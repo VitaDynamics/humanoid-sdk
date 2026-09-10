@@ -84,6 +84,13 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
 
 ## Development and evidence
 
+- The default branch is `main`. Work on feature branches and submit changes
+  through pull requests. Synchronize with `git fetch` followed by `git rebase`;
+  do not use `git merge` or create merge commits. Do not rewrite, force-push or
+  delete the default branch.
+- Merge pull requests with **Squash and merge** only, so each PR contributes
+  one commit to the default branch. Do not use GitHub's merge-commit or
+  rebase-and-merge methods. Obtain explicit user authorization before merging.
 - Reuse Aorta transport and generated message wheels; do not copy their runtime
   into this repository or implement a parallel protocol. Keep the SDK thin.
 - Maintain reference documentation in the separate documentation source
