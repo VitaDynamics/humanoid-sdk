@@ -26,9 +26,10 @@
 
 ## 文档与兼容性
 
-对外使用、部署、topic/message、状态切换和 EXTERNAL 配置文档统一维护在
-[humanoid-docs](https://github.com/VitaDynamics/humanoid-docs) 的
-`content/software/sdk/`，随本次交付补齐。
+用户文档入口：[VitaDynamics 人形机器人文档](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg)。
+
+SDK 专页尚未发布。发布后，这里会补充 SDK 使用、部署、topic/message、状态切换
+和 EXTERNAL 配置的直达链接；当前链接是知识库入口，不是 SDK 专页。
 
 文件名按工具约定使用大写：[Codex 的 AGENTS.md](https://developers.openai.com/codex/guides/agents-md)
 与 [Claude Code 的 CLAUDE.md](https://code.claude.com/docs/en/memory)。

@@ -9,6 +9,9 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
 - Read `README.md` for the supported release, installation commands and customer
   documentation. Follow the linked SDK documentation for message contracts,
   deployment and EXTERNAL configuration; do not invent commands or topic fields.
+- Customer documentation is the published Feishu knowledge base linked in the
+  README. Until the SDK pages are published, state that they are unavailable;
+  do not invent a page URL or substitute the documentation source repository.
 - If the README marks the release as in preparation, or its required package,
   example or manifest is absent, stop installation and explain what is missing.
   The workflow below describes the delivery contract, not evidence that this
@@ -83,9 +86,11 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
 
 - Reuse Aorta transport and generated message wheels; do not copy their runtime
   into this repository or implement a parallel protocol. Keep the SDK thin.
-- Keep customer reference documentation in `VitaDynamics/humanoid-docs` under
-  `content/software/sdk/`. Keep this repository's README short and actionable;
-  do not duplicate the reference manual or internal HIL session logs.
+- Maintain reference documentation in the separate documentation source
+  repository, but do not expose that repository as a customer entry point or
+  prerequisite. Link users only to published Feishu pages. Keep this
+  repository's README short; do not duplicate the reference manual or internal
+  HIL session logs.
 - Run the repository's documented tests after changes. A mocked unit test is
   not a real-binding test; an import test is not a live transport test. Do not
   launch a motion example as part of an automated installation or CI check.
