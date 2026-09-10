@@ -3,8 +3,11 @@
 基于 Aorta 的 Python SDK 与人形机器人示例，Python 导入名为
 `locomotion_aorta`。客户端不需要 ROS 2、机器人主仓库或私有消息源码。
 
-> 首次独立发行正在准备中。配套 Aorta wheels 和安装验收完成前，不将本分支
-> 视为可部署发行版；不要用其他版本的 wheel 替代缺失依赖。
+> 安装包从本仓库的 [Releases](https://github.com/VitaDynamics/humanoid-sdk/releases)
+> 获取。`v0.1.0-rc.1` 是候选交付，Python 包版本为 `0.1.0`；仅在该版本的完整
+> bundle 和校验清单均可下载时安装，不用其他版本的 wheel 替代缺失依赖。
+> 候选包已通过 Linux x86_64 离线安装和真实消息绑定检查；这不替代该包在
+> aarch64 设备上的连接与运动验收，运动示例仍须逐机审查、单独授权。
 
 ## 使用 agent 开始
 
@@ -28,8 +31,8 @@
 
 用户文档入口：[VitaDynamics 人形机器人文档](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg)。
 
-SDK 专页尚未发布。发布后，这里会补充 SDK 使用、部署、topic/message、状态切换
-和 EXTERNAL 配置的直达链接；当前链接是知识库入口，不是 SDK 专页。
+SDK 专页：[人形 SDK](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh)，
+包含安装部署、只读 quick start、topic/message、状态切换、EXTERNAL 配置和视频订阅。
 
 文件名按工具约定使用大写：[Codex 的 AGENTS.md](https://developers.openai.com/codex/guides/agents-md)
 与 [Claude Code 的 CLAUDE.md](https://code.claude.com/docs/en/memory)。
