@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "locomotion-aorta"
+version = "0.1.0"
+description = "Python-only client for VITA humanoid locomotion over Aorta"
+requires-python = ">=3.10"
+dependencies = [
+    "aorta-sdk==2026.9.10+humanoid.7100871",
+    "aorta-msgs==2026.9.10+humanoid.7100871",
+    "flatbuffers==25.9.23",
+]
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["locomotion_aorta*"]
