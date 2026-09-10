@@ -1,0 +1,21 @@
+{
+  "manifest_version": 1,
+  "sdk_version": "0.1.0",
+  "robot_profile": "A-sample full",
+  "aorta_revision": "71008719f5958df7f09d522f1d585c6748956ce1",
+  "aorta_version": "2026.9.10+humanoid.7100871",
+  "aorta_build_run": "https://github.com/VitaDynamics/aorta/actions/runs/34485667816",
+  "flatbuffers_version": "25.9.23",
+  "python_requires": ">=3.10",
+  "platforms": ["linux_x86_64", "linux_aarch64"],
+  "external_version": 1,
+  "command_slots": 42,
+  "state_slots": 44,
+  "session_mode": "peer",
+  "wheel_sha256": {
+    "flatbuffers-25.9.23-py2.py3-none-any.whl": "255538574d6cb6d0a79a17ec8bc0d30985913b87513a01cce8bcdb6b4c44d0e2",
+    "aorta_sdk-2026.9.10+humanoid.7100871-py3-none-linux_x86_64.whl": "20945a5c74c8b614ec995a37e7d63a6a91971b262ca5042882c4ef5cfdb64049",
+    "aorta_sdk-2026.9.10+humanoid.7100871-py3-none-linux_aarch64.whl": "84e33de14a4d28daf904363bae835bbfa2db0e0196ecd6ed6aa3f0acec4cdc69",
+    "aorta_msgs-2026.9.10+humanoid.7100871-py3-none-any.whl": "b4440adfb3d58371c088483715ab32e1263a9b4cb3f61e193afc05a99605a57d"
+  }
+}
