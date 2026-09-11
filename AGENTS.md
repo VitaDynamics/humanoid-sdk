@@ -82,6 +82,26 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
 - Service restart, persistent motor/config changes, OTA installation, slot
   activation and reboot require explicit scope and authorization of their own.
 
+## Cross-repository maintenance (maintainers only)
+
+- The full internal agreement is maintained in `VitaDynamics/vita-robot` at
+  `docs/reference/humanoid-sdk-maintenance.zh.md`. This is a maintenance pointer,
+  not a customer installation prerequisite; use these local instructions for
+  quick start without requiring access to internal repositories.
+- For changes to topics, messages, joint mapping, state transitions, lease or
+  safety behavior, configuration or installation, name a change owner. In the PR,
+  record related server/schema/documentation PRs (or why unaffected), compatible
+  versions, verification and release dependencies. Do not duplicate those implementations.
+- Keep version/revision, artifact digests and tested robot/configuration evidence
+  in the existing release records. A prerelease may be offered for testing before
+  device acceptance only with explicit completed checks, gaps and restrictions.
+  Recommend normal use only after the agreed acceptance; record accepted deviations
+  and exclusions. Never replace published attachments in place; issue a new version.
+- New EXTERNAL/SDK test reports must be linked by the change owner from the robot
+  repository's `docs/reports/2026-09-11-external-sdk-remaining-verification.zh.md`,
+  updating status and date without rewriting original results. Do not duplicate
+  internal HIL logs or create a second outstanding-test list here.
+
 ## Development and evidence
 
 - The default branch is `main`. Work on feature branches and submit changes
