@@ -2,6 +2,8 @@
 
 基于 Aorta 的 Python SDK 与人形机器人示例，Python 导入名为
 `locomotion_aorta`。客户端不需要 ROS 2、机器人主仓库或私有消息源码。
+通常在用户自己的 Linux PC 或计算设备上运行 SDK，通过有线网络连接机器人的 S100；
+不要求把 SDK 安装到 S100。
 
 > 安装包从本仓库的 [Releases](https://github.com/VitaDynamics/humanoid-sdk/releases)
 > 获取。`v0.1.0-rc.1` 是候选交付，Python 包版本为 `0.1.0`；仅在该版本的完整
@@ -32,7 +34,7 @@
 用户文档入口：[VitaDynamics 人形机器人文档](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg)。
 
 SDK 专页：[人形 SDK](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh)，
-包含安装部署、只读 quick start、topic/message、状态切换、EXTERNAL 配置和视频订阅。
+完整教程由该文档入口维护；网络接入须区分用户设备与 S100，不能共用本机回环端点。
 
 文件名按工具约定使用大写：[Codex 的 AGENTS.md](https://developers.openai.com/codex/guides/agents-md)
 与 [Claude Code 的 CLAUDE.md](https://code.claude.com/docs/en/memory)。
@@ -43,29 +45,39 @@ SDK 专页：[人形 SDK](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oG
 
 兼容版本见 [compatibility.json](compatibility.json)：Linux x86_64/aarch64、
 Python 3.10+、Aorta `2026.9.10+humanoid.7100871`。不要换用旧版消息包。
-正式部署须使用经交付方核验的完整 bundle；以下从其根目录执行，不覆盖旧环境：
+正式部署须使用经交付方核验的完整 bundle。以下在用户自己的 Linux 设备上，
+从 bundle 根目录执行，不覆盖旧环境，也不需要 `/app/script/env.sh`：
 
 ```bash
-# S100 每个新 shell 先执行；开发机跳过这一行。
-source /app/script/env.sh
 python3 -m venv venv
 source venv/bin/activate
 python -m pip install --no-index --find-links wheelhouse locomotion-aorta==0.1.0
 python -m pip check
 python -c 'import aorta, flatbuffers, locomotion_aorta; import lowlevel.LowCmd, locomotion_sdk.ControlStatus'
-# 核对该文件实际是 peer 配置；开发机改用部署方提供的 peer profile。
-export ZENOH_SESSION_CONFIG_URI=/app_param/zenoh/s100_session_peer.json5
+# 先将部署方提供的完整 PC peer profile 放到本地 config/，核对端点与认证域。
+export ZENOH_SESSION_CONFIG_URI="$PWD/config/pc_session_peer.json5"
+test -r "$ZENOH_SESSION_CONFIG_URI"
 python examples/lowstate_subscriber.py --group default --timeout 5
 ```
 
 venv 已存在时仅激活。最后一条需要连接授权，只读一帧，不申请控制权。
+PC 与 S100 须有可达的有线 IP；PC profile 的 `connect.endpoints` 指向 S100
+的可达地址和交付端口（例如 `tcp/192.168.125.2:7447`），不能写 `127.0.0.1`。
+SDK 的 `peer` 可以连接机器人上的 router；还须保留配套的 gossip/自动连接、
+namespace 和认证配置。示例地址不是每台机器的默认值；配置由部署方提供，不随
+通用 bundle 分发设备凭据。`--group default` 也须与机器人实际 group 匹配。
+
+仅当明确选择在 S100 本机运行 SDK 时，才在激活 venv **之前**执行
+`source /app/script/env.sh`，并改用部署方核验的
+`/app_param/zenoh/s100_session_peer.json5`。SDK 安装位置与机器人 OTA 是两回事。
+
 `examples/external_control.py` 是 42 槽全身归零往返 demo，含硬件调试增益和双肘
 回程向零偏移 10°；必须逐机审查并单独授权，不由安装命令自动运行。
 
 ## 部署避坑
 
 - `env.sh` 不安装 FlatBuffers；完整 wheelhouse 已将它列为依赖，不用 `--no-deps`。
-- 先 source 环境再激活 venv，检查 `command -v python`，防止 PATH 指回系统 Python。
+- 仅 S100 先 source 环境再激活 venv；PC 直接使用自己的 venv，检查 `command -v python`。
 - 全部 SDK/demo 使用核验过的 peer profile；不要回退 client 或未配置的默认 session。
 - 清理未核验的 PYTHONPATH 覆盖，确认导入当前 SDK，不能把 HIL 临时源码当正式版本。
 - OTA 装到 B 不代表当前已运行 B；SDK 安装不包含切槽、重启或电机配置修改。

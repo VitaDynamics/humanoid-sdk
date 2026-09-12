@@ -24,6 +24,9 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
   Never reuse a robot hostname, slot or safety confirmation from an old session.
 - A request for quick start means installation and read-only verification first,
   not permission to move a robot, replace its OTA image or restart services.
+- Default to the user's own Linux PC/device as the SDK host; S100 hosts the
+  robot services. Installing the SDK on S100 is an explicit alternative, not
+  a prerequisite. Keep local shell commands distinct from robot-side checks.
 
 ## Installation and deployment workflow
 
@@ -44,11 +47,17 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
 4. Run `python -m pip check`, import the SDK and real Aorta message bindings,
    inspect installed versions and run the examples' `--help`. Do not call these
    checks proof of a live connection or proof that robot motion is safe.
-5. Select the deployment-owned **peer** session profile before constructing any
-   Aorta node. On the documented S100 deployment this is
-   `/app_param/zenoh/s100_session_peer.json5`, selected with
-   `ZENOH_SESSION_CONFIG_URI`. Verify that it exists and actually selects peer;
-   a filename alone is not evidence. Do not fall back to client/router mode.
+5. Select the deployment-owned **peer** session profile on the SDK host with
+   `ZENOH_SESSION_CONFIG_URI` before constructing any Aorta node. For an
+   offboard PC, verify its robot-facing IP/route, the reachable S100 router
+   endpoint, the advertised peer listener, matching namespace/authentication
+   and group, and the release-matched gossip/autoconnect policy. Do not copy
+   S100's loopback endpoint to the PC or merely change `mode`. A peer may
+   connect to a router; SSH access alone does not establish SDK connectivity.
+   `/app_param/zenoh/s100_session_peer.json5` is a robot-local path, only for
+   the explicit S100-hosted alternative. Verify the actual profile, not its
+   filename. Do not fall back to client/router mode, remove authentication,
+   disable firewalls wholesale or automatically change robot networking.
 6. With permission to connect to the target, run the documented bounded
    `examples/lowstate_subscriber.py` check. It must not request a control lease or
    publish a motion command. Confirm fresh feedback, expected joint count and
