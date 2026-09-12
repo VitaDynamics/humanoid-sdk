@@ -48,6 +48,10 @@ Python 3.10+、Aorta `2026.9.10+humanoid.7100871`。不要换用旧版消息包�
 正式部署须使用经交付方核验的完整 bundle。以下在用户自己的 Linux 设备上，
 从 bundle 根目录执行，不覆盖旧环境，也不需要 `/app/script/env.sh`：
 
+当前打包器包含依赖和示例，但尚未附带 PC peer profile；它仍是需要补齐的交付物，
+不是安装后自动生成的文件。缺少匹配版本的 profile 和必要认证文件时，停止连接步骤，
+不要用空文件、旧相机 client 配置或默认 session 代替。LowState 订阅同样要求 peer。
+
 ```bash
 python3 -m venv venv
 source venv/bin/activate
