@@ -14,6 +14,10 @@ class OfflineInstallTest(unittest.TestCase):
     def test_complete_bundle_installs_without_index(self):
         bundle = Path(sys.argv[1]).resolve()
         manifest = json.loads((bundle / "MANIFEST.json").read_text())
+        self.assertEqual(manifest["pc_session_profile"], "config/pc_session_peer.json5")
+        profile = json.loads((bundle / manifest["pc_session_profile"]).read_text())
+        self.assertEqual(profile["mode"], "peer")
+        self.assertEqual(profile["namespace"], "REPLACE_WITH_ROBOT_NAMESPACE")
         actual_files = {
             path.relative_to(bundle).as_posix()
             for path in bundle.rglob("*")

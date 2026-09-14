@@ -12,6 +12,7 @@
   "command_slots": 42,
   "state_slots": 44,
   "session_mode": "peer",
+  "pc_session_profile": "config/pc_session_peer.json5",
   "wheel_sha256": {
     "flatbuffers-25.9.23-py2.py3-none-any.whl": "255538574d6cb6d0a79a17ec8bc0d30985913b87513a01cce8bcdb6b4c44d0e2",
     "aorta_sdk-2026.9.10+humanoid.7100871-py3-none-linux_x86_64.whl": "20945a5c74c8b614ec995a37e7d63a6a91971b262ca5042882c4ef5cfdb64049",

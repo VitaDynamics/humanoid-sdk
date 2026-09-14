@@ -58,6 +58,13 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
    the explicit S100-hosted alternative. Verify the actual profile, not its
    filename. Do not fall back to client/router mode, remove authentication,
    disable firewalls wholesale or automatically change robot networking.
+   Start with `config/pc_session_peer.json5` from the checkout or a bundle that
+   contains it. Copy it outside the repository with mode 0600; keep an existing
+   private copy. Replace the namespace and authentication placeholders using
+   deployment-provided values and an absolute local dictionary path, then set
+   the actual PC listener and S100 endpoint. Never print credentials or commit
+   the private copy. The already-published v0.1.0-rc.1 bundle lacks this file;
+   obtain it from a reviewed compatible SDK revision, not an invented default.
 6. With permission to connect to the target, run the documented bounded
    `examples/lowstate_subscriber.py` check. It must not request a control lease or
    publish a motion command. Confirm fresh feedback, expected joint count and
