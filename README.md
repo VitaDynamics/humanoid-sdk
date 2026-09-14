@@ -48,9 +48,12 @@ Python 3.10+、Aorta `2026.9.10+humanoid.7100871`。不要换用旧版消息包�
 正式部署须使用经交付方核验的完整 bundle。以下在用户自己的 Linux 设备上，
 从 bundle 根目录执行，不覆盖旧环境，也不需要 `/app/script/env.sh`：
 
-当前打包器包含依赖和示例，但尚未附带 PC peer profile；它仍是需要补齐的交付物，
-不是安装后自动生成的文件。缺少匹配版本的 profile 和必要认证文件时，停止连接步骤，
-不要用空文件、旧相机 client 配置或默认 session 代替。LowState 订阅同样要求 peer。
+仓库提供 [PC peer 配置](config/pc_session_peer.json5)，新构建的 offline bundle
+也在同一路径包含该文件并记录 SHA-256。它保留已测试 PC 的网络与传输设置，
+namespace、账号、密码和认证字典路径使用占位符，不能原样连接。
+已发布的 `v0.1.0-rc.1` bundle 不含此文件，不会被原地更新；使用该旧包时，
+可从配套的已审核 SDK 提交获取此配置，记录来源提交和摘要。仅安装 wheel 不会安装此文件。
+填写步骤见 [PC 网络与 Zenoh 配置](https://vitadynamics.feishu.cn/wiki/M1vEw22vziSNAjkHVCncFlu1nyh)。
 
 ```bash
 python3 -m venv venv
@@ -58,8 +61,13 @@ source venv/bin/activate
 python -m pip install --no-index --find-links wheelhouse locomotion-aorta==0.1.0
 python -m pip check
 python -c 'import aorta, flatbuffers, locomotion_aorta; import lowlevel.LowCmd, locomotion_sdk.ControlStatus'
-# 先将部署方提供的完整 PC peer profile 放到本地 config/，核对端点与认证域。
-export ZENOH_SESSION_CONFIG_URI="$PWD/config/pc_session_peer.json5"
+# 复制到仓库外，保留已有文件；仅修改私有副本，不提交认证材料。
+mkdir -p "$HOME/.config/vita"
+PC_PROFILE="$HOME/.config/vita/pc_session_peer.json5"
+test ! -e "$PC_PROFILE" && install -m 600 config/pc_session_peer.json5 "$PC_PROFILE"
+# 按网络文档填写实际 IP、namespace、认证信息和字典绝对路径，消除全部占位符。
+${EDITOR:-vi} "$PC_PROFILE"
+export ZENOH_SESSION_CONFIG_URI="$PC_PROFILE"
 test -r "$ZENOH_SESSION_CONFIG_URI"
 python examples/lowstate_subscriber.py --group default --timeout 5
 ```
@@ -68,8 +76,9 @@ venv 已存在时仅激活。最后一条需要连接授权，只读一帧，不
 PC 与 S100 须有可达的有线 IP；PC profile 的 `connect.endpoints` 指向 S100
 的可达地址和交付端口（例如 `tcp/192.168.125.2:7447`），不能写 `127.0.0.1`。
 SDK 的 `peer` 可以连接机器人上的 router；还须保留配套的 gossip/自动连接、
-namespace 和认证配置。示例地址不是每台机器的默认值；配置由部署方提供，不随
-通用 bundle 分发设备凭据。`--group default` 也须与机器人实际 group 匹配。
+namespace 和认证配置。示例地址不是每台机器的默认值；部署方提供 namespace、
+授权账号/密码和配套认证字典，通用 bundle 不分发设备凭据。
+`--group default` 也须与机器人实际 group 匹配。缺少认证材料时停止，不删除 auth。
 
 仅当明确选择在 S100 本机运行 SDK 时，才在激活 venv **之前**执行
 `source /app/script/env.sh`，并改用部署方核验的
@@ -102,7 +111,8 @@ python tests/offline_install.py dist/offline-bundle
 
 wheelhouse 须包含清单中的两种 Linux Aorta runtime、消息包与 FlatBuffers；打包器
 检查固定依赖 SHA-256，生成含每文件摘要和源码状态的 MANIFEST.json，保留 agent
-软链接。`make build` 只构建 wheel，源码和 demo 随 offline bundle 交付，不发布
+软链接。只打包指定的公共 PC profile，拒绝已填入部署认证值的模板；不要把私有配置
+放进源码。`make build` 只构建 wheel，源码、demo 和 PC profile 随 offline bundle 交付，不发布
 会将软链接展开为普通文件的 setuptools sdist。输出目录存在时拒绝覆盖。
 正式交付必须来自审核后的干净提交；本机测试、
 原生库导入和离线安装不替代 aarch64 实机与现场运动验收。

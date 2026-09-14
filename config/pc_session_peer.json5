@@ -1,0 +1,48 @@
+{
+  "namespace": "REPLACE_WITH_ROBOT_NAMESPACE",
+  "mode": "peer",
+  "connect": {
+    "endpoints": ["tcp/192.168.125.2:7447"],
+    "timeout_ms": 10000,
+    "exit_on_failure": false,
+    "retry": {
+      "period_init_ms": 200,
+      "period_max_ms": 2000,
+      "period_increase_factor": 2
+    }
+  },
+  "listen": {"endpoints": ["tcp/192.168.125.3:0"]},
+  "scouting": {
+    "multicast": {"enabled": false},
+    "gossip": {
+      "enabled": true,
+      "target": {"router": ["router", "peer"], "peer": ["router"]},
+      "autoconnect": {"router": [], "peer": ["peer"]},
+      "autoconnect_strategy": {"peer": {"to_peer": "greater-zid"}}
+    }
+  },
+  "timestamping": {
+    "enabled": {"router": true, "peer": false, "client": false},
+    "drop_future_timestamp": false
+  },
+  "queries_default_timeout": 600000,
+  "transport": {
+    "auth": {
+      "usrpwd": {
+        "user": "REPLACE_WITH_DEPLOYMENT_USER",
+        "password": "REPLACE_WITH_DEPLOYMENT_PASSWORD",
+        "dictionary_file": "/REPLACE_WITH_ABSOLUTE_PATH/peer-auth.txt"
+      }
+    },
+    "link": {"tx": {"lease": 3000, "keep_alive": 4}},
+    "shared_memory": {
+      "enabled": true,
+      "mode": "lazy",
+      "transport_optimization": {
+        "enabled": true,
+        "pool_size": 8388608,
+        "message_size_threshold": 256
+      }
+    }
+  }
+}

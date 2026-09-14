@@ -17,6 +17,18 @@ def digest(path: Path) -> str:
 
 def package(wheelhouses: list[Path], output: Path) -> None:
     compatibility = json.loads((ROOT / "compatibility.json").read_text())
+    profile_path = Path("config/pc_session_peer.json5")
+    profile = json.loads((ROOT / profile_path).read_text())
+    if (profile.get("namespace") != "REPLACE_WITH_ROBOT_NAMESPACE"
+            or profile.get("mode") != "peer"
+            or profile.get("transport", {}).get("auth") != {"usrpwd": {
+                "user": "REPLACE_WITH_DEPLOYMENT_USER",
+                "password": "REPLACE_WITH_DEPLOYMENT_PASSWORD",
+                "dictionary_file": "/REPLACE_WITH_ABSOLUTE_PATH/peer-auth.txt",
+            }}):
+        raise ValueError("PC profile must retain public deployment placeholders; never package credentials")
+    if compatibility.get("pc_session_profile") != profile_path.as_posix():
+        raise ValueError("compatibility PC profile path does not match bundled template")
     wheels = []
     for name, expected in compatibility["wheel_sha256"].items():
         matches = [directory / name for directory in wheelhouses
@@ -51,6 +63,9 @@ def package(wheelhouses: list[Path], output: Path) -> None:
     for name in ("README.md", "AGENTS.md", "compatibility.json"):
         shutil.copyfile(ROOT / name, output / name)
     (output / "CLAUDE.md").symlink_to("AGENTS.md")
+    (output / "config").mkdir()
+    # Copy only the public template, never local profiles or authentication files.
+    shutil.copyfile(ROOT / profile_path, output / profile_path)
     shutil.copytree(ROOT / "examples", output / "examples",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copytree(ROOT / "python/locomotion_aorta", output / "source/locomotion_aorta",
