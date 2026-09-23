@@ -128,14 +128,21 @@ class ExternalController:
     def enter_external(
         self, timeout: float, *, lease_duration_s: float = 30.0
     ) -> ControlStatus:
-        """Enter EXTERNAL; timeout bounds entry, not the requested lease."""
+        """Enter EXTERNAL; zero lease duration requests an unlimited lease.
+
+        timeout bounds entry only. An unlimited lease still requires CANCEL on
+        exit and remains subject to command-stream timeout and safety checks.
+        """
         if (
             isinstance(lease_duration_s, bool)
             or not isinstance(lease_duration_s, (int, float))
-            or not 0.001 <= lease_duration_s <= ((1 << 32) - 1) / 1000
+            or not (
+                lease_duration_s == 0
+                or 0.001 <= lease_duration_s <= ((1 << 32) - 1) / 1000
+            )
         ):
             raise ValueError(
-                "lease_duration_s must fit a positive uint32 millisecond duration"
+                "lease_duration_s must be zero or fit a positive uint32 millisecond duration"
             )
         requested_lease_ms = int(lease_duration_s * 1000)
         deadline = _deadline(timeout)

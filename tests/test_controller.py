@@ -363,7 +363,7 @@ class ExternalControllerTest(unittest.TestCase):
 
     def test_enter_sends_requested_lease_only_in_prepare(self) -> None:
         for seconds, milliseconds in (
-            (90.0, 90_000), (0.001, 1), (1.234, 1234),
+            (0, 0), (90.0, 90_000), (0.001, 1), (1.234, 1234),
             (4_294_967.295, 4_294_967_295),
         ):
             with self.subTest(seconds=seconds):
@@ -390,7 +390,7 @@ class ExternalControllerTest(unittest.TestCase):
         self.addCleanup(harness.controller.close)
         harness.accept_enter()
         for value in (
-            0, -1, 0.0009, True, "90", None, math.nan,
+            -1, 0.0009, True, "90", None, math.nan,
             math.inf, -math.inf, 4_294_967.296, 10**400,
         ):
             with self.subTest(value=value):

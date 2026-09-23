@@ -86,6 +86,9 @@ namespace 和认证配置。示例地址不是每台机器的默认值；部署�
 
 `examples/external_control.py` 是 42 槽全身归零往返 demo，含硬件调试增益和双肘
 回程向零偏移 10°；必须逐机审查并单独授权，不由安装命令自动运行。
+`ExternalController.enter_external(..., lease_duration_s=0)` 可向支持该语义的
+服务端请求无限期租约；它不会关闭命令断流保护，结束时仍须 CANCEL。旧服务端可能
+拒绝此请求，不能把拒绝当成获得控制权。现有 demo 仍使用有限的 90 秒租约。
 
 ## 部署避坑
 
