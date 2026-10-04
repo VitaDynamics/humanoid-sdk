@@ -356,52 +356,77 @@ class ExternalControllerTest(unittest.TestCase):
         self.assertEqual({request.client_id for request in requests}, {"test-client"})
         self.assertEqual({request.protocol_version for request in requests}, {1})
         self.assertEqual(requests[0].lease_id, "")
-        self.assertEqual(requests[0].requested_lease_ms, 30_000)
+        self.assertEqual(requests[0].requested_lease_ms, 0)
         self.assertEqual(requests[1].lease_id, harness.lease_id)
         self.assertEqual(requests[1].requested_lease_ms, 0)
         self.assertEqual(status.phase, ExternalPhase.RUNNING)
+        self.assertEqual(status.lease_deadline_monotonic_ns, 0)
 
-    def test_enter_sends_requested_lease_only_in_prepare(self) -> None:
-        for seconds, milliseconds in (
-            (0, 0), (90.0, 90_000), (0.001, 1), (1.234, 1234),
-            (4_294_967.295, 4_294_967_295),
-        ):
-            with self.subTest(seconds=seconds):
-                harness = ControllerHarness()
-                self.addCleanup(harness.controller.close)
-                harness.accept_enter()
-                harness.controller.enter_external(
-                    timeout=0.1, lease_duration_s=seconds
-                )
-                requests = [
-                    message
-                    for topic, message in harness.transport.published
-                    if topic == CONTROL_REQUEST_TOPIC
-                ]
-                self.assertEqual(requests[0].requested_lease_ms, milliseconds)
-                self.assertEqual(requests[1].requested_lease_ms, 0)
-                harness.controller.close()
-                cancel = harness.transport.published[-1][1]
-                self.assertEqual(cancel.operation, ControlOperation.CANCEL)
-                self.assertEqual(cancel.requested_lease_ms, 0)
-
-    def test_invalid_lease_is_rejected_before_request_and_allows_retry(self) -> None:
+    def test_control_requests_always_send_zero_duration(self) -> None:
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)
         harness.accept_enter()
-        for value in (
-            -1, 0.0009, True, "90", None, math.nan,
-            math.inf, -math.inf, 4_294_967.296, 10**400,
-        ):
-            with self.subTest(value=value):
-                with self.assertRaises(ValueError):
+        harness.controller.enter_external(timeout=0.1)
+        harness.controller.close()
+        requests = [
+            message
+            for topic, message in harness.transport.published
+            if topic == CONTROL_REQUEST_TOPIC
+        ]
+        self.assertEqual(
+            [request.operation for request in requests],
+            [ControlOperation.PREPARE, ControlOperation.COMMIT, ControlOperation.CANCEL],
+        )
+        self.assertTrue(all(request.requested_lease_ms == 0 for request in requests))
+
+    def test_removed_duration_argument_fails_before_sending(self) -> None:
+        harness = ControllerHarness()
+        self.addCleanup(harness.controller.close)
+        harness.accept_enter()
+        for duration in (0, 30):
+            with self.subTest(duration=duration):
+                with self.assertRaisesRegex(TypeError, "lease_duration_s"):
                     harness.controller.enter_external(
-                        timeout=0.1, lease_duration_s=value
+                        timeout=0.1, lease_duration_s=duration
                     )
                 self.assertEqual(harness.transport.published, [])
         harness.controller.enter_external(timeout=0.1)
         prepare = harness.transport.published[0][1]
-        self.assertEqual(prepare.requested_lease_ms, 30_000)
+        self.assertEqual(prepare.requested_lease_ms, 0)
+
+    def test_unlimited_request_rejection_does_not_fall_back_to_finite(self) -> None:
+        harness = ControllerHarness()
+        self.addCleanup(harness.controller.close)
+
+        def on_publish(topic, request) -> None:
+            if topic == CONTROL_REQUEST_TOPIC:
+                harness.ack(
+                    request, accepted=False, reason="zero duration unsupported"
+                )
+
+        harness.transport.on_publish = on_publish
+        with self.assertRaisesRegex(ControlRejectedError, "zero duration unsupported"):
+            harness.controller.enter_external(timeout=0.1)
+        requests = [
+            message for topic, message in harness.transport.published
+            if topic == CONTROL_REQUEST_TOPIC
+        ]
+        self.assertEqual(
+            [request.operation for request in requests],
+            [ControlOperation.PREPARE, ControlOperation.CANCEL],
+        )
+        self.assertTrue(all(request.requested_lease_ms == 0 for request in requests))
+        with self.assertRaises(NotRunningError):
+            harness.controller.publish(make_command(1))
+
+    def test_entry_wait_timeout_still_validated_before_sending(self) -> None:
+        harness = ControllerHarness()
+        self.addCleanup(harness.controller.close)
+        for timeout in (0, -1, True, None, math.nan, math.inf):
+            with self.subTest(timeout=timeout):
+                with self.assertRaises(ValueError):
+                    harness.controller.enter_external(timeout=timeout)
+                self.assertEqual(harness.transport.published, [])
 
     def test_enter_accepts_running_status_after_server_sequence_reset(self) -> None:
         harness = ControllerHarness()

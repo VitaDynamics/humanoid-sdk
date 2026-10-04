@@ -19,7 +19,7 @@ class ExternalPhase(str, Enum):
     RUNNING = "RUNNING"
     TIMEOUT_HOLD = "TIMEOUT_HOLD"
     CANCELLED = "CANCELLED"
-    EXPIRED = "EXPIRED"
+    EXPIRED = "EXPIRED"  # Legacy wire value; retained for decoding older servers.
     EMERGENCY = "EMERGENCY"
 
 
@@ -60,12 +60,14 @@ class HumanoidLowState:
 
 @dataclass(frozen=True, slots=True)
 class ControlRequest:
+    """Wire request; lease_id names control ownership, not a timer."""
+
     request_id: str
     client_id: str
     operation: ControlOperation
     action_name: str = "EXTERNAL"
     lease_id: str = ""
-    requested_lease_ms: int = 0
+    requested_lease_ms: int = 0  # Legacy wire field; the controller always sends 0.
     protocol_version: int = PROTOCOL_VERSION
 
 
@@ -77,7 +79,7 @@ class ControlAck:
     error_code: int = 0
     reason: str = ""
     lease_id: str = ""
-    lease_deadline_monotonic_ns: int = 0
+    lease_deadline_monotonic_ns: int = 0  # Legacy wire field; 0 means no expiry.
     protocol_version: int = PROTOCOL_VERSION
 
 
@@ -88,7 +90,7 @@ class ControlStatus:
     phase: ExternalPhase
     client_id: str = ""
     lease_id: str = ""
-    lease_deadline_monotonic_ns: int = 0
+    lease_deadline_monotonic_ns: int = 0  # Legacy wire field; 0 means no expiry.
     generation: int = 0
     last_accepted_cmd_id: int = 0
     last_valid_age_ms: int = 0

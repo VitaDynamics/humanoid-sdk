@@ -6,7 +6,6 @@ import time
 from collections.abc import Callable, Sequence
 
 from locomotion_aorta import (
-    ControlStatus,
     ExternalController,
     ExternalPhase,
     HumanoidLowState,
@@ -26,8 +25,6 @@ RETURN_ENDPOINT_POSITION_TOLERANCE_RAD = 0.05
 ELBOW_RETURN_OFFSET_RAD = math.radians(10.0)
 STATIONARY_DQ_RAD_S = 0.05
 LOWSTATE_WINDOW_S = 0.2
-EXIT_MARGIN_S = 5.0
-REQUESTED_LEASE_S = 90.0
 
 # A-sample FIXED_STAND baseline with shoulder pitch/elbow kp=80 for tuning.
 DEMO_KP = (
@@ -78,16 +75,9 @@ def run(
         )
     segment_steps = _segment_steps(start_q)
     motion_duration_s = 2 * segment_steps * PERIOD_S + 2 * DWELL_S
-    required_lease_s = motion_duration_s + EXIT_MARGIN_S
-    if required_lease_s > REQUESTED_LEASE_S:
-        raise ValueError(
-            f"trajectory does not fit the {REQUESTED_LEASE_S:g}-second lease: "
-            f"requires {required_lease_s:.2f}s including exit margin"
-        )
     emit(
         f"preflight passed: {COMMAND_SLOTS} slots, "
-        f"trajectory={motion_duration_s:.2f}s, "
-        f"required lease={required_lease_s:.2f}s"
+        f"trajectory={motion_duration_s:.2f}s"
     )
     emit(
         "elbow return targets (10 deg toward zero, clamped at zero): "
@@ -97,17 +87,8 @@ def run(
 
     entered = False
     try:
-        entered_status = controller.enter_external(
-            timeout, lease_duration_s=REQUESTED_LEASE_S
-        )
+        entered_status = controller.enter_external(timeout)
         entered = True
-        remaining_lease_s = _remaining_lease_seconds(entered_status)
-        if remaining_lease_s < required_lease_s:
-            raise RuntimeError(
-                "actual remaining lease is too short: "
-                f"{remaining_lease_s:.2f}s available, "
-                f"{required_lease_s:.2f}s required"
-            )
 
         generation = entered_status.generation
         reject_count = entered_status.reject_count
@@ -246,14 +227,6 @@ def _segment_steps(start_q: Sequence[float]) -> int:
         1.5 * displacement / MAX_PEAK_SPEED_RAD_S,
     )
     return math.ceil(duration_s / PERIOD_S)
-
-
-def _remaining_lease_seconds(status: ControlStatus) -> float:
-    deadline_ns = status.lease_deadline_monotonic_ns
-    stamp_ns = status.stamp_monotonic_ns
-    if deadline_ns <= stamp_ns or stamp_ns <= 0:
-        raise RuntimeError("RUNNING status did not provide a usable lease deadline")
-    return (deadline_ns - stamp_ns) / 1_000_000_000
 
 
 def _position_command(q: Sequence[float]) -> LowCmd:

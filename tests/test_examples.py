@@ -23,7 +23,6 @@ class RecordingController:
         self,
         clock: "FakeClock",
         *,
-        lease_remaining_s: float = 90.0,
         advance_lowstate: bool = True,
         cancel_action: str = "PASSIVE",
         fail_phase_after_commands: int | None = None,
@@ -34,7 +33,6 @@ class RecordingController:
         follow_commands: bool = True,
     ) -> None:
         self.clock = clock
-        self.lease_remaining_s = lease_remaining_s
         self.advance_lowstate = advance_lowstate
         self.cancel_action = cancel_action
         self.fail_phase_after_commands = fail_phase_after_commands
@@ -67,11 +65,9 @@ class RecordingController:
         self._emit_lowstate()
         return self.controller.wait_lowstate(timeout)
 
-    def enter_external(self, timeout: float, *, lease_duration_s: float = 30.0):
+    def enter_external(self, timeout: float):
         self.calls.append("enter_external")
-        return self.controller.enter_external(
-            timeout, lease_duration_s=lease_duration_s
-        )
+        return self.controller.enter_external(timeout)
 
     def publish(self, command):
         self.calls.append("publish")
@@ -139,7 +135,7 @@ class RecordingController:
                         phase=phase,
                         client_id="example-client",
                         lease_id="lease-example",
-                        lease_deadline_monotonic_ns=31_000_000_000,
+                        lease_deadline_monotonic_ns=0,
                         generation=17,
                         reject_count=reject_count,
                         stamp_monotonic_ns=(
@@ -179,9 +175,7 @@ class RecordingController:
                     phase=ExternalPhase.RUNNING,
                     client_id="example-client",
                     lease_id="lease-example",
-                    lease_deadline_monotonic_ns=int(
-                        (1.0 + self.lease_remaining_s) * 1_000_000_000
-                    ),
+                    lease_deadline_monotonic_ns=0,
                     generation=17,
                     stamp_monotonic_ns=1_000_000_000,
                 ),
@@ -417,7 +411,7 @@ class ExamplesSmokeTest(unittest.TestCase):
             external_control.PERIOD_S,
         )
 
-    def test_external_example_runs_large_pose_with_90_second_lease(self):
+    def test_external_example_runs_large_pose_with_zero_deadline(self):
         clock = FakeClock()
         harness = RecordingController(clock)
         self.addCleanup(harness.close)
@@ -430,7 +424,7 @@ class ExamplesSmokeTest(unittest.TestCase):
             message for topic, message in harness.transport.published
             if topic == CONTROL_REQUEST_TOPIC
         ]
-        self.assertEqual(requests[0].requested_lease_ms, 90_000)
+        self.assertEqual(requests[0].requested_lease_ms, 0)
         commands = [
             message for topic, message in harness.transport.published
             if topic == EXTERNAL_COMMAND_TOPIC
@@ -446,46 +440,33 @@ class ExamplesSmokeTest(unittest.TestCase):
         self.assertLess(duration, 61.0)
         self.assertEqual(harness.status.current_action, "PASSIVE")
 
-    def test_external_example_rejects_trajectory_that_exceeds_nominal_lease(self):
+    def test_external_example_runs_beyond_old_duration_and_cancels(self):
         clock = FakeClock()
         harness = RecordingController(clock)
         self.addCleanup(harness.close)
         harness.measured_q = [3.0] * 42
 
-        with self.assertRaisesRegex(ValueError, "90-second lease"):
-            external_control.run(
-                harness,
-                timeout=1.0,
-                sleep=clock.sleep,
-                monotonic=clock.monotonic,
-                emit=lambda _: None,
-            )
+        external_control.run(
+            harness,
+            timeout=1.0,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            emit=lambda _: None,
+        )
 
-        self.assertNotIn("enter_external", harness.calls)
-
-    def test_external_example_cancels_when_actual_remaining_lease_is_short(self):
-        clock = FakeClock()
-        harness = RecordingController(clock, lease_remaining_s=30.0)
-        self.addCleanup(harness.close)
-        harness.measured_q[31] = -1.95
-
-        with self.assertRaisesRegex(RuntimeError, "remaining lease"):
-            external_control.run(
-                harness,
-                timeout=1.0,
-                sleep=clock.sleep,
-                monotonic=clock.monotonic,
-                emit=lambda _: None,
-            )
-
+        self.assertGreater(harness.command_times[-1] - harness.command_times[0], 90.0)
         self.assertIn("enter_external", harness.calls)
         self.assertEqual(harness.calls[-1], "exit_external")
-        self.assertFalse(
-            any(
-                topic == EXTERNAL_COMMAND_TOPIC
-                for topic, _ in harness.transport.published
-            )
+        requests = [
+            message for topic, message in harness.transport.published
+            if topic == CONTROL_REQUEST_TOPIC
+        ]
+        self.assertEqual(
+            [request.operation for request in requests],
+            [ControlOperation.PREPARE, ControlOperation.COMMIT, ControlOperation.CANCEL],
         )
+        self.assertTrue(all(request.requested_lease_ms == 0 for request in requests))
+        self.assertEqual(harness.status.current_action, "PASSIVE")
 
     def test_external_example_rejects_stale_preflight_lowstate(self):
         clock = FakeClock()

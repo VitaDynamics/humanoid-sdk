@@ -166,6 +166,25 @@ class AortaBindingContractTest(unittest.TestCase):
         self.assertEqual(command_view.ExternalSessionId(), 42)
         self.assertEqual(command_view.ExternalSequence(), 3)
 
+    def test_prepare_encodes_zero_duration_with_real_bindings(self) -> None:
+        import flatbuffers
+
+        bindings = transport_module._load_aorta_bindings()
+        request = ControlRequest(
+            request_id="request-unlimited",
+            client_id="client-1",
+            operation=ControlOperation.PREPARE,
+        )
+        builder = flatbuffers.Builder(256)
+        root = transport_module._fill_control_request(bindings, request, builder, 0)
+        builder.Finish(root)
+        view = bindings.control_request_module.ControlRequest.GetRootAs(builder.Output())
+        self.assertEqual(view.Operation(), 1)
+        self.assertEqual(view.RequestId(), b"request-unlimited")
+        self.assertEqual(view.ClientId(), b"client-1")
+        self.assertEqual(view.LeaseId(), b"")
+        self.assertEqual(view.RequestedLeaseMs(), 0)
+
     def test_lowstate_timestamp_converts_microseconds_to_nanoseconds(self) -> None:
         import flatbuffers
         import lowlevel.HumanoidLowState as lowstate_module

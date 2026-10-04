@@ -66,7 +66,7 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
    the private copy. The already-published v0.1.0-rc.1 bundle lacks this file;
    obtain it from a reviewed compatible SDK revision, not an invented default.
 6. With permission to connect to the target, run the documented bounded
-   `examples/lowstate_subscriber.py` check. It must not request a control lease or
+   `examples/lowstate_subscriber.py` check. It must not request control ownership or
    publish a motion command. Confirm fresh feedback, expected joint count and
    finite values; report timeout or shutdown warnings rather than hiding them.
 7. Stop at the read-only milestone unless the user requests a motion demo.
@@ -79,8 +79,9 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
   current on-site confirmation of reliable support, clear movement and pinch
   zones, an attendant and a usable emergency stop. A CLI confirmation flag is
   not a substitute for that confirmation.
-- Explain that the EXTERNAL demo moves joints, requests a 90-second lease, and
-  exits through CANCEL to PASSIVE. PASSIVE can let loaded limbs fall; do not
+- Explain that the EXTERNAL demo moves joints, requests control with no automatic
+  expiry, and exits through CANCEL to PASSIVE. Client failure does not automatically
+  release ownership. PASSIVE can let loaded limbs fall; do not
   promise restoration of an action cleared during entry. Inspect the current
   demo's targets and gains rather than assuming another robot's tuning is safe.
 - Verify the effective configuration and real joint roster. Use the full
@@ -88,7 +89,7 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
   the supported configuration; do not hide an absent or faulty actuator by
   changing it to MOCK. Do not raise limits or disable safety checks to make a
   demonstration pass.
-- Keep server lease/session ownership, increasing command sequence, watchdog,
+- Keep server session ownership, increasing command sequence, watchdog,
   command validation and safe exit intact. ACK acceptance is not completed
   state transition; verify the resulting status.
 - Do not automatically retry motion after a fault, communication timeout,
