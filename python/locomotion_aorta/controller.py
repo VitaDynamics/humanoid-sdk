@@ -125,26 +125,12 @@ class ExternalController:
             "timed out waiting for humanoid lowstate",
         )
 
-    def enter_external(
-        self, timeout: float, *, lease_duration_s: float = 30.0
-    ) -> ControlStatus:
-        """Enter EXTERNAL; zero lease duration requests an unlimited lease.
+    def enter_external(self, timeout: float) -> ControlStatus:
+        """Enter EXTERNAL with no automatic expiry.
 
-        timeout bounds entry only. An unlimited lease still requires CANCEL on
-        exit and remains subject to command-stream timeout and safety checks.
+        timeout bounds entry only. Call exit_external() to release control;
+        command-stream timeout and safety checks remain active.
         """
-        if (
-            isinstance(lease_duration_s, bool)
-            or not isinstance(lease_duration_s, (int, float))
-            or not (
-                lease_duration_s == 0
-                or 0.001 <= lease_duration_s <= ((1 << 32) - 1) / 1000
-            )
-        ):
-            raise ValueError(
-                "lease_duration_s must be zero or fit a positive uint32 millisecond duration"
-            )
-        requested_lease_ms = int(lease_duration_s * 1000)
         deadline = _deadline(timeout)
         with self._condition:
             self._ensure_open()
@@ -159,9 +145,7 @@ class ExternalController:
             self._acks.clear()
 
         try:
-            prepare = self._request(
-                ControlOperation.PREPARE, requested_lease_ms=requested_lease_ms
-            )
+            prepare = self._request(ControlOperation.PREPARE)
             self.transport.publish(CONTROL_REQUEST_TOPIC, prepare)
             prepare_ack = self._wait_for_ack(
                 request_id, ControlOperation.PREPARE, deadline
@@ -362,9 +346,7 @@ class ExternalController:
                     raise ExternalControlTimeoutError(timeout_message)
                 self._condition.wait(remaining)
 
-    def _request(
-        self, operation: ControlOperation, *, requested_lease_ms: int = 0
-    ) -> ControlRequest:
+    def _request(self, operation: ControlOperation) -> ControlRequest:
         if self._request_id is None:
             raise ExternalControlError("no active request identity")
         return ControlRequest(
@@ -372,7 +354,7 @@ class ExternalController:
             client_id=self.client_id,
             operation=operation,
             lease_id=self._lease_id,
-            requested_lease_ms=requested_lease_ms,
+            requested_lease_ms=0,
         )
 
     def _best_effort_cancel(self) -> None:
