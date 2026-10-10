@@ -1,0 +1,114 @@
+name: SDK latency
+
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-latency-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  latency:
+    # Stable required-check name. No path/draft filters, no continue-on-error.
+    name: SDK latency report
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    env:
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.10"
+      - name: Fetch pinned runtime from this repository's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wheelhouse"
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          manifest = json.loads(pathlib.Path('compatibility.json').read_text())
+          wheelhouse = pathlib.Path(os.environ['RUNNER_TEMP']) / 'wheelhouse'
+          names = [n for n in manifest['wheel_sha256'] if n.endswith(('-linux_x86_64.whl', '-any.whl'))]
+          if sorted(n.split('-')[0] for n in names) != ['aorta_msgs', 'aorta_sdk', 'flatbuffers']:
+              raise RuntimeError('incomplete pinned wheelhouse')
+          command = ['gh', 'release', 'download', 'v0.1.0-rc.2', '--repo', os.environ['GITHUB_REPOSITORY'],
+                     '--dir', str(wheelhouse)]
+          for name in names:
+              command.extend(['--pattern', name])
+          subprocess.run(command, check=True)
+          for name in names:
+              if hashlib.sha256((wheelhouse / name).read_bytes()).hexdigest() != manifest['wheel_sha256'][name]:
+                  raise RuntimeError(f'checksum mismatch: {name}')
+          PY
+      - name: Install pinned bindings and run SDK/report unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --no-index "$RUNNER_TEMP"/wheelhouse/*.whl
+          python -m pip check
+          PYTHONPATH=python:tests python -m unittest discover -s tests -v
+      - name: Build standalone C++ Mock
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/latency/build_mock.py --build-dir "$RUNNER_TEMP/latency-build" 2>&1 | tee "$RUNNER_TEMP/latency-build.log"
+      - name: Measure all frequencies (60 seconds each, sequential)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/latency/run.py --build-dir "$RUNNER_TEMP/latency-build" \
+            --output "$RUNNER_TEMP/latency-results" --seconds 60 \
+            --rates 50 100 200 300 400 500 600 700 800 900 1000
+          python - <<'PY'
+          import json, os, pathlib
+          r = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'latency-results/results.json').read_text())
+          if r['status'] != 'PASS' or len(r['results']) != 11:
+              raise RuntimeError('incomplete full latency report')
+          PY
+      - name: Publish summary (including setup/test failures)
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, 'tests/latency')
+          from report import render
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'latency-results'
+          if not (out / 'results.json').exists():
+              out.mkdir(exist_ok=True)
+              render(out, {'status': 'NOT_MEASURED', 'results': [],
+                           'error': 'Setup/build failed or run interrupted; inspect job log.'})
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write((out / 'summary.md').read_text())
+          PY
+      - name: Upload HTML, raw CSV, JSON, logs and provenance
+        id: report_artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sdk-latency-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/latency-results/
+            ${{ runner.temp }}/latency-build.log
+            ${{ runner.temp }}/latency-build/build.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Add report download link to Summary
+        if: ${{ always() && steps.report_artifact.outputs.artifact-url != '' }}
+        env:
+          REPORT_URL: ${{ steps.report_artifact.outputs.artifact-url }}
+        shell: bash
+        run: |
+          printf '\n[下载完整报告 ZIP（含 report.html、CSV、JSON）](%s)\n' "$REPORT_URL" >> "$GITHUB_STEP_SUMMARY"
