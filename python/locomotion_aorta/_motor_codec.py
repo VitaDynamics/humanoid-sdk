@@ -11,6 +11,7 @@ from typing import Any
 from .types import MotorCommand, MotorState
 
 
+_U16 = struct.Struct("<H")
 _U32 = struct.Struct("<I")
 _S32 = struct.Struct("<i")
 _VTABLE_HEADER = struct.Struct("<HH")
@@ -59,10 +60,9 @@ def _state_plan(
     if length < 4 or length % 2 or object_size < 4:
         raise ValueError("invalid HumanoidMotorState vtable")
     _check_bounds(vtable, length, size)
-    entries = struct.unpack_from("<" + "H" * (length // 2), data, vtable)
     fields = []
     for index, (slot, fmt, width) in enumerate(_STATE_FIELDS):
-        offset = entries[slot // 2] if slot < length else 0
+        offset = _U16.unpack_from(data, vtable + slot)[0] if slot < length else 0
         if offset:
             if offset < 4 or offset + width > object_size:
                 raise ValueError("HumanoidMotorState scalar outside table")
@@ -108,9 +108,9 @@ def unpack_motor_states(view: Any) -> tuple[MotorState, ...]:
         if plan is None:
             plan = _state_plan(data, vtable, size)
             plans[vtable] = plan
-        packer, indices, object_size = plan
+        unpacker, indices, object_size = plan
         _check_bounds(pos, object_size, size)
-        values = packer.unpack_from(data, pos) + (0.0,)
+        values = unpacker.unpack_from(data, pos) + (0.0,)
         motors.append(MotorState(
             q=values[indices[0]],
             dq=values[indices[1]],
