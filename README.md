@@ -106,6 +106,10 @@ CANCEL；命令断流保护、控制权校验和安全检查保持不变。客�
 
 ## 开发与离线打包
 
+PR 的 `SDK latency report` 检查在 x86 上运行 Python SDK ↔ C++ Mock 通信测试，
+50～1000 Hz 每档至少 60 秒，保存 HTML、原始 CSV、JSON 与双向频率/延迟统计。
+复现方式和测量边界见 [latency CI](tests/latency/README.md)；这不是实机/HIL 验收。
+
 维护者安装匹配的 Aorta wheels 后，在独立 venv 内执行：
 
 ```bash
