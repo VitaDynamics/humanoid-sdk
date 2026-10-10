@@ -14,6 +14,7 @@ from .types import MotorCommand, MotorState
 _U32 = struct.Struct("<I")
 _S32 = struct.Struct("<i")
 _VTABLE_HEADER = struct.Struct("<HH")
+_STATE_VECTOR_SLOT = 20  # motor_states, not the legacy motor_state.
 # Vtable slots/types from aorta-msgs 2026.9.10+humanoid.7100871:
 # Q, Dq, TauEst (float32), Temperature (signed int8).
 _STATE_FIELDS = ((12, "f", 4), (14, "f", 4), (18, "f", 4), (26, "b", 1))
@@ -24,7 +25,9 @@ def _command_packer(count: int) -> struct.Struct:
     return struct.Struct("<" + "B3xfffff" * count)
 
 
-def pack_motor_commands(motors: tuple[MotorCommand, ...]) -> bytes:
+def create_motor_cmd_vector(
+    builder: Any, module: Any, motors: tuple[MotorCommand, ...]
+) -> int:
     # Preserve the generated encoder's uint8 range check / TypeError before
     # struct.pack (which otherwise raises struct.error for out-of-range modes).
     from flatbuffers.number_types import Uint8Flags, enforce_number
@@ -33,7 +36,14 @@ def pack_motor_commands(motors: tuple[MotorCommand, ...]) -> bytes:
     for motor in motors:
         enforce_number(motor.mode, Uint8Flags)
         fields.extend((motor.mode, motor.q, motor.dq, motor.tau, motor.kp, motor.kd))
-    return _command_packer(len(motors)).pack(*fields)
+    payload = _command_packer(len(motors)).pack(*fields)
+    module.LowCmdStartMotorCmdVector(builder, len(motors))
+    # StartVector reserves/aligns the structs. Copy once, using the pinned
+    # FlatBuffers Builder.CreateByteVector head/Bytes convention.
+    end = builder.Head()
+    builder.head = end - len(payload)
+    builder.Bytes[builder.Head():end] = payload
+    return builder.EndVector()
 
 
 def _check_bounds(start: int, width: int, size: int) -> None:
@@ -41,7 +51,9 @@ def _check_bounds(start: int, width: int, size: int) -> None:
         raise ValueError("HumanoidLowState field outside buffer")
 
 
-def _state_plan(data: Any, vtable: int, size: int) -> tuple:
+def _state_plan(
+    data: memoryview, vtable: int, size: int
+) -> tuple[struct.Struct, tuple[int, ...], int]:
     _check_bounds(vtable, _VTABLE_HEADER.size, size)
     length, object_size = _VTABLE_HEADER.unpack_from(data, vtable)
     if length < 4 or length % 2 or object_size < 4:
@@ -70,9 +82,10 @@ def _state_plan(data: Any, vtable: int, size: int) -> tuple:
 
 
 def unpack_motor_states(view: Any) -> tuple[MotorState, ...]:
-    data, root = view._tab.Bytes, view._tab.Pos
+    data = memoryview(view._tab.Bytes).cast("B")
+    root = view._tab.Pos
     size = len(data)
-    offset = view._tab.Offset(20)  # motor_states, not the legacy motor_state.
+    offset = view._tab.Offset(_STATE_VECTOR_SLOT)
     if not offset:
         return ()
     pointer = root + offset
@@ -82,7 +95,7 @@ def unpack_motor_states(view: Any) -> tuple[MotorState, ...]:
     count = _U32.unpack_from(data, vector)[0]
     first = vector + 4
     _check_bounds(first, count * 4, size)
-    offsets = struct.iter_unpack("<I", memoryview(data)[first:first + count * 4])
+    offsets = struct.iter_unpack("<I", data[first:first + count * 4])
     plans = {}  # Message-local: never reuse addresses from an earlier buffer.
     motors = []
     for index, (relative,) in enumerate(offsets):

@@ -10,6 +10,7 @@ import flatbuffers
 import aorta.sys.AortaHeader as header_module
 import lowlevel.HumanoidLowState as state_module
 import lowlevel.HumanoidMotorState as motor_state_module
+import lowlevel.MotorCmd as motor_cmd_module
 
 from locomotion_aorta import HumanoidLowState, LowCmd, MotorCommand, MotorState
 from locomotion_aorta import transport
@@ -20,7 +21,7 @@ def reference_fill_low_cmd(bindings, command, builder, header):
     module = bindings.low_cmd_module
     module.LowCmdStartMotorCmdVector(builder, len(command.motor_cmds))
     for motor in reversed(command.motor_cmds):
-        bindings.motor_cmd_module.CreateMotorCmd(
+        motor_cmd_module.CreateMotorCmd(
             builder, motor.mode, motor.q, motor.dq, motor.tau, motor.kp, motor.kd
         )
     vector = builder.EndVector()
@@ -154,7 +155,7 @@ class MotorCommandCodecTest(unittest.TestCase):
     def test_generated_per_motor_encoder_is_not_called(self):
         motors = [MotorCommand(10, q=.25)] * 42
         expected = self.assert_same_wire(motors)  # Positive equivalence control.
-        with patch.object(self.bindings.motor_cmd_module, "CreateMotorCmd",
+        with patch.object(motor_cmd_module, "CreateMotorCmd",
                           side_effect=AssertionError("per-slot encoding")):
             self.assertEqual(encode(self.bindings, LowCmd(65535, tuple(motors), 1,
                                                         2**64 - 1, 2**64 - 2),
@@ -240,6 +241,15 @@ class MotorStateCodecTest(unittest.TestCase):
         for kind in (bytes, bytearray, memoryview):
             self.assert_same_state(kind(data))
         self.assert_same_state(b"prefix!!" + data, offset=8)
+
+    def test_typed_and_multidimensional_memoryviews_use_byte_offsets(self):
+        data = build_state([dict(Q=1, Dq=2, TauEst=3, Temperature=4)] * 44)
+        self.assert_same_state(data)  # Positive control for the same wire bytes.
+        for fmt in ("I", "Q"):
+            with self.subTest(format=fmt):
+                self.assert_same_state(memoryview(data).cast(fmt))
+                self.assert_same_state(memoryview(b"prefix!!" + data).cast(fmt), offset=8)
+        self.assert_same_state(memoryview(data).cast("B", shape=(len(data) // 8, 8)))
 
     def test_no_generated_per_motor_accessors(self):
         data = build_state([dict(Q=1, Dq=2, TauEst=3, Temperature=4)] * 44)

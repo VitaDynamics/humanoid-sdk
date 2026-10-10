@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from ._motor_codec import pack_motor_commands, unpack_motor_states
+from ._motor_codec import create_motor_cmd_vector, unpack_motor_states
 from .types import (
     ControlAck,
     ControlOperation,
@@ -47,7 +47,6 @@ class _AortaBindings:
     aorta: Any
     control_request_module: Any
     low_cmd_module: Any
-    motor_cmd_module: Any
     control_request_schema_meta: Any
     low_cmd_schema_meta: Any
     humanoid_low_state_decoder: Callable[[bytes], Any]
@@ -167,12 +166,10 @@ def _load_aorta_bindings() -> _AortaBindings:
     control_status = importlib.import_module("locomotion_sdk.ControlStatus")
     humanoid_lowstate = importlib.import_module("lowlevel.HumanoidLowState")
     low_cmd = importlib.import_module("lowlevel.LowCmd")
-    motor_cmd = importlib.import_module("lowlevel.MotorCmd")
     return _AortaBindings(
         aorta=aorta,
         control_request_module=control_request,
         low_cmd_module=low_cmd,
-        motor_cmd_module=motor_cmd,
         control_request_schema_meta=importlib.import_module(
             "control_request_schema_meta"
         ),
@@ -213,14 +210,7 @@ def _fill_low_cmd(
     header: int,
 ) -> int:
     module = bindings.low_cmd_module
-    payload = pack_motor_commands(command.motor_cmds)
-    module.LowCmdStartMotorCmdVector(builder, len(command.motor_cmds))
-    # StartVector reserves/aligns all 24-byte structs. Copy once, following
-    # the pinned FlatBuffers Builder.CreateByteVector head/Bytes convention.
-    end = builder.Head()
-    builder.head = end - len(payload)
-    builder.Bytes[builder.Head():end] = payload
-    motor_cmds = builder.EndVector()
+    motor_cmds = create_motor_cmd_vector(builder, module, command.motor_cmds)
     module.LowCmdStart(builder)
     module.LowCmdAddAortaHeader(builder, header)
     module.LowCmdAddMotorCmd(builder, motor_cmds)
