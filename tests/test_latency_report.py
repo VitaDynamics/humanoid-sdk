@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parent / "latency"))
-from report import STAGES, analyze, render
+from report import STAGES, analyze, proportional_bar, render
 
 
 class LatencyReportTest(unittest.TestCase):
@@ -87,6 +87,47 @@ class LatencyReportTest(unittest.TestCase):
         self.assertEqual(json.loads((self.directory / "results.json").read_text())["status"], "FAIL")
         self.assertIn("&lt;script&gt;", (self.directory / "report.html").read_text())
         self.assertNotIn("<script>", (self.directory / "report.html").read_text())
+
+    def test_summary_has_inline_charts_and_publish_metric(self):
+        result = self.analyze()
+        result["sdk_publish_call"]["p95_ms"] = 123.456789
+        render(self.directory, {"status": "SMOKE_ONLY", "results": [result],
+                               "pr_head": "reviewed-head", "git_head": "merge-checkout"})
+        for name in ("summary.md", "report.html"):
+            text = (self.directory / name).read_text()
+            self.assertIn("123.456789", text)
+            self.assertIn("重叠", text)
+            self.assertIn("reviewed-head", text)
+            self.assertIn("merge-checkout", text)
+            for _, _, label in STAGES:
+                self.assertIn(label, text)
+        summary = (self.directory / "summary.md").read_text()
+        self.assertIn("## 往返延迟", summary)
+        self.assertIn("## 实际发送与回复频率", summary)
+        self.assertIn("## 八阶段耗时", summary)
+        self.assertIn("█", summary)
+        self.assertNotIn("<svg", summary)
+        self.assertNotIn("![", summary)  # no private artifact/external-image dependency
+
+    def test_bar_scale_zero_and_fractional_cells(self):
+        self.assertEqual(proportional_bar(0, 0, 8), " " * 8)
+        self.assertEqual(proportional_bar(8, 8, 8), "█" * 8)
+        self.assertEqual(proportional_bar(4, 8, 8), "████    ")
+        self.assertEqual(proportional_bar(.5, 8, 8), "▌       ")
+
+    def test_setup_failure_renders_without_fabricated_charts(self):
+        render(self.directory, {"status": "NOT_MEASURED", "results": [], "error": "setup failed"})
+        for name in ("summary.md", "report.html"):
+            text = (self.directory / name).read_text()
+            self.assertIn("NOT_MEASURED", text)
+            self.assertIn("setup failed", text)
+        self.assertNotIn("```text", (self.directory / "summary.md").read_text())
+
+    def test_full_summary_stays_within_github_size_limit(self):
+        result = self.analyze()
+        results = [dict(result, rate_hz=hz) for hz in (50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000)]
+        render(self.directory, {"status": "PASS", "results": results})
+        self.assertLess((self.directory / "summary.md").stat().st_size, 1_000_000)
 
 
 if __name__ == "__main__":

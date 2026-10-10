@@ -6,6 +6,7 @@ import importlib.metadata
 import json
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import tarfile
 import urllib.request
@@ -24,6 +25,26 @@ def run(*args):
     subprocess.run(list(map(str, args)), check=True)
 
 
+def extract_source(archive, directory):
+    """Restore compiler inputs from the pinned archive, never trust a reused tree."""
+    if digest(archive) != FB_SHA:
+        raise RuntimeError("FlatBuffers archive checksum mismatch")
+    source = directory / "flatbuffers-25.9.23"
+    if source.is_symlink():
+        raise RuntimeError("FlatBuffers source directory must not be a symlink")
+    with tarfile.open(archive) as tar:
+        # Java/TS links are irrelevant to flatc. Only extract the expected subtree.
+        members = [m for m in tar.getmembers() if m.isfile() or m.isdir()]
+        for member in members:
+            path = Path(member.name)
+            if not path.parts or path.is_absolute() or ".." in path.parts or path.parts[0] != source.name:
+                raise RuntimeError("unsafe archive member")
+        if source.exists():
+            shutil.rmtree(source)  # only this task's extracted dependency, not its build cache
+        tar.extractall(directory, members=members)
+    return source
+
+
 def build(directory):
     directory = directory.resolve()
     directory.mkdir(parents=True, exist_ok=True)
@@ -40,18 +61,7 @@ def build(directory):
     if not archive.exists():
         with urllib.request.urlopen(FB_URL, timeout=120) as response:
             archive.write_bytes(response.read())
-    if digest(archive) != FB_SHA:
-        raise RuntimeError("FlatBuffers archive checksum mismatch")
-    source = directory / "flatbuffers-25.9.23"
-    if not source.exists():
-        # The archive is pinned above; omit Java/TS links and reject traversal.
-        with tarfile.open(archive) as tar:
-            members = [m for m in tar.getmembers() if m.isfile() or m.isdir()]
-            for member in members:
-                dest = (directory / member.name).resolve()
-                if not dest.is_relative_to(directory):
-                    raise RuntimeError("unsafe archive member")
-            tar.extractall(directory, members=members)
+    source = extract_source(archive, directory)
     cmake = directory / "flatbuffers-build"
     run("cmake", "-S", source, "-B", cmake, "-DCMAKE_BUILD_TYPE=Release",
         "-DFLATBUFFERS_BUILD_TESTS=OFF", "-DFLATBUFFERS_BUILD_FLATLIB=OFF")

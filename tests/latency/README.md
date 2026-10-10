@@ -39,6 +39,8 @@ process watchdogs only terminate the benchmark's own process groups.
 - C++ message headers are generated from the wheel's actual BFBS, not a copied
   or simplified schema. FlatBuffers 25.9.23 source is SHA256-pinned. CMake/g++
   build only flatc and the small Mock; no robot build/toolchain is required.
+  Reusing a build directory always restores extracted sources from the verified
+  archive (discarding local edits/extra files there); the compiler cache is kept.
 - `build.json` records schema/runtime/binary hashes and compiler. `results.json`
   records checkout SHA, PR head, source hashes, runtime versions, environment,
   raw counts and every rate's statistics. PR runs normally test GitHub's merge
@@ -46,7 +48,15 @@ process watchdogs only terminate the benchmark's own process groups.
 
 ## Reports and interpretation
 
-Download `sdk-latency-<run>-<attempt>` from Actions (30-day retention):
+Open the **SDK latency report** job's Summary directly from the PR checks.
+It displays proportional text bar charts for RTT, both directions' frequencies,
+SDK publish-call time, and expandable eight-stage charts/tables. These use plain
+GitHub Markdown, without an external image host, public data upload or PR write
+permission. Bars share the stated scale and round to 1/8 character; exact numbers
+remain visible. They are not interactive SVG charts.
+
+The Summary also links to `sdk-latency-<run>-<attempt>` (30-day retention).
+Download and unzip it for the full SVG/HTML presentation and raw evidence:
 
 - `report.html`: self-contained Chinese eight-stage proportional time chart;
 - `summary.md`, `results.json`: both directions' actual send/receive Hz, matched

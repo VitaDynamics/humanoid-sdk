@@ -35,28 +35,27 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/wheelhouse"
-          gh release download v0.1.0-rc.2 --repo "$GITHUB_REPOSITORY" \
-            --pattern 'aorta_sdk-2026.9.10+humanoid.7100871-py3-none-linux_x86_64.whl' \
-            --pattern 'aorta_msgs-2026.9.10+humanoid.7100871-py3-none-any.whl' \
-            --pattern 'flatbuffers-25.9.23-py2.py3-none-any.whl' \
-            --dir "$RUNNER_TEMP/wheelhouse"
           python - <<'PY'
-          import hashlib, json, os, pathlib
+          import hashlib, json, os, pathlib, subprocess
           manifest = json.loads(pathlib.Path('compatibility.json').read_text())
-          files = list((pathlib.Path(os.environ['RUNNER_TEMP']) / 'wheelhouse').glob('*.whl'))
-          if len(files) != 3:
+          wheelhouse = pathlib.Path(os.environ['RUNNER_TEMP']) / 'wheelhouse'
+          names = [n for n in manifest['wheel_sha256'] if n.endswith(('-linux_x86_64.whl', '-any.whl'))]
+          if sorted(n.split('-')[0] for n in names) != ['aorta_msgs', 'aorta_sdk', 'flatbuffers']:
               raise RuntimeError('incomplete pinned wheelhouse')
-          for p in files:
-              if hashlib.sha256(p.read_bytes()).hexdigest() != manifest['wheel_sha256'][p.name]:
-                  raise RuntimeError(f'checksum mismatch: {p.name}')
+          command = ['gh', 'release', 'download', 'v0.1.0-rc.2', '--repo', os.environ['GITHUB_REPOSITORY'],
+                     '--dir', str(wheelhouse)]
+          for name in names:
+              command.extend(['--pattern', name])
+          subprocess.run(command, check=True)
+          for name in names:
+              if hashlib.sha256((wheelhouse / name).read_bytes()).hexdigest() != manifest['wheel_sha256'][name]:
+                  raise RuntimeError(f'checksum mismatch: {name}')
           PY
       - name: Install pinned bindings and run SDK/report unit tests
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --no-index --find-links="$RUNNER_TEMP/wheelhouse" \
-            'aorta-sdk==2026.9.10+humanoid.7100871' \
-            'aorta-msgs==2026.9.10+humanoid.7100871' 'flatbuffers==25.9.23'
+          python -m pip install --no-index "$RUNNER_TEMP"/wheelhouse/*.whl
           python -m pip check
           PYTHONPATH=python:tests python -m unittest discover -s tests -v
       - name: Build standalone C++ Mock
@@ -95,6 +94,7 @@ jobs:
               summary.write((out / 'summary.md').read_text())
           PY
       - name: Upload HTML, raw CSV, JSON, logs and provenance
+        id: report_artifact
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -105,3 +105,10 @@ jobs:
             ${{ runner.temp }}/latency-build/build.json
           if-no-files-found: error
           retention-days: 30
+      - name: Add report download link to Summary
+        if: ${{ always() && steps.report_artifact.outputs.artifact-url != '' }}
+        env:
+          REPORT_URL: ${{ steps.report_artifact.outputs.artifact-url }}
+        shell: bash
+        run: |
+          printf '\n[下载完整报告 ZIP（含 report.html、CSV、JSON）](%s)\n' "$REPORT_URL" >> "$GITHUB_STEP_SUMMARY"
