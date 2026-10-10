@@ -61,6 +61,8 @@ Stage bars use **means of the same matched rows**, whose sum is mean RTT.
 Percentiles do not add. SDK publish-call time overlaps transport and is reported
 separately. The two communication stages include Aorta/Zenoh scheduling, copies,
 Python dispatch/GIL and kernel transport; they are not pure TCP latency.
+RTT begins at the C++ Aorta byte-publication call; the synthetic state's
+construction and serialization happen before that boundary and are excluded.
 
 The initial gate requires successful processes, complete frequency windows,
 valid exact-ID joins, nonempty data, monotonic stage order and a produced report.

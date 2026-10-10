@@ -35,7 +35,14 @@ def main():
 
     def timed_decode(view):
         timing.decode_ns = time.monotonic_ns()
-        result = decode(view)
+        try:
+            result = decode(view)
+        except Exception as error:
+            # Aorta logs callback exceptions; make them fail the benchmark too,
+            # rather than misreporting an SDK decoding regression as packet loss.
+            with lock:
+                errors.append(repr(error))
+            raise
         timing.decoded_ns = time.monotonic_ns()
         return result
 
