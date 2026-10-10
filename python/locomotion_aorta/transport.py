@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ._motor_codec import pack_motor_commands, unpack_motor_states
 from .types import (
     ControlAck,
     ControlOperation,
@@ -13,7 +14,6 @@ from .types import (
     ExternalPhase,
     HumanoidLowState,
     LowCmd,
-    MotorState,
 )
 
 
@@ -213,17 +213,13 @@ def _fill_low_cmd(
     header: int,
 ) -> int:
     module = bindings.low_cmd_module
+    payload = pack_motor_commands(command.motor_cmds)
     module.LowCmdStartMotorCmdVector(builder, len(command.motor_cmds))
-    for motor in reversed(command.motor_cmds):
-        bindings.motor_cmd_module.CreateMotorCmd(
-            builder,
-            motor.mode,
-            motor.q,
-            motor.dq,
-            motor.tau,
-            motor.kp,
-            motor.kd,
-        )
+    # StartVector reserves/aligns all 24-byte structs. Copy once, following
+    # the pinned FlatBuffers Builder.CreateByteVector head/Bytes convention.
+    end = builder.Head()
+    builder.head = end - len(payload)
+    builder.Bytes[builder.Head():end] = payload
     motor_cmds = builder.EndVector()
     module.LowCmdStart(builder)
     module.LowCmdAddAortaHeader(builder, header)
@@ -270,23 +266,10 @@ def _decode_control_status(view: Any) -> ControlStatus:
 
 
 def _decode_humanoid_lowstate(view: Any) -> HumanoidLowState:
-    motor_states = []
-    for index in range(view.MotorStatesLength()):
-        motor = view.MotorStates(index)
-        motor_states.append(
-            MotorState()
-            if motor is None
-            else MotorState(
-                q=float(motor.Q()),
-                dq=float(motor.Dq()),
-                tau_est=float(motor.TauEst()),
-                temperature=float(motor.Temperature()),
-            )
-        )
     return HumanoidLowState(
         state_id=int(view.StateId()),
         stamp_ns=int(view.TsStateReal()) * 1000,
-        motor_states=tuple(motor_states),
+        motor_states=unpack_motor_states(view),
         attitude_valid=bool(view.AttitudeValid()),
     )
 
