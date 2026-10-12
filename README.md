@@ -94,6 +94,66 @@ CANCEL；命令断流保护、控制权校验和安全检查保持不变。客�
 需要支持零时长无限期的机器人软件；旧服务端拒绝时会报错，不回退到有限期请求。
 这些是源码变更，尚未进入已发布的 `v0.1.0-rc.1` 包；安装仍须核对匹配的发布组合。
 
+## Revo2 手部专用测试入口（开发中，未发布/实机验收）
+
+`examples/brainco_hand_control.py` 不使用全身归零 demo 的目标和增益。
+先由现场审核人准备完整的 JSON 测试规格，再离线校验：
+
+```bash
+python examples/brainco_hand_control.py --spec reviewed-test.json
+```
+
+默认 `--mode validate` 不创建通信节点、不申请控制权。获得只读连接授权后可用
+`--mode observe` 检查 200 ms 持续更新的全身反馈与批准基线。
+只有显式 `--mode move --confirm-motion` 才申请 EXTERNAL；命令行确认不能替代本轮
+现场授权、支撑、看护、独立停机手段和设备单位/限值/固件核验。不要把测试中的
+synthetic fixture 作为真机规格。源码入口不等于已发布 bundle 已包含此功能。
+
+规格必须明确提供以下字段，拒绝缺项、额外字段、重复 JSON key 和非有限值：
+
+| 字段 | 约定 |
+| --- | --- |
+| `format_version` / `robot_profile` | `1` / `foot_humanoid_asample_brainco`，全身 A-sample |
+| `reviewed_by` / `robot_config_sha256` / `device_preflight_evidence` / `stop_method` | 审核人、有效配置摘要、设备预检证据、已验证的现场停止方式；程序只记录规格摘要，不能远程核验这些声明 |
+| `baseline` | 完整 42 项，每项显式 `mode/q/dq/tau/kp/kd`；静态基线 `mode=10,dq=0`，由现场审定，不能自动复制全身反馈或归零 |
+| `hand_limits` | 以槽位字符串为 key，覆盖左 25–30、右 34–39，每项有 `lower_rad/upper_rad/max_target_rate_rad_s` |
+| `target_positions_rad` | 仅选上述手槽的绝对目标，可单指、单手或双手；其他槽及字段保持批准基线不变 |
+| `position_tolerance_rad` | 42 项明确的预检/跟踪/非目标漂移容差 |
+| `move_duration_s` / `settle_duration_s` | 单向插值时长、末端目标继续发布的时长；结束时检查一帧新鲜且静止的反馈，不证明手端物理停止/释力 |
+| `max_feedback_gap_s` / `max_status_gap_s` / `stationary_dq_rad_s` | 反馈/控制状态更新预算和静止速度阈值，须按设备验证后填写 |
+
+所有手槽的 `dq/tau/kp/kd` 必须为零。50 Hz 是目标发布频率上限，不追赶补发；
+`max_target_rate_rad_s` 仅限制软件目标斜率，不能替代手端速度、电流设置。
+最多执行向目标的一段运动，不自动回程或重试；超出量化后的运动与末端保持时长
+加 `max_feedback_gap_s` 的总预算即取消，不无限延长。SDK 的控制权仍无自动到期。
+预算在程序恢复执行时检查，不能抢占阻塞的 I/O 或失去调度的进程，不构成硬实时停机保证。
+
+程序输出 JSONL，区分 LowState、完整 42 槽命令尝试、SDK 调用返回及 CANCEL 结果。
+命令返回不代表电机 ACK；PASSIVE 确认不代表手端停止，也可能使负载肢体下落。
+正常、异常和 Ctrl-C 均尝试退出已发起的会话；退出失败保留 `UNCONFIRMED`，由现场
+执行独立安全处置。当前 SDK 只有整帧时间/序号，没有逐电机新鲜度，且不能据此证明
+跨时钟绝对反馈延迟；该入口不订阅 HandTouch、不替代触觉绑定与 MCAP 验收。
+
+### 只读采集与 MCAP 导出（候选能力）
+
+新增 `examples/brainco_capture.py`：`live` 有时限地订阅 HandTouch、44 槽 LowState、
+42 槽 LowCmd 和 ControlStatus；只创建订阅者，不申请控制权。`mcap-export` 完全离线。
+两者都要求版本/设备元数据、生成的 `aorta.topic.lowlevel.HandTouch` 绑定；缺失即拒绝，
+不使用手写解码器。当前固定 `aorta_msgs` 不含该模块，需由交付方提供与候选机器人匹配的
+附加 HIL wheel；它不属于已发布 SDK 的默认安装。MCAP 功能另需 `hil` extra（mcap 1.3.1）。
+
+```bash
+python examples/brainco_capture.py --help
+python examples/brainco_capture.py --metadata reviewed-metadata.json --output new-trace.jsonl \
+  live --duration-s 60 --group default --stdin-markers
+```
+
+第二条需要新的只读连接授权和已核验的 peer profile。按行输入的标记属于观察端时钟，
+不与机器人时间混用。输出拒绝覆盖，保留部分失败文件，记录本地队列丢样；此计数不等于
+传输/recorder 无丢包。MCAP 导出要求显式 topic 映射及每种 BFBS 的 SHA256，校验容器 CRC
+和末尾，不猜 topic 后缀。`--help` 列出离线参数。取得候选依赖后用 `make check-hil` 验证；
+普通 `make check` 在缺少可选 HIL 依赖时明确跳过该测试类，不代表 HIL 通过。
+
 ## 部署避坑
 
 - `env.sh` 不安装 FlatBuffers；完整 wheelhouse 已将它列为依赖，不用 `--no-deps`。

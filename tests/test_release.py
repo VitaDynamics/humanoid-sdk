@@ -41,6 +41,10 @@ class ReleaseTest(unittest.TestCase):
             (root / "CLAUDE.md").symlink_to("AGENTS.md")
             for name in ("examples", "python/locomotion_aorta", "config", "dist", "wheels"):
                 (root / name).mkdir(parents=True)
+            hand_example = Path("examples/brainco_hand_control.py")
+            shutil.copyfile(ROOT / hand_example, root / hand_example)
+            capture_example = Path("examples/brainco_capture.py")
+            shutil.copyfile(ROOT / capture_example, root / capture_example)
             source = ROOT / "config/pc_session_peer.json5"
             if source.exists():
                 shutil.copyfile(source, root / "config/pc_session_peer.json5")
@@ -62,6 +66,11 @@ class ReleaseTest(unittest.TestCase):
             self.assertEqual(bundled.read_bytes(), source.read_bytes())
             self.assertEqual([p.name for p in (output / "config").iterdir()], [source.name])
             manifest = json.loads((output / "MANIFEST.json").read_text())
+            self.assertEqual((output / hand_example).read_bytes(), (ROOT / hand_example).read_bytes())
+            self.assertEqual(manifest["files"][hand_example.as_posix()],
+                             hashlib.sha256((ROOT / hand_example).read_bytes()).hexdigest())
+            self.assertEqual(manifest["files"][capture_example.as_posix()],
+                             hashlib.sha256((ROOT / capture_example).read_bytes()).hexdigest())
             self.assertEqual(manifest["pc_session_profile"], "config/pc_session_peer.json5")
             self.assertEqual(manifest["files"]["config/pc_session_peer.json5"],
                              hashlib.sha256(bundled.read_bytes()).hexdigest())
