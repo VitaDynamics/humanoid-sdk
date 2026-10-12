@@ -1,4 +1,4 @@
-"""Assemble a self-contained offline bundle; never download or publish it."""
+"""Bundle pinned SDK/runtime/base/product wheels; never download or publish them."""
 
 import argparse
 import hashlib

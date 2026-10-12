@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
     if (!capture.session || hz < 1 || hz > 1000 || !std::isfinite(seconds) ||
         seconds < 1 || seconds * hz + 1 > 65000)
       throw std::runtime_error("invalid bounded benchmark options");
-    if (aorta_abi_version() != 8)
+    if (aorta_abi_version() != AORTA_EXPECTED_ABI)
       throw std::runtime_error("Aorta ABI mismatch");
     const std::string prefix =
         "/bench/sdk_latency/" + std::to_string(capture.session);
@@ -114,6 +114,7 @@ int main(int argc, char **argv) {
                                 {});
     if (schema.empty()) throw std::runtime_error("missing schema BFBS");
     aorta_pub_options_t options{};
+    options.schema_root_type = "lowlevel.HumanoidLowState";
     options.schema_bfbs = schema.data();
     options.schema_bfbs_len = schema.size();
     auto state_qos = aorta_qos_preset(AORTA_QOS_PRESET_SENSOR_DATA);
