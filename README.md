@@ -7,7 +7,7 @@
 
 > 安装包从本仓库的 [Releases](https://github.com/VitaDynamics/humanoid-sdk/releases)
 > 获取。当前源码迁移到 Aorta main 与 schemas-internal 的消息，拟使用
-> `v0.1.0-rc.4` 承载候选依赖；该 tag/资产须由 owner 批准发布。
+> `v0.1.0-rc.4` 承载官方 Aorta / vita_msgs 依赖；该 tag/资产须由 owner 批准发布。
 > Python 包版本仍为 `0.1.0`。旧 rc.1–rc.3 不包含本次迁移组合；仅在匹配的完整
 > bundle 和校验清单均可下载时安装，不用其他版本的 wheel 替代缺失依赖。
 > 本地离线安装与消息检查不替代 aarch64 设备上的连接与运动验收。
@@ -45,9 +45,9 @@ SDK 专页：[人形 SDK](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oG
 ## 安装与只读 quick start
 
 兼容版本见 [compatibility.json](compatibility.json)：Linux x86_64/aarch64、
-Python 3.10+、Aorta main `2026.9.23+main.8ff30fe`（ABI 13）、
-`vita-msgs==0.1.0`（schemas-internal `b697157a`）与 FlatBuffers `25.9.23`。
-这是临时精确 pin，待 release A/V 后统一更新；不要换用旧 fork 的消息包。
+Python 3.10+、Aorta `2026.10.12`（ABI 13）、
+`vita-msgs==0.1.0`（GitHub release `s0.1.0`，schemas-internal `0663f019`）与 FlatBuffers `25.9.23`。
+这些精确 pin 对应已发布的 Aorta / vita_msgs；不要换用旧 fork 的消息包。
 正式部署须使用经交付方核验的完整 bundle。以下在用户自己的 Linux 设备上，
 从 bundle 根目录执行，不覆盖旧环境，也不需要 `/app/script/env.sh`：
 
@@ -184,7 +184,7 @@ python tests/offline_install.py dist/offline-bundle
 ```
 
 wheelhouse 须包含清单中的两种 Linux Aorta runtime、`aorta-msgs`、`vita-msgs`
-与 FlatBuffers；候选依赖从清单的 `dependency_release_tag` 获取。打包器
+与 FlatBuffers；依赖从清单的 `dependency_release_tag` 获取。打包器
 检查固定依赖 SHA-256，生成含每文件摘要和源码状态的 MANIFEST.json，保留 agent
 软链接。只打包指定的公共 PC profile，拒绝已填入部署认证值的模板；不要把私有配置
 放进源码。`make build` 只构建 wheel，源码、demo 和 PC profile 随 offline bundle 交付，不发布

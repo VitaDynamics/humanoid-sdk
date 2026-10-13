@@ -1,5 +1,5 @@
 // Test-only declaration subset of the cbindgen C API at Aorta
-// 8ff30fea6bc704ff00523f955f659d9ed3b97f98 (ABI 13).
+// 8df48ed10a0efcb155c4cf29889e43a2351f0968 (ABI 13).
 // No middleware implementation: link the pinned aorta-sdk wheel's shared
 // library.
 #pragma once
