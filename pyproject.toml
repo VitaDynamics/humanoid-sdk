@@ -14,6 +14,9 @@ dependencies = [
     "flatbuffers==25.9.23",
 ]
 
+[project.optional-dependencies]
+hil = ["mcap==1.3.1"]
+
 [tool.setuptools]
 package-dir = {"" = "python"}
 
