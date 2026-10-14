@@ -12,7 +12,9 @@ import lowlevel.HumanoidLowState as state_module
 import lowlevel.HumanoidMotorState as motor_state_module
 import lowlevel.MotorCmd as motor_cmd_module
 
-from locomotion_aorta import HumanoidLowState, LowCmd, MotorCommand, MotorState
+from locomotion_aorta.types import HumanoidLowState, LowCmd, MotorCommand, MotorState
+from types import SimpleNamespace
+import lowlevel.LowCmd as low_cmd_module
 from locomotion_aorta import transport, _motor_codec
 
 
@@ -33,6 +35,25 @@ def reference_fill_low_cmd(bindings, command, builder, header):
     module.LowCmdAddExternalSessionId(builder, command.external_session_id)
     module.LowCmdAddExternalSequence(builder, command.external_sequence)
     return module.LowCmdEnd(builder)
+
+
+def legacy_bulk_fill(bindings, command, builder, header):
+    module = bindings.low_cmd_module
+    vector = _motor_codec.create_motor_cmd_vector(builder, module, command.motor_cmds)
+    module.LowCmdStart(builder)
+    module.LowCmdAddAortaHeader(builder, header)
+    module.LowCmdAddMotorCmd(builder, vector)
+    module.LowCmdAddCmdId(builder, command.cmd_id)
+    module.LowCmdAddExternalVersion(builder, command.external_version)
+    module.LowCmdAddExternalSessionId(builder, command.external_session_id)
+    module.LowCmdAddExternalSequence(builder, command.external_sequence)
+    return module.LowCmdEnd(builder)
+
+
+def legacy_bulk_decode(view):
+    return HumanoidLowState(state_id=view.StateId(), stamp_ns=view.TsStateReal() * 1000,
+                            motor_states=_motor_codec.unpack_motor_states(view),
+                            attitude_valid=view.AttitudeValid())
 
 
 def encode(bindings, command, fill, initial_size=256, include_header=True):
@@ -98,13 +119,13 @@ def reference_decode(view):
 class MotorCommandCodecTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.bindings = transport._load_aorta_bindings()
+        cls.bindings = SimpleNamespace(low_cmd_module=low_cmd_module)
 
     def assert_same_wire(self, motors, initial_size=256, include_header=True):
         command = LowCmd(65535, tuple(motors), 1, 2**64 - 1, 2**64 - 2)
         expected = encode(self.bindings, command, reference_fill_low_cmd,
                           initial_size, include_header)
-        actual = encode(self.bindings, command, transport._fill_low_cmd,
+        actual = encode(self.bindings, command, legacy_bulk_fill,
                         initial_size, include_header)
         self.assertEqual(actual, expected)
         view = self.bindings.low_cmd_module.LowCmd.GetRootAs(actual)
@@ -149,7 +170,7 @@ class MotorCommandCodecTest(unittest.TestCase):
                       MotorCommand(q="invalid"), MotorCommand(q=1e100)):
             with self.subTest(motor=motor):
                 command = LowCmd(1, (motor,))
-                for fill in (reference_fill_low_cmd, transport._fill_low_cmd):
+                for fill in (reference_fill_low_cmd, legacy_bulk_fill):
                     with self.assertRaises((TypeError, struct.error, OverflowError)):
                         encode(self.bindings, command, fill)
 
@@ -160,7 +181,7 @@ class MotorCommandCodecTest(unittest.TestCase):
                           side_effect=AssertionError("per-slot encoding")):
             self.assertEqual(encode(self.bindings, LowCmd(65535, tuple(motors), 1,
                                                         2**64 - 1, 2**64 - 2),
-                                    transport._fill_low_cmd), expected)
+                                    legacy_bulk_fill), expected)
 
 
 class MotorStateCodecTest(unittest.TestCase):
@@ -201,7 +222,7 @@ class MotorStateCodecTest(unittest.TestCase):
 
     def assert_same_state(self, data, offset=0):
         view = state_module.HumanoidLowState.GetRootAs(data, offset)
-        expected, actual = reference_decode(view), transport._decode_humanoid_lowstate(view)
+        expected, actual = reference_decode(view), legacy_bulk_decode(view)
         self.assertIs(type(actual), type(expected))
         self.assertEqual((actual.state_id, actual.stamp_ns, actual.attitude_valid),
                          (expected.state_id, expected.stamp_ns, expected.attitude_valid))
@@ -294,7 +315,7 @@ class MotorStateCodecTest(unittest.TestCase):
                           side_effect=AssertionError("per-slot table")), \
              patch.object(motor_state_module.HumanoidMotorState, "Q",
                           side_effect=AssertionError("per-field getter")):
-            self.assertEqual(transport._decode_humanoid_lowstate(
+            self.assertEqual(legacy_bulk_decode(
                 state_module.HumanoidLowState.GetRootAs(data)), expected)
 
     def test_corrupt_offsets_layouts_and_truncation_fail_closed(self):
@@ -328,7 +349,7 @@ class MotorStateCodecTest(unittest.TestCase):
                 else:
                     del bad[-1:]
                 with self.assertRaises(ValueError):
-                    transport._decode_humanoid_lowstate(view)
+                    legacy_bulk_decode(view)
 
 
 if __name__ == "__main__":

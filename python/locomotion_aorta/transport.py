@@ -1,27 +1,28 @@
 from __future__ import annotations
 
 import importlib
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from ._motor_codec import create_motor_cmd_vector, unpack_motor_states
+from ._body_codec import create_body_cmd, decode_body_state, decode_robot_info_response
+from .body_types import HumCmd, GetRobotInfoResponse
 from .types import (
     ControlAck,
     ControlOperation,
     ControlRequest,
     ControlStatus,
     ExternalPhase,
-    HumanoidLowState,
-    LowCmd,
 )
 
 
-LOWSTATE_TOPIC = "/sdk/foot_humanoid/lowstate"
+BODY_STATE_TOPIC = "/sdk/foot_humanoid/body_state"
+HUM_CMD_TOPIC = "/sdk/foot_humanoid/hum_cmd"
+GET_ROBOT_INFO_SERVICE = "/sdk/foot_humanoid/get_robot_info"
 CONTROL_REQUEST_TOPIC = "/sdk/foot_humanoid/control/request"
 CONTROL_ACK_TOPIC = "/sdk/foot_humanoid/control/ack"
 CONTROL_STATUS_TOPIC = "/sdk/foot_humanoid/control/status"
-EXTERNAL_COMMAND_TOPIC = "/locomotion/external_command"
 
 
 class AortaBindingsUnavailableError(RuntimeError):
@@ -39,6 +40,8 @@ class Transport(Protocol):
 
     def publish(self, topic: str, message: Any) -> None: ...
 
+    def get_robot_info(self, timeout: float) -> GetRobotInfoResponse: ...
+
     def close(self) -> None: ...
 
 
@@ -46,10 +49,13 @@ class Transport(Protocol):
 class _AortaBindings:
     aorta: Any
     control_request_module: Any
-    low_cmd_module: Any
+    hum_cmd_module: Any
     control_request_schema_meta: Any
-    low_cmd_schema_meta: Any
-    humanoid_low_state_decoder: Callable[[bytes], Any]
+    hum_cmd_schema_meta: Any
+    body_state_decoder: Callable[[bytes], Any]
+    get_robot_info_request: Any
+    get_robot_info_response: Any
+    get_robot_info_schema_meta: Any
     control_ack_decoder: Callable[[bytes], Any]
     control_status_decoder: Callable[[bytes], Any]
 
@@ -60,6 +66,8 @@ class _AortaTransport:
         self.node = self._bindings.aorta.Node(node_name, group)
         self.publishers: dict[str, Any] = {}
         self.subscriptions: list[Any] = []
+        self._info_clients: dict[int, Any] = {}
+        self._info_lock = threading.Lock()
         self._closed = False
         try:
             realtime = self._bindings.aorta.QoS.realtime_control()
@@ -70,10 +78,10 @@ class _AortaTransport:
                     qos=realtime,
                 )
             )
-            self.publishers[EXTERNAL_COMMAND_TOPIC] = (
+            self.publishers[HUM_CMD_TOPIC] = (
                 self.node.create_publisher_typed(
-                    self._bindings.low_cmd_schema_meta,
-                    EXTERNAL_COMMAND_TOPIC,
+                    self._bindings.hum_cmd_schema_meta,
+                    HUM_CMD_TOPIC,
                     qos=realtime,
                 )
             )
@@ -111,27 +119,52 @@ class _AortaTransport:
                 )
             )
             return
-        if not isinstance(message, LowCmd):
-            raise TypeError("external command topic requires LowCmd")
+        if not isinstance(message, HumCmd):
+            raise TypeError("body command topic requires HumCmd")
         publisher.publish_typed(
-            lambda builder, header: _fill_low_cmd(
+            lambda builder, header: _fill_hum_cmd(
                 self._bindings, message, builder, header
             )
         )
 
-    def close(self) -> None:
+    def get_robot_info(self, timeout: float) -> GetRobotInfoResponse:
+        with self._info_lock:
+            return self._get_robot_info_locked(timeout)
+
+    def _get_robot_info_locked(self, timeout: float) -> GetRobotInfoResponse:
+        import math
         if self._closed:
-            return
-        self._closed = True
-        self.node.close()
+            raise RuntimeError("Aorta transport is closed")
+        if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be finite and positive")
+        timeout_ms = math.ceil(timeout * 1000)
+        if timeout_ms not in self._info_clients:
+            self._info_clients[timeout_ms] = self.node.create_client_typed(
+                GET_ROBOT_INFO_SERVICE,
+                self._bindings.get_robot_info_response.GetRobotInfoResponse.GetRootAs,
+                request_schema_meta=self._bindings.get_robot_info_schema_meta,
+                options=self._bindings.aorta.ClientOptions(timeout_ms=timeout_ms))
+        client = self._info_clients[timeout_ms]
+        if not client.raw().wait_for_matching(timeout_ms):
+            raise TimeoutError("get_robot_info service provider not found")
+        reply = client.call(lambda builder, header: _fill_robot_info_request(
+            self._bindings.get_robot_info_request, builder, header)).decode()
+        return decode_robot_info_response(reply)
+
+    def close(self) -> None:
+        with self._info_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self.node.close()
 
     def _subscriber_spec(
         self, topic: str
     ) -> tuple[Callable[[bytes], Any], Callable[[Any], Any], Any]:
-        if topic == LOWSTATE_TOPIC:
+        if topic == BODY_STATE_TOPIC:
             return (
-                self._bindings.humanoid_low_state_decoder,
-                _decode_humanoid_lowstate,
+                self._bindings.body_state_decoder,
+                decode_body_state,
                 self._bindings.aorta.QoS.sensor_data(),
             )
         if topic == CONTROL_ACK_TOPIC:
@@ -164,17 +197,20 @@ def _load_aorta_bindings() -> _AortaBindings:
     control_request = importlib.import_module("locomotion_sdk.ControlRequest")
     control_ack = importlib.import_module("locomotion_sdk.ControlAck")
     control_status = importlib.import_module("locomotion_sdk.ControlStatus")
-    humanoid_lowstate = importlib.import_module("lowlevel.HumanoidLowState")
-    low_cmd = importlib.import_module("lowlevel.LowCmd")
+    body_state = importlib.import_module("lowlevel.BodyState")
+    hum_cmd = importlib.import_module("lowlevel.HumCmd")
     return _AortaBindings(
         aorta=aorta,
         control_request_module=control_request,
-        low_cmd_module=low_cmd,
+        hum_cmd_module=hum_cmd,
         control_request_schema_meta=importlib.import_module(
             "control_request_schema_meta"
         ),
-        low_cmd_schema_meta=importlib.import_module("low_cmd_schema_meta"),
-        humanoid_low_state_decoder=humanoid_lowstate.HumanoidLowState.GetRootAs,
+        hum_cmd_schema_meta=importlib.import_module("hum_cmd_schema_meta"),
+        body_state_decoder=body_state.BodyState.GetRootAs,
+        get_robot_info_request=importlib.import_module("aorta.services.humanoid_locomotion.GetRobotInfoRequest"),
+        get_robot_info_response=importlib.import_module("aorta.services.humanoid_locomotion.GetRobotInfoResponse"),
+        get_robot_info_schema_meta=importlib.import_module("get_robot_info_schema_meta"),
         control_ack_decoder=control_ack.ControlAck.GetRootAs,
         control_status_decoder=control_status.ControlStatus.GetRootAs,
     )
@@ -203,22 +239,34 @@ def _fill_control_request(
     return module.ControlRequestEnd(builder)
 
 
-def _fill_low_cmd(
-    bindings: _AortaBindings,
-    command: LowCmd,
-    builder: Any,
-    header: int,
+def _fill_hum_cmd(
+    bindings: _AortaBindings, command: HumCmd, builder: Any, header: int,
 ) -> int:
-    module = bindings.low_cmd_module
-    motor_cmds = create_motor_cmd_vector(builder, module, command.motor_cmds)
-    module.LowCmdStart(builder)
-    module.LowCmdAddAortaHeader(builder, header)
-    module.LowCmdAddMotorCmd(builder, motor_cmds)
-    module.LowCmdAddCmdId(builder, command.cmd_id)
-    module.LowCmdAddExternalVersion(builder, command.external_version)
-    module.LowCmdAddExternalSessionId(builder, command.external_session_id)
-    module.LowCmdAddExternalSequence(builder, command.external_sequence)
-    return module.LowCmdEnd(builder)
+    module = bindings.hum_cmd_module
+    module.HumCmdStart(builder)
+    module.HumCmdAddAortaHeader(builder, header)
+    module.HumCmdAddMotorCmd(builder, create_body_cmd(builder, command.motor_cmds))
+    for name in ("protocol_version", "session_id", "sequence", "cmd_id", "input_state_id",
+                 "input_state_ts_real_us", "ts_client_created_us", "ts_client_send_us"):
+        getter = ''.join(part.capitalize() for part in name.split('_'))
+        getattr(module, 'HumCmdAdd' + getter)(builder, getattr(command, name))
+    # Action is present even when equal to the schema default. Keep other defaults unchanged.
+    previous = builder.forceDefaults
+    builder.ForceDefaults(True)
+    try:
+        module.HumCmdAddAction(builder, command.action)
+    finally:
+        builder.ForceDefaults(previous)
+    if command.root_quat is not None:
+        from lowlevel.HumRootQuatWxyz import CreateHumRootQuatWxyz
+        module.HumCmdAddRootQuat(builder, CreateHumRootQuatWxyz(builder, *command.root_quat))
+    return module.HumCmdEnd(builder)
+
+
+def _fill_robot_info_request(module: Any, builder: Any, header: int) -> int:
+    module.GetRobotInfoRequestStart(builder)
+    module.GetRobotInfoRequestAddAortaHeader(builder, header)
+    return module.GetRobotInfoRequestEnd(builder)
 
 
 def _decode_control_ack(view: Any) -> ControlAck:
@@ -254,14 +302,6 @@ def _decode_control_status(view: Any) -> ControlStatus:
         protocol_version=int(view.ProtocolVersion()),
     )
 
-
-def _decode_humanoid_lowstate(view: Any) -> HumanoidLowState:
-    return HumanoidLowState(
-        state_id=int(view.StateId()),
-        stamp_ns=int(view.TsStateReal()) * 1000,
-        motor_states=unpack_motor_states(view),
-        attitude_valid=bool(view.AttitudeValid()),
-    )
 
 
 def _encode_operation(operation: ControlOperation) -> int:
