@@ -8,13 +8,16 @@ from collections.abc import Callable, Sequence
 from locomotion_aorta import (
     ExternalController,
     ExternalPhase,
-    HumanoidLowState,
-    LowCmd,
-    MotorCommand,
+    BodyState,
+    HumCmd,
+    HumMotorCmd,
+    HumCmdAction,
+    BODY_SLOTS,
+    ServiceStatus,
 )
 
 
-COMMAND_SLOTS = 42
+COMMAND_SLOTS = BODY_SLOTS
 PERIOD_S = 0.02
 MAX_PEAK_SPEED_RAD_S = 0.10
 MIN_SEGMENT_DURATION_S = 2.0
@@ -27,26 +30,8 @@ STATIONARY_DQ_RAD_S = 0.05
 LOWSTATE_WINDOW_S = 0.2
 
 # A-sample FIXED_STAND baseline with shoulder pitch/elbow kp=80 for tuning.
-DEMO_KP = (
-    100.0, 100.0, 60.0, 150.0, 80.0, 40.0,
-    100.0, 100.0, 60.0, 150.0, 80.0, 40.0,
-    80.0, 80.0, 80.0, 40.0, 40.0, 80.0,
-    80.0, 40.0, 40.0, 80.0, 60.0, 60.0, 80.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    60.0, 60.0, 80.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    20.0, 20.0,
-)
-FIXED_STAND_KD = (
-    3.0, 3.0, 2.0, 4.0, 2.0, 1.0,
-    3.0, 3.0, 2.0, 4.0, 2.0, 1.0,
-    2.0, 2.0, 2.0, 1.0, 1.0, 1.0,
-    2.0, 1.0, 1.0, 1.0, 3.0, 3.0, 4.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    3.0, 3.0, 4.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    1.0, 1.0,
-)
+DEMO_KP = (100.0, 100.0, 60.0, 150.0, 80.0, 40.0, 100.0, 100.0, 60.0, 150.0, 80.0, 40.0, 80.0, 80.0, 0.0, 80.0, 40.0, 40.0, 80.0, 60.0, 60.0, 80.0, 80.0, 40.0, 40.0, 80.0, 60.0, 60.0, 80.0, 20.0, 20.0)
+FIXED_STAND_KD = (3.0, 3.0, 2.0, 4.0, 2.0, 1.0, 3.0, 3.0, 2.0, 4.0, 2.0, 1.0, 2.0, 2.0, 0.0, 2.0, 1.0, 1.0, 1.0, 3.0, 3.0, 4.0, 2.0, 1.0, 1.0, 1.0, 3.0, 3.0, 4.0, 1.0, 1.0)
 
 
 def run(
@@ -57,18 +42,19 @@ def run(
     monotonic: Callable[[], float] = time.monotonic,
     emit: Callable[[str], None] = print,
 ) -> None:
-    start_state = _wait_for_stationary_lowstate(
+    require_body_info(controller, timeout)
+    start_state = _wait_for_stationary_body_state(
         controller,
         timeout=timeout,
         sleep=sleep,
         monotonic=monotonic,
     )
     start_q = tuple(
-        motor.q for motor in start_state.motor_states[:COMMAND_SLOTS]
+        motor.q if motor.populated else 0.0 for motor in start_state.motor_states
     )
     return_q = list(start_q)
     # Offset only the elbows toward zero to avoid the observed hip interference.
-    for slot in (17, 21):
+    for slot in (18, 25):
         return_q[slot] = math.copysign(
             max(abs(start_q[slot]) - ELBOW_RETURN_OFFSET_RAD, 0.0),
             start_q[slot],
@@ -81,8 +67,8 @@ def run(
     )
     emit(
         "elbow return targets (10 deg toward zero, clamped at zero): "
-        f"slot 17 {start_q[17]:.4f} -> {return_q[17]:.4f} rad, "
-        f"slot 21 {start_q[21]:.4f} -> {return_q[21]:.4f} rad"
+        f"slot 18 {start_q[18]:.4f} -> {return_q[18]:.4f} rad, "
+        f"slot 25 {start_q[25]:.4f} -> {return_q[25]:.4f} rad"
     )
 
     entered = False
@@ -98,7 +84,7 @@ def run(
         last_state_change = monotonic()
         next_publish = monotonic()
 
-        def publish_frame(q: Sequence[float]) -> HumanoidLowState:
+        def publish_frame(q: Sequence[float]) -> BodyState:
             nonlocal last_state_id, last_state_change, next_publish
             delay = next_publish - monotonic()
             if delay > 0:
@@ -120,16 +106,16 @@ def run(
                     "robot reject_count changed during the trajectory"
                 )
 
-            state = controller.wait_lowstate(timeout)
-            _validate_lowstate(state, require_stationary=False)
+            state = controller.wait_body_state(timeout)
+            _validate_body_state(state, require_stationary=False)
             now = monotonic()
             if state.state_id != last_state_id:
                 last_state_id = state.state_id
                 last_state_change = now
             elif now - last_state_change >= LOWSTATE_WINDOW_S:
-                raise RuntimeError("lowstate became stale during the trajectory")
+                raise RuntimeError("body state became stale during the trajectory")
 
-            controller.publish(_position_command(q))
+            controller.publish(_position_command(q, state))
             next_publish = max(next_publish + PERIOD_S, monotonic() + PERIOD_S)
             return state
 
@@ -164,30 +150,42 @@ def run(
             emit("CANCEL confirmed PASSIVE")
 
 
-def _wait_for_stationary_lowstate(
+def require_body_info(controller: ExternalController, timeout: float):
+    response = controller.get_robot_info(timeout)
+    if response.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS):
+        raise RuntimeError(f"get_robot_info failed: status={response.status} {response.error_message}")
+    info = response.info
+    body = None if info is None else info.body
+    if (body is None or body.slot_count != COMMAND_SLOTS
+            or any(len(v) != COMMAND_SLOTS for v in (body.joint_names, body.joints, body.motor_identities))):
+        raise RuntimeError("get_robot_info did not provide the public31 body roster")
+    return body
+
+
+def _wait_for_stationary_body_state(
     controller: ExternalController,
     *,
     timeout: float,
     sleep: Callable[[float], None],
     monotonic: Callable[[], float],
-) -> HumanoidLowState:
+) -> BodyState:
     deadline = monotonic() + timeout
     stationary_since: float | None = None
     last_new_time = monotonic()
     last_state_id: int | None = None
-    latest: HumanoidLowState | None = None
+    latest: BodyState | None = None
 
     while monotonic() < deadline:
         remaining = deadline - monotonic()
-        latest = controller.wait_lowstate(max(remaining, 0.001))
-        _validate_lowstate(latest, require_stationary=False)
+        latest = controller.wait_body_state(max(remaining, 0.001))
+        _validate_body_state(latest, require_stationary=False)
         now = monotonic()
         if latest.state_id != last_state_id:
             last_state_id = latest.state_id
             last_new_time = now
             if any(
                 abs(motor.dq) > STATIONARY_DQ_RAD_S
-                for motor in latest.motor_states[:COMMAND_SLOTS]
+                for motor in latest.motor_states if motor.populated
             ):
                 stationary_since = None
             elif stationary_since is None:
@@ -195,28 +193,32 @@ def _wait_for_stationary_lowstate(
             elif now - stationary_since >= LOWSTATE_WINDOW_S:
                 return latest
         elif now - last_new_time >= LOWSTATE_WINDOW_S:
-            raise RuntimeError("lowstate is stale during the preflight window")
+            raise RuntimeError("body state is stale during the preflight window")
         sleep(min(PERIOD_S, max(0.0, deadline - now)))
 
-    raise RuntimeError("timed out waiting for 200 ms of fresh stationary lowstate")
+    raise RuntimeError("timed out waiting for 200 ms of fresh stationary body state")
 
 
-def _validate_lowstate(
-    state: HumanoidLowState, *, require_stationary: bool
+def _validate_body_state(
+    state: BodyState, *, require_stationary: bool
 ) -> None:
     if not state.attitude_valid:
-        raise RuntimeError("lowstate attitude is invalid")
-    if len(state.motor_states) < COMMAND_SLOTS:
+        raise RuntimeError("body state attitude is invalid")
+    if len(state.motor_states) != COMMAND_SLOTS:
         raise RuntimeError(
-            f"lowstate has {len(state.motor_states)} motor slots; "
+            f"body state has {len(state.motor_states)} motor slots; "
             f"{COMMAND_SLOTS} required"
         )
-    for index, motor in enumerate(state.motor_states[:COMMAND_SLOTS]):
+    for index, motor in enumerate(state.motor_states):
+        if not motor.populated:
+            continue
+        if motor.valid_fields & 3 != 3:
+            raise RuntimeError(f"body state motor[{index}] q/dq is unavailable")
         if not math.isfinite(motor.q) or not math.isfinite(motor.dq):
-            raise RuntimeError(f"lowstate motor[{index}] q/dq is not finite")
+            raise RuntimeError(f"body state motor[{index}] q/dq is not finite")
         if require_stationary and abs(motor.dq) > STATIONARY_DQ_RAD_S:
             raise RuntimeError(
-                f"lowstate motor[{index}] is moving at {motor.dq:.3f} rad/s"
+                f"body state motor[{index}] is moving at {motor.dq:.3f} rad/s"
             )
 
 
@@ -229,18 +231,20 @@ def _segment_steps(start_q: Sequence[float]) -> int:
     return math.ceil(duration_s / PERIOD_S)
 
 
-def _position_command(q: Sequence[float]) -> LowCmd:
+def _position_command(q: Sequence[float], state: BodyState | None = None) -> HumCmd:
     if len(q) != COMMAND_SLOTS:
         raise ValueError(f"position command must contain {COMMAND_SLOTS} slots")
     commands = tuple(
-        MotorCommand(mode=10, q=position, kp=kp, kd=kd)
+        HumMotorCmd(q=position, kp=kp, kd=kd)
         for position, kp, kd in zip(q, DEMO_KP, FIXED_STAND_KD)
     )
-    return LowCmd(cmd_id=1, motor_cmds=commands)
+    return HumCmd(cmd_id=1, motor_cmds=commands, action=HumCmdAction.EXTERNAL,
+                  input_state_id=0 if state is None else state.state_id,
+                  input_state_ts_real_us=0 if state is None else state.ts_state_real_us)
 
 
 def _publish_segment(
-    publish: Callable[[Sequence[float]], HumanoidLowState],
+    publish: Callable[[Sequence[float]], BodyState],
     start: Sequence[float],
     target: Sequence[float],
     steps: int,
@@ -257,7 +261,7 @@ def _publish_segment(
 
 
 def _publish_dwell(
-    publish: Callable[[Sequence[float]], HumanoidLowState],
+    publish: Callable[[Sequence[float]], BodyState],
     target: Sequence[float],
     *,
     monotonic: Callable[[], float],
@@ -270,8 +274,8 @@ def _publish_dwell(
         state = publish(target)
         now = monotonic()
         at_endpoint = all(
-            abs(motor.q - target_q) <= position_tolerance_rad
-            and abs(motor.dq) <= STATIONARY_DQ_RAD_S
+            not motor.populated or (abs(motor.q - target_q) <= position_tolerance_rad
+            and abs(motor.dq) <= STATIONARY_DQ_RAD_S)
             for motor, target_q in zip(
                 state.motor_states[:COMMAND_SLOTS], target
             )
@@ -293,7 +297,7 @@ def _publish_dwell(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Hoist-only 42-slot EXTERNAL demo: current pose to zero, "
+            "Hoist-only 31-slot EXTERNAL demo: current pose to zero, "
             "then return with elbow clearance offset"
         )
     )

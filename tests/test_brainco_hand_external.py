@@ -1,3 +1,4 @@
+from body_fixtures import sample_motor, robot_info_reply
 from dataclasses import replace
 import io
 import math
@@ -6,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from examples import brainco_hand_external as demo
-from locomotion_aorta import EXTERNAL_COMMAND_TOPIC, HandState, HandJointState, HandCmd, HandJointCmd
+from locomotion_aorta import HUM_CMD_TOPIC, HandState, HandJointState, HandCmd, HandJointCmd
 from test_examples import FakeClock, RecordingController
 from test_hand import codec, info_obj
 from lowlevel.HandInfo import HandInfo
@@ -61,9 +62,9 @@ class ExternalHandTest(unittest.TestCase):
     def test_body_holds_original_pose_and_hands_use_only_independent_publish(self):
         c = self.controller(); hands = [FakeHand('left'), FakeHand('right')]
         self.run_demo(c, hands, body_gains='hold')
-        body_commands = [command for topic, command in c.transport.published if topic == EXTERNAL_COMMAND_TOPIC]
+        body_commands = [command for topic, command in c.transport.published if topic == HUM_CMD_TOPIC]
         self.assertGreater(len(body_commands), 100)
-        baseline = demo.body._position_command((.1,)*42).motor_cmds
+        baseline = demo.body._position_command(tuple(0.0 if i == 14 else .1 for i in range(31))).motor_cmds
         self.assertTrue(all(cmd.motor_cmds == baseline for cmd in body_commands))
         for hand in hands:
             self.assertGreater(len(hand.commands), 0)
@@ -82,13 +83,12 @@ class ExternalHandTest(unittest.TestCase):
     def test_zero_gains_preserve_measured_q_and_independent_hand_motion(self):
         c = self.controller(); hands = [FakeHand('left'), FakeHand('right')]
         self.run_demo(c, hands, body_gains='zero')
-        commands = [command for topic, command in c.transport.published if topic == EXTERNAL_COMMAND_TOPIC]
+        commands = [command for topic, command in c.transport.published if topic == HUM_CMD_TOPIC]
         self.assertGreater(len(commands), 100)
         for command in commands:
-            self.assertEqual(len(command.motor_cmds), 42)
-            for motor in command.motor_cmds:
-                self.assertEqual(motor.mode, 10)
-                self.assertEqual(motor.q, .1)
+            self.assertEqual(len(command.motor_cmds), 31)
+            for i, motor in enumerate(command.motor_cmds):
+                self.assertEqual(motor.q, 0.0 if i == 14 else .1)
                 self.assertEqual((motor.kp, motor.kd, motor.dq, motor.tau), (0., 0., 0., 0.))
         self.assertTrue(all(len(hand.commands) > 0 for hand in hands))
         self.assertIn('exit_external', c.calls)

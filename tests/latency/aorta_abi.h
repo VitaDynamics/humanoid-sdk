@@ -76,6 +76,40 @@ using aorta_result_t = int32_t;
 using aorta_on_msg_cb = void (*)(const aorta_bytes_view_t *,
                                  const aorta_schema_hash_view_t *,
                                  const aorta_msg_context_t *, void *);
+// RPC declarations mirror the pinned wheel's _ffi/{bindings,structs}.py, ABI13.
+using aorta_service_t = uint64_t;
+using aorta_service_request_t = uint64_t;
+struct aorta_owned_bytes_slice_t {
+  const uint8_t *data;
+  uintptr_t len;
+  void *release;  // opaque callback pointer; always null in this test
+  void *release_ctx;
+};
+struct aorta_owned_bytes_view_t {
+  const aorta_owned_bytes_slice_t *slices;
+  uintptr_t slice_count, total_len;
+};
+struct aorta_service_options_t {
+  int32_t schema_attach_policy, callback_group;
+  uint64_t callback_group_handle;
+  int64_t deadline_ns;
+  const uint8_t *service_schema_hash_hex;
+  uintptr_t service_schema_hash_len;
+  const uint8_t *service_schema_bfbs;
+  uintptr_t service_schema_bfbs_len;
+  const char *request_root_type;
+  uintptr_t request_root_type_len;
+  const char *response_root_type;
+  uintptr_t response_root_type_len;
+  int32_t rpc_overflow_policy;
+  uint64_t rpc_overflow_block_timeout_ms;
+};
+using aorta_service_callback_t = void (*)(const aorta_bytes_view_t *, aorta_service_request_t, void *);
+aorta_result_t aorta_service_new_with_options(aorta_node_t, const char *,
+    const aorta_service_options_t *, aorta_service_callback_t, void *, aorta_service_t *);
+aorta_result_t aorta_service_free(aorta_service_t);
+aorta_result_t aorta_service_request_reply(aorta_service_request_t, const aorta_owned_bytes_view_t *);
+aorta_result_t aorta_service_request_reply_error(aorta_service_request_t, const char *);
 uint32_t aorta_abi_version();
 aorta_qos_t aorta_qos_preset(aorta_qos_preset_t);
 aorta_result_t aorta_node_new(const char *, const char *, aorta_node_t *);
@@ -97,3 +131,10 @@ static_assert(offsetof(aorta_pub_options_t, schema_root_type) == 32);
 static_assert(offsetof(aorta_pub_options_t, schema_bfbs) == 8);
 static_assert(sizeof(aorta_bytes_view_t) == 24);
 static_assert(sizeof(aorta_msg_context_t) == 56);
+
+static_assert(sizeof(aorta_owned_bytes_slice_t) == 32);
+static_assert(sizeof(aorta_owned_bytes_view_t) == 24);
+static_assert(sizeof(aorta_service_options_t) == 104);
+static_assert(offsetof(aorta_service_options_t, service_schema_bfbs) == 40);
+static_assert(offsetof(aorta_service_options_t, response_root_type) == 72);
+static_assert(offsetof(aorta_service_options_t, rpc_overflow_block_timeout_ms) == 96);

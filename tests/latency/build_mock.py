@@ -70,7 +70,7 @@ def build(directory):
     generated = directory / "generated"
     generated.mkdir(exist_ok=True)
     schemas = {}
-    for name in ("humanoid_low_state", "low_cmd"):
+    for name in ("body_state", "hum_cmd", "get_robot_info"):
         meta = importlib.import_module(name + "_schema_meta")
         bfbs = generated / (name + ".bfbs")
         bfbs.write_bytes(meta.SCHEMA_BFBS)
@@ -88,7 +88,8 @@ def build(directory):
     run("g++", "-std=c++17", "-O2", "-pthread", "-Wall", "-Wextra", "-Werror",
         "-DAORTA_EXPECTED_ABI=" + str(manifest["aorta_abi_version"]),
         "-I" + str(source / "include"), "-I" + str(generated),
-        ROOT / "tests/latency/mock.cpp", ROOT / "tests/latency/state.cpp", core,
+        ROOT / "tests/latency/mock.cpp", ROOT / "tests/latency/state.cpp",
+        ROOT / "tests/latency/robot_info.cpp", core,
         "-Wl,-rpath," + str(directory), "-o", directory / "mock")
     result = {"versions": versions,
               "aorta_abi_version": manifest["aorta_abi_version"],

@@ -9,18 +9,18 @@ binary wheels and compiler inputs, without robot connectivity or hardware.
 `SDK latency report` runs on every PR update (and merge-group/manual events),
 without path filters. Each of **50, 100, 200, …, 1000 Hz** runs for at least
 **60 seconds**, sequentially, without perf/strace/py-spy. A C++ process publishes
-44-slot `HumanoidLowState` (self-contained motor states, two IMUs, command echo);
-the current checkout's Python SDK decodes it, constructs 42 `MotorCommand`s,
-and publishes `LowCmd`. The Mock verifies the FlatBuffer and copies all 42 slots.
+31-slot `BodyState` (fixed motor structs, two IMUs; applied echo omitted);
+the current checkout's Python SDK decodes it, constructs31 `HumMotorCmd`s,
+and publishes `HumCmd`. The Mock verifies the FlatBuffer and copies all31 slots.
 This measures the generated C++ decoder/copy endpoint, **not** the complete
 locomotion admission/interpolation/actuator pipeline.
 
 Both processes use real Aorta, sensor-data/realtime-control QoS defaults, unique
 `/bench/sdk_latency/<session>/...` topics and peer sessions restricted to
-`127.0.0.1`. Multicast/gossip scouting, SHM and compression are disabled. No
-control session, actuator command on a production topic, service or timer is
-started. Synthetic positions are correlated by session, sequence, cmd_id and
-validated 42-slot content, never by nearest timestamp. Scheduling does not
+`127.0.0.1`. Multicast/gossip scouting, SHM and compression are disabled. A synthetic typed `get_robot_info` RPC is served under the same isolated
+benchmark prefix and queried once by the client. No control lease, production
+actuator topic or timer is started. This is host RPC evidence, never robot readback. Synthetic positions are correlated by session, sequence, cmd_id and
+validated31-slot content, never by nearest timestamp. Scheduling does not
 intentionally burst to catch up. Capture is bounded to 65,000 rows per window;
 process watchdogs only terminate the benchmark's own process groups.
 
@@ -29,7 +29,7 @@ process watchdogs only terminate the benchmark's own process groups.
 - Python wheels come from this repository's `dependency_release_tag` in
   `compatibility.json` (`v0.1.0-rc.4`), verified against exact SHA-256s.
   The five dependency wheels are Aorta SDK 2026.10.12 for both Linux
-  architectures, aorta-msgs 2026.10.12, vbot-humanoid-msgs 0.1.0, and
+  architectures, aorta-msgs 2026.10.12, vbot-humanoid-msgs 0.1.2, and
   FlatBuffers 25.9.23. CI uses this repository's `contents: read` token.
   Tests import `python/locomotion_aorta` from the checkout under test.
 - C++ links the installed wheel's `libaorta_core.so` (ABI 13). `aorta_abi.h`

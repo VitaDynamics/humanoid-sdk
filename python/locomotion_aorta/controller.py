@@ -10,8 +10,8 @@ from .transport import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
     CONTROL_STATUS_TOPIC,
-    EXTERNAL_COMMAND_TOPIC,
-    LOWSTATE_TOPIC,
+    HUM_CMD_TOPIC,
+    BODY_STATE_TOPIC,
     Transport,
     create_aorta_transport,
 )
@@ -21,10 +21,12 @@ from .types import (
     ControlRequest,
     ControlStatus,
     ExternalPhase,
-    HumanoidLowState,
-    LowCmd,
-    MotorCommand,
     PROTOCOL_VERSION,
+)
+
+from .body_types import (
+    BODY_SLOTS, BODY_PROTOCOL_VERSION, BodyState, HumCmd, HumMotorCmd, HumCmdAction,
+    BodyInfo, GetRobotInfoResponse,
 )
 
 
@@ -79,7 +81,8 @@ class ExternalController:
         )
 
         self._condition = threading.Condition()
-        self._latest_lowstate: HumanoidLowState | None = None
+        self._latest_body_state: BodyState | None = None
+        self._body_info: BodyInfo | None = None
         self._latest_status: ControlStatus | None = None
         self._acks: dict[tuple[str, ControlOperation], ControlAck] = {}
         self._request_id: str | None = None
@@ -92,7 +95,7 @@ class ExternalController:
 
         try:
             self._subscriptions.append(
-                self.transport.subscribe(LOWSTATE_TOPIC, self._on_lowstate)
+                self.transport.subscribe(BODY_STATE_TOPIC, self._on_body_state)
             )
             self._subscriptions.append(
                 self.transport.subscribe(CONTROL_ACK_TOPIC, self._on_ack)
@@ -117,13 +120,25 @@ class ExternalController:
         with self._condition:
             return self._latest_status
 
-    def wait_lowstate(self, timeout: float) -> HumanoidLowState:
+    def wait_body_state(self, timeout: float) -> BodyState:
         deadline = _deadline(timeout)
         return self._wait_for(
-            lambda: self._latest_lowstate,
+            lambda: self._latest_body_state,
             deadline,
-            "timed out waiting for humanoid lowstate",
+            "timed out waiting for body state",
         )
+
+    def get_robot_info(self, timeout: float = 5.0) -> GetRobotInfoResponse:
+        _deadline(timeout)
+        with self._condition:
+            self._ensure_open()
+        reply = self.transport.get_robot_info(timeout)
+        with self._condition:
+            self._ensure_open()
+            if reply.info is not None:
+                self._body_info = reply.info.body
+        # Preserve partial or failed discovery and each end-effector status for the caller.
+        return reply
 
     def enter_external(self, timeout: float) -> ControlStatus:
         """Enter EXTERNAL with no automatic expiry.
@@ -183,10 +198,15 @@ class ExternalController:
             self._best_effort_cancel()
             raise
 
-    def publish(self, command: LowCmd) -> None:
-        _validate_command(command)
+    def publish(self, command: HumCmd) -> None:
         with self._condition:
             self._ensure_open()
+            population = None
+            if self._body_info is not None and len(self._body_info.joints) == BODY_SLOTS:
+                population = tuple(j.populated for j in self._body_info.joints)
+            elif self._latest_body_state is not None and len(self._latest_body_state.motor_states) == BODY_SLOTS:
+                population = tuple(j.populated for j in self._latest_body_state.motor_states)
+            _validate_command(command, population)
             status = self._latest_status
             if not self._status_allows_publish(status):
                 raise NotRunningError(
@@ -211,12 +231,16 @@ class ExternalController:
                 raise ExternalControlError("external sequence exhausted")
             external_command = replace(
                 command,
-                external_version=PROTOCOL_VERSION,
-                external_session_id=self._external_session_id,
-                external_sequence=self._next_external_sequence,
+                protocol_version=BODY_PROTOCOL_VERSION,
+                action=HumCmdAction.EXTERNAL,
+                root_quat=None,
+                session_id=self._external_session_id,
+                sequence=self._next_external_sequence,
+                ts_client_created_us=command.ts_client_created_us or time.monotonic_ns() // 1000,
+                ts_client_send_us=time.monotonic_ns() // 1000,
             )
             self._next_external_sequence += 1
-        self.transport.publish(EXTERNAL_COMMAND_TOPIC, external_command)
+        self.transport.publish(HUM_CMD_TOPIC, external_command)
 
     def exit_external(self, timeout: float) -> ControlStatus:
         deadline = _deadline(timeout)
@@ -284,12 +308,12 @@ class ExternalController:
         del exc_type, exc, traceback
         self.close()
 
-    def _on_lowstate(self, lowstate: Any) -> None:
-        if not isinstance(lowstate, HumanoidLowState):
+    def _on_body_state(self, lowstate: Any) -> None:
+        if not isinstance(lowstate, BodyState) or lowstate.protocol_version != BODY_PROTOCOL_VERSION:
             return
         with self._condition:
             if not self._closed:
-                self._latest_lowstate = lowstate
+                self._latest_body_state = lowstate
                 self._condition.notify_all()
 
     def _on_ack(self, ack: Any) -> None:
@@ -447,37 +471,24 @@ def _status_is_newer(
     return status.status_seq > previous.status_seq
 
 
-def _validate_command(command: LowCmd) -> None:
-    if not isinstance(command, LowCmd):
-        raise InvalidCommandError("command must be a LowCmd")
-    if (
-        isinstance(command.cmd_id, bool)
-        or not isinstance(command.cmd_id, int)
-        or not 0 < command.cmd_id < (1 << 16)
-    ):
+def _validate_command(command: HumCmd, populated: tuple[bool, ...] | None = None) -> None:
+    if not isinstance(command, HumCmd):
+        raise InvalidCommandError("command must be a HumCmd")
+    if (isinstance(command.cmd_id, bool) or not isinstance(command.cmd_id, int)
+            or not 0 < command.cmd_id < (1 << 16)):
         raise InvalidCommandError("cmd_id must be an integer in [1, 65535]")
-    if not isinstance(command.motor_cmds, tuple) or not command.motor_cmds:
-        raise InvalidCommandError("motor_cmds must be a non-empty tuple")
+    if not isinstance(command.motor_cmds, tuple) or len(command.motor_cmds) != BODY_SLOTS:
+        raise InvalidCommandError("motor_cmds must be a31-slot tuple")
+    if command.action != HumCmdAction.EXTERNAL:
+        raise InvalidCommandError("ExternalController requires EXTERNAL action")
     for index, motor in enumerate(command.motor_cmds):
-        if not isinstance(motor, MotorCommand):
-            raise InvalidCommandError(
-                f"motor_cmds[{index}] must be a MotorCommand"
-            )
-        if (
-            isinstance(motor.mode, bool)
-            or not isinstance(motor.mode, int)
-            or not 0 <= motor.mode <= 255
-        ):
-            raise InvalidCommandError(
-                f"motor_cmds[{index}].mode must be an unsigned byte"
-            )
+        if not isinstance(motor, HumMotorCmd):
+            raise InvalidCommandError(f"motor_cmds[{index}] must be a HumMotorCmd")
+        if populated is not None and not populated[index]:
+            continue
         for field in ("q", "dq", "tau", "kp", "kd"):
             value = getattr(motor, field)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise InvalidCommandError(
-                    f"motor_cmds[{index}].{field} must be numeric"
-                )
+                raise InvalidCommandError(f"motor_cmds[{index}].{field} must be numeric")
             if not math.isfinite(value):
-                raise InvalidCommandError(
-                    f"motor_cmds[{index}].{field} must be finite"
-                )
+                raise InvalidCommandError(f"motor_cmds[{index}].{field} must be finite")

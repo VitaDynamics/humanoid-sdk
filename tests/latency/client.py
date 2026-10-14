@@ -19,16 +19,17 @@ def main():
     if not 0 < args.session < 2**64 or not 1 <= args.duration <= 120:
         parser.error("invalid bounded benchmark")
     import locomotion_aorta.transport as sdk
-    from locomotion_aorta.types import LowCmd, MotorCommand
+    from locomotion_aorta import HumCmd, HumMotorCmd, HumCmdAction, ServiceStatus
     from aorta.publisher import Publisher
 
     prefix = f"/bench/sdk_latency/{args.session}"
-    sdk.LOWSTATE_TOPIC = prefix + "/lowstate"
-    sdk.EXTERNAL_COMMAND_TOPIC = prefix + "/command"
+    sdk.BODY_STATE_TOPIC = prefix + "/lowstate"
+    sdk.HUM_CMD_TOPIC = prefix + "/command"
+    sdk.GET_ROBOT_INFO_SERVICE = prefix + "/get_robot_info"
     sdk.CONTROL_REQUEST_TOPIC = prefix + "/unused_request"
     sdk.CONTROL_ACK_TOPIC = prefix + "/unused_ack"
     sdk.CONTROL_STATUS_TOPIC = prefix + "/unused_status"
-    decode, fill, publish_bytes = sdk._decode_humanoid_lowstate, sdk._fill_low_cmd, Publisher.publish_bytes
+    decode, fill, publish_bytes = sdk.decode_body_state, sdk._fill_hum_cmd, Publisher.publish_bytes
     timing = threading.local()
     rows, errors = [], []
     lock = threading.Lock()
@@ -57,23 +58,24 @@ def main():
         timing.bytes_ns = time.monotonic_ns()
         return publish_bytes(publisher, *argv, **kwargs)
 
-    sdk._decode_humanoid_lowstate = timed_decode
-    sdk._fill_low_cmd = timed_fill
+    sdk.decode_body_state = timed_decode
+    sdk._fill_hum_cmd = timed_fill
     Publisher.publish_bytes = timed_publish
     transport = sdk.create_aorta_transport(node_name="sdk_ci_python", group="default")
 
     def callback(state):
         with lock:
             try:
-                if len(state.motor_states) != 44 or not 0 < state.state_id <= 65000:
+                if state.protocol_version != 1 or len(state.motor_states) != 31 or not 0 < state.state_id <= 65000:
                     raise ValueError("invalid state slots/sequence")
-                command = LowCmd(
-                    cmd_id=state.state_id, external_version=1,
-                    external_session_id=args.session, external_sequence=state.state_id,
-                    motor_cmds=tuple(MotorCommand(1, m.q, m.dq, m.tau_est, 1., .5)
-                                    for m in state.motor_states[:42]))
+                command = HumCmd(
+                    cmd_id=state.state_id, protocol_version=1, action=HumCmdAction.EXTERNAL,
+                    session_id=args.session, sequence=state.state_id,
+                    input_state_id=state.state_id, input_state_ts_real_us=state.ts_state_real_us,
+                    motor_cmds=tuple(HumMotorCmd(m.q, m.dq, m.tau_est, 1., .5) if m.populated else HumMotorCmd()
+                                    for m in state.motor_states))
                 built_ns = time.monotonic_ns()
-                transport.publish(sdk.EXTERNAL_COMMAND_TOPIC, command)
+                transport.publish(sdk.HUM_CMD_TOPIC, command)
                 returned_ns = time.monotonic_ns()
                 rows.append((args.session, state.state_id, timing.decode_ns, timing.decoded_ns,
                              built_ns, timing.fill_ns, timing.filled_ns, timing.bytes_ns, returned_ns))
@@ -82,10 +84,20 @@ def main():
             except Exception as error:
                 errors.append(repr(error))
 
-    transport.subscribe(sdk.LOWSTATE_TOPIC, callback)
+    transport.subscribe(sdk.BODY_STATE_TOPIC, callback)
     try:
-        if not transport.publishers[sdk.EXTERNAL_COMMAND_TOPIC].wait_for_matching(15000):
+        if not transport.publishers[sdk.HUM_CMD_TOPIC].wait_for_matching(15000):
             raise RuntimeError("mock command subscriber did not match")
+        info = transport.get_robot_info(timeout=15.0)
+        body = None if info.info is None else info.info.body
+        if (info.status != ServiceStatus.SUCCESS or body is None or body.slot_count != 31
+                or len(body.joints) != 31 or len(body.motor_identities) != 31
+                or len(info.info.end_effectors) != 2 or body.joints[14].populated):
+            raise ValueError("invalid actual Mock RobotInfo reply")
+        (args.directory / "client_info.json").write_text(json.dumps({
+            "status": info.status, "slot_count": body.slot_count,
+            "joint_names": body.joint_names, "populated": [j.populated for j in body.joints],
+            "motor_identity_count": len(body.motor_identities), "end_effector_count": len(info.info.end_effectors)}))
         (args.directory / "client.ready").write_text("ready\n")
         deadline = time.monotonic() + args.duration + 30
         while not (args.directory / "stop").exists():

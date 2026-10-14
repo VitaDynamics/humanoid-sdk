@@ -35,5 +35,9 @@ class FakeTransport:
         for callback in list(self.callbacks.get(topic, [])):
             callback(message)
 
+    def get_robot_info(self, timeout):
+        from body_fixtures import robot_info_reply
+        return robot_info_reply()
+
     def close(self) -> None:
         self.close_count += 1

@@ -3,6 +3,7 @@ from enum import Enum
 
 
 PROTOCOL_VERSION = 1
+CONTROL_REQUEST_VERSION = 2
 
 
 class ControlOperation(str, Enum):
@@ -68,7 +69,7 @@ class ControlRequest:
     action_name: str = "EXTERNAL"
     lease_id: str = ""
     requested_lease_ms: int = 0  # Legacy wire field; the controller always sends 0.
-    protocol_version: int = PROTOCOL_VERSION
+    protocol_version: int = CONTROL_REQUEST_VERSION
 
 
 @dataclass(frozen=True, slots=True)

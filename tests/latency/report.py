@@ -8,13 +8,13 @@ import statistics
 
 STAGES = (
     ("publish_ns", "decode_ns", "状态发布 → Python 开始解析（通信与调度）"),
-    ("decode_ns", "decoded_ns", "Python 解析并转换 44 槽状态"),
-    ("decoded_ns", "built_ns", "Python 生成 42 槽回复对象"),
+    ("decode_ns", "decoded_ns", "Python 解析并转换 31 槽状态"),
+    ("decoded_ns", "built_ns", "Python 生成 31 槽回复对象"),
     ("built_ns", "fill_ns", "SDK 发布入口与消息头构造"),
     ("fill_ns", "filled_ns", "SDK 命令填充与序列化"),
     ("filled_ns", "bytes_ns", "FlatBuffer 收尾 → Aorta 字节发布入口"),
     ("bytes_ns", "callback_ns", "Aorta 发布入口 → Mock 回调（通信与调度）"),
-    ("callback_ns", "copied_ns", "Mock 校验 FlatBuffer 并复制 42 槽命令"),
+    ("callback_ns", "copied_ns", "Mock 校验 FlatBuffer 并复制 31 槽命令"),
 )
 COLORS = ("#3182bd", "#31a354", "#74c476", "#a1d99b", "#e6550d", "#fd8d3c", "#756bb1", "#9e9ac8")
 STAT_KEYS = ("mean_ms", "p50_ms", "p95_ms", "p99_ms", "max_ms")
@@ -217,7 +217,7 @@ def render(directory, manifest):
         'td:first-child,th:first-child{text-align:left}.timeline{height:32px;display:flex;background:#f3f4f6}'
         '.timeline span{display:block;min-width:0}section{margin:36px 0}pre{white-space:pre-wrap}</style>'
         '<h1>Python SDK ↔ C++ Mock 通信延迟</h1>'
-        '<p>x86 同主机、两个进程、TCP loopback、SHM 关闭；44 槽状态 → 42 槽回复。'
+        '<p>x86 同主机、两个进程、TCP loopback、SHM 关闭；31 槽状态 → 31 槽回复。'
         '时钟统一 CLOCK_MONOTONIC。通信段包含 Aorta/Zenoh 排队、调度及回调，不等于纯 TCP 传输。'
         'Mock 使用官方生成的 FlatBuffer 校验/访问器与内存复制，不运行 locomotion 控制循环。'
         '共享 CI runner 抖动不能外推 S100/HIL；分位数不可相加。SDK publish 调用耗时与往返部分重叠，不能重复相加。</p>'

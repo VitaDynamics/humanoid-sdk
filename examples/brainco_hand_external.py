@@ -143,16 +143,17 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
         emit(f'{client.side}: model={info.model}, joints={info.joint_names}, '
              f'limits_rad={list(zip(info.q_min, info.q_max))}, speed={speed_deg_s:g} deg/s, '
              f'pattern={pattern}, loop={loop}, fractions={low_frac:g}/{high_frac:g}')
-    start_state = body._wait_for_stationary_lowstate(
+    body.require_body_info(controller, timeout)
+    start_state = body._wait_for_stationary_body_state(
         controller, timeout=timeout, sleep=sleep, monotonic=monotonic)
-    start_q = tuple(m.q for m in start_state.motor_states[:body.COMMAND_SLOTS])
+    start_q = tuple(m.q if m.populated else 0.0 for m in start_state.motor_states)
     hold = body._position_command(start_q)
     if body_gains == 'zero':
         hold = replace(hold, motor_cmds=tuple(replace(cmd, kp=0.0, kd=0.0, dq=0.0, tau=0.0)
                                               for cmd in hold.motor_cmds))
     gains = 'kp=kd=0' if body_gains == 'zero' else 'existing DEMO_KP/FIXED_STAND_KD'
-    emit(f'body: --body-gains {body_gains}, 42-slot measured q, {gains}, dq=tau=0; '
-         'finger slots reserved; no body zero/return trajectory')
+    emit(f'body: --body-gains {body_gains}, 31-slot measured q, {gains}, dq=tau=0; '
+         'hands use independent EE commands; no body zero/return trajectory')
     attempted = False
     try:
         attempted = True  # CANCEL even if entry is interrupted after PREPARE/COMMIT.
@@ -177,8 +178,8 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
                        (entered.generation, entered.client_id, entered.lease_id)
                     or status.reject_count != entered.reject_count):
                 raise RuntimeError('body EXTERNAL ownership/phase/reject_count changed')
-            state = controller.wait_lowstate(timeout)
-            body._validate_lowstate(state, require_stationary=False)
+            state = controller.wait_body_state(timeout)
+            body._validate_body_state(state, require_stationary=False)
             now = monotonic()
             if state.state_id != last_body_id:
                 last_body_id, last_body_change = state.state_id, now
@@ -187,9 +188,10 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
             # Retain the current pose using the inherited endpoint tolerance;
             # abort instead of continuing hand movement if the body drifts.
             if any(abs(m.q - q) > body.RETURN_ENDPOINT_POSITION_TOLERANCE_RAD
-                   for m, q in zip(state.motor_states[:body.COMMAND_SLOTS], start_q)):
+                   for m, q in zip(state.motor_states, start_q) if m.populated):
                 raise RuntimeError('body departed from its held pose')
-            controller.publish(hold)
+            controller.publish(replace(hold, input_state_id=state.state_id,
+                                       input_state_ts_real_us=state.ts_state_real_us))
             ready = True
             for client in clients:
                 feedback = client.state

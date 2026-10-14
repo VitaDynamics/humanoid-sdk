@@ -52,7 +52,9 @@ def window(build, directory, rate, seconds):
     commands = [
         ("python", [sys.executable, str(ROOT / "tests/latency/client.py"), str(directory), str(session), str(seconds)]),
         ("mock", [str(build / "mock"), str(directory), str(session), str(rate), str(seconds),
-                  str(build / "generated/humanoid_low_state.bfbs")]),
+                  str(build / "generated/body_state.bfbs"),
+                  str(build / "generated/get_robot_info.bfbs"),
+                  json.loads((ROOT / "compatibility.json").read_text())["schema_sha256"]["get_robot_info"]]),
     ]
     (directory / "commands.json").write_text(json.dumps(commands, indent=2))
     try:
