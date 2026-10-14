@@ -126,6 +126,7 @@ class AortaBindingContractTest(unittest.TestCase):
         request_view = bindings.control_request_module.ControlRequest.GetRootAs(
             builder.Output()
         )
+        self.assertEqual(request_view.ProtocolVersion(), 2)
         self.assertEqual(request_view.Operation(), 2)
         self.assertEqual(request_view.RequestId(), b"request-1")
         self.assertEqual(request_view.LeaseId(), b"lease-1")

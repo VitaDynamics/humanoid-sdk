@@ -271,3 +271,28 @@ class BrainCoCaptureTest(unittest.TestCase):
         self.assertTrue(row['nonfinite_feedback'])
         self.assertEqual(row['inhibit_reason'], 4)
         self.assertEqual(row['joints'][0]['ts_acquired_hw_us'], 17)
+
+
+class PublicBodyCaptureTest(unittest.TestCase):
+    def test_current_body_state_keeps_unpopulated_quality_and_null(self):
+        from test_body_codec import make_state
+        data, _ = make_state()
+        row = capture.decode('body_state',data,capture.load_bindings())
+        self.assertEqual(len(row['motor_states']),31)
+        self.assertFalse(row['motor_states'][14]['populated'])
+        self.assertIsNone(row['motor_states'][14]['q'])
+        self.assertEqual(row['motor_states'][14]['valid_fields'],0)
+        self.assertTrue(row['nonfinite_feedback'])
+        self.assertEqual(row['ts_state_real_us'],1_234_567)
+
+    def test_current_command_keeps_action_and_body_causality_without_mode(self):
+        from test_body_codec import make_command, encode
+        from locomotion_aorta import HumCmdAction
+        row=capture.decode('hum_cmd',encode(make_command()),capture.load_bindings())
+        self.assertEqual(row['action'],HumCmdAction.EXTERNAL)
+        self.assertEqual(len(row['motor_cmds']),31)
+        self.assertEqual(row['input_state_id'],123)
+        self.assertNotIn('mode',row['motor_cmds'][0])
+        self.assertNotIn('lowstate',capture.TOPICS)
+        self.assertNotIn('external_command',capture.TOPICS)
+        self.assertIn('lowstate',capture.MODULES)  # explicit archive parsing retained
