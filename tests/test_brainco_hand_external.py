@@ -36,7 +36,7 @@ class FakeHand:
         if self.commands and self.inhibited:
             self._state = replace(self._state, output_allowed=False, inhibit_reason=3)
         return self._state
-    def get_info(self, timeout): return self.info
+    def wait_info(self, timeout): return self.info
     def wait_state(self, timeout): return self.state
     def publish(self, q, dq):
         self.commands.append((tuple(q), tuple(dq)))
@@ -124,6 +124,40 @@ class ExternalHandTest(unittest.TestCase):
         with patch.object(demo, 'HandClient') as hand, patch('sys.stderr', new_callable=io.StringIO):
             with self.assertRaises(SystemExit): demo.main(['--dry-run', '--touch', 'on'])
             hand.assert_not_called()
+
+    def test_touch_update_waits_past_cached_and_inflight_old_info(self):
+        hand = FakeHand()
+        cached = hand.info
+        old = replace(cached)  # A later event can still carry the previous flag.
+        updated = replace(cached, touch_enabled=False)
+        self.assertEqual(updated.ts_info_us, cached.ts_info_us)
+        with patch.object(hand, 'wait_info', side_effect=[old, updated]) as wait:
+            result = demo.wait_touch_info(hand, False, 1)
+        self.assertIs(result, updated)
+        self.assertIs(wait.call_args_list[0].kwargs['after_info'], cached)
+        self.assertIs(wait.call_args_list[1].kwargs['after_info'], old)
+
+    def test_touch_wait_keeps_one_timeout_budget(self):
+        hand = FakeHand()
+        with patch.object(demo.time, 'monotonic', side_effect=[0, .25, 1.01]), \
+             patch.object(hand, 'wait_info', return_value=replace(hand.info)) as wait:
+            with self.assertRaises(TimeoutError):
+                demo.wait_touch_info(hand, False, 1)
+        wait.assert_called_once()
+        self.assertEqual(wait.call_args.args[0], .75)
+
+    def test_touch_cli_waits_for_topic_update_before_external_run(self):
+        with patch.object(demo, 'HandClient') as hand, \
+             patch.object(demo, 'ExternalController'), \
+             patch.object(demo, 'wait_touch_info') as wait, patch.object(demo, 'run') as run:
+            client = hand.return_value.__enter__.return_value
+            client.set_touch.return_value = False
+            events = []
+            wait.side_effect = lambda *a: events.append('info')
+            run.side_effect = lambda *a, **kw: events.append('run')
+            demo.main(['--confirm-motion', '--side', 'right', '--touch', 'off'])
+            wait.assert_called_once_with(client, False, 5.0)
+            self.assertEqual(events, ['info', 'run'])
 
     def test_keyboardinterrupt_after_entry_cancels_and_sends_no_exit_hand_target(self):
         c = self.controller(); hand = FakeHand()

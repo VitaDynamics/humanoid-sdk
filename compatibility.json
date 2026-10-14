@@ -18,7 +18,7 @@
     "aorta_sdk-2026.10.12-py3-none-linux_aarch64.whl": "c1f7a03e023cbb50b1ec9252393f72f4713392af02e0ace7766461667760c333",
     "aorta_sdk-2026.10.12-py3-none-linux_x86_64.whl": "900d143041a422f9c3f7023aad7334c0ebcc17e0c549e0ed3a0e6f10c02b9afa",
     "flatbuffers-25.9.23-py2.py3-none-any.whl": "255538574d6cb6d0a79a17ec8bc0d30985913b87513a01cce8bcdb6b4c44d0e2",
-    "vbot_humanoid_msgs-0.1.1-py3-none-any.whl": "46c907172183420687688c9796900f8aec2a261ef8a3f2ddb8018199ef0257d4"
+    "vbot_humanoid_msgs-0.1.1-py3-none-any.whl": "1c3b846bb8c0a808f9db0a56b4aa8eef6296dd0f2412f5553bff76127df78480"
   },
   "dependency_release_tag": "v0.1.0-rc.4",
   "aorta_abi_version": 13,
@@ -27,12 +27,10 @@
     "control_request": "4e9009a2487c76e04421761871e6799d98b0b2816217dfe904240afd97eb88cc",
     "control_status": "cc897baf058703077ece4cbdc1f61b7c443905dbe1e24f204451ccf629afebf6",
     "gripper_cmd": "0e2ad8c1e3eb401707600b0a2aa6d941354088351bad85747f4d1482a50acc5e",
-    "gripper_get_info": "e0db04db4887623efd8cffedc6d3e07284db566065f7950a22b44abfde363904",
     "gripper_info": "37ce0518a4bb892bd86c120dd21aaa4e7f4e1d2c7647d7d6a4bf614fe620f254",
     "gripper_state": "d950efe2e7253cf3073c3989d124dca2c9508813e134871883e94a54ac3926c0",
     "hand_cmd": "a2e1a39106401aece5b5cf3be073cd0ff3399824a62051f43bfdcd5c21be32c6",
     "hand_cmd_trace": "145a368501eb1fe607506a49805b53e0d0124475f65a786d79b8b065dffdde3c",
-    "hand_get_info": "00c1dfcfb97ab81bade337216616ef0e2596fcc55f366040df5e1dd484d12844",
     "hand_info": "99e26b49ccd44d72af73591bf96af20ec27c23b995426f0f006baa8be3974dd2",
     "hand_set_touch": "1fe757111414c2aebe78e8152c8864e65111e910e90e7d541e150155805ddcd9",
     "hand_state": "b723a54c71f0d2850af88a8d9b8a5816313d1518f56b10d785e7b4ceee80f9b7",
