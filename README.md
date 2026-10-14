@@ -5,12 +5,11 @@
 通常在用户自己的 Linux PC 或计算设备上运行 SDK，通过有线网络连接机器人的 S100；
 不要求把 SDK 安装到 S100。
 
-> 安装包从本仓库的 [Releases](https://github.com/VitaDynamics/humanoid-sdk/releases)
-> 获取。当前源码迁移到 Aorta main 与 schemas-internal 的消息，拟使用
-> `v0.1.0-rc.4` 承载官方 Aorta / vita_msgs 依赖；该 tag/资产须由 owner 批准发布。
-> Python 包版本仍为 `0.1.0`。旧 rc.1–rc.3 不包含本次迁移组合；仅在匹配的完整
-> bundle 和校验清单均可下载时安装，不用其他版本的 wheel 替代缺失依赖。
-> 本地离线安装与消息检查不替代 aarch64 设备上的连接与运动验收。
+> **当前分支 HIL only**：BrainCo 手部使用独立 topic，精确依赖 schemas-internal
+> `489488e52b5fa3d808db8538badd537c1e78c70f` 的临时 `vita-msgs` wheel；它尚未发布。
+> 由交付方提供完整离线 bundle 和摘要，不能用官方 `vita-msgs==0.1.0` 替代。
+> 机器人必须先完成手域启动修复并由现场确认可用。本分支没有设备连接或运动验收。
+> SDK Python 包版本仍为 `0.1.0`；正式发布信息见本仓库 Releases。
 
 ## 使用 agent 开始
 
@@ -46,9 +45,8 @@ SDK 专页：[人形 SDK](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oG
 
 兼容版本见 [compatibility.json](compatibility.json)：Linux x86_64/aarch64、
 Python 3.10+、Aorta `2026.10.12`（ABI 13）、
-`vita-msgs==0.1.0`（GitHub release `s0.1.0`，schemas-internal `0663f019`）与 FlatBuffers `25.9.23`。
-这些精确 pin 对应已发布的 Aorta / vita_msgs；不要换用旧 fork 的消息包。
-正式部署须使用经交付方核验的完整 bundle。以下在用户自己的 Linux 设备上，
+`vita-msgs==0.1.0+hil.brainco.20261014`（HIL only，schemas-internal `489488e`）与 FlatBuffers `25.9.23`。
+Aorta 使用官方 release；临时消息 wheel 必须来自交付方核验的完整 HIL bundle。以下在用户自己的 Linux 设备上，
 从 bundle 根目录执行，不覆盖旧环境，也不需要 `/app/script/env.sh`：
 
 仓库提供 [PC peer 配置](config/pc_session_peer.json5)，新构建的 offline bundle
@@ -97,65 +95,51 @@ CANCEL；命令断流保护、控制权校验和安全检查保持不变。客�
 需要支持零时长无限期的机器人软件；旧服务端拒绝时会报错，不回退到有限期请求。
 这些是源码变更，尚未进入已发布的 `v0.1.0-rc.1` 包；安装仍须核对匹配的发布组合。
 
-## Revo2 手部专用测试入口（开发中，未发布/实机验收）
+## Revo2 手部 EXTERNAL 测试（HIL only）
 
-`examples/brainco_hand_control.py` 不使用全身归零 demo 的目标和增益。
-先由现场审核人准备完整的 JSON 测试规格，再离线校验：
-
-```bash
-python examples/brainco_hand_control.py --spec reviewed-test.json
-```
-
-默认 `--mode validate` 不创建通信节点、不申请控制权。获得只读连接授权后可用
-`--mode observe` 检查 200 ms 持续更新的全身反馈与批准基线。
-只有显式 `--mode move --confirm-motion` 才申请 EXTERNAL；命令行确认不能替代本轮
-现场授权、支撑、看护、独立停机手段和设备单位/限值/固件核验。不要把测试中的
-synthetic fixture 作为真机规格。源码入口不等于已发布 bundle 已包含此功能。
-
-规格必须明确提供以下字段，拒绝缺项、额外字段、重复 JSON key 和非有限值：
-
-| 字段 | 约定 |
-| --- | --- |
-| `format_version` / `robot_profile` | `1` / `foot_humanoid_asample_brainco`，全身 A-sample |
-| `reviewed_by` / `robot_config_sha256` / `device_preflight_evidence` / `stop_method` | 审核人、有效配置摘要、设备预检证据、已验证的现场停止方式；程序只记录规格摘要，不能远程核验这些声明 |
-| `baseline` | 完整 42 项，每项显式 `mode/q/dq/tau/kp/kd`；静态基线 `mode=10,dq=0`，由现场审定，不能自动复制全身反馈或归零 |
-| `hand_limits` | 以槽位字符串为 key，覆盖左 25–30、右 34–39，每项有 `lower_rad/upper_rad/max_target_rate_rad_s` |
-| `target_positions_rad` | 仅选上述手槽的绝对目标，可单指、单手或双手；其他槽及字段保持批准基线不变 |
-| `position_tolerance_rad` | 42 项明确的预检/跟踪/非目标漂移容差 |
-| `move_duration_s` / `settle_duration_s` | 单向插值时长、末端目标继续发布的时长；结束时检查一帧新鲜且静止的反馈，不证明手端物理停止/释力 |
-| `max_feedback_gap_s` / `max_status_gap_s` / `stationary_dq_rad_s` | 反馈/控制状态更新预算和静止速度阈值，须按设备验证后填写 |
-
-所有手槽的 `dq/tau/kp/kd` 必须为零。50 Hz 是目标发布频率上限，不追赶补发；
-`max_target_rate_rad_s` 仅限制软件目标斜率，不能替代手端速度、电流设置。
-最多执行向目标的一段运动，不自动回程或重试；超出量化后的运动与末端保持时长
-加 `max_feedback_gap_s` 的总预算即取消，不无限延长。SDK 的控制权仍无自动到期。
-预算在程序恢复执行时检查，不能抢占阻塞的 I/O 或失去调度的进程，不构成硬实时停机保证。
-
-程序输出 JSONL，区分 LowState、完整 42 槽命令尝试、SDK 调用返回及 CANCEL 结果。
-命令返回不代表电机 ACK；PASSIVE 确认不代表手端停止，也可能使负载肢体下落。
-正常、异常和 Ctrl-C 均尝试退出已发起的会话；退出失败保留 `UNCONFIRMED`，由现场
-执行独立安全处置。当前 SDK 只有整帧时间/序号，没有逐电机新鲜度，且不能据此证明
-跨时钟绝对反馈延迟；该入口不订阅 HandTouch、不替代触觉绑定与 MCAP 验收。
-
-### 只读采集与 MCAP 导出（候选能力）
-
-新增 `examples/brainco_capture.py`：`live` 有时限地订阅 HandTouch、44 槽 LowState、
-42 槽 LowCmd 和 ControlStatus；只创建订阅者，不申请控制权。`mcap-export` 完全离线。
-两者都要求版本/设备元数据、生成的 `aorta.topic.lowlevel.HandTouch` 绑定；缺失即拒绝，
-不使用手写解码器。当前固定 `aorta_msgs` 不含该模块，需由交付方提供与候选机器人匹配的
-附加 HIL wheel；它不属于已发布 SDK 的默认安装。MCAP 功能另需 `hil` extra（mcap 1.3.1）。
+获得本次只读连接授权、配置 PC peer profile 后，先读取左右手 info/state：
 
 ```bash
-python examples/brainco_capture.py --help
-python examples/brainco_capture.py --metadata reviewed-metadata.json --output new-trace.jsonl \
-  live --duration-s 60 --group default --stdin-markers
+export AORTA_GROUP=default
+python examples/brainco_hand_external.py --dry-run --side both --group default --timeout 5
 ```
 
-第二条需要新的只读连接授权和已核验的 peer profile。按行输入的标记属于观察端时钟，
-不与机器人时间混用。输出拒绝覆盖，保留部分失败文件，记录本地队列丢样；此计数不等于
-传输/recorder 无丢包。MCAP 导出要求显式 topic 映射及每种 BFBS 的 SHA256，校验容器 CRC
-和末尾，不猜 topic 后缀。`--help` 列出离线参数。取得候选依赖后用 `make check-hil` 验证；
-普通 `make check` 在缺少可选 HIL 依赖时明确跳过该测试类，不代表 HIL 通过。
+默认入口同样只读，不申请控制权，不发布 cmd，不调用 set_touch；`get_info` 是只读 RPC。
+`--side left|right|both` 使用 wire Side：left=1、right=2，不使用设备寄存器的左右编号。
+实际运动须有本轮吊装/可靠支撑、看护、清空夹点与急停确认，再由现场执行：
+
+```bash
+python examples/brainco_hand_external.py --side both --group default --timeout 5 --confirm-motion
+```
+
+本体收到 50 Hz 的完整 42 槽 LowCmd：q 为进入前静止 LowState 的姿态，mode=10、
+dq=tau=0，kp/kd **直接复用** `external_control.py` 的 `DEMO_KP/FIXED_STAND_KD`。
+手指槽位为 RESERVED（原有手指增益为 0），手命令只走
+`/sdk/foot_humanoid/hand/<side>/cmd`。不执行本体归零或回程轨迹；“保持”仍依赖设备、
+通信及增益适配，不能替代吊装。姿态漂移和反馈陈旧检查沿用现有示例容差/时间窗。
+
+先核对 `BRAINCO_REVO2`、6 DOF、关节名和 info 限位，随后各关节慢速移到限位区间
+25%→75%→25%（部分张合，避开端点）。速度用机器人 BrainCo JSON 的已有
+`brainco_revo2.speed_deg_s=[1,1,1,1,1,1]` 占位值，换成 float32 rad/s；这是占位配置，
+不是已测性能/电流/安全结论。`--touch on|off` 可在租约进入前调用 set_touch，默认 keep。
+左右手有各自随机非零会话与递增序号；手会话和本体 EXTERNAL generation 相互独立。
+
+正常结束、异常与 Ctrl-C 均尝试 CANCEL，要求确认 PASSIVE；不发手部归零/回程命令，
+手按服务端契约保持最后目标。PASSIVE 可使本体负载肢体下落；进程被杀死不能保证
+CANCEL，租约无限期、不会自动到期。超时/故障退出后不自动重试运动，退出未确认须
+现场处理。旧 `brainco_hand_control.py` 现在转到此入口，不再支持旧 `--spec`/LowCmd 手槽路径。
+
+打印 state 的 q/q_cmd/dq、会话/序号回执及七阶段 µs 时间链。三个入口时间
+`middleware_received/received/dequeued` 相同，代表回调交付；worker 等待包含在
+accepted→first_output。0 为未测阶段，只计算机器人 VitaNow 时钟内的差值；PC 时间与
+CAN 硬件时间不参与跨域延迟计算。逐命令 `cmd_trace` 默认关闭；需要时由设备操作方
+另行授权给 locomotion 进程设置 `LOCOMOTION_HAND_CMD_TRACE=1` 并按部署流程重启，
+PC 环境变量不能打开机器人 trace。话题为 `/sdk/foot_humanoid/hand/<side>/cmd_trace`。
+
+`HandClient` 支持 state/touch/info 订阅及 get_info/set_touch。只读采集入口
+`examples/brainco_capture.py` 同步改为左右手 cmd/state/touch/info 独立话题，保留本体
+LowCmd/LowState/ControlStatus 和离线 MCAP 导出（需另装 `hil` extra）。采集格式 v2 中
+缺失/非有限手反馈写 JSON null 并标记，保留 raw words 和硬件时间，不生成假零。
 
 ## 部署避坑
 
@@ -184,7 +168,7 @@ python tests/offline_install.py dist/offline-bundle
 ```
 
 wheelhouse 须包含清单中的两种 Linux Aorta runtime、`aorta-msgs`、`vita-msgs`
-与 FlatBuffers；依赖从清单的 `dependency_release_tag` 获取。打包器
+与 FlatBuffers；本 HIL 分支的临时 vita_msgs 由交付方提供，`dependency_release_tag=null` 表示尚无发布 tag，现有 release 下载 CI 不能据此获得 HIL wheel。打包器
 检查固定依赖 SHA-256，生成含每文件摘要和源码状态的 MANIFEST.json，保留 agent
 软链接。只打包指定的公共 PC profile，拒绝已填入部署认证值的模板；不要把私有配置
 放进源码。`make build` 只构建 wheel，源码、demo 和 PC profile 随 offline bundle 交付，不发布
