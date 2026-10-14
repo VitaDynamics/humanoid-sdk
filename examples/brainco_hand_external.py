@@ -2,11 +2,12 @@
 """HIL only: select body gains and exercise independent BrainCo hands."""
 import argparse
 import importlib.util
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 import math
 from pathlib import Path
 import struct
+import signal
 import time
 
 from locomotion_aorta import ExternalController, ExternalPhase, HandClient, HandType, InhibitReason
@@ -23,7 +24,47 @@ _body_spec.loader.exec_module(body)
 HAND_SPEED_RAD_S = struct.unpack("<f", struct.pack("<f", math.radians(1.0)))[0]
 
 
-def validate_hand(info, state, *, require_output=False):
+@contextmanager
+def stop_signals():
+    """Interrupt once; keep repeated stop signals from interrupting CANCEL."""
+    stopped = False
+    previous = {}
+
+    def stop(signum, _frame):
+        nonlocal stopped
+        if not stopped:
+            stopped = True
+            raise KeyboardInterrupt(f'received {signal.Signals(signum).name}')
+
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous[signum] = signal.signal(signum, stop)
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+def validate_motion_options(speed_deg_s, pattern, low_frac, high_frac, feedback_interval):
+    if not math.isfinite(speed_deg_s) or speed_deg_s <= 0:
+        raise ValueError('--speed-deg-s must be finite and positive')
+    try:
+        speed = struct.unpack('<f', struct.pack('<f', math.radians(speed_deg_s)))[0]
+    except OverflowError as error:
+        raise ValueError('--speed-deg-s must fit float32 rad/s') from error
+    if not math.isfinite(speed) or speed <= 0:
+        raise ValueError('--speed-deg-s must fit positive float32 rad/s')
+    if pattern not in ('simultaneous', 'sequential'):
+        raise ValueError('--pattern must be simultaneous or sequential')
+    if not (math.isfinite(low_frac) and math.isfinite(high_frac)
+            and 0 <= low_frac < high_frac <= 1):
+        raise ValueError('requires 0 <= --low-frac < --high-frac <= 1')
+    if not math.isfinite(feedback_interval) or feedback_interval < 1:
+        raise ValueError('--feedback-interval must be finite and at least 1 second')
+    return speed
+
+
+def validate_hand(info, state, *, require_output=False, speed=HAND_SPEED_RAD_S):
     validate_info(info)
     if (info.model != 'BRAINCO_REVO2' or info.hand_type != HandType.BRAINCO_REVO2
             or info.dof != 6 or info.joint_names !=
@@ -39,8 +80,8 @@ def validate_hand(info, state, *, require_output=False):
            or not low <= j.q <= high
            for j, low, high in zip(state.joints, info.q_min, info.q_max)):
         raise ValueError('hand feedback is nonfinite or outside info limits')
-    if any(limit < HAND_SPEED_RAD_S for limit in info.dq_max):
-        raise ValueError('configured 1 deg/s placeholder exceeds advertised speed limit')
+    if any(limit < speed for limit in info.dq_max):
+        raise ValueError('requested speed exceeds advertised speed limit')
     if require_output and (not state.output_allowed or state.inhibit_reason != InhibitReason.NONE):
         raise RuntimeError('hand output was inhibited during motion')
 
@@ -86,18 +127,23 @@ def observe(clients, *, timeout, emit=print):
             emit(f'{client.side}: touch={touch}')
 
 
-def run(controller, clients, *, timeout, body_gains='hold', sleep=time.sleep, monotonic=time.monotonic, emit=print):
+@stop_signals()
+def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=1.0,
+        pattern='simultaneous', loop=False, low_frac=0.25, high_frac=0.75,
+        feedback_interval=1.0, sleep=time.sleep, monotonic=time.monotonic, emit=print):
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError('timeout must be finite and positive')
     if body_gains not in ('zero', 'hold'):
         raise ValueError('body_gains must be zero or hold')
+    speed = validate_motion_options(speed_deg_s, pattern, low_frac, high_frac, feedback_interval)
     infos = {}
     for client in clients:
         info = client.get_info(timeout)
-        validate_hand(info, client.wait_state(timeout))
+        validate_hand(info, client.wait_state(timeout), speed=speed)
         infos[client.side] = info
         emit(f'{client.side}: model={info.model}, joints={info.joint_names}, '
-             f'limits_rad={list(zip(info.q_min, info.q_max))}, speed=1 deg/s placeholder')
+             f'limits_rad={list(zip(info.q_min, info.q_max))}, speed={speed_deg_s:g} deg/s, '
+             f'pattern={pattern}, loop={loop}, fractions={low_frac:g}/{high_frac:g}')
     start_state = body._wait_for_stationary_lowstate(
         controller, timeout=timeout, sleep=sleep, monotonic=monotonic)
     start_q = tuple(m.q for m in start_state.motor_states[:body.COMMAND_SLOTS])
@@ -118,6 +164,7 @@ def run(controller, clients, *, timeout, body_gains='hold', sleep=time.sleep, mo
         next_print = monotonic()
         sent = {}
         last_commands = {}
+        stats = {}
 
         def frame(*, moving):
             nonlocal next_publish, next_print, last_body_id, last_body_change
@@ -147,7 +194,7 @@ def run(controller, clients, *, timeout, body_gains='hold', sleep=time.sleep, mo
             ready = True
             for client in clients:
                 feedback = client.state
-                validate_hand(infos[client.side], feedback, require_output=moving)
+                validate_hand(infos[client.side], feedback, require_output=moving, speed=speed)
                 previous_id, changed, rejects = last_hand[client.side]
                 if feedback.reject_count != rejects:
                     raise RuntimeError('hand reject_count changed')
@@ -169,10 +216,14 @@ def run(controller, clients, *, timeout, body_gains='hold', sleep=time.sleep, mo
                         raise TimeoutError('hand command echo did not advance within --timeout')
                     sent[client.side] = sequence, progress_time, echoed
                 ready = ready and feedback.output_allowed and feedback.inhibit_reason == InhibitReason.NONE
+                if client.side in stats:
+                    summary = stats[client.side]
+                    summary['measured'] = [max(a, j.q) for a, j in zip(summary['measured'], feedback.joints)]
+                    summary['reject_end'] = feedback.reject_count
             if now >= next_print:
                 for client in clients:
                     print_feedback(client, emit, command=last_commands.get(client.side))
-                next_print = now + body.DWELL_S
+                next_print = now + feedback_interval
             next_publish = max(next_publish + body.PERIOD_S, monotonic() + body.PERIOD_S)
             return ready
 
@@ -181,30 +232,92 @@ def run(controller, clients, *, timeout, body_gains='hold', sleep=time.sleep, mo
             if monotonic() >= deadline:
                 raise TimeoutError('hand output did not become enabled after EXTERNAL entry')
         positions = {c.side: tuple(j.q for j in c.state.joints) for c in clients}
-        for fraction in (0.25, 0.75, 0.25):
-            targets = {side: tuple(low + fraction * (high - low)
-                                   for low, high in zip(info.q_min, info.q_max))
-                       for side, info in infos.items()}
+
+        def move(targets):
+            nonlocal positions
             steps = max(1, math.ceil(max(abs(target - current)
                         for side in targets for target, current in
-                        zip(targets[side], positions[side])) / HAND_SPEED_RAD_S / body.PERIOD_S))
+                        zip(targets[side], positions[side])) / speed / body.PERIOD_S))
             for step in range(1, steps + 1):
                 frame(moving=True)
                 for client in clients:
                     side = client.side
-                    q = tuple(a + (b - a) * step / steps
-                              for a, b in zip(positions[side], targets[side]))
-                    command = client.publish(q, (HAND_SPEED_RAD_S,) * infos[side].dof)
+                    # Keep legal endpoint fractions in range despite floating
+                    # point interpolation rounding; feedback checks stay strict.
+                    q = tuple(min(high, max(low, a + (b - a) * step / steps))
+                              for a, b, low, high in zip(positions[side], targets[side],
+                                                       infos[side].q_min, infos[side].q_max))
+                    command = client.publish(q, (speed,) * infos[side].dof)
+                    if side in stats:
+                        stats[side]['commanded'] = [max(a, b) for a, b in zip(stats[side]['commanded'], q)]
                     _, progress_time, echoed = sent.get(side, (0, monotonic(), 0))
                     sent[side] = command.sequence, progress_time, echoed
                     last_commands[side] = command
             positions = targets
             for _ in range(math.ceil(body.DWELL_S / body.PERIOD_S)):
                 frame(moving=True)
-        for client in clients:
-            print_feedback(client, emit, command=last_commands.get(client.side))
+
+        low_targets = {side: tuple(min(b, max(a, a + low_frac * (b - a))) for a, b in zip(info.q_min, info.q_max))
+                       for side, info in infos.items()}
+        high_targets = {side: tuple(min(b, max(a, a + high_frac * (b - a))) for a, b in zip(info.q_min, info.q_max))
+                        for side, info in infos.items()}
+        # Establish the low pose before sequential motion; preserve the original
+        # simultaneous low/high/low trajectory and dwell with default options.
+        move(low_targets)
+
+        def begin_summary():
+            stats.clear()
+            for client in clients:
+                state = client.state
+                stats[client.side] = dict(measured=[j.q for j in state.joints],
+                                         commanded=list(positions[client.side]),
+                                         reject_start=state.reject_count, reject_end=state.reject_count)
+
+        def joint_summary(side, index, started, round_number):
+            summary = stats[side]
+            emit(f'{side}: round={round_number} joint={infos[side].joint_names[index]} '
+                 f'measured_max_rad={summary["measured"][index]:.6g} '
+                 f'commanded_max_rad={summary["commanded"][index]:.6g} '
+                 f'roundtrip_s={monotonic() - started:.3f} '
+                 f'reject_count={summary["reject_start"]}->{summary["reject_end"]} '
+                 f'body_reject_count={entered.reject_count}->{controller.status.reject_count}')
+
+        round_number = 0
+        while True:
+            round_number += 1
+            round_start = monotonic()
+            if pattern == 'simultaneous':
+                begin_summary()
+                move(high_targets)
+                move(low_targets)
+                for side, info in infos.items():
+                    for index in range(info.dof):
+                        joint_summary(side, index, round_start, round_number)
+            else:
+                # Across both hands too, only one joint leaves its low target.
+                for side, info in infos.items():
+                    for index in range(info.dof):
+                        started = monotonic()
+                        begin_summary()
+                        targets = dict(low_targets)
+                        q = list(targets[side])
+                        q[index] = high_targets[side][index]
+                        targets[side] = tuple(q)
+                        move(targets)
+                        move(low_targets)
+                        joint_summary(side, index, started, round_number)
+            emit(f'round={round_number} complete pattern={pattern} '
+                 f'joints={sum(info.dof for info in infos.values())} '
+                 f'elapsed_s={monotonic() - round_start:.3f} '
+                 f'hand_reject_counts={[(c.side, last_hand[c.side][2]) for c in clients]} '
+                 f'body_reject_count={entered.reject_count}->{controller.status.reject_count}')
+            if not loop:
+                break
     finally:
         if attempted:
+            # A stop during normal/fault cleanup must also allow CANCEL to finish.
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                signal.signal(signum, signal.SIG_IGN)
             try:
                 status = controller.exit_external(timeout)
                 if status.current_action != 'PASSIVE':
@@ -226,9 +339,20 @@ def main(argv=None):
     parser.add_argument('--dry-run', action='store_true', help='read-only RPC/subscriptions; no lease or writes')
     parser.add_argument('--confirm-motion', action='store_true', help='requires separate current on-site approval')
     parser.add_argument('--touch', choices=('keep', 'on', 'off'), default='keep')
+    parser.add_argument('--speed-deg-s', type=float, default=1.0, help='positive speed within info dq_max (default: 1)')
+    parser.add_argument('--pattern', choices=('simultaneous', 'sequential'), default='simultaneous')
+    parser.add_argument('--loop', action='store_true', help='repeat until SIGINT/SIGTERM or a safety failure')
+    parser.add_argument('--low-frac', type=float, default=0.25)
+    parser.add_argument('--high-frac', type=float, default=0.75)
+    parser.add_argument('--feedback-interval', type=float, default=1.0, help='feedback interval in seconds, at least 1')
     args = parser.parse_args(argv)
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
+    try:
+        validate_motion_options(args.speed_deg_s, args.pattern, args.low_frac,
+                                args.high_frac, args.feedback_interval)
+    except ValueError as error:
+        parser.error(str(error))
     if args.dry_run and args.confirm_motion:
         parser.error('--dry-run and --confirm-motion are mutually exclusive')
     readonly = args.dry_run or not args.confirm_motion
@@ -247,7 +371,10 @@ def main(argv=None):
                 for client in clients:
                     client.set_touch(args.touch == 'on', args.timeout)
             try:
-                run(controller, clients, timeout=args.timeout, body_gains=args.body_gains)
+                run(controller, clients, timeout=args.timeout, body_gains=args.body_gains,
+                    speed_deg_s=args.speed_deg_s, pattern=args.pattern, loop=args.loop,
+                    low_frac=args.low_frac, high_frac=args.high_frac,
+                    feedback_interval=args.feedback_interval)
             except KeyboardInterrupt:
                 print('interrupted; lease release attempted, no neutral hand command')
 

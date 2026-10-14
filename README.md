@@ -123,15 +123,30 @@ dq=tau=0。`--body-gains zero` 令所有槽位 kp=kd=0，q 仍填测得姿态；
 执行；zero 参数只选择持续发送帧的目标增益，不保证进入及故障阶段的物理失能。
 
 先核对 `BRAINCO_REVO2`、6 DOF、关节名和 info 限位，随后各关节慢速移到限位区间
-25%→75%→25%（部分张合，避开端点）。速度用机器人 BrainCo JSON 的已有
-`brainco_revo2.speed_deg_s=[1,1,1,1,1,1]` 占位值，换成 float32 rad/s；这是占位配置，
-不是已测性能/电流/安全结论。`--touch on|off` 可在租约进入前调用 set_touch，默认 keep。
+25%→75%→25%（部分张合，避开端点）。默认 `--pattern simultaneous`、
+`--speed-deg-s 1`、`--low-frac 0.25 --high-frac 0.75`，保留原来的一次往返。
+速度转换为 float32 rad/s，必须为有限正数且不超过每个关节 info 声明的 dq_max；
+比例必须满足 0 ≤ low < high ≤ 1。默认速度是原配置占位值，不是已测性能/电流/安全结论。
+`--pattern sequential` 先把所有关节移到低位，然后按 info.joint_names 顺序逐个
+低位→高位→低位，其余关节的命令保持低位；双手模式先左后右，一次只动一个关节。
+`--loop` 持续重复，没有轮数或运行时长上限，直到 SIGINT/SIGTERM 或安全检查失败。
+每个关节往返和每轮各打印一行摘要；周期性反馈由 `--feedback-interval` 控制，
+默认 1 秒，不能小于 1 秒。`--touch on|off` 可在租约进入前调用 set_touch，默认 keep。
 左右手有各自随机非零会话与递增序号；手会话和本体 EXTERNAL generation 相互独立。
 
-正常结束、异常与 Ctrl-C 均尝试 CANCEL，要求确认 PASSIVE；不发手部归零/回程命令，
+右手逐个循环的命令示例（仍需本轮现场授权和安全确认）：
+
+```bash
+python examples/brainco_hand_external.py --side right --group default --timeout 5 --body-gains zero --pattern sequential --loop --speed-deg-s 20 --confirm-motion
+```
+
+正常结束、异常、Ctrl-C 与 `kill -INT <demo_pid>` / `kill -TERM <demo_pid>` 均停止
+发送新目标并尝试 CANCEL，要求确认 PASSIVE；不发手部归零/回程命令，
 手按服务端契约保持最后目标。PASSIVE 可使本体负载肢体下落；进程被杀死不能保证
 CANCEL，租约无限期、不会自动到期。超时/故障退出后不自动重试运动，退出未确认须
 现场处理。旧 `brainco_hand_control.py` 现在转到此入口，不再支持旧 `--spec`/LowCmd 手槽路径。
+长时间运行须由现场看护电量和本体姿态；zero 不保持本体，偏离起始姿态超过
+既有 0.05 rad 容差仍立即退出，不能为了持续循环放宽检查或自动重试。
 
 打印 state 的 q/q_cmd/dq、会话/序号回执及七阶段 µs 时间链。三个入口时间
 `middleware_received/received/dequeued` 相同，代表回调交付；worker 等待包含在

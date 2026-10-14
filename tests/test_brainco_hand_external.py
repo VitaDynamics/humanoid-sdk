@@ -1,6 +1,7 @@
 from dataclasses import replace
 import io
 import math
+import signal
 import unittest
 from unittest.mock import patch
 
@@ -13,11 +14,14 @@ from test_hand import pack
 
 
 class FakeHand:
-    def __init__(self, side='left', *, stale=False, reject=False, inhibited=False, echo=True):
+    def __init__(self, side='left', *, stale=False, reject=False, inhibited=False, echo=True,
+                 speed_limit=None):
         self.side = side
         self.session_id = 101 if side == 'left' else 202
         self.echo = echo
         self.info = codec.decode_info(HandInfo.GetRootAs(pack(info_obj(1 if side == 'left' else 2))))
+        if speed_limit is not None:
+            self.info = replace(self.info, dq_max=(speed_limit,) * 6)
         self.commands = []
         self.stale, self.reject, self.inhibited = stale, reject, inhibited
         self._state = HandState(state_id=1, hand_type=1, side=self.info.side, dof=6,
@@ -170,3 +174,170 @@ class ExternalHandTest(unittest.TestCase):
         with self.assertRaisesRegex(TimeoutError, 'echo did not advance'):
             self.run_demo(c, [FakeHand(echo=False)])
         self.assertIn('exit_external', c.calls)
+
+    def test_default_trajectory_matches_original_three_fraction_commands(self):
+        c = self.controller(); hand = FakeHand()
+        self.run_demo(c, [hand])
+        expected = []
+        previous = (.01,) * 6
+        for fraction in (.25, .75, .25):
+            target = tuple(a + fraction * (b - a) for a, b in zip(hand.info.q_min, hand.info.q_max))
+            steps = max(1, math.ceil(max(abs(a - b) for a, b in zip(target, previous))
+                                    / demo.HAND_SPEED_RAD_S / demo.body.PERIOD_S))
+            expected.extend((tuple(a + (b - a) * step / steps for a, b in zip(previous, target)),
+                             (demo.HAND_SPEED_RAD_S,) * 6) for step in range(1, steps + 1))
+            previous = target
+        self.assertEqual(hand.commands, expected)
+        self.assertEqual(sum(' joint=' in s for s in self.events), 6)
+        self.assertEqual(sum(' complete pattern=' in s for s in self.events), 1)
+
+    def test_sequential_order_and_all_other_joints_remain_low_across_hands(self):
+        c = self.controller(); hands = [FakeHand('left', speed_limit=math.radians(160)),
+                                      FakeHand('right', speed_limit=math.radians(160))]
+        self.run_demo(c, hands, pattern='sequential', speed_deg_s=20, low_frac=.1, high_frac=.9)
+        low = tuple(a + .1 * (b - a) for a, b in zip(hands[0].info.q_min, hands[0].info.q_max))
+        high = tuple(a + .9 * (b - a) for a, b in zip(hands[0].info.q_min, hands[0].info.q_max))
+        initialized = False
+        active_order = []
+        previous = [(.01,) * 6, (.01,) * 6]
+        for frame in zip(*(h.commands for h in hands)):
+            qs = [cmd[0] for cmd in frame]
+            if initialized:
+                active = [(side, j) for side, q in enumerate(qs) for j, v in enumerate(q)
+                          if abs(v - low[j]) > 1e-9]
+                self.assertLessEqual(len(active), 1)
+                if active and (not active_order or active_order[-1] != active[0]):
+                    active_order.append(active[0])
+            elif all(all(abs(a - b) < 1e-9 for a, b in zip(q, low)) for q in qs):
+                initialized = True
+            for side, (q, dq) in enumerate(frame):
+                self.assertTrue(all(abs(a - b) <= dq[j] * demo.body.PERIOD_S + 1e-9
+                                    for j, (a, b) in enumerate(zip(q, previous[side]))))
+            previous = qs
+        self.assertTrue(initialized)
+        self.assertEqual(active_order, [(side, j) for side in range(2) for j in range(6)])
+        for hand in hands:
+            for actual, target in zip(hand.commands[-1][0], low):
+                self.assertAlmostEqual(actual, target)
+            for j in range(6):
+                self.assertAlmostEqual(max(q[j] for q, _ in hand.commands), high[j])
+        self.assertEqual(sum(' joint=' in s for s in self.events), 12)
+        self.assertEqual(sum(' complete pattern=' in s for s in self.events), 1)
+
+    def test_loop_signals_cancel_after_multiple_rounds_and_restore_handlers(self):
+        for pattern in ('simultaneous', 'sequential'):
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                with self.subTest(pattern=pattern, signal=signum):
+                    self.events.clear()
+                    c = self.controller(); hand = FakeHand(speed_limit=math.radians(160))
+                    handlers = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+                    at_stop = []
+                    def stop_after_rounds(t):
+                        if sum(' complete pattern=' in s for s in self.events) >= 2:
+                            at_stop.append(len(hand.commands))
+                            signal.raise_signal(signum)
+                        self.clock.sleep(t)
+                    original_exit = c.exit_external
+                    def cancel(timeout):
+                        # Repeated signals must not prevent PASSIVE confirmation.
+                        signal.raise_signal(signal.SIGINT)
+                        signal.raise_signal(signal.SIGTERM)
+                        return original_exit(timeout)
+                    with patch.object(c, 'exit_external', side_effect=cancel):
+                        with self.assertRaises(KeyboardInterrupt):
+                            self.run_demo(c, [hand], pattern=pattern, loop=True, speed_deg_s=20,
+                                          sleep=stop_after_rounds)
+                    self.assertEqual(c.calls.count('exit_external'), 1)
+                    self.assertEqual(c.status.current_action, 'PASSIVE')
+                    self.assertEqual(len(hand.commands), at_stop[0])
+                    self.assertEqual(sum(' complete pattern=' in s for s in self.events), 2)
+                    self.assertEqual({s: signal.getsignal(s) for s in handlers}, handlers)
+
+    def test_cli_motion_options_defaults_and_forwarding(self):
+        for args, expected in (([], dict(speed_deg_s=1., pattern='simultaneous', loop=False,
+                                        low_frac=.25, high_frac=.75, feedback_interval=1.)),
+                               (['--speed-deg-s', '20', '--pattern', 'sequential', '--loop',
+                                 '--low-frac', '.1', '--high-frac', '.9', '--feedback-interval', '3'],
+                                dict(speed_deg_s=20., pattern='sequential', loop=True,
+                                     low_frac=.1, high_frac=.9, feedback_interval=3.))):
+            with patch.object(demo, 'HandClient'), patch.object(demo, 'ExternalController'), \
+                 patch.object(demo, 'run') as run:
+                demo.main(['--confirm-motion'] + args)
+                for key, value in expected.items():
+                    self.assertEqual(run.call_args.kwargs[key], value)
+
+    def test_invalid_motion_options_before_connect_or_enter(self):
+        cases = [dict(speed_deg_s=v) for v in (0, -1, float('nan'), float('inf'), 1e300, 1e-300)]
+        cases += [dict(low_frac=a, high_frac=b) for a, b in
+                  ((-.1, .75), (.25, 1.1), (.5, .5), (.8, .2), (float('nan'), .75), (.25, float('inf')))]
+        cases += [dict(pattern='invalid'), dict(feedback_interval=.5), dict(feedback_interval=float('nan'))]
+        for options in cases:
+            with self.subTest(options=options):
+                c = self.controller(); hand = FakeHand()
+                with self.assertRaises(ValueError): self.run_demo(c, [hand], **options)
+                self.assertNotIn('enter_external', c.calls)
+                argv = [part for key, value in options.items()
+                        for part in ('--' + key.replace('_', '-'), str(value))]
+                with patch.object(demo, 'HandClient') as client, \
+                     patch.object(demo, 'ExternalController') as controller, \
+                     patch('sys.stderr', new_callable=io.StringIO):
+                    with self.assertRaises(SystemExit): demo.main(argv)
+                    client.assert_not_called(); controller.assert_not_called()
+
+    def test_requested_speed_limit_is_checked_before_entry_and_each_frame(self):
+        c = self.controller(); hand = FakeHand()
+        with self.assertRaisesRegex(ValueError, 'speed limit'):
+            self.run_demo(c, [hand], speed_deg_s=math.degrees(min(hand.info.dq_max)) + 1)
+        self.assertNotIn('enter_external', c.calls)
+        hand.info = replace(hand.info, dq_max=(demo.HAND_SPEED_RAD_S,) * 6)
+        self.run_demo(c, [hand])
+        with self.assertRaisesRegex(ValueError, 'speed limit'):
+            demo.validate_hand(hand.info, hand.state, require_output=True, speed=math.radians(20))
+
+    def test_loop_keeps_all_existing_safety_failures_and_cancel(self):
+        for hand, kwargs in ((FakeHand(stale=True), {}), (FakeHand(reject=True), {}),
+                              (FakeHand(inhibited=True), {}), (FakeHand(echo=False), {}),
+                              (FakeHand(), {'fail_phase_after_commands':3}),
+                              (FakeHand(), {'reject_after_commands':3}),
+                              (FakeHand(), {'stale_after_commands':3}),
+                              (FakeHand(), {'drift_command_range':(3,20)})):
+            with self.subTest(kwargs=kwargs):
+                c = self.controller(**kwargs)
+                with self.assertRaises((RuntimeError, TimeoutError)):
+                    self.run_demo(c, [hand], pattern='sequential', loop=True)
+                self.assertEqual(c.calls.count('exit_external'), 1)
+
+    def test_periodic_feedback_interval_is_respected(self):
+        c = self.controller(); hand = FakeHand(); times = []
+        original = demo.print_feedback
+        def record(*args, **kwargs):
+            times.append(self.clock.monotonic())
+            return original(*args, **kwargs)
+        with patch.object(demo, 'print_feedback', side_effect=record):
+            self.run_demo(c, [hand], pattern='sequential', feedback_interval=2.)
+        self.assertGreater(len(times), 2)
+        self.assertTrue(all(b - a >= 2. for a, b in zip(times, times[1:])))
+
+    def test_fraction_endpoints_and_different_joint_limits_remain_in_range(self):
+        c = self.controller(); hand = FakeHand(speed_limit=math.radians(160))
+        hand.info = replace(hand.info, q_min=(-.1, -.05, 0., .005, -.2, -.01),
+                            q_max=(.2, .1, .02, .04, .2, .03))
+        self.run_demo(c, [hand], pattern='sequential', speed_deg_s=20, low_frac=0., high_frac=1.)
+        for q, _ in hand.commands:
+            self.assertTrue(all(a <= v <= b for a, v, b in zip(hand.info.q_min, q, hand.info.q_max)))
+        for j, (low, high) in enumerate(zip(hand.info.q_min, hand.info.q_max)):
+            self.assertAlmostEqual(hand.commands[-1][0][j], low)
+            self.assertAlmostEqual(max(q[j] for q, _ in hand.commands), high)
+
+    def test_stop_during_normal_cancel_does_not_interrupt_passive_confirmation(self):
+        c = self.controller(); hand = FakeHand()
+        original_exit = c.exit_external
+        handlers = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+        def cancel(timeout):
+            signal.raise_signal(signal.SIGINT)
+            signal.raise_signal(signal.SIGTERM)
+            return original_exit(timeout)
+        with patch.object(c, 'exit_external', side_effect=cancel):
+            self.run_demo(c, [hand])
+        self.assertEqual(c.status.current_action, 'PASSIVE')
+        self.assertEqual({s: signal.getsignal(s) for s in handlers}, handlers)
