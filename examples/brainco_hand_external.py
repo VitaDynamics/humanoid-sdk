@@ -114,9 +114,24 @@ def print_feedback(client, emit=print, *, command=None):
          f'age_us={state.last_valid_age_us} robot_chain_us={chain} delta_us={delta}')
 
 
+def wait_touch_info(client, enabled, timeout):
+    # Info timestamps stay unchanged after set_touch. Require a later topic
+    # event and the acknowledged value, keeping the existing caller timeout.
+    previous = client.info
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('timed out waiting for hand touch info update')
+        info = client.wait_info(remaining, after_info=previous)
+        if info.touch_enabled == enabled:
+            return info
+        previous = info
+
+
 def observe(clients, *, timeout, emit=print):
     for client in clients:
-        info = client.get_info(timeout)
+        info = client.wait_info(timeout)
         state = client.wait_state(timeout)
         emit(f'{client.side}: info={info} state_identity='
              f'{state.hand_type}/{state.side}/{state.dof}; read-only, no lease/cmd/set_touch')
@@ -137,7 +152,7 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
     speed = validate_motion_options(speed_deg_s, pattern, low_frac, high_frac, feedback_interval)
     infos = {}
     for client in clients:
-        info = client.get_info(timeout)
+        info = client.wait_info(timeout)
         validate_hand(info, client.wait_state(timeout), speed=speed)
         infos[client.side] = info
         emit(f'{client.side}: model={info.model}, joints={info.joint_names}, '
@@ -335,7 +350,7 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float, default=5.0)
     parser.add_argument('--body-gains', choices=('zero', 'hold'), default='hold',
                         help='zero: kp=kd=0 with measured q; hold: existing pose gains (default)')
-    parser.add_argument('--dry-run', action='store_true', help='read-only RPC/subscriptions; no lease or writes')
+    parser.add_argument('--dry-run', action='store_true', help='read-only subscriptions; no lease or writes')
     parser.add_argument('--confirm-motion', action='store_true', help='requires separate current on-site approval')
     parser.add_argument('--touch', choices=('keep', 'on', 'off'), default='keep')
     parser.add_argument('--speed-deg-s', type=float, default=20.0, help='positive speed within info dq_max (default: 20)')
@@ -368,7 +383,8 @@ def main(argv=None):
                        for side in sides]
             if args.touch != 'keep':
                 for client in clients:
-                    client.set_touch(args.touch == 'on', args.timeout)
+                    enabled = client.set_touch(args.touch == 'on', args.timeout)
+                    wait_touch_info(client, enabled, args.timeout)
             try:
                 run(controller, clients, timeout=args.timeout, body_gains=args.body_gains,
                     speed_deg_s=args.speed_deg_s, pattern=args.pattern, loop=args.loop,
