@@ -13,10 +13,9 @@ def load_bindings():
     try:
         modules = {name: importlib.import_module('lowlevel.' + name) for name in (
             'HandCmd', 'HandJointCmd', 'HandState', 'HandTouch', 'HandInfo')}
-        for name in ('HandGetInfoRequest', 'HandGetInfoResponse',
-                     'HandSetTouchRequest', 'HandSetTouchResponse'):
+        for name in ('HandSetTouchRequest', 'HandSetTouchResponse'):
             modules[name] = importlib.import_module('aorta.services.humanoid_locomotion.' + name)
-        for stem in ('hand_cmd', 'hand_get_info', 'hand_set_touch'):
+        for stem in ('hand_cmd', 'hand_set_touch'):
             modules[stem + '_meta'] = importlib.import_module(stem + '_schema_meta')
         modules['aorta'] = importlib.import_module('aorta')
         return SimpleNamespace(**modules)

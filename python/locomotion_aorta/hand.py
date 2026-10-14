@@ -1,4 +1,4 @@
-"""Independent hand topics and typed RPCs; body EXTERNAL ownership stays separate."""
+"""Independent hand topics and touch control RPC; body EXTERNAL ownership stays separate."""
 from collections.abc import Sequence
 import math
 import threading
@@ -110,7 +110,7 @@ class HandClient:
     def info(self):
         return self._get('info')
 
-    def _wait(self, kind, timeout, after_state_id=None):
+    def _wait(self, kind, timeout, after_state_id=None, after_info=None):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError('timeout must be finite and positive')
         deadline = time.monotonic() + timeout
@@ -118,7 +118,9 @@ class HandClient:
             while True:
                 self._ensure_open()
                 value = self._latest[kind]
-                if value is not None and (after_state_id is None or value.state_id > after_state_id):
+                if (value is not None
+                        and (after_state_id is None or value.state_id > after_state_id)
+                        and (after_info is None or value is not after_info)):
                     return value
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -128,8 +130,9 @@ class HandClient:
     def wait_state(self, timeout: float = 5.0, *, after_state_id: int | None = None) -> HandState:
         return self._wait('state', timeout, after_state_id)
 
-    def wait_info(self, timeout: float = 5.0) -> HandInfo:
-        return self._wait('info', timeout)
+    def wait_info(self, timeout: float = 5.0, *, after_info: HandInfo | None = None) -> HandInfo:
+        """Wait for info; after_info selects a later topic event, not a timestamp."""
+        return self._wait('info', timeout, after_info=after_info)
 
     def wait_touch(self, timeout: float = 5.0) -> HandTouch:
         return self._wait('touch', timeout)
@@ -203,20 +206,6 @@ class HandClient:
         if reply.Status() != 0:  # aorta.services.common.ServiceStatus.SUCCESS
             raise RuntimeError(f'{stem} failed with ServiceStatus={reply.Status()}')
         return reply
-
-    def get_info(self, timeout: float = 5.0) -> HandInfo:
-        reply = self._call('hand_get_info', 'HandGetInfoRequest', 'HandGetInfoResponse', timeout)
-        if reply.Info() is None:
-            raise RuntimeError('get_info succeeded without info')
-        info = codec.decode_info(reply.Info())
-        validate_info(info)
-        if info.side != self.wire_side:
-            raise ValueError('get_info returned another side')
-        with self._condition:
-            self._ensure_open()
-            self._latest['info'] = info
-            self._condition.notify_all()
-        return info
 
     def set_touch(self, enable: bool, timeout: float = 5.0) -> bool:
         if self._read_only:

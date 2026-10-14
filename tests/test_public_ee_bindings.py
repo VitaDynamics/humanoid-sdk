@@ -23,16 +23,12 @@ class PublicEeBindingTest(unittest.TestCase):
                 meta = importlib.import_module(stem + '_schema_meta')
                 self.assertEqual(hashlib.sha256(meta.SCHEMA_BFBS).hexdigest(), expected)
 
-    def test_hand_topics_and_both_service_directions_are_generated(self):
+    def test_hand_topics_and_touch_control_are_generated(self):
         bindings = load_bindings()
         for name in ('HandCmd', 'HandState', 'HandTouch', 'HandInfo',
-                     'HandGetInfoRequest', 'HandGetInfoResponse',
                      'HandSetTouchRequest', 'HandSetTouchResponse'):
             with self.subTest(name=name):
                 self.assertTrue(callable(getattr(getattr(bindings, name), name).GetRootAs))
         for name in ('HandCmdTrace', 'GripperCmd', 'GripperState', 'GripperInfo'):
             module = importlib.import_module('lowlevel.' + name)
-            self.assertTrue(callable(getattr(module, name).GetRootAs))
-        for name in ('GripperGetInfoRequest', 'GripperGetInfoResponse'):
-            module = importlib.import_module('aorta.services.humanoid_locomotion.' + name)
             self.assertTrue(callable(getattr(module, name).GetRootAs))

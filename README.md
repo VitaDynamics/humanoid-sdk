@@ -93,7 +93,13 @@ python examples/brainco_hand_external.py --dry-run --side both --group default -
 ```
 
 The default entry is also read-only: no lease, hand command or touch write.
-`HandClient` reads info/state/touch and supports typed `get_info`/`set_touch` RPCs.
+`HandClient` reads info/state/touch topics; `wait_info(timeout=5)` waits for the
+first info sample or returns its cache. HandInfo is published about once a second;
+late subscribers wait for a subsequent sample, with no historical replay promise.
+Only the typed `set_touch` control RPC remains. After that control call, the demo
+waits for a later info event with the acknowledged `touch_enabled` value;
+`ts_info_us` need not change. `wait_info(after_info=client.info)` can request a
+later event without clearing the info cache used by command publication.
 Left/right wire values are 1/2; they differ from the device register numbering.
 
 After separate on-site motion authorization, support, an attendant and an
