@@ -15,7 +15,6 @@ from lowlevel.HandState import HandStateT
 from lowlevel.HandJointState import HandJointStateT
 from lowlevel.HandTouch import HandTouchT
 from lowlevel.FingerTouchMeta import FingerTouchMetaT
-from aorta.services.humanoid_locomotion.HandGetInfoResponse import HandGetInfoResponseT
 from aorta.services.humanoid_locomotion.HandSetTouchResponse import HandSetTouchResponseT
 
 
@@ -76,18 +75,12 @@ class FakeClient(Handle):
     def wait_for_matching(self, timeout):
         return self.node.matching
     def call(self, fill):
-        module = (self.node.bindings.HandGetInfoRequest if self.topic.endswith('/get_info')
-                  else self.node.bindings.HandSetTouchRequest)
-        cls = getattr(module, 'HandGetInfoRequest' if self.topic.endswith('/get_info') else 'HandSetTouchRequest')
+        cls = self.node.bindings.HandSetTouchRequest.HandSetTouchRequest
         builder = flatbuffers.Builder(256)
         builder.Finish(fill(builder, 0))
         request = cls.GetRootAs(builder.Output())
-        side = 1 if '/left/' in self.topic else 2
-        if self.topic.endswith('/get_info'):
-            response = HandGetInfoResponseT(status=self.node.service_status, info=info_obj(side))
-        else:
-            self.node.touch_requests.append(request.Enable())
-            response = HandSetTouchResponseT(status=self.node.service_status, enabled=request.Enable())
+        self.node.touch_requests.append(request.Enable())
+        response = HandSetTouchResponseT(status=self.node.service_status, enabled=request.Enable())
         result = self.decoder(pack(response))
         return SimpleNamespace(decode=lambda: result)
 
@@ -116,7 +109,7 @@ class FakeNode:
         handle = FakePublisher(self, topic); self.handles.append(handle)
         return handle
     def create_client_typed(self, topic, decoder, request_schema_meta, options):
-        assert request_schema_meta.ROOT_TYPE_NAME.endswith(('HandGetInfoRequest', 'HandSetTouchRequest'))
+        assert request_schema_meta.ROOT_TYPE_NAME.endswith('HandSetTouchRequest')
         self.client_options.append(options)
         handle = FakeClient(self, topic, decoder); self.handles.append(handle)
         return handle
@@ -189,9 +182,9 @@ class HandTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'invalid hand feedback'):
             c.wait_touch()
 
-    def test_get_info_set_touch_real_requests_and_service_failures(self):
+    def test_set_touch_real_requests_and_service_failures(self):
         c, n = self.client()
-        info = c.get_info(.25)
+        info = c.wait_info(.25)
         self.assertEqual(info.model, 'BRAINCO_REVO2')
         self.assertEqual(info.joint_names[0], 'thumb_pitch')
         self.assertTrue(c.set_touch(True, .25)); self.assertFalse(c.set_touch(False, .25))
@@ -201,7 +194,33 @@ class HandTest(unittest.TestCase):
             c.set_touch(True)
         n.matching = False
         with self.assertRaises(TimeoutError):
-            c.get_info(.1)
+            c.set_touch(True, .1)
+
+    def test_late_subscription_waits_for_info_without_rpc(self):
+        node = FakeNode()
+        client = HandClient('left', node=node, read_only=True)
+        self.addCleanup(client.close)
+        with self.assertRaises(TimeoutError):
+            client.wait_info(.001)
+        node.emit('left', 'info', info_obj())
+        self.assertIs(client.wait_info(), client.info)
+        self.assertEqual(node.client_options, [])
+        self.assertEqual(node.commands, [])
+
+    def test_later_info_event_works_with_unchanged_timestamp(self):
+        client, node = self.client()
+        cached = client.info
+        with self.assertRaises(TimeoutError):
+            client.wait_info(.001, after_info=cached)
+        self.assertFalse(client.set_touch(False))
+        # The cached capabilities remain available to command publication.
+        self.assertIs(client.info, cached)
+        obj = info_obj(); obj.touchEnabled = False
+        node.emit('left', 'info', obj)
+        later = client.wait_info(after_info=cached)
+        self.assertIsNot(later, cached)
+        self.assertEqual(later.ts_info_us, cached.ts_info_us)
+        self.assertFalse(later.touch_enabled)
 
     def test_invalid_commands_and_sides_never_publish(self):
         c, n = self.client()
@@ -228,7 +247,7 @@ class HandTest(unittest.TestCase):
 
     def test_readonly_close_shared_node_and_wait_timeout(self):
         c, n = self.client(read_only=True)
-        c.get_info()
+        c.wait_info()
         with self.assertRaises(RuntimeError): c.publish([.01]*6)
         with self.assertRaises(RuntimeError): c.set_touch(True)
         with self.assertRaises(TimeoutError): c.wait_state(.001, after_state_id=9)
@@ -237,7 +256,7 @@ class HandTest(unittest.TestCase):
         self.assertTrue(all(handle.closed for handle in n.handles))
         self.assertFalse(n.commands)
         self.assertFalse(n.touch_requests)
-        with self.assertRaises(RuntimeError): c.get_info()
+        with self.assertRaises(RuntimeError): c.wait_info()
 
     def test_feedback_wrong_side_and_joint_count_fail_explicitly(self):
         for obj in (state_obj(2), HandStateT(stateId=2, side=1, dof=6, joints=[])):
