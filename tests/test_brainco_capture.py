@@ -99,11 +99,14 @@ class BrainCoCaptureTest(unittest.TestCase):
                 capture.decode("left_hand_touch", data, bindings)
 
     def test_lowcmd_real_binding_preserves_all_fields(self):
-        from examples import external_control as demo
-        from locomotion_aorta import transport
-        command = demo._position_command((0.1,) * 42)
+        # Historical archive fixture: use the preserved generated42 encoder,
+        # never call the current31 demo/transport to manufacture an old command.
+        import lowlevel.LowCmd as module
+        from locomotion_aorta.types import LowCmd, MotorCommand
+        from test_motor_codec import reference_fill_low_cmd
+        command = LowCmd(1,tuple(MotorCommand(mode=10,q=.1,kp=30.,kd=1.5) for _ in range(42)))
         builder = flatbuffers.Builder(4096)
-        builder.Finish(transport._fill_low_cmd(transport._load_aorta_bindings(), command, builder, 0))
+        builder.Finish(reference_fill_low_cmd(SimpleNamespace(low_cmd_module=module),command,builder,0))
         row = capture.decode("external_command", bytes(builder.Output()), capture.load_bindings())
         self.assertEqual(row["cmd_id"], 1)
         self.assertEqual(len(row["motor_cmds"]), 42)
