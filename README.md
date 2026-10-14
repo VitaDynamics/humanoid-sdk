@@ -5,15 +5,18 @@ name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
 with Python 3.10 or newer.
 
 Dependencies are pinned to Aorta SDK and messages `2026.10.12` (ABI 13),
-`vbot-humanoid-msgs==0.1.0`, and `flatbuffers==25.9.23`. Obtain the matching
+`vbot-humanoid-msgs==0.1.1`, and `flatbuffers==25.9.23`. Obtain the matching
 wheels from this repository's [Releases](https://github.com/VitaDynamics/humanoid-sdk/releases),
 using the `dependency_release_tag` in [compatibility.json](compatibility.json)
 (`v0.1.0-rc.4`). Verify wheel filenames and SHA-256s against that manifest;
-do not substitute older wheels if an asset is missing.
+do not substitute older wheels if an asset is missing. The EE `0.1.1` release
+assets are being prepared; until they are available, use only the reviewed
+public candidate bundle for host validation, not a private/HIL wheel.
 
 The HumanoidLowState wire layout differs from rc.2/rc.3, including the
 `motor_states` field ID. LowCmd and the control messages retain their layouts.
-The SDK and robot must use matching schema hashes. The body remains on the 42-command/44-feedback contract;
+The SDK and robot must use matching schema hashes. The body remains on the
+42-command/44-feedback contract;
 independent public EE topics and typed hand RPCs are added.
 
 Documentation: [Humanoid documentation](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg),
