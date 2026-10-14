@@ -53,3 +53,15 @@ __all__ = [
     "NotRunningError",
     "PROTOCOL_VERSION",
 ]
+
+from .hand import HAND_TOPIC_PREFIX, HandClient
+from .hand_types import (
+    FingerTouchMeta, HandCmd, HandInfo, HandJointCmd, HandJointState,
+    HandSide, HandState, HandTouch, HandType, InhibitReason,
+)
+
+__all__ += [
+    "HAND_TOPIC_PREFIX", "HandClient", "HandCmd", "HandInfo", "HandJointCmd",
+    "HandJointState", "HandSide", "HandState", "HandTouch", "HandType",
+    "InhibitReason", "FingerTouchMeta",
+]
