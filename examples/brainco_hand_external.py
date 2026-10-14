@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""HIL only: hold the measured body pose and exercise independent BrainCo hands."""
+"""HIL only: select body gains and exercise independent BrainCo hands."""
 import argparse
 import importlib.util
 from contextlib import ExitStack
+from dataclasses import replace
 import math
 from pathlib import Path
 import struct
@@ -85,9 +86,11 @@ def observe(clients, *, timeout, emit=print):
             emit(f'{client.side}: touch={touch}')
 
 
-def run(controller, clients, *, timeout, sleep=time.sleep, monotonic=time.monotonic, emit=print):
+def run(controller, clients, *, timeout, body_gains='hold', sleep=time.sleep, monotonic=time.monotonic, emit=print):
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError('timeout must be finite and positive')
+    if body_gains not in ('zero', 'hold'):
+        raise ValueError('body_gains must be zero or hold')
     infos = {}
     for client in clients:
         info = client.get_info(timeout)
@@ -99,7 +102,11 @@ def run(controller, clients, *, timeout, sleep=time.sleep, monotonic=time.monoto
         controller, timeout=timeout, sleep=sleep, monotonic=monotonic)
     start_q = tuple(m.q for m in start_state.motor_states[:body.COMMAND_SLOTS])
     hold = body._position_command(start_q)
-    emit('body: 42-slot measured-pose hold, existing DEMO_KP/FIXED_STAND_KD, dq=tau=0; '
+    if body_gains == 'zero':
+        hold = replace(hold, motor_cmds=tuple(replace(cmd, kp=0.0, kd=0.0, dq=0.0, tau=0.0)
+                                              for cmd in hold.motor_cmds))
+    gains = 'kp=kd=0' if body_gains == 'zero' else 'existing DEMO_KP/FIXED_STAND_KD'
+    emit(f'body: --body-gains {body_gains}, 42-slot measured q, {gains}, dq=tau=0; '
          'finger slots reserved; no body zero/return trajectory')
     attempted = False
     try:
@@ -214,6 +221,8 @@ def main(argv=None):
     parser.add_argument('--side', choices=('left', 'right', 'both'), default='both')
     parser.add_argument('--group', default='default')
     parser.add_argument('--timeout', type=float, default=5.0)
+    parser.add_argument('--body-gains', choices=('zero', 'hold'), default='hold',
+                        help='zero: kp=kd=0 with measured q; hold: existing pose gains (default)')
     parser.add_argument('--dry-run', action='store_true', help='read-only RPC/subscriptions; no lease or writes')
     parser.add_argument('--confirm-motion', action='store_true', help='requires separate current on-site approval')
     parser.add_argument('--touch', choices=('keep', 'on', 'off'), default='keep')
@@ -238,7 +247,7 @@ def main(argv=None):
                 for client in clients:
                     client.set_touch(args.touch == 'on', args.timeout)
             try:
-                run(controller, clients, timeout=args.timeout)
+                run(controller, clients, timeout=args.timeout, body_gains=args.body_gains)
             except KeyboardInterrupt:
                 print('interrupted; lease release attempted, no neutral hand command')
 

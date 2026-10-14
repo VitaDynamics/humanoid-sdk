@@ -109,14 +109,18 @@ python examples/brainco_hand_external.py --dry-run --side both --group default -
 实际运动须有本轮吊装/可靠支撑、看护、清空夹点与急停确认，再由现场执行：
 
 ```bash
-python examples/brainco_hand_external.py --side both --group default --timeout 5 --confirm-motion
+python examples/brainco_hand_external.py --side both --group default --timeout 5 --body-gains zero --confirm-motion
 ```
 
 本体收到 50 Hz 的完整 42 槽 LowCmd：q 为进入前静止 LowState 的姿态，mode=10、
-dq=tau=0，kp/kd **直接复用** `external_control.py` 的 `DEMO_KP/FIXED_STAND_KD`。
+dq=tau=0。`--body-gains zero` 令所有槽位 kp=kd=0，q 仍填测得姿态；
+零增益不提供姿态保持。本次吊装手部测试使用 zero。默认 `--body-gains hold`
+保留原有行为，kp/kd **直接复用** `external_control.py` 的 `DEMO_KP/FIXED_STAND_KD`。
 手指槽位为 RESERVED（原有手指增益为 0），手命令只走
 `/sdk/foot_humanoid/hand/<side>/cmd`。不执行本体归零或回程轨迹；“保持”仍依赖设备、
 通信及增益适配，不能替代吊装。姿态漂移和反馈陈旧检查沿用现有示例容差/时间窗。
+进入 EXTERNAL 的 measured-hold/增益插值、断流 safe-hold 和故障域保护仍由机器人侧
+执行；zero 参数只选择持续发送帧的目标增益，不保证进入及故障阶段的物理失能。
 
 先核对 `BRAINCO_REVO2`、6 DOF、关节名和 info 限位，随后各关节慢速移到限位区间
 25%→75%→25%（部分张合，避开端点）。速度用机器人 BrainCo JSON 的已有

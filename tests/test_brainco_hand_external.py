@@ -55,7 +55,7 @@ class ExternalHandTest(unittest.TestCase):
 
     def test_body_holds_original_pose_and_hands_use_only_independent_publish(self):
         c = self.controller(); hands = [FakeHand('left'), FakeHand('right')]
-        self.run_demo(c, hands)
+        self.run_demo(c, hands, body_gains='hold')
         body_commands = [command for topic, command in c.transport.published if topic == EXTERNAL_COMMAND_TOPIC]
         self.assertGreater(len(body_commands), 100)
         baseline = demo.body._position_command((.1,)*42).motor_cmds
@@ -74,8 +74,42 @@ class ExternalHandTest(unittest.TestCase):
         self.assertTrue(any('CANCEL confirmed PASSIVE' in s for s in self.events))
         self.assertTrue(any('NOT_MEASURED' in s and 'robot_chain_us' in s for s in self.events))
 
+    def test_zero_gains_preserve_measured_q_and_independent_hand_motion(self):
+        c = self.controller(); hands = [FakeHand('left'), FakeHand('right')]
+        self.run_demo(c, hands, body_gains='zero')
+        commands = [command for topic, command in c.transport.published if topic == EXTERNAL_COMMAND_TOPIC]
+        self.assertGreater(len(commands), 100)
+        for command in commands:
+            self.assertEqual(len(command.motor_cmds), 42)
+            for motor in command.motor_cmds:
+                self.assertEqual(motor.mode, 10)
+                self.assertEqual(motor.q, .1)
+                self.assertEqual((motor.kp, motor.kd, motor.dq, motor.tau), (0., 0., 0., 0.))
+        self.assertTrue(all(len(hand.commands) > 50 for hand in hands))
+        self.assertIn('exit_external', c.calls)
+        self.assertTrue(any('--body-gains zero' in s for s in self.events))
+
+    def test_body_gains_cli_defaults_to_hold_and_forwards_zero(self):
+        for args, expected in (([], 'hold'), (['--body-gains', 'hold'], 'hold'),
+                               (['--body-gains', 'zero'], 'zero')):
+            with self.subTest(expected=expected), patch.object(demo, 'HandClient'), \
+                 patch.object(demo, 'ExternalController'), patch.object(demo, 'run') as run:
+                demo.main(['--confirm-motion', '--side', 'left'] + args)
+                self.assertEqual(run.call_args.kwargs['body_gains'], expected)
+        with patch.object(demo, 'HandClient') as hand, patch('sys.stderr', new_callable=io.StringIO):
+            with self.assertRaises(SystemExit): demo.main(['--body-gains', 'invalid'])
+            hand.assert_not_called()
+
+    def test_invalid_body_gains_fail_before_entry(self):
+        c = self.controller(); hand = FakeHand()
+        with self.assertRaisesRegex(ValueError, 'body_gains'):
+            self.run_demo(c, [hand], body_gains='invalid')
+        self.assertNotIn('enter_external', c.calls)
+        self.assertFalse(hand.commands)
+
     def test_dryrun_and_default_use_readonly_clients_without_body_controller(self):
-        for args in (['--dry-run', '--side', 'left'], ['--side', 'right']):
+        for args in (['--dry-run', '--side', 'left'], ['--side', 'right'],
+                     ['--dry-run', '--body-gains', 'zero'], ['--body-gains', 'zero']):
             with patch.object(demo, 'HandClient') as hand, patch.object(demo, 'ExternalController') as body, \
                  patch.object(demo, 'observe') as observe:
                 demo.main(args)
