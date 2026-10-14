@@ -21,19 +21,17 @@ def metadata():
 
 def touch_payload(side=1, length=5):
     # Real generated binding, not a handwritten decoder or mocked schema.
-    from aorta.topic.lowlevel.HandTouch import HandTouchT
+    from lowlevel.HandTouch import HandTouchT
+    from lowlevel.FingerTouchMeta import FingerTouchMetaT
     touch = HandTouchT()
-    touch.handSide = side
-    touch.tactileType = touch.timestampDomain = 1
-    touch.sampleSequence = 1
-    touch.receivedTimestampUs = 1000
-    touch.sampledTimestampUs = list(range(990, 990 + length))
-    touch.hardwareSampledTimestampUs = [50] * 5
-    touch.fingerValid = [True] * 5
-    touch.fingerSequence = [1] * 5
-    touch.fingerStatusFlags = [0] * 5
-    touch.fingerDirectionValid = [False] * 5
-    touch.rawRegisters = [100, 200, 65535, 400, 500, 256] * 5
+    touch.side = side
+    touch.handType = touch.sensorType = 1
+    touch.touchSeq = 1
+    touch.tsPubUs = 1000
+    touch.fingers = [FingerTouchMetaT(tsRequestUs=990+i, tsAcquiredHwUs=50,
+                     tsIngestedUs=995, sampleSeq=1, wordOffset=6*i,
+                     wordCount=6, valid=True) for i in range(length)]
+    touch.raw = [100, 200, 65535, 400, 500, 256] * 5
     builder = flatbuffers.Builder(512)
     builder.Finish(touch.Pack(builder))
     return bytes(builder.Output())
@@ -87,30 +85,27 @@ class BrainCoCaptureTest(unittest.TestCase):
     def test_real_generated_touch_both_sides(self):
         bindings = capture.load_bindings()
         for side in (1, 2):
-            row = capture.decode("hand_touch", touch_payload(side), bindings)
-            self.assertEqual(row["hand_side"], side)
-            self.assertEqual(row["raw_registers"], [100, 200, 65535, 400, 500, 256] * 5)
-            self.assertEqual(row["sampled_timestamp_us"], [990, 991, 992, 993, 994])
-            self.assertEqual(row["finger_direction_valid"], [False] * 5)
+            row = capture.decode(("left" if side == 1 else "right") + "_hand_touch", touch_payload(side), bindings)
+            self.assertEqual(row["side"], side)
+            self.assertEqual(row["raw"], [100, 200, 65535, 400, 500, 256] * 5)
+            self.assertEqual([f["ts_request_us"] for f in row["fingers"]], [990, 991, 992, 993, 994])
+            self.assertEqual([f["direction_flags"] for f in row["fingers"]], [0] * 5)
 
     def test_bad_vectors_side_truncation_and_oversized_payload(self):
         bindings = capture.load_bindings()
-        for data in (touch_payload(length=4), touch_payload(side=0), b"", touch_payload()[:32],
+        for data in (touch_payload(length=6), touch_payload(side=0), b"", touch_payload()[:32],
                      bytes(65537), b"\xff" * 16):
             with self.subTest(length=len(data)), self.assertRaises((ValueError, struct.error, TypeError)):
-                capture.decode("hand_touch", data, bindings)
+                capture.decode("left_hand_touch", data, bindings)
 
     def test_lowcmd_real_binding_preserves_all_fields(self):
-        from examples import brainco_hand_control as demo
-        from test_brainco_hand_control import synthetic_spec
+        from examples import external_control as demo
         from locomotion_aorta import transport
-        path = self.path / "spec"
-        path.write_text(json.dumps(synthetic_spec()))
-        command = demo.command_at(demo.load_plan(path), 1, 7)
+        command = demo._position_command((0.1,) * 42)
         builder = flatbuffers.Builder(4096)
         builder.Finish(transport._fill_low_cmd(transport._load_aorta_bindings(), command, builder, 0))
         row = capture.decode("external_command", bytes(builder.Output()), capture.load_bindings())
-        self.assertEqual(row["cmd_id"], 7)
+        self.assertEqual(row["cmd_id"], 1)
         self.assertEqual(len(row["motor_cmds"]), 42)
         for before, after in zip(command.motor_cmds, row["motor_cmds"]):
             for name in ("mode", "q", "dq", "tau", "kp", "kd"):
@@ -149,7 +144,7 @@ class BrainCoCaptureTest(unittest.TestCase):
         def subscribe(message_type, topic, handler, qos):
             self.assertIs(message_type, bytes)
             node.subscriptions.append(topic)
-            if topic == capture.TOPICS["hand_touch"]:
+            if topic == capture.TOPICS["left_hand_touch"]:
                 for _ in range(burst):
                     handler(bytes(16) if invalid else touch_payload(), SimpleNamespace(sequence=1, publisher_node="fake"))
             if fail:
@@ -164,7 +159,7 @@ class BrainCoCaptureTest(unittest.TestCase):
         output = self.path / "trace"
         result = capture.capture_live(output, metadata(), 0.04, capacity=1,
                                       node_factory=lambda *a: node, monotonic=Clock())
-        self.assertEqual(result, {"hand_touch": 1})
+        self.assertEqual(result, {"left_hand_touch": 1})
         self.assertEqual(set(node.subscriptions), set(capture.TOPICS.values()))
         self.assertTrue(node.closed)
         rows = read_rows(output)
@@ -208,16 +203,16 @@ class BrainCoCaptureTest(unittest.TestCase):
         self.assertIn("capture_timestamp_ns", marker)
         self.assertNotIn("timestamp_us", marker)
 
-    def mcap_file(self, *, root="aorta.topic.lowlevel.HandTouch", encoding="flatbuffer"):
+    def mcap_file(self, *, root="lowlevel.HandTouch", encoding="flatbuffer"):
         from mcap.writer import Writer, CompressionType
         source = self.path / "input.mcap"
         with source.open("wb") as stream:
             writer = Writer(stream, compression=CompressionType.NONE, enable_data_crcs=True)
             writer.start()
             schema = writer.register_schema(root, encoding, b"synthetic-bfbs-for-hash-guard-only")
-            channel = writer.register_channel("aorta/default/pub/locomotion/hand_touch", "flatbuffer", schema)
+            channel = writer.register_channel("aorta/default/pub/sdk/foot_humanoid/hand/left/touch", "flatbuffer", schema)
             for side in (1, 2):
-                writer.add_message(channel, side * 1000, touch_payload(side), side * 1000, side)
+                writer.add_message(channel, side * 1000, touch_payload(1), side * 1000, side)
             writer.finish()
         return source
 
@@ -225,15 +220,15 @@ class BrainCoCaptureTest(unittest.TestCase):
         meta = metadata()
         meta["schema_sha256"] = hashlib.sha256(b"synthetic-bfbs-for-hash-guard-only").hexdigest()
         return capture.export_mcap(source, self.path / "export", meta,
-            {"aorta/default/pub/locomotion/hand_touch": "hand_touch"},
-            {"hand_touch": hashlib.sha256(b"synthetic-bfbs-for-hash-guard-only").hexdigest()}, **kwargs)
+            {"aorta/default/pub/sdk/foot_humanoid/hand/left/touch": "left_hand_touch"},
+            {"left_hand_touch": hashlib.sha256(b"synthetic-bfbs-for-hash-guard-only").hexdigest()}, **kwargs)
 
     def test_mcap_export_uses_exact_topic_hash_and_retains_source_hash(self):
         source = self.mcap_file()
-        self.assertEqual(self.export(source), {"hand_touch": 2})
+        self.assertEqual(self.export(source), {"left_hand_touch": 2})
         rows = read_rows(self.path / "export")
         self.assertEqual(rows[0]["source_mcap_sha256"], hashlib.sha256(source.read_bytes()).hexdigest())
-        self.assertEqual([r["hand_side"] for r in rows[1:-1]], [1, 2])
+        self.assertEqual([r["side"] for r in rows[1:-1]], [1, 1])
         self.assertTrue(rows[-1]["complete"])
 
     def test_mcap_truncated_final_magic_is_not_complete(self):
@@ -261,9 +256,18 @@ class BrainCoCaptureTest(unittest.TestCase):
                 self.export(source)
             (self.path / "export").unlink()
         source = self.mcap_file()
-        for topics, hashes in (({"wrong/topic": "hand_touch"}, {"hand_touch": "0" * 64}),
-                                ({"aorta/default/pub/locomotion/hand_touch": "hand_touch"}, {"hand_touch": "0" * 64})):
+        for topics, hashes in (({"wrong/topic": "left_hand_touch"}, {"left_hand_touch": "0" * 64}),
+                                ({"aorta/default/pub/sdk/foot_humanoid/hand/left/touch": "left_hand_touch"}, {"left_hand_touch": "0" * 64})):
             with self.assertRaises(ValueError):
                 capture.export_mcap(source, self.path / "export", metadata(), topics, hashes)
             self.assertFalse(read_rows(self.path / "export")[-1]["complete"])
             (self.path / "export").unlink()
+
+    def test_new_hand_state_capture_preserves_missing_feedback_as_null(self):
+        from test_hand import state_obj, pack
+        obj = state_obj(); obj.joints[0].q = float('nan'); obj.inhibitReason = 4
+        row = capture.decode('left_hand_state', pack(obj), capture.load_bindings())
+        self.assertIsNone(row['joints'][0]['q'])
+        self.assertTrue(row['nonfinite_feedback'])
+        self.assertEqual(row['inhibit_reason'], 4)
+        self.assertEqual(row['joints'][0]['ts_acquired_hw_us'], 17)

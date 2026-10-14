@@ -16,34 +16,26 @@ import re
 import threading
 import time
 
+from . import _hand_codec
 from .transport import _decode_control_status, _decode_humanoid_lowstate
 
 
 TOPICS = {
-    "hand_touch": "/locomotion/hand_touch",
     "lowstate": "/sdk/foot_humanoid/lowstate",
     "external_command": "/locomotion/external_command",
     "control_status": "/sdk/foot_humanoid/control/status",
 }
 MODULES = {
-    "hand_touch": ("aorta.topic.lowlevel.HandTouch", "HandTouch"),
     "lowstate": ("lowlevel.HumanoidLowState", "HumanoidLowState"),
     "external_command": ("lowlevel.LowCmd", "LowCmd"),
     "control_status": ("locomotion_sdk.ControlStatus", "ControlStatus"),
 }
-TOUCH_SCALARS = {
-    "hand_side": "HandSide", "tactile_type": "TactileType",
-    "timestamp_domain": "TimestampDomain", "sample_sequence": "SampleSequence",
-    "received_timestamp_us": "ReceivedTimestampUs",
-}
-TOUCH_VECTORS = {
-    "sampled_timestamp_us": ("SampledTimestampUs", 5),
-    "hardware_sampled_timestamp_us": ("HardwareSampledTimestampUs", 5),
-    "finger_valid": ("FingerValid", 5), "finger_sequence": ("FingerSequence", 5),
-    "finger_status_flags": ("FingerStatusFlags", 5),
-    "finger_direction_valid": ("FingerDirectionValid", 5),
-    "raw_registers": ("RawRegisters", 30),
-}
+for _side in ("left", "right"):
+    for _kind, _root in (("cmd", "HandCmd"), ("state", "HandState"),
+                         ("touch", "HandTouch"), ("info", "HandInfo")):
+        _key = f"{_side}_hand_{_kind}"
+        TOPICS[_key] = f"/sdk/foot_humanoid/hand/{_side}/{_kind}"
+        MODULES[_key] = ("lowlevel." + _root, _root)
 
 
 def metadata_checked(metadata):
@@ -68,21 +60,34 @@ def load_bindings():
                 for kind, (module, name) in MODULES.items()}
     except (ImportError, AttributeError) as error:
         raise RuntimeError("matching generated HIL bindings are required, including "
-                           "aorta.topic.lowlevel.HandTouch; no handwritten decoder fallback") from error
+                           "lowlevel.HandTouch at schemas 489488e; no handwritten decoder fallback") from error
 
 
 def decode(kind, payload, bindings):
     if not isinstance(payload, bytes) or not 8 <= len(payload) <= 65536:
         raise ValueError("invalid or oversized FlatBuffer payload")
     view = bindings[kind](payload)
-    if kind == "hand_touch":
-        result = {key: getattr(view, getter)() for key, getter in TOUCH_SCALARS.items()}
-        for key, (getter, count) in TOUCH_VECTORS.items():
-            if getattr(view, getter + "Length")() != count:
-                raise ValueError(f"HandTouch.{key}: expected {count} elements")
-            result[key] = [getattr(view, getter)(i) for i in range(count)]
-        if result["hand_side"] not in (1, 2) or result["tactile_type"] != 1 or result["timestamp_domain"] != 1:
-            raise ValueError("unsupported HandTouch side/type/clock")
+    if "_hand_" in kind:
+        side, hand_kind = kind.split("_hand_")
+        record = getattr(_hand_codec, "decode_" + hand_kind)(view)
+        if record.side != (1 if side == "left" else 2):
+            raise ValueError("Hand message side differs from selected topic")
+        result = asdict(record)
+        # NOT_READY can legitimately carry NaN. JSON null preserves absence;
+        # never synthesize a zero angle/current from missing hand feedback.
+        nonfinite = False
+        def json_value(value):
+            nonlocal nonfinite
+            if isinstance(value, float) and not math.isfinite(value):
+                nonfinite = True
+                return None
+            if isinstance(value, dict):
+                return {key: json_value(item) for key, item in value.items()}
+            if isinstance(value, (tuple, list)):
+                return [json_value(item) for item in value]
+            return value
+        result = json_value(result)
+        result["nonfinite_feedback"] = nonfinite
         return result
     if kind == "lowstate":
         if view.MotorStatesLength() != 44:
@@ -114,7 +119,7 @@ class TraceWriter:
         self.stream = stream
         self.counts = {}
         self.write({**metadata_checked(metadata), "type": "metadata",
-                    "capture_format": "brainco_capture_v1", "capture_clock": clock,
+                    "capture_format": "brainco_capture_v2", "capture_clock": clock,
                     "transport_loss": "not_measured"})
 
     def write(self, record):
@@ -223,8 +228,9 @@ def export_mcap(source: Path, output: Path, metadata, topic_map, schema_hashes, 
     for kind in topic_map.values():
         if not re.fullmatch(r"[0-9a-f]{64}", schema_hashes.get(kind, "")):
             raise ValueError(f"expected BFBS sha256 required for {kind}")
-    if "hand_touch" in topic_map.values() and schema_hashes["hand_touch"] != metadata["schema_sha256"]:
-        raise ValueError("metadata HandTouch schema_sha256 differs from requested BFBS")
+    for kind in topic_map.values():
+        if kind.endswith("_hand_touch") and schema_hashes[kind] != metadata["schema_sha256"]:
+            raise ValueError("metadata HandTouch schema_sha256 differs from requested BFBS")
     bindings = load_bindings() if bindings is None else bindings
     from mcap.reader import NonSeekingReader
     with source.open("rb") as incoming, output.open("x", encoding="utf-8") as stream:
