@@ -256,7 +256,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
         if entered.phase != api.ExternalPhase.RUNNING or entered.current_action != 'EXTERNAL':
             raise RuntimeError('PREPARE/ACK/COMMIT did not reach actual EXTERNAL RUNNING')
         deadline = monotonic()
-        cmd_id = 0
+        cmd_id = 1
         while not stop.is_set():
             status = controller.status
             if status is None or any(getattr(status,key) != getattr(entered,key)
@@ -271,7 +271,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
                 break
             # Keep all D2 controller/session/capability/watchdog/command guards in publish.
             controller.publish(bodycmd(api,targets,state,cmd_id))
-            cmd_id = (cmd_id+1) & 0xffff
+            cmd_id = cmd_id % 0xffff + 1
             deadline = max(deadline+policy.period, monotonic())
             sleep(max(0.0,deadline-monotonic()))
     finally:

@@ -186,6 +186,60 @@ class LifecycleTests(unittest.TestCase):
             if mode in ('sigint','sigterm','entry_error','wait_error'):self.assertNotIn('publish',events)
         return events
 
+    def published_command_ids(self, frame_count):
+        import locomotion_aorta as api
+        from locomotion_aorta.controller import _validate_command
+        body, state = fixture()
+        stop = threading.Event()
+        commands, events = [], []
+        status = NS(phase=api.ExternalPhase.RUNNING, current_action='EXTERNAL',
+                    generation=3, client_id='client', lease_id='lease', reject_count=0)
+        targets = tuple(api.BodyJointCmd() for _ in range(31))
+
+        class Controller:
+            def get_robot_info(self, timeout):
+                return NS(status=api.ServiceStatus.SUCCESS, info=NS(body=body))
+            def wait_body_state(self, timeout):
+                return state
+            def enter_external(self, timeout):
+                events.append('enter')
+                return status
+            def publish(self, command):
+                # Exercise the real controller guard at startup and both sides
+                # of the uint16 boundary, without transport or a real model.
+                if len(commands) in (0, 65534, 65535, 65536):
+                    _validate_command(command)
+                commands.append(command.cmd_id)
+                if len(commands) == frame_count:
+                    stop.set()
+            def exit_external(self, timeout):
+                events.append('cancel')
+                return NS(current_action='PASSIVE')
+
+        class PolicyStub:
+            contract = CONTRACT
+            period = 0
+            history = []
+            def roster(self, body):
+                return {}
+            def observation(self, *args):
+                return ()
+            def targets(self, actions, body):
+                return targets
+
+        controller = Controller()
+        controller.status = status
+        live(controller, api, PolicyStub(), NS(infer=lambda obs: ()), lambda: (),
+             stop, 5, sleep=lambda seconds: None, monotonic=lambda: 0)
+        self.assertEqual(events, ['enter', 'cancel'])
+        return commands
+
+    def test_live_first_command_id_is_one_and_passes_controller_guard(self):
+        self.assertEqual(self.published_command_ids(1), [1])
+
+    def test_live_command_id_wraps_to_one_without_zero(self):
+        self.assertEqual(self.published_command_ids(65537), list(range(1, 65536)) + [1, 2])
+
     def test_normal_exit_cancels(self):self.assertEqual(self.run_case('normal'),['enter','publish','cancel'])
     def test_success_service_status_runs_and_cancels(self):
         self.assertEqual(self.run_case('normal',API.ServiceStatus.SUCCESS),['enter','publish','cancel'])
