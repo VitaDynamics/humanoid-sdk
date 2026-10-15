@@ -102,6 +102,9 @@ waits for a later info event with the acknowledged `touch_enabled` value;
 later event without clearing the info cache used by command publication.
 Left/right wire values are 1/2; they differ from the device register numbering.
 
+`HandJointState` 的 `*_raw` 字段仅供诊断，含义随设备型号变化，不应依赖。
+Examples use normalized feedback and do not depend on these raw fields.
+
 After separate on-site motion authorization, support, an attendant and an
 emergency stop, a right-hand sequential round can be run with:
 
