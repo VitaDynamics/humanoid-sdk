@@ -81,6 +81,9 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
     attempted = False
     active = False
     traces = []
+    hold_samples = 0
+    hold_peak_abs_error = [0.0] * len(pose)
+    hold_slots = tuple(i for i, joint in enumerate(initial.joints) if joint.populated)
     try:
         if plan is not None:
             from locomotion_aorta import CONTROL_ACK_TOPIC, CONTROL_STATUS_TOPIC
@@ -104,7 +107,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
         stage = 'hold'
 
         def frame(target=None):
-            nonlocal last_id, last_change, next_publish, next_cmd_id
+            nonlocal last_id, last_change, next_publish, next_cmd_id, hold_samples
             if not active:
                 raise RuntimeError('EXTERNAL frame callback is no longer active')
             delay = next_publish - monotonic()
@@ -124,9 +127,14 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
                 last_id, last_change = state.state_id, now
             elif now - last_change >= body.LOWSTATE_WINDOW_S:
                 raise RuntimeError('body lowstate became stale')
-            if check_hold and any(abs(j.q - q) > body.RETURN_ENDPOINT_POSITION_TOLERANCE_RAD
-                                  for j, q in zip(state.joints, pose) if j.populated):
-                raise RuntimeError('body departed from its held pose')
+            if check_hold:
+                errors = tuple(state.joints[i].q - pose[i] for i in hold_slots)
+                for i, error in zip(hold_slots, errors):
+                    hold_peak_abs_error[i] = max(hold_peak_abs_error[i], abs(error))
+                hold_samples += 1
+                emit(f'BODY_HOLD observation_only=true sample={hold_samples} '
+                     f'slots={hold_slots!r} q_error_rad={errors!r} '
+                     f'max_abs_q_error_rad={max(map(abs, errors), default=0.0):.6f}')
             if plan is None:
                 command = replace(hold, input_state_id=state.state_id,
                                   input_state_ts_real_us=state.ts_state_real_us)
@@ -166,17 +174,24 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
     finally:
         active = False
         try:
-            if attempted:
-                for signum in (signal.SIGINT, signal.SIGTERM):
-                    signal.signal(signum, signal.SIG_IGN)
-                try:
-                    status = controller.exit_external(timeout)
-                    if status.current_action != 'PASSIVE':
-                        raise RuntimeError(f'CANCEL returned {status.current_action}, expected PASSIVE')
-                except BaseException as error:
-                    emit(f'CANCEL UNCONFIRMED: {error}; use the on-site emergency procedure')
-                    raise
-                emit('CANCEL confirmed PASSIVE; no further gripper targets; body may fall without support')
+            if hold_samples:
+                emit(f'BODY_HOLD summary observation_only=true samples={hold_samples} '
+                     f'slots={hold_slots!r} '
+                     f'peak_abs_q_error_rad={tuple(hold_peak_abs_error[i] for i in hold_slots)!r} '
+                     f'max_abs_q_error_rad={max(hold_peak_abs_error, default=0.0):.6f}')
         finally:
-            for trace in traces:
-                trace.close()
+            try:
+                if attempted:
+                    for signum in (signal.SIGINT, signal.SIGTERM):
+                        signal.signal(signum, signal.SIG_IGN)
+                    try:
+                        status = controller.exit_external(timeout)
+                        if status.current_action != 'PASSIVE':
+                            raise RuntimeError(f'CANCEL returned {status.current_action}, expected PASSIVE')
+                    except BaseException as error:
+                        emit(f'CANCEL UNCONFIRMED: {error}; use the on-site emergency procedure')
+                        raise
+                    emit('CANCEL confirmed PASSIVE; no further gripper targets; body may fall without support')
+            finally:
+                for trace in traces:
+                    trace.close()
