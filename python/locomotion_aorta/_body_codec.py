@@ -122,7 +122,6 @@ def decode_robot_info(view: Any) -> RobotInfo:
         hand, gripper = entry.Hand(), entry.Gripper()
         grip = None if gripper is None else decode_gripper_info(gripper)
         effectors.append(_dto(entry, EndEffectorCapability,
-                             get_info_service=_text(entry.GetInfoService()),
                              hand=None if hand is None else decode_info(hand),
                              gripper=grip, reason=_text(entry.Reason())))
     return _dto(view, RobotInfo, body=body_info, end_effectors=tuple(effectors))

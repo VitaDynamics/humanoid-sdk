@@ -134,7 +134,6 @@ class EndEffectorCapability:
     kind: int
     configured: bool
     is_mock: bool
-    get_info_service: str
     hand: HandInfo | None
     gripper: GripperInfo | None
     ready: bool

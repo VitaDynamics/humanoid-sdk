@@ -2,7 +2,10 @@
 
 This D2 successor is in preparation. The official 0.1.2 CI asset SHA is pending;
 its manifest value is null and installation/packaging is blocked until release.
-Local integration uses the separately recorded S2 6520e94f test artifact only.
+Local integration targets S2 0db27b9376d5 (local public wheel only).
+Its RobotInfo/get_robot_info layout removes the end-effector info-service
+endpoint; use matching generated bindings and robot software. Earlier 6520
+pre-release RobotInfo buffers are incompatible with this checkout.
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
