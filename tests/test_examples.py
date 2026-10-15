@@ -1,7 +1,7 @@
 from body_fixtures import sample_motor, robot_info_reply
 import unittest
 
-from examples import external_control, lowstate_subscriber
+from examples import external_control, body_state_subscriber
 from locomotion_aorta import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
@@ -217,12 +217,12 @@ class FakeClock:
 
 
 class ExamplesSmokeTest(unittest.TestCase):
-    def test_lowstate_example_prints_snapshot_without_entering_external(self):
+    def test_body_state_example_prints_snapshot_without_entering_external(self):
         harness = RecordingController(FakeClock())
         self.addCleanup(harness.close)
         output: list[str] = []
 
-        lowstate_subscriber.run_once(
+        body_state_subscriber.run_once(
             harness, timeout=0.1, emit=output.append
         )
 

@@ -43,7 +43,7 @@ and [PC networking and Zenoh configuration](https://vitadynamics.feishu.cn/wiki/
 | `examples/teleop_policy.py` | PC-local ONNX inference and gamepad input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
 
 Basic examples remain `examples/external_control.py` for body EXTERNAL,
-`examples/lowstate_subscriber.py` for read-only BodyState, and
+`examples/body_state_subscriber.py` for read-only BodyState, and
 `examples/fixed_stand_pose.py` as the robot-profile zero-pose helper.
 The policy demo is not limited to offline use; installation or `--help`
 does not authorize live motion.
@@ -75,7 +75,7 @@ test ! -e "$PC_PROFILE" && install -m 600 config/pc_session_peer.json5 "$PC_PROF
 ${EDITOR:-vi} "$PC_PROFILE"
 export ZENOH_SESSION_CONFIG_URI="$PC_PROFILE"
 test -r "$ZENOH_SESSION_CONFIG_URI"
-python examples/lowstate_subscriber.py --group default --timeout 5
+python examples/body_state_subscriber.py --group default --timeout 5
 ```
 
 The last command connects to the robot and reads feedback; run it only with

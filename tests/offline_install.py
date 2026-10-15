@@ -60,9 +60,9 @@ class OfflineInstallTest(unittest.TestCase):
                  f"assert aorta.load_library().aorta_abi_version() == {manifest['aorta_abi_version']}; "
                  "print('real bindings and pinned humanoid bindings/native ABI OK')"], check=True,
             )
-            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py"):
+            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py"):
                 self.assertFalse((bundle / "examples" / retired).exists())
-            for example in ("lowstate_subscriber.py", "external_control.py",
+            for example in ("body_state_subscriber.py", "external_control.py",
                             "brainco_hand_external.py", "brainco_capture.py", "teleop_policy.py",
                             "gripper_external.py"):
                 subprocess.run(

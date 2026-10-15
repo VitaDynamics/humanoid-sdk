@@ -53,7 +53,7 @@ class ReleaseTest(unittest.TestCase):
             for name in ("examples", "python/locomotion_aorta", "config", "dist", "wheels"):
                 (root / name).mkdir(parents=True)
             examples = ("brainco_hand_external.py", "brainco_capture.py", "gripper_external.py",
-                        "external_control.py", "lowstate_subscriber.py", "teleop_policy.py",
+                        "external_control.py", "body_state_subscriber.py", "teleop_policy.py",
                         "fixed_stand_pose.py", "fixed_stand_profile.json", "action17_contract.json")
             for name in examples:
                 shutil.copyfile(ROOT / "examples" / name, root / "examples" / name)
@@ -83,7 +83,7 @@ class ReleaseTest(unittest.TestCase):
                 self.assertEqual((output / relative).read_bytes(), (ROOT / relative).read_bytes())
                 self.assertEqual(manifest["files"][relative],
                                  hashlib.sha256((ROOT / relative).read_bytes()).hexdigest())
-            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py"):
+            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py"):
                 self.assertFalse((output / "examples" / retired).exists())
                 self.assertNotIn("examples/" + retired, manifest["files"])
             self.assertEqual(manifest["pc_session_profile"], "config/pc_session_peer.json5")

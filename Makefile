@@ -6,7 +6,7 @@ test:
 
 check: test
 	$(PYTHON) -m pip check
-	$(PYTHON) examples/lowstate_subscriber.py --help
+	$(PYTHON) examples/body_state_subscriber.py --help
 	$(PYTHON) examples/external_control.py --help
 	$(PYTHON) examples/teleop_policy.py --help
 	$(PYTHON) examples/brainco_hand_external.py --help
