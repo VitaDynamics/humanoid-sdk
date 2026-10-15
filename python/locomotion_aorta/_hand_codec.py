@@ -39,26 +39,21 @@ def decode_info(view):
     vectors = {name: tuple(getattr(view, getter)(i) for i in
                           range(getattr(view, getter + 'Length')()))
                for name, getter in (('q_min', 'QMin'), ('q_max', 'QMax'), ('dq_max', 'DqMax'))}
-    return _table(view, HandInfo, model=_decode_text(view.Model()),
-                  firmware=_decode_text(view.Firmware()),
+    return _table(view, HandInfo, firmware=_decode_text(view.Firmware()),
                   joint_names=tuple(_decode_text(view.JointNames(i))
                                     for i in range(view.JointNamesLength())), **vectors)
 
 
 def decode_state(view):
     joints = tuple(_table(view.Joints(i), HandJointState) for i in range(view.JointsLength()))
-    if len(joints) != view.Dof():
-        raise ValueError('HandState joint count differs from dof')
     # Preserve NaN/NOT_READY and all original counters; never replace missing feedback with zero.
     return _table(view, HandState, joints=joints)
 
 
 def decode_touch(view):
     fingers = tuple(_table(view.Fingers(i), FingerTouchMeta) for i in range(view.FingersLength()))
-    raw = tuple(view.Raw(i) for i in range(view.RawLength()))
-    if any(f.word_offset + f.word_count > len(raw) for f in fingers):
-        raise ValueError('HandTouch finger range exceeds raw words')
-    return _table(view, HandTouch, fingers=fingers, raw=raw)
+    raw = tuple(view.RawWords(i) for i in range(view.RawWordsLength()))
+    return _table(view, HandTouch, fingers=fingers, raw_words=raw)
 
 
 def fill_command(bindings, command, builder, header):

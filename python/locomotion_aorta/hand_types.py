@@ -56,9 +56,6 @@ class HandJointState:
     current_ma: float = 0.0
     q_cmd: float = 0.0
     dq_cmd: float = 0.0
-    ts_acquired_hw_us: int = 0
-    ts_ingested_us: int = 0
-    ts_assembled_us: int = 0
     q_raw: int = 0
     dq_raw: int = 0
     current_raw: int = 0
@@ -70,12 +67,12 @@ class HandState:
     state_id: int
     hand_type: int
     side: int
-    dof: int
     joints: tuple[HandJointState, ...]
     ts_state_real_us: int = 0
     ts_state_pub_us: int = 0
-    ts_poll_request_us: int = 0
-    ts_poll_response_us: int = 0
+    ts_acquired_hw_us: int = 0
+    ts_ingested_us: int = 0
+    ts_assembled_us: int = 0
     output_allowed: bool = False
     inhibit_reason: int = 4
     last_cmd_session_id: int = 0
@@ -86,13 +83,11 @@ class HandState:
     reject_count: int = 0
     last_reject_code: int = 0
     ingress_drop_count: int = 0
-    cmd_middleware_received_us: int = 0
-    cmd_received_us: int = 0
-    cmd_dequeued_us: int = 0
-    cmd_accepted_us: int = 0
-    cmd_first_output_us: int = 0
-    cmd_write_ack_us: int = 0
-    cmd_first_feedback_us: int = 0
+    ts_cmd_received_us: int = 0
+    ts_cmd_accepted_us: int = 0
+    ts_cmd_first_output_us: int = 0
+    ts_cmd_write_ack_us: int = 0
+    ts_cmd_first_feedback_us: int = 0
     timeout_count: int = 0
     crc_error_count: int = 0
 
@@ -105,27 +100,23 @@ class FingerTouchMeta:
     sample_seq: int
     status_flags: int
     direction_flags: int
-    word_offset: int
-    word_count: int
-    valid: bool
 
 
 @dataclass(frozen=True, slots=True)
 class HandTouch:
-    touch_seq: int
+    state_id: int
     hand_type: int
     side: int
     sensor_type: int
-    ts_pub_us: int
+    ts_state_pub_us: int
     fingers: tuple[FingerTouchMeta, ...]
-    raw: tuple[int, ...]
+    raw_words: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class HandInfo:
     ts_info_us: int
     hand_type: int
-    model: str
     firmware: str
     side: int
     dof: int
@@ -137,5 +128,4 @@ class HandInfo:
     touch_enabled: bool = False
     touch_fingers: int = 0
     touch_words_per_finger: int = 0
-    poll_period_us: int = 0
-    touch_every_n_polls: int = 0
+    ts_state_pub_us: int = 0

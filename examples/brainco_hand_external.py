@@ -65,12 +65,12 @@ def validate_motion_options(speed_deg_s, pattern, low_frac, high_frac, feedback_
 
 def validate_hand(info, state, *, require_output=False, speed=HAND_SPEED_RAD_S):
     validate_info(info)
-    if (info.model != 'BRAINCO_REVO2' or info.hand_type != HandType.BRAINCO_REVO2
+    if (info.hand_type != HandType.BRAINCO_REVO2
             or info.dof != 6 or info.joint_names !=
                ('thumb_pitch', 'thumb_roll', 'index', 'middle', 'ring', 'little')):
         raise ValueError('requires BRAINCO_REVO2 with six joints')
     if (state.side != info.side or state.hand_type != info.hand_type
-            or state.dof != info.dof or len(state.joints) != info.dof):
+            or len(state.joints) != info.dof):
         raise ValueError('HandState identity/DOF differs from HandInfo')
     if state.inhibit_reason in (InhibitReason.EMERGENCY, InhibitReason.DOMAIN_FAULT,
                                InhibitReason.NOT_READY):
@@ -90,9 +90,8 @@ def print_feedback(client, emit=print, *, command=None):
     if state is None:
         emit(f'{client.side}: no HandState')
         return
-    chain = {name: getattr(state, 'cmd_' + name + '_us') for name in (
-        'middleware_received', 'received', 'dequeued', 'accepted', 'first_output',
-        'write_ack', 'first_feedback')}
+    chain = {name: getattr(state, 'ts_cmd_' + name + '_us') for name in (
+        'received', 'accepted', 'first_output', 'write_ack', 'first_feedback')}
     # Only subtract timestamps from the same robot VitaNow-us clock. Zero
     # stages remain unmeasured; PC creation/send and sensor clocks are separate.
     delta = {}
@@ -134,7 +133,7 @@ def observe(clients, *, timeout, emit=print):
         info = client.wait_info(timeout)
         state = client.wait_state(timeout)
         emit(f'{client.side}: info={info} state_identity='
-             f'{state.hand_type}/{state.side}/{state.dof}; read-only, no lease/cmd/set_touch')
+             f'{state.hand_type}/{state.side}/{len(state.joints)}; read-only, no lease/cmd/set_touch')
         print_feedback(client, emit)
         touch = client.touch
         if touch is not None:
@@ -155,7 +154,7 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
         info = client.wait_info(timeout)
         validate_hand(info, client.wait_state(timeout), speed=speed)
         infos[client.side] = info
-        emit(f'{client.side}: model={info.model}, joints={info.joint_names}, '
+        emit(f'{client.side}: hand_type={info.hand_type}, joints={info.joint_names}, '
              f'limits_rad={list(zip(info.q_min, info.q_max))}, speed={speed_deg_s:g} deg/s, '
              f'pattern={pattern}, loop={loop}, fractions={low_frac:g}/{high_frac:g}')
     body.require_body_info(controller, timeout)

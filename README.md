@@ -1,5 +1,9 @@
 # Humanoid SDK
 
+This D2 successor is in preparation. The official 0.1.2 CI asset SHA is pending;
+its manifest value is null and installation/packaging is blocked until release.
+Local integration uses the separately recorded S2 6520e94f test artifact only.
+
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
 with Python 3.10 or newer.
@@ -102,6 +106,11 @@ waits for a later info event with the acknowledged `touch_enabled` value;
 later event without clearing the info cache used by command publication.
 Left/right wire values are 1/2; they differ from the device register numbering.
 
+This candidate uses the T021 public EE layout. HandState stores the three
+sample timestamps once per message and exposes five `ts_cmd_*` stages; zero
+future stages remain unmeasured. Touch uses `state_id`, `ts_state_pub_us` and
+`raw_words`, with geometry from HandInfo. Old candidate recordings require their
+matching SDK; the MCAP exporter refuses BFBS that differ from loaded bindings.
 `HandJointState` 的 `*_raw` 字段仅供诊断，含义随设备型号变化，不应依赖。
 Examples use normalized feedback and do not depend on these raw fields.
 
@@ -134,9 +143,9 @@ lease release. Hand session/sequence and body EXTERNAL generation are separate.
 `examples/brainco_capture.py` subscribes to independent hand topics plus body
 BodyState/ControlStatus (and historical LowCmd/LowState recordings) and exports MCAP with the optional `hil` extra.
 Missing or nonfinite hand feedback is retained as JSON null, never a synthetic
-zero. Seven-stage robot timestamps use VitaNow microseconds; zero future stages
-are unmeasured. Robot `cmd_trace` is enabled by its deployment-owned environment,
-not the PC's environment. Host tests and packaging do not establish device HIL.
+zero. Five-stage robot timestamps use Vita host microseconds; zero future stages
+are unmeasured. Public HandState carries these stages; no separate public trace
+root is required. Host tests and packaging do not establish device HIL.
 
 ## Development and offline packaging
 
@@ -162,6 +171,41 @@ The `SDK latency report` check exercises Python SDK ↔ C++ Mock communication
 at 50–1000 Hz for at least 60 seconds per rate. See the
 [benchmark documentation](tests/latency/README.md) for its measurement boundary
 and reports. It does not establish robot performance or motion acceptance.
+
+## Independent AGX grippers (in preparation)
+
+`GripperClient` uses `/sdk/foot_humanoid/gripper/<left|right>/{cmd,state,info}`.
+It shares the same `GripperInfo` DTO with `get_robot_info`; there is no per-side
+info RPC and no gripper slot in the 31-joint BodyCmd. The default example and
+`--dry-run` only subscribe, without ownership or command publication:
+
+```bash
+python examples/gripper_external.py --side right --dry-run --group default --timeout 5
+```
+
+`publish_target(q, dq=0, torque_cmd_nm=None)` uses absolute **total opening in m**
+and a host speed cap in **m/s**. It preserves dq=0 for the robot's configured
+default; it does not interpolate a second SDK opening trajectory. Values beyond
+the advertised ranges are rejected before publishing. Unknown limit sources
+remain readable diagnostics and cannot authorize a target.
+
+Torque is a signed software motor-side command in N·m: None uses configured
+hold torque; explicit 0 sends 0. Its absolute bound and hold default come from
+CONFIG. It is not gripping force in N or a device limit; device interpretation
+is governed by the vendor. Acceleration/deceleration are not first-release fields.
+
+After explicit on-site authorization, suspension/support, an attendant and an
+emergency stop, choose a target from the actual Info limits and run:
+
+```bash
+python examples/gripper_external.py --side right --target-m "$TARGET_OPENING_M" --confirm-motion
+```
+
+The example enters EXTERNAL through the existing body preflight/PREPARE/COMMIT,
+holds the measured 31-slot body pose and exits through CANCEL to PASSIVE. Its
+sample, host target and latest-received trace keys stay separate; a host echo is
+not proof of device execution or arrival. Zero trace timestamps remain unknown,
+including AGX write_ack. No robot connection or motion has been tested here.
 
 ## PC policy example (in preparation)
 

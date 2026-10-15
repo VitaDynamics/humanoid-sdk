@@ -1,5 +1,6 @@
 """Public body DTOs. Angles rad; robot/client clocks are explicitly microseconds."""
 from dataclasses import dataclass
+from .gripper_types import GripperInfo
 from lowlevel.BodyCmdAction import BodyCmdAction
 from lowlevel.BodySampleStatus import BodySampleStatus
 from lowlevel.BodyImuLocation import BodyImuLocation
@@ -126,18 +127,6 @@ class BodyInfo:
     joint_names: tuple[str, ...]
     joints: tuple[BodyJointCapability, ...]
     motor_identities: tuple[BodyMotorIdentity, ...]
-
-@dataclass(frozen=True, slots=True)
-class GripperInfo:
-    ts_info_us: int
-    gripper_type: int
-    model: str
-    firmware: str
-    side: int
-    opening_min_m: float
-    opening_max_m: float
-    max_opening_rate_m_s: float
-    hold_torque_nm: float
 
 @dataclass(frozen=True, slots=True)
 class EndEffectorCapability:

@@ -5,7 +5,7 @@ from typing import Any
 from .body_types import (
     BODY_SLOTS, BodyJointState, BodyImuState, BodyImuSample, BodyAppliedCmd,
     BodyState, BodyJointCmd, BodyJointCapability, BodyMotorIdentity, BodyInfo,
-    GripperInfo, EndEffectorCapability, RobotInfo, GetRobotInfoResponse,
+    EndEffectorCapability, RobotInfo, GetRobotInfoResponse,
 )
 
 # Layouts and vector slots from the actual final S2 generated accessors.
@@ -107,6 +107,7 @@ def decode_body_state(view: Any) -> BodyState:
 
 def decode_robot_info(view: Any) -> RobotInfo:
     from ._hand_codec import decode_info
+    from ._gripper_codec import decode_info as decode_gripper_info
     body = view.Body()
     body_info = None if body is None else _dto(
         body, BodyInfo,
@@ -119,9 +120,7 @@ def decode_robot_info(view: Any) -> RobotInfo:
     for i in range(view.EndEffectorsLength()):
         entry = view.EndEffectors(i)
         hand, gripper = entry.Hand(), entry.Gripper()
-        grip = None if gripper is None else _dto(
-            gripper, GripperInfo, model=_text(gripper.Model()), firmware=_text(gripper.Firmware()),
-            max_opening_rate_m_s=gripper.MaxOpeningRateMS(), hold_torque_nm=gripper.HoldTorqueNm())
+        grip = None if gripper is None else decode_gripper_info(gripper)
         effectors.append(_dto(entry, EndEffectorCapability,
                              get_info_service=_text(entry.GetInfoService()),
                              hand=None if hand is None else decode_info(hand),

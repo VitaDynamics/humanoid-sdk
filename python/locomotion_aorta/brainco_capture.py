@@ -16,7 +16,7 @@ import re
 import threading
 import time
 
-from . import _hand_codec
+from . import _hand_codec, _gripper_codec
 from .transport import _decode_control_status
 from ._body_codec import decode_body_state, unpack_body_cmd
 from ._motor_codec import unpack_motor_states
@@ -46,6 +46,10 @@ for _side in ("left", "right"):
                          ("touch", "HandTouch"), ("info", "HandInfo")):
         _key = f"{_side}_hand_{_kind}"
         TOPICS[_key] = f"/sdk/foot_humanoid/hand/{_side}/{_kind}"
+        MODULES[_key] = ("lowlevel." + _root, _root)
+    for _kind, _root in (("cmd", "GripperCmd"), ("state", "GripperState"), ("info", "GripperInfo")):
+        _key = f"{_side}_gripper_{_kind}"
+        TOPICS[_key] = f"/sdk/foot_humanoid/gripper/{_side}/{_kind}"
         MODULES[_key] = ("lowlevel." + _root, _root)
 
 
@@ -91,10 +95,23 @@ def _json_feedback(result):
     return result
 
 
+def binding_schema_hash(kind):
+    root = MODULES[kind][1]
+    stem = re.sub(r'(?<!^)(?=[A-Z])', '_', root).lower()
+    module = importlib.import_module(stem + '_schema_meta')
+    return hashlib.sha256(module.SCHEMA_BFBS).hexdigest()
+
+
 def decode(kind, payload, bindings):
     if not isinstance(payload, bytes) or not 8 <= len(payload) <= 65536:
         raise ValueError("invalid or oversized FlatBuffer payload")
     view = bindings[kind](payload)
+    if "_gripper_" in kind:
+        side, gripper_kind = kind.split("_gripper_")
+        record = getattr(_gripper_codec, "decode_" + gripper_kind)(view)
+        if record.side != (1 if side == "left" else 2):
+            raise ValueError("Gripper message side differs from selected topic")
+        return _json_feedback(asdict(record))
     if "_hand_" in kind:
         side, hand_kind = kind.split("_hand_")
         record = getattr(_hand_codec, "decode_" + hand_kind)(view)
@@ -151,7 +168,7 @@ class TraceWriter:
         self.stream = stream
         self.counts = {}
         self.write({**metadata_checked(metadata), "type": "metadata",
-                    "capture_format": "brainco_capture_v2", "capture_clock": clock,
+                    "capture_format": "brainco_capture_v3", "capture_clock": clock,
                     "transport_loss": "not_measured"})
 
     def write(self, record):
@@ -263,6 +280,8 @@ def export_mcap(source: Path, output: Path, metadata, topic_map, schema_hashes, 
     for kind in topic_map.values():
         if kind.endswith("_hand_touch") and schema_hashes[kind] != metadata["schema_sha256"]:
             raise ValueError("metadata HandTouch schema_sha256 differs from requested BFBS")
+        if schema_hashes[kind] != binding_schema_hash(kind):
+            raise ValueError(f"recorded BFBS differs from loaded binding for {kind}; use its matching SDK")
     bindings = load_bindings() if bindings is None else bindings
     from mcap.reader import NonSeekingReader
     with source.open("rb") as incoming, output.open("x", encoding="utf-8") as stream:

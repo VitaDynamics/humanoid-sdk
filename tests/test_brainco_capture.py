@@ -26,12 +26,11 @@ def touch_payload(side=1, length=5):
     touch = HandTouchT()
     touch.side = side
     touch.handType = touch.sensorType = 1
-    touch.touchSeq = 1
-    touch.tsPubUs = 1000
+    touch.stateId = 1
+    touch.tsStatePubUs = 1000
     touch.fingers = [FingerTouchMetaT(tsRequestUs=990+i, tsAcquiredHwUs=50,
-                     tsIngestedUs=995, sampleSeq=1, wordOffset=6*i,
-                     wordCount=6, valid=True) for i in range(length)]
-    touch.raw = [100, 200, 65535, 400, 500, 256] * 5
+                     tsIngestedUs=995, sampleSeq=1) for i in range(length)]
+    touch.rawWords = [100, 200, 65535, 400, 500, 256] * 5
     builder = flatbuffers.Builder(512)
     builder.Finish(touch.Pack(builder))
     return bytes(builder.Output())
@@ -87,13 +86,13 @@ class BrainCoCaptureTest(unittest.TestCase):
         for side in (1, 2):
             row = capture.decode(("left" if side == 1 else "right") + "_hand_touch", touch_payload(side), bindings)
             self.assertEqual(row["side"], side)
-            self.assertEqual(row["raw"], [100, 200, 65535, 400, 500, 256] * 5)
+            self.assertEqual(row["raw_words"], [100, 200, 65535, 400, 500, 256] * 5)
             self.assertEqual([f["ts_request_us"] for f in row["fingers"]], [990, 991, 992, 993, 994])
             self.assertEqual([f["direction_flags"] for f in row["fingers"]], [0] * 5)
 
     def test_bad_vectors_side_truncation_and_oversized_payload(self):
         bindings = capture.load_bindings()
-        for data in (touch_payload(length=6), touch_payload(side=0), b"", touch_payload()[:32],
+        for data in (touch_payload(side=2), touch_payload(side=0), b"", touch_payload()[:32],
                      bytes(65537), b"\xff" * 16):
             with self.subTest(length=len(data)), self.assertRaises((ValueError, struct.error, TypeError)):
                 capture.decode("left_hand_touch", data, bindings)
@@ -206,13 +205,14 @@ class BrainCoCaptureTest(unittest.TestCase):
         self.assertIn("capture_timestamp_ns", marker)
         self.assertNotIn("timestamp_us", marker)
 
-    def mcap_file(self, *, root="lowlevel.HandTouch", encoding="flatbuffer"):
+    def mcap_file(self, *, root="lowlevel.HandTouch", encoding="flatbuffer", schema_data=None):
         from mcap.writer import Writer, CompressionType
+        from hand_touch_schema_meta import SCHEMA_BFBS
         source = self.path / "input.mcap"
         with source.open("wb") as stream:
             writer = Writer(stream, compression=CompressionType.NONE, enable_data_crcs=True)
             writer.start()
-            schema = writer.register_schema(root, encoding, b"synthetic-bfbs-for-hash-guard-only")
+            schema = writer.register_schema(root, encoding, SCHEMA_BFBS if schema_data is None else schema_data)
             channel = writer.register_channel("aorta/default/pub/sdk/foot_humanoid/hand/left/touch", "flatbuffer", schema)
             for side in (1, 2):
                 writer.add_message(channel, side * 1000, touch_payload(1), side * 1000, side)
@@ -221,10 +221,10 @@ class BrainCoCaptureTest(unittest.TestCase):
 
     def export(self, source, **kwargs):
         meta = metadata()
-        meta["schema_sha256"] = hashlib.sha256(b"synthetic-bfbs-for-hash-guard-only").hexdigest()
+        meta["schema_sha256"] = capture.binding_schema_hash('left_hand_touch')
         return capture.export_mcap(source, self.path / "export", meta,
             {"aorta/default/pub/sdk/foot_humanoid/hand/left/touch": "left_hand_touch"},
-            {"left_hand_touch": hashlib.sha256(b"synthetic-bfbs-for-hash-guard-only").hexdigest()}, **kwargs)
+            {"left_hand_touch": meta["schema_sha256"]}, **kwargs)
 
     def test_mcap_export_uses_exact_topic_hash_and_retains_source_hash(self):
         source = self.mcap_file()
@@ -259,12 +259,22 @@ class BrainCoCaptureTest(unittest.TestCase):
                 self.export(source)
             (self.path / "export").unlink()
         source = self.mcap_file()
-        for topics, hashes in (({"wrong/topic": "left_hand_touch"}, {"left_hand_touch": "0" * 64}),
-                                ({"aorta/default/pub/sdk/foot_humanoid/hand/left/touch": "left_hand_touch"}, {"left_hand_touch": "0" * 64})):
-            with self.assertRaises(ValueError):
-                capture.export_mcap(source, self.path / "export", metadata(), topics, hashes)
-            self.assertFalse(read_rows(self.path / "export")[-1]["complete"])
-            (self.path / "export").unlink()
+        meta = metadata(); meta['schema_sha256'] = capture.binding_schema_hash('left_hand_touch')
+        with self.assertRaises(ValueError):
+            capture.export_mcap(source, self.path / 'export', meta,
+                                {'wrong/topic': 'left_hand_touch'},
+                                {'left_hand_touch': meta['schema_sha256']})
+        self.assertFalse(read_rows(self.path / 'export')[-1]['complete'])
+        (self.path / 'export').unlink()
+        stale = b'synthetic-other-layout'
+        source = self.mcap_file(schema_data=stale)
+        meta['schema_sha256'] = hashlib.sha256(stale).hexdigest()
+        with patch.object(capture, 'decode') as decode, self.assertRaisesRegex(ValueError, 'loaded binding'):
+            capture.export_mcap(source, self.path / 'export', meta,
+                {'aorta/default/pub/sdk/foot_humanoid/hand/left/touch': 'left_hand_touch'},
+                {'left_hand_touch': meta['schema_sha256']})
+        decode.assert_not_called()
+        self.assertFalse((self.path / 'export').exists())
 
     def test_new_hand_state_capture_preserves_missing_feedback_as_null(self):
         from test_hand import state_obj, pack
@@ -273,7 +283,8 @@ class BrainCoCaptureTest(unittest.TestCase):
         self.assertIsNone(row['joints'][0]['q'])
         self.assertTrue(row['nonfinite_feedback'])
         self.assertEqual(row['inhibit_reason'], 4)
-        self.assertEqual(row['joints'][0]['ts_acquired_hw_us'], 17)
+        self.assertEqual(row['ts_acquired_hw_us'], 17)
+        self.assertNotIn('ts_acquired_hw_us', row['joints'][0])
 
 
 class PublicBodyCaptureTest(unittest.TestCase):

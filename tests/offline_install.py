@@ -61,7 +61,8 @@ class OfflineInstallTest(unittest.TestCase):
                  "print('real bindings and pinned humanoid bindings/native ABI OK')"], check=True,
             )
             for example in ("lowstate_subscriber.py", "external_control.py",
-                            "brainco_hand_external.py", "brainco_hand_control.py", "brainco_capture.py", "teleop_policy.py"):
+                            "brainco_hand_external.py", "brainco_hand_control.py", "brainco_capture.py", "teleop_policy.py",
+                            "gripper_external.py"):
                 subprocess.run(
                     [python, "-I", str(bundle / "examples" / example), "--help"],
                     check=True,
