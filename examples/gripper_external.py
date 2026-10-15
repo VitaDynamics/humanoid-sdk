@@ -71,6 +71,7 @@ def observe(client, *, timeout, emit=print):
 
 def run(controller, client, *, q, dq=0.0, torque_cmd_nm=None,
         timeout=5.0, duration=body.DWELL_S, body_gains='hold',
+        body_pose='measured', return_to_start=False,
         sleep=time.sleep, monotonic=time.monotonic, emit=print):
     if not math.isfinite(duration) or isinstance(duration, bool) or duration <= 0:
         raise ValueError('duration must be finite and positive')
@@ -78,6 +79,8 @@ def run(controller, client, *, q, dq=0.0, torque_cmd_nm=None,
     validate_target(info, q, dq, torque_cmd_nm)
     initial = client.wait_state(timeout)
     validate_state(info, initial)
+    if return_to_start:
+        validate_target(info, initial.sample.q, dq, torque_cmd_nm)
     emit(f'{client.side}: q={q} m, dq={dq} m/s host cap '
          f'(0 remains robot configuration default), torque_cmd_nm={torque_cmd_nm} '
          f'(None uses robot hold; explicit0 is0), duration={duration}s; '
@@ -119,29 +122,32 @@ def run(controller, client, *, q, dq=0.0, torque_cmd_nm=None,
                 break
             if monotonic() >= ready_deadline:
                 raise TimeoutError('gripper output did not become enabled after EXTERNAL entry')
-        deadline = monotonic() + duration
-        next_print = monotonic()
-        while monotonic() < deadline:
-            frame()
-            state = feedback(True)
-            submitted = client.publish_target(q, dq, torque_cmd_nm=torque_cmd_nm, input_state=state)
-            if monotonic() >= next_print:
-                print_feedback(client, emit)
-                next_print = monotonic() + body.DWELL_S
-        # Confirm admission of the final input without equating it with TX or
-        # physical arrival, and keep the body watchdog alive while waiting.
-        final_deadline = monotonic() + timeout
-        while submitted is not None:
-            frame()
-            state = feedback(True)
-            if (state.trace_session_id == submitted.session_id
-                    and state.trace_sequence == submitted.sequence
-                    and state.ts_cmd_accepted_us):
-                break
-            if monotonic() >= final_deadline:
-                raise TimeoutError('final gripper input admission was not observed')
+        targets = (q, initial.sample.q) if return_to_start else (q,)
+        for target in targets:
+            emit(f'gripper leg target={target} m; same EXTERNAL session')
+            deadline = monotonic() + duration
+            next_print = monotonic()
+            while monotonic() < deadline:
+                frame()
+                state = feedback(True)
+                submitted = client.publish_target(target, dq, torque_cmd_nm=torque_cmd_nm, input_state=state)
+                if monotonic() >= next_print:
+                    print_feedback(client, emit)
+                    next_print = monotonic() + body.DWELL_S
+            # Confirm admission of the final input without equating it with TX or
+            # physical arrival, and keep the body watchdog alive while waiting.
+            final_deadline = monotonic() + timeout
+            while submitted is not None:
+                frame()
+                state = feedback(True)
+                if (state.trace_session_id == submitted.session_id
+                        and state.trace_sequence == submitted.sequence
+                        and state.ts_cmd_accepted_us):
+                    break
+                if monotonic() >= final_deadline:
+                    raise TimeoutError('final gripper input admission was not observed')
 
-    run_external(controller, command_loop, body=body, timeout=timeout, body_gains=body_gains,
+    run_external(controller, command_loop, body=body, timeout=timeout, body_gains=body_gains, body_pose=body_pose,
                  sleep=sleep, monotonic=monotonic, emit=emit)
     print_feedback(client, emit)
     emit('Target streaming ended; measured endpoint/completion is not inferred from host target or trace')
@@ -158,9 +164,15 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None):
                         help='signed software motor-side Nm; omitted=config hold, explicit0=0')
     parser.add_argument('--duration', type=float, default=body.DWELL_S, help='target streaming time in seconds')
     parser.add_argument('--body-gains', choices=('hold', 'zero'), default='hold')
+    parser.add_argument('--body-pose', choices=('measured', 'zero'), default='measured',
+                        help='zero uses frozen FIXED_STAND gains and real-time linear entry')
+    parser.add_argument('--return-to-start', action='store_true',
+                        help='after target streaming, return once to the initial measured gripper opening')
     parser.add_argument('--dry-run', action='store_true', help='read-only subscriptions, no lease or commands')
     parser.add_argument('--confirm-motion', action='store_true', help='requires separate current on-site authorization')
     args = parser.parse_args(argv)
+    if args.body_pose == 'zero' and args.body_gains != 'hold':
+        parser.error('--body-pose zero requires FIXED_STAND gains; select --body-gains hold')
     if args.dry_run and args.confirm_motion:
         parser.error('--dry-run and --confirm-motion are mutually exclusive')
     if not all(math.isfinite(v) and v > 0 for v in (args.timeout, args.duration)):
@@ -189,7 +201,8 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None):
             try:
                 run(controller, client, q=args.target_m, dq=args.speed_m_s,
                     torque_cmd_nm=args.torque_cmd_nm, timeout=args.timeout,
-                    duration=args.duration, body_gains=args.body_gains)
+                    duration=args.duration, body_gains=args.body_gains,
+                    body_pose=args.body_pose, return_to_start=args.return_to_start)
             except KeyboardInterrupt:
                 print('interrupted; CANCEL attempted; no neutral gripper command')
 
