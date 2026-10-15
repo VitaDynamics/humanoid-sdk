@@ -98,6 +98,13 @@ waits for a later info event with the acknowledged `touch_enabled` value;
 later event without clearing the info cache used by command publication.
 Left/right wire values are 1/2; they differ from the device register numbering.
 
+This candidate uses the T021 public EE layout. HandState stores the three
+sample timestamps once per message and exposes five `ts_cmd_*` stages; zero
+future stages remain unmeasured. Touch uses `state_id`, `ts_state_pub_us` and
+`raw_words`, with geometry from HandInfo. Old candidate recordings require their
+matching SDK; the MCAP exporter refuses BFBS that differ from loaded bindings.
+`HandJointState` 的 `*_raw` 字段仅供诊断，含义随设备型号变化，不应依赖。
+
 After separate on-site motion authorization, support, an attendant and an
 emergency stop, a right-hand sequential round can be run with:
 
@@ -127,9 +134,9 @@ lease release. Hand session/sequence and body EXTERNAL generation are separate.
 `examples/brainco_capture.py` subscribes to independent hand topics plus body
 LowCmd/LowState/ControlStatus and exports MCAP with the optional `hil` extra.
 Missing or nonfinite hand feedback is retained as JSON null, never a synthetic
-zero. Seven-stage robot timestamps use VitaNow microseconds; zero future stages
-are unmeasured. Robot `cmd_trace` is enabled by its deployment-owned environment,
-not the PC's environment. Host tests and packaging do not establish device HIL.
+zero. Five-stage robot timestamps use Vita host microseconds; zero future stages
+are unmeasured. Public HandState carries these stages; no separate public trace
+root is required. Host tests and packaging do not establish device HIL.
 
 ## Development and offline packaging
 

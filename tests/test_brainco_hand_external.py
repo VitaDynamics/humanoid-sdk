@@ -25,7 +25,7 @@ class FakeHand:
             self.info = replace(self.info, dq_max=(speed_limit,) * 6)
         self.commands = []
         self.stale, self.reject, self.inhibited = stale, reject, inhibited
-        self._state = HandState(state_id=1, hand_type=1, side=self.info.side, dof=6,
+        self._state = HandState(state_id=1, hand_type=1, side=self.info.side,
                                 joints=(HandJointState(q=.01),) * 6, output_allowed=True, inhibit_reason=0)
     @property
     def state(self):
@@ -188,10 +188,10 @@ class ExternalHandTest(unittest.TestCase):
                 with self.assertRaises(RuntimeError): self.run_demo(c, [hand])
                 self.assertIn('exit_external', c.calls)
 
-    def test_wrong_model_nonfinite_and_limits_fail_before_enter(self):
-        for change in ('model','nan','limits'):
+    def test_wrong_hand_type_nonfinite_and_limits_fail_before_enter(self):
+        for change in ('hand_type','nan','limits'):
             c = self.controller(); hand = FakeHand()
-            if change == 'model': hand.info = replace(hand.info, model='LINKER_L6')
+            if change == 'hand_type': hand.info = replace(hand.info, hand_type=2)
             elif change == 'limits': hand.info = replace(hand.info, dq_max=(0.,)*6)
             else: hand._state = replace(hand._state, joints=(HandJointState(q=float('nan')),)*6)
             with self.assertRaises(ValueError): self.run_demo(c, [hand])

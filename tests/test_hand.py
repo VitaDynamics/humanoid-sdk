@@ -25,24 +25,23 @@ def pack(obj):
 
 
 def info_obj(side=1):
-    return HandInfoT(tsInfoUs=1200, handType=1, model='BRAINCO_REVO2', firmware='synthetic',
+    return HandInfoT(tsInfoUs=1200, tsStatePubUs=1300, handType=1, firmware='synthetic',
                      side=side, dof=6, jointNames=['thumb_pitch', 'thumb_roll', 'index', 'middle', 'ring', 'little'],
                      qMin=[0.] * 6, qMax=[.02] * 6, dqMax=[math.radians(1.)] * 6,
-                     touchAvailable=True, touchEnabled=True, touchFingers=5, touchWordsPerFinger=6,
-                     pollPeriodUs=20000, touchEveryNPolls=5)
+                     touchAvailable=True, touchEnabled=True, touchFingers=5, touchWordsPerFinger=6)
 
 
 def state_obj(side=1):
-    return HandStateT(stateId=9, handType=1, side=side, dof=6,
-                      tsStateRealUs=5000, tsStatePubUs=5100, tsPollRequestUs=4800, tsPollResponseUs=4900,
+    return HandStateT(stateId=9, handType=1, side=side,
+                      tsStateRealUs=4900, tsStatePubUs=5100,
+                      tsAcquiredHwUs=17, tsIngestedUs=4900, tsAssembledUs=5000,
                       outputAllowed=True, inhibitReason=0,
                       lastCmdSessionId=11, lastCmdSequence=7, lastCmdId=3,
                       estimatedInputPeriodUs=20000, rejectCount=0, lastRejectCode=0, ingressDropCount=2,
-                      cmdMiddlewareReceivedUs=4100, cmdReceivedUs=4100, cmdDequeuedUs=4100,
-                      cmdAcceptedUs=4150, cmdFirstOutputUs=4200, cmdWriteAckUs=4300, cmdFirstFeedbackUs=4900,
+                      tsCmdReceivedUs=4100, tsCmdAcceptedUs=4150, tsCmdFirstOutputUs=4200,
+                      tsCmdWriteAckUs=4300, tsCmdFirstFeedbackUs=4900,
                       timeoutCount=4, crcErrorCount=5,
                       joints=[HandJointStateT(q=.01, dq=.005, currentMa=12.5, qCmd=.011, dqCmd=.017,
-                              tsAcquiredHwUs=17, tsIngestedUs=4900, tsAssembledUs=5000,
                               qRaw=100, dqRaw=200, currentRaw=300, statusRaw=7) for _ in range(6)])
 
 
@@ -141,7 +140,7 @@ class HandTest(unittest.TestCase):
             second = c.publish([.01]*6)
             self.assertEqual((first.sequence, second.sequence), (1, 2))
             self.assertEqual((first.protocol_version, first.hand_type, first.side), (1, 1, side))
-            self.assertEqual((first.input_state_id, first.input_state_ts_real_us), (9, 5000))
+            self.assertEqual((first.input_state_id, first.input_state_ts_real_us), (9, 4900))
             self.assertEqual(first.cmd_id, 123)
             decoded = node.commands[-2][1]
             self.assertEqual(decoded.session_id, c.session_id)
@@ -160,24 +159,24 @@ class HandTest(unittest.TestCase):
         s = client.state
         self.assertTrue(math.isnan(s.joints[0].q))
         self.assertEqual((s.joints[0].current_ma, s.joints[0].q_raw, s.joints[0].status_raw), (12.5, 100, 7))
-        self.assertEqual((s.ts_poll_request_us, s.ts_poll_response_us), (4800, 4900))
-        self.assertEqual((s.cmd_middleware_received_us, s.cmd_received_us, s.cmd_dequeued_us), (4100, 4100, 4100))
-        self.assertEqual((s.cmd_write_ack_us, s.cmd_first_feedback_us), (4300, 4900))
+        self.assertEqual((s.ts_acquired_hw_us, s.ts_ingested_us, s.ts_assembled_us), (17, 4900, 5000))
+        self.assertEqual(s.ts_cmd_received_us, 4100)
+        self.assertEqual((s.ts_cmd_write_ack_us, s.ts_cmd_first_feedback_us), (4300, 4900))
         self.assertEqual((s.ingress_drop_count, s.timeout_count, s.crc_error_count), (2, 4, 5))
         self.assertEqual(s.last_valid_age_us, (1 << 64) - 1)
 
     def test_touch_raw_geometry_timestamps_and_callback(self):
         seen = []
         c, n = self.client(on_touch=seen.append)
-        obj = HandTouchT(touchSeq=18, handType=1, side=1, sensorType=1, tsPubUs=9000,
+        obj = HandTouchT(stateId=18, handType=1, side=1, sensorType=1, tsStatePubUs=9000,
                         fingers=[FingerTouchMetaT(tsRequestUs=8000, tsAcquiredHwUs=17, tsIngestedUs=8900,
-                                    sampleSeq=2, statusFlags=4, directionFlags=3, wordOffset=0,
-                                    wordCount=3, valid=True)], raw=[0, 256, 65535])
+                                    sampleSeq=2, statusFlags=4, directionFlags=3) for _ in range(5)],
+                        rawWords=[0, 256, 65535, 0, 0, 0] * 5)
         n.emit('left', 'touch', obj)
-        self.assertEqual(c.wait_touch().raw, (0, 256, 65535))
+        self.assertEqual(c.wait_touch().raw_words[:3], (0, 256, 65535))
         self.assertEqual(c.touch.fingers[0].ts_acquired_hw_us, 17)
         self.assertEqual(seen, [c.touch])
-        obj.fingers[0].wordCount = 4
+        obj.rawWords.pop()
         n.emit('left', 'touch', obj)
         with self.assertRaisesRegex(RuntimeError, 'invalid hand feedback'):
             c.wait_touch()
@@ -185,7 +184,8 @@ class HandTest(unittest.TestCase):
     def test_set_touch_real_requests_and_service_failures(self):
         c, n = self.client()
         info = c.wait_info(.25)
-        self.assertEqual(info.model, 'BRAINCO_REVO2')
+        self.assertEqual(info.hand_type, 1)
+        self.assertEqual(info.ts_state_pub_us, 1300)
         self.assertEqual(info.joint_names[0], 'thumb_pitch')
         self.assertTrue(c.set_touch(True, .25)); self.assertFalse(c.set_touch(False, .25))
         self.assertEqual(n.touch_requests, [True, False])
@@ -259,9 +259,18 @@ class HandTest(unittest.TestCase):
         with self.assertRaises(RuntimeError): c.wait_info()
 
     def test_feedback_wrong_side_and_joint_count_fail_explicitly(self):
-        for obj in (state_obj(2), HandStateT(stateId=2, side=1, dof=6, joints=[])):
+        for obj in (state_obj(2), HandStateT(stateId=2, side=1, joints=[])):
             c, n = self.client(); n.emit('left', 'state', obj)
             with self.assertRaises(RuntimeError): _ = c.state
+
+    def test_joint_count_is_checked_against_later_info(self):
+        n = FakeNode(); c = HandClient('left', node=n)
+        self.addCleanup(c.close)
+        n.emit('left', 'state', HandStateT(stateId=1, handType=1, side=1, joints=[]))
+        self.assertEqual(c.state.joints, ())
+        n.emit('left', 'info', info_obj())
+        with self.assertRaisesRegex(RuntimeError, 'invalid hand feedback'):
+            c.wait_info()
 
     def test_missing_bindings_do_not_open_node(self):
         with patch.object(codec.importlib, 'import_module', side_effect=ImportError('missing')):

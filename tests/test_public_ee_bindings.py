@@ -12,6 +12,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PublicEeBindingTest(unittest.TestCase):
+    def test_t021_struct_layouts_and_message_level_clocks(self):
+        from lowlevel.HandJointCmd import HandJointCmd
+        from lowlevel.HandJointState import HandJointState
+        from lowlevel.FingerTouchMeta import FingerTouchMeta
+        from lowlevel.HandState import HandState
+        from lowlevel.HandInfo import HandInfo
+        self.assertEqual((HandJointCmd.SizeOf(), HandJointState.SizeOf(), FingerTouchMeta.SizeOf()),
+                         (8, 28, 32))
+        for name in ('TsAcquiredHwUs', 'TsIngestedUs', 'TsAssembledUs'):
+            self.assertTrue(hasattr(HandState, name))
+            self.assertFalse(hasattr(HandJointState, name))
+        for name in ('Dof', 'TsPollRequestUs', 'TsPollResponseUs', 'CmdDequeuedUs'):
+            self.assertFalse(hasattr(HandState, name))
+        self.assertFalse(hasattr(HandInfo, 'Model'))
+
     def test_distribution_and_all_pinned_bfbs_match(self):
         manifest = json.loads((ROOT / 'compatibility.json').read_text())
         self.assertEqual(importlib.metadata.version('vbot-humanoid-msgs'),
@@ -29,6 +44,6 @@ class PublicEeBindingTest(unittest.TestCase):
                      'HandSetTouchRequest', 'HandSetTouchResponse'):
             with self.subTest(name=name):
                 self.assertTrue(callable(getattr(getattr(bindings, name), name).GetRootAs))
-        for name in ('HandCmdTrace', 'GripperCmd', 'GripperState', 'GripperInfo'):
-            module = importlib.import_module('lowlevel.' + name)
-            self.assertTrue(callable(getattr(module, name).GetRootAs))
+        for name in ('hand_cmd_trace', 'gripper_cmd', 'gripper_state', 'gripper_info'):
+            with self.subTest(removed_root=name), self.assertRaises(ImportError):
+                importlib.import_module(name + '_schema_meta')

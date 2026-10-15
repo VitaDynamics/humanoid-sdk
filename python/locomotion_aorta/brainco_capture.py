@@ -63,6 +63,13 @@ def load_bindings():
                            "lowlevel.HandTouch; no handwritten decoder fallback") from error
 
 
+def binding_schema_hash(kind):
+    root = MODULES[kind][1]
+    stem = re.sub(r'(?<!^)(?=[A-Z])', '_', root).lower()
+    module = importlib.import_module(stem + '_schema_meta')
+    return hashlib.sha256(module.SCHEMA_BFBS).hexdigest()
+
+
 def decode(kind, payload, bindings):
     if not isinstance(payload, bytes) or not 8 <= len(payload) <= 65536:
         raise ValueError("invalid or oversized FlatBuffer payload")
@@ -119,7 +126,7 @@ class TraceWriter:
         self.stream = stream
         self.counts = {}
         self.write({**metadata_checked(metadata), "type": "metadata",
-                    "capture_format": "brainco_capture_v2", "capture_clock": clock,
+                    "capture_format": "brainco_capture_v3", "capture_clock": clock,
                     "transport_loss": "not_measured"})
 
     def write(self, record):
@@ -231,6 +238,8 @@ def export_mcap(source: Path, output: Path, metadata, topic_map, schema_hashes, 
     for kind in topic_map.values():
         if kind.endswith("_hand_touch") and schema_hashes[kind] != metadata["schema_sha256"]:
             raise ValueError("metadata HandTouch schema_sha256 differs from requested BFBS")
+        if schema_hashes[kind] != binding_schema_hash(kind):
+            raise ValueError(f"recorded BFBS differs from loaded binding for {kind}; use its matching SDK")
     bindings = load_bindings() if bindings is None else bindings
     from mcap.reader import NonSeekingReader
     with source.open("rb") as incoming, output.open("x", encoding="utf-8") as stream:

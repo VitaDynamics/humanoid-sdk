@@ -19,8 +19,8 @@ def validate_info(info):
     if any(len(values) != info.dof for values in
            (info.joint_names, info.q_min, info.q_max, info.dq_max)):
         raise ValueError('HandInfo per-joint lengths differ from dof')
-    if not info.model or not all(info.joint_names) or len(set(info.joint_names)) != info.dof:
-        raise ValueError('HandInfo model/joint names are invalid')
+    if not all(info.joint_names) or len(set(info.joint_names)) != info.dof:
+        raise ValueError('HandInfo joint names are invalid')
     for low, high, speed in zip(info.q_min, info.q_max, info.dq_max):
         if not all(math.isfinite(v) for v in (low, high, speed)) or low > high or speed < 0:
             raise ValueError('HandInfo limits are invalid')
@@ -83,6 +83,17 @@ class HandClient:
             with self._condition:
                 if self._closed:
                     return
+                info = value if kind == 'info' else self._latest['info']
+                state = value if kind == 'state' else self._latest['state']
+                touch = value if kind == 'touch' else self._latest['touch']
+                if info is not None:
+                    if state is not None and (state.hand_type != info.hand_type
+                                               or len(state.joints) != info.dof):
+                        raise ValueError('HandState identity/joint count differs from Info')
+                    if touch is not None and (touch.hand_type != info.hand_type
+                            or len(touch.fingers) != info.touch_fingers
+                            or len(touch.raw_words) != info.touch_fingers * info.touch_words_per_finger):
+                        raise ValueError('HandTouch geometry differs from Info')
                 self._latest[kind] = value
                 self._condition.notify_all()
             callback = self._callbacks[kind]
