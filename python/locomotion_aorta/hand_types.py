@@ -46,11 +46,10 @@ class HandCmd:
 
 @dataclass(frozen=True, slots=True)
 class HandJointState:
-    """Normalized feedback; ``*_raw`` values are model-specific diagnostics.
+    """Normalized feedback; *_raw are model-specific diagnostics only.
 
-    ``*_raw`` 字段仅供诊断，含义随设备型号变化，不应依赖。
+    *_raw 字段仅供诊断，含义随设备型号变化，不应依赖。
     """
-
     q: float = 0.0
     dq: float = 0.0
     current_ma: float = 0.0
