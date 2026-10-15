@@ -109,9 +109,32 @@ class ZeroPoseTest(unittest.TestCase):
             FixedStandPose(body_info()).check([m.q for m in cmd.joints])
         self.assertEqual(c.calls.count('enter_external'), 1)
         self.assertEqual(c.calls.count('exit_external'), 1)
-        self.assertTrue(any('zero endpoint settled' in e for e in events))
+        self.assertTrue(any('observation only' in e for e in events))
         self.assertTrue(any('confirmed PASSIVE' in e for e in events))
         self.assertTrue(any('CONTROL' in e.upper() and 'ACK' in e.upper() for e in events))
+
+    def test_settle_zero_nonfollowing_or_drift_is_observation_and_gripper_still_runs(self):
+        for options in ({'follow_commands': False},
+                        {'drift_command_range': (8, 60), 'drift_position_rad': .2}):
+            with self.subTest(options=options):
+                c, clock = self.controller(**options)
+                gripper = FakeGripper()
+                events = []
+                publish = gripper.publish_target
+                def gripper_publish(*args, **kwargs):
+                    self.assertNotIn('exit_external', c.calls)
+                    self.assertTrue(any('ZERO_DWELL complete observation_only=true' in e for e in events))
+                    return publish(*args, **kwargs)
+                gripper.publish_target = gripper_publish
+                gripper_demo.run(c, gripper, q=.075, duration=.08, body_pose='zero',
+                                 timeout=1, sleep=clock.sleep, monotonic=clock.monotonic, emit=events.append)
+                self.assertTrue(gripper.commands)
+                complete = [e for e in events if 'ZERO_DWELL complete observation_only=true' in e]
+                self.assertEqual(len(complete), 1)
+                peak = float(complete[0].split('peak_abs_q_error_rad=')[1].split()[0])
+                self.assertGreater(peak, .08)  # Deliberately beyond the removed example-only gate.
+                self.assertEqual(c.calls.count('exit_external'), 1)
+                self.assertTrue(any('CANCEL confirmed PASSIVE' in e for e in events))
 
     def test_slow_pc_does_not_stretch_ramp_by_frame_count(self):
         class SlowClock(FakeClock):

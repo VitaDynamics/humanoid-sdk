@@ -125,7 +125,7 @@ def run(controller, client, *, q, dq=0.0, torque_cmd_nm=None,
         validate_target(info, initial.sample.q, dq, torque_cmd_nm)
     emit(f'{client.side}: q={q} m, dq={dq} m/s host cap '
          f'(0 remains robot configuration default), torque_cmd_nm={torque_cmd_nm} '
-         f'(None uses robot hold; explicit0 is0), duration={duration}s; '
+         f'(None uses robot hold; explicit 0 is 0), duration={duration}s; '
          'signed host motor-side Nm, not force N/device limit; no SDK trajectory interpolation')
 
     def command_loop(frame):
@@ -327,7 +327,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None):
     parser.add_argument('--target-m', type=float, help='absolute total opening target; required for motion')
     parser.add_argument('--speed-m-s', type=float, default=0.0, help='host cap; 0 leaves robot configuration default')
     parser.add_argument('--torque-cmd-nm', type=float, default=None,
-                        help='signed software motor-side Nm; omitted=config hold, explicit0=0')
+                        help='signed software motor-side Nm; omitted=config hold, explicit 0=0')
     parser.add_argument('--duration', type=float, default=None, help='streaming seconds: sine default30, target default1')
     parser.add_argument('--body-gains', choices=('hold', 'zero'), default='hold')
     parser.add_argument('--body-pose', choices=('measured', 'zero'), default='measured',

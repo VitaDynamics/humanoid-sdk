@@ -12,7 +12,7 @@ class FixedStandPose:
         self.info = info
         names = tuple(info.joint_names)
         if len(names) != 31 or len(set(names)) != 31 or len(info.joints) != 31:
-            raise ValueError('FIXED_STAND requires the unique public31 roster')
+            raise ValueError('FIXED_STAND requires the unique public 31 roster')
         problems = []
         for name, cap in zip(names, info.joints):
             if not cap.populated:
@@ -40,7 +40,7 @@ class FixedStandPose:
 
     def check(self, values):
         if len(values) != len(self.info.joints):
-            raise ValueError('target must have31 slots')
+            raise ValueError('target must have 31 slots')
         for name, cap, q in zip(self.info.joint_names, self.info.joints, values):
             if cap.populated and (not math.isfinite(q) or not cap.q_min <= q <= cap.q_max):
                 raise ValueError(f'{name}: q={q} outside [{cap.q_min}, {cap.q_max}]')
@@ -71,7 +71,7 @@ class FixedStandPose:
                 commands.append(BodyJointCmd(q=value, dq=0.0, tau=0.0,
                                              kp=gains['kp'], kd=gains['kd']))
             else:
-                # Fixed public31 wire placeholder; server populated mask prevents
+                # Fixed public 31 wire placeholder; server populated mask prevents
                 # physical output. Never use an uninstalled slot's q or gains.
                 commands.append(BodyJointCmd())
         return BodyCmd(cmd_id=cmd_id, joints=tuple(commands), action=BodyCmdAction.EXTERNAL,

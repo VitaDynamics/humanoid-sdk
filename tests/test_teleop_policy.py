@@ -159,6 +159,7 @@ class LifecycleTests(unittest.TestCase):
             def get_robot_info(self,timeout):return NS(info=NS(body=body),status=reply_status,error_message='hands unavailable')
             def wait_body_state(self,timeout):
                 if 'enter' in events and mode=='wait_error':raise TimeoutError('actual feedback timeout')
+                state.state_id += 1
                 return state
             def enter_external(self,timeout):
                 events.append('enter')
@@ -200,6 +201,7 @@ class LifecycleTests(unittest.TestCase):
             def get_robot_info(self, timeout):
                 return NS(status=api.ServiceStatus.SUCCESS, info=NS(body=body))
             def wait_body_state(self, timeout):
+                state.state_id += 1
                 return state
             def enter_external(self, timeout):
                 events.append('enter')
@@ -239,6 +241,100 @@ class LifecycleTests(unittest.TestCase):
 
     def test_live_command_id_wraps_to_one_without_zero(self):
         self.assertEqual(self.published_command_ids(65537), list(range(1, 65536)) + [1, 2])
+
+    def fresh_state_case(self, ids, *, stop_during_wait=False):
+        from test_examples import FakeClock
+        body, state = fixture()
+        clock, stop = FakeClock(), threading.Event()
+        published, inferred, reads, events = [], [], [], []
+        status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
+                    client_id='client', lease_id=4, reject_count=0)
+        class Controller:
+            def get_robot_info(self, timeout):
+                return NS(info=NS(body=body), status=API.ServiceStatus.SUCCESS, error_message='')
+            def wait_body_state(self, timeout):
+                reads.append(timeout)
+                state.state_id = ids[min(len(reads)-1, len(ids)-1)]
+                if stop_during_wait and len(reads) == 3:
+                    stop.set()
+                return state
+            def enter_external(self, timeout):
+                events.append('enter')
+                return status
+            def publish(self, command):
+                published.append(command)
+                if command.input_state_id == ids[-1] and len(set(ids)) > 2:
+                    stop.set()
+            def exit_external(self, timeout):
+                events.append('cancel')
+                return NS(current_action='PASSIVE')
+        controller = Controller()
+        controller.status = status
+        model = NS(infer=lambda obs: inferred.append(obs) or [0]*12)
+        try:
+            live(controller, API, Policy(METADATA, CONTRACT), model, lambda: (), stop,
+                 timeout=1, sleep=clock.sleep, monotonic=clock.monotonic)
+        finally:
+            self.assertEqual(events, ['enter', 'cancel'])
+            self.assertEqual(len(inferred), len(published))
+            if len(set(ids)) == 1:
+                self.assertEqual(inferred, [])
+                self.assertEqual(published, [])
+            self.assertTrue(all(0 < remaining <= 1 for remaining in reads))
+        return published, inferred, clock
+
+    def test_body_state_frozen_before_first_inference_times_out_and_cancels(self):
+        # No fresh input after the preflight sample: no new leg targets at all.
+        with self.assertRaisesRegex(TimeoutError, 'BodyState did not advance'):
+            self.fresh_state_case([10, 10])
+
+    def test_body_state_stops_or_regresses_after_publish_no_more_inference_then_cancel(self):
+        for tail in (11, 10):
+            with self.subTest(tail=tail):
+                # Capture the first successful inference/publication; all later
+                # cached or out-of-order samples must be held, then CANCEL.
+                body, state = fixture()
+                from test_examples import FakeClock
+                clock, stop = FakeClock(), threading.Event()
+                outputs, inferences, events = [], [], []
+                status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
+                            client_id='client', lease_id=4, reject_count=0)
+                class Controller:
+                    reads = 0
+                    def get_robot_info(self, timeout):
+                        return NS(info=NS(body=body), status=API.ServiceStatus.SUCCESS, error_message='')
+                    def wait_body_state(self, timeout):
+                        self.reads += 1
+                        state.state_id = 10 if self.reads == 1 else 11 if self.reads == 2 else tail
+                        return state
+                    def enter_external(self, timeout):
+                        events.append('enter')
+                        return status
+                    def publish(self, command):
+                        outputs.append(command)
+                    def exit_external(self, timeout):
+                        events.append('cancel')
+                        return NS(current_action='PASSIVE')
+                controller = Controller()
+                controller.status = status
+                with self.assertRaisesRegex(TimeoutError, 'BodyState did not advance'):
+                    live(controller, API, Policy(METADATA, CONTRACT),
+                         NS(infer=lambda obs: inferences.append(obs) or [0]*12), lambda: (), stop, 1,
+                         sleep=clock.sleep, monotonic=clock.monotonic)
+                self.assertEqual([cmd.input_state_id for cmd in outputs], [11])
+                self.assertEqual(len(inferences), 1)
+                self.assertEqual(events, ['enter', 'cancel'])
+
+    def test_cached_or_regressed_samples_are_waited_out_before_fresh_inference(self):
+        outputs, inferred, clock = self.fresh_state_case([10, 10, 9, 10, 11, 11, 12])
+        self.assertEqual([cmd.input_state_id for cmd in outputs], [11, 12])
+        self.assertEqual(len(inferred), 2)
+        self.assertGreater(clock.monotonic(), 0)
+
+    def test_stop_while_waiting_for_update_cancels_without_new_targets(self):
+        outputs, inferred, _ = self.fresh_state_case([10, 10], stop_during_wait=True)
+        self.assertEqual(outputs, [])
+        self.assertEqual(inferred, [])
 
     def test_normal_exit_cancels(self):self.assertEqual(self.run_case('normal'),['enter','publish','cancel'])
     def test_success_service_status_runs_and_cancels(self):

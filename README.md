@@ -22,8 +22,8 @@ public wheel rather than a private/HIL wheel.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
 Match the robot's public schema hashes and roster to [compatibility.json](compatibility.json).
-Control requests use protocol2; ACK/Status remain protocol1; new body roots use
-protocol1. BodyCmd action is explicitly encoded using the generated EXTERNAL
+Control requests use protocol 2; ACK/Status remain protocol 1; new body roots use
+protocol 1. BodyCmd action is explicitly encoded using the generated EXTERNAL
 symbol. Entry remains by action name and lease; the command does not activate
 EXTERNAL. Older robots rejecting v2 receive no automatic downgrade or LowCmd
 fallback. Discovery preserves partial body/hand results and actual field/limit
@@ -72,7 +72,7 @@ blocker; do not remove it to connect.
 
 ## Motion example
 
-`examples/external_control.py` requests control and moves30 installed body joints in the public31 roster.
+`examples/external_control.py` requests control and moves 30 installed body joints in the public 31 roster.
 Review its targets and gains for the specific robot, and obtain explicit
 motion authorization, reliable support, an attendant and emergency-stop access.
 Installation and read-only checks do not authorize motion.
@@ -131,7 +131,7 @@ against every joint's advertised `dq_max`. The default fractions remain
 `--loop` repeats until SIGINT/SIGTERM or a safety failure. No automatic retry is
 performed. The legacy `brainco_hand_control.py` forwards to this entry.
 
-The body receives measured-pose31-slot BodyCmd frames; hand commands use only
+The body receives measured-pose 31-slot BodyCmd frames; hand commands use only
 `/sdk/foot_humanoid/hand/<side>/cmd`. `--body-gains zero` selects kp=kd=dq=tau=0,
 with q still measured; it does not support the body or instantly zero gains
 during EXTERNAL entry. The default `hold` gains reuse `external_control.py`.
@@ -205,17 +205,26 @@ python examples/gripper_external.py --side right --target-m "$TARGET_OPENING_M" 
 ```
 
 The example enters EXTERNAL through the existing body preflight/PREPARE/COMMIT,
-holds the measured 31-slot body pose and exits through CANCEL to PASSIVE. Its
-sample, host target and latest-received trace keys stay separate; a host echo is
+holds the measured 31-slot body pose and exits through CANCEL to PASSIVE.
+`--body-pose zero --body-gains hold` instead ramps to zero using the recorded
+robot FIXED_STAND profile, then holds zero in the same EXTERNAL session.
+Zero-settle error/speed/dwell and this gripper example's body hold drift are
+observation only; they do not trigger CANCEL. Entry stationary, state validity,
+freshness, ownership, phase, rejection and CANCEL-confirmation guards remain active.
+`BodyState.applied_cmd` is currently always None on the matching robot runtime;
+it cannot be used as execution evidence. The gripper sample, host target and
+latest-received trace keys stay separate; a host echo is
 not proof of device execution or arrival. Zero trace timestamps remain unknown,
 including AGX write_ack. No robot connection or motion has been tested here.
 
 ## PC policy example (in preparation)
 
 `examples/teleop_policy.py` subscribes to BodyState, discovers the actual body
-roster, runs a local action17 ONNX policy, and uses the same EXTERNAL lease and
-CANCEL exit. Install the optional `teleop-demo` extra for ONNX Runtime and gamepad
-input. `--model` is required; no model is bundled or selected automatically.
+roster, runs a local action 17 ONNX policy, and uses the same EXTERNAL lease and
+CANCEL exit. Before every live inference it waits up to the existing `--timeout`
+for a strictly increasing BodyState `state_id`; unchanged or older feedback is
+not reused for another inference or leg command, and timeout attempts CANCEL.
+Install the optional `teleop-demo` extra for ONNX Runtime and gamepad input. `--model` is required; no model is bundled or selected automatically.
 Use `--help` or `--dry-run --body-state-jsonl <capture>` before live use; dry-run
 does not construct SDK transport. The offline validation used a noshoes model;
 replace it with the delivered shoes model and recheck metadata/profile parity

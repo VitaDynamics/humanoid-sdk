@@ -478,7 +478,7 @@ def _validate_command(command: BodyCmd, populated: tuple[bool, ...] | None = Non
             or not 0 < command.cmd_id < (1 << 16)):
         raise InvalidCommandError("cmd_id must be an integer in [1, 65535]")
     if not isinstance(command.joints, tuple) or len(command.joints) != BODY_SLOTS:
-        raise InvalidCommandError("joints must be a31-slot tuple")
+        raise InvalidCommandError("joints must be a 31-slot tuple")
     if command.action != BodyCmdAction.EXTERNAL:
         raise InvalidCommandError("ExternalController requires EXTERNAL action")
     for index, motor in enumerate(command.joints):

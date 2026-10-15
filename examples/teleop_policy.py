@@ -247,6 +247,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
     # Validate the real observation before requesting ownership; don't consume history yet.
     policy.observation(initial, body, command.step(()), api.BodyImuLocation.HIP)
     policy.history.clear()
+    last_state_id = initial.state_id
     attempted = False
     try:
         if stop.is_set():
@@ -262,9 +263,23 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
             if status is None or any(getattr(status,key) != getattr(entered,key)
                                      for key in ('phase','generation','client_id','lease_id','current_action','reject_count')):
                 raise RuntimeError('EXTERNAL ownership/status changed')
-            state = controller.wait_body_state(timeout=timeout)
+            # wait_body_state may return its cache. Reuse --timeout to wait for
+            # a strictly newer input; never infer/publish again from that cache.
+            state_deadline = monotonic() + timeout
+            while not stop.is_set():
+                remaining = state_deadline - monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('BodyState did not advance within --timeout')
+                state = controller.wait_body_state(timeout=remaining)
+                if state.state_id > last_state_id:
+                    break
+                remaining = state_deadline - monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('BodyState did not advance within --timeout')
+                sleep(min(policy.period, remaining))
             if stop.is_set():
                 break
+            last_state_id = state.state_id
             observation = policy.observation(state,body,command.step(axes()),api.BodyImuLocation.HIP)
             targets = policy.targets(model.infer(observation),body)
             if stop.is_set():

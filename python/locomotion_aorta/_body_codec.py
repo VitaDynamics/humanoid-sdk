@@ -18,7 +18,7 @@ _APPLIED_JOINTS_SLOT = 14  # BodyAppliedCmd.joints, id5
 
 def create_body_cmd(builder: Any, joints: tuple[BodyJointCmd, ...]) -> int:
     if len(joints) != BODY_SLOTS:
-        raise ValueError("BodyCmd requires exactly31 joint slots")
+        raise ValueError("BodyCmd requires exactly 31 joint slots")
     payload = _COMMAND.pack(*(v for joint in joints for v in (joint.q, joint.dq, joint.tau, joint.kp, joint.kd)))
     builder.StartVector(_MOTOR.size, len(joints), 4)
     end = builder.Head()
@@ -54,7 +54,7 @@ def _vector_field_data(view: Any, slot: int, stride: int, alignment: int) -> mem
     bounds(vector, 4)
     count = struct.unpack_from('<I', data, vector)[0]
     if count != BODY_SLOTS:
-        raise ValueError("body vector requires exactly31 joint slots")
+        raise ValueError("body vector requires exactly 31 joint slots")
     payload = vector + 4
     if payload % alignment:
         raise ValueError("body vector payload misaligned")
