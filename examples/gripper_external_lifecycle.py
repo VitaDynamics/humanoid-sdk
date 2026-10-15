@@ -29,6 +29,27 @@ def stop_signals():
             signal.signal(signum, handler)
 
 
+def _observe_zero_dwell(frame, target, *, body, monotonic, emit):
+    """Record the existing example dwell without a feedback-arrival gate."""
+    began = monotonic()
+    peak_error = 0.0
+    peak_speed = 0.0
+    samples = math.ceil(body.DWELL_S / body.PERIOD_S)
+    for sample in range(samples):
+        state = frame(target)  # Retains the lifecycle's safety/protocol checks.
+        error = max((abs(j.q - q) for j, q in zip(state.joints, target)
+                     if j.populated), default=0.0)
+        speed = max((abs(j.dq) for j in state.joints if j.populated), default=0.0)
+        peak_error = max(peak_error, error)
+        peak_speed = max(peak_speed, speed)
+        emit(f'ZERO_DWELL observation_only=true sample={sample + 1} '
+             f'elapsed_s={monotonic() - began:.6f} '
+             f'max_abs_q_error_rad={error:.6f} max_abs_dq_rad_s={speed:.6f}')
+    emit(f'ZERO_DWELL complete observation_only=true samples={samples} '
+         f'requested_dwell_s={body.DWELL_S} elapsed_s={monotonic() - began:.6f} '
+         f'peak_abs_q_error_rad={peak_error:.6f} peak_abs_dq_rad_s={peak_speed:.6f}')
+
+
 @stop_signals()
 def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hold',
                  body_pose='measured', sleep=time.sleep, monotonic=time.monotonic, emit=print):
@@ -136,11 +157,11 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             pose = (0.0,) * len(start)
             frame(pose)
             stage = 'settle-zero'
-            body._publish_dwell(frame, pose, monotonic=monotonic, label='zero',
-                                position_tolerance_rad=body.ZERO_ENDPOINT_POSITION_TOLERANCE_RAD)
+            _observe_zero_dwell(frame, pose, body=body, monotonic=monotonic, emit=emit)
             check_hold = True
             stage = 'hold-zero'
-            emit('zero endpoint settled; holding EXTERNAL in the same session before gripper commands')
+            emit('zero endpoint settled check disabled (observation only); '
+                 'holding EXTERNAL in the same session before gripper commands')
         command_loop(frame)
     finally:
         active = False
