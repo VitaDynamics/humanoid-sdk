@@ -4,7 +4,6 @@
   "robot_profile": "A-sample full",
   "aorta_revision": "71008719f5958df7f09d522f1d585c6748956ce1",
   "aorta_version": "2026.9.10+humanoid.7100871",
-  "aorta_build_run": "https://github.com/VitaDynamics/aorta/actions/runs/34485667816",
   "flatbuffers_version": "25.9.23",
   "python_requires": ">=3.10",
   "platforms": ["linux_x86_64", "linux_aarch64"],
