@@ -1,6 +1,6 @@
 """Public body DTOs. Angles rad; robot/client clocks are explicitly microseconds."""
 from dataclasses import dataclass
-from lowlevel.HumCmdAction import HumCmdAction
+from lowlevel.BodyCmdAction import BodyCmdAction
 from lowlevel.BodySampleStatus import BodySampleStatus
 from lowlevel.BodyImuLocation import BodyImuLocation
 from lowlevel.BodySlotRole import BodySlotRole
@@ -12,7 +12,7 @@ BODY_SLOTS = 31
 BODY_PROTOCOL_VERSION = 1
 
 @dataclass(frozen=True, slots=True)
-class HumMotorCmd:
+class BodyJointCmd:
     q: float = 0.0
     dq: float = 0.0
     tau: float = 0.0
@@ -20,10 +20,10 @@ class HumMotorCmd:
     kd: float = 0.0
 
 @dataclass(frozen=True, slots=True)
-class HumCmd:
+class BodyCmd:
     cmd_id: int
-    motor_cmds: tuple[HumMotorCmd, ...]
-    action: int = HumCmdAction.EXTERNAL
+    joints: tuple[BodyJointCmd, ...]
+    action: int = BodyCmdAction.EXTERNAL
     protocol_version: int = BODY_PROTOCOL_VERSION
     session_id: int = 0
     sequence: int = 0
@@ -72,19 +72,19 @@ class BodyImuSample:
     host_timestamp_us: int = 0
 
 @dataclass(frozen=True, slots=True)
-class BodyAppliedCommand:
-    action: int = HumCmdAction.UNKNOWN
+class BodyAppliedCmd:
+    action: int = BodyCmdAction.UNKNOWN
     session_id: int = 0
     sequence: int = 0
     cmd_id: int = 0
     ts_first_output_us: int = 0
-    motor_cmds: tuple[HumMotorCmd, ...] = ()
+    joints: tuple[BodyJointCmd, ...] = ()
     source_key_valid: bool = False
 
 @dataclass(frozen=True, slots=True)
 class BodyState:
     state_id: int
-    motor_states: tuple[BodyJointState, ...]
+    joints: tuple[BodyJointState, ...]
     protocol_version: int = BODY_PROTOCOL_VERSION
     roster_version: int = 0
     ts_state_real_us: int = 0
@@ -92,7 +92,7 @@ class BodyState:
     ts_consumed_us: int = 0
     attitude_valid: bool = False
     imu_states: tuple[BodyImuSample, ...] = ()
-    applied_cmd: BodyAppliedCommand | None = None
+    applied_cmd: BodyAppliedCmd | None = None
 
 @dataclass(frozen=True, slots=True)
 class BodyJointCapability:

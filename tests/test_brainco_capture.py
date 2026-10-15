@@ -281,21 +281,21 @@ class PublicBodyCaptureTest(unittest.TestCase):
         from test_body_codec import make_state
         data, _ = make_state()
         row = capture.decode('body_state',data,capture.load_bindings())
-        self.assertEqual(len(row['motor_states']),31)
-        self.assertFalse(row['motor_states'][14]['populated'])
-        self.assertIsNone(row['motor_states'][14]['q'])
-        self.assertEqual(row['motor_states'][14]['valid_fields'],0)
+        self.assertEqual(len(row['joints']),31)
+        self.assertFalse(row['joints'][14]['populated'])
+        self.assertIsNone(row['joints'][14]['q'])
+        self.assertEqual(row['joints'][14]['valid_fields'],0)
         self.assertTrue(row['nonfinite_feedback'])
         self.assertEqual(row['ts_state_real_us'],1_234_567)
 
     def test_current_command_keeps_action_and_body_causality_without_mode(self):
         from test_body_codec import make_command, encode
-        from locomotion_aorta import HumCmdAction
-        row=capture.decode('hum_cmd',encode(make_command()),capture.load_bindings())
-        self.assertEqual(row['action'],HumCmdAction.EXTERNAL)
-        self.assertEqual(len(row['motor_cmds']),31)
+        from locomotion_aorta import BodyCmdAction
+        row=capture.decode('body_cmd',encode(make_command()),capture.load_bindings())
+        self.assertEqual(row['action'],BodyCmdAction.EXTERNAL)
+        self.assertEqual(len(row['joints']),31)
         self.assertEqual(row['input_state_id'],123)
-        self.assertNotIn('mode',row['motor_cmds'][0])
+        self.assertNotIn('mode',row['joints'][0])
         self.assertNotIn('lowstate',capture.TOPICS)
         self.assertNotIn('external_command',capture.TOPICS)
         self.assertIn('lowstate',capture.MODULES)  # explicit archive parsing retained

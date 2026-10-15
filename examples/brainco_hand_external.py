@@ -161,11 +161,11 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
     body.require_body_info(controller, timeout)
     start_state = body._wait_for_stationary_body_state(
         controller, timeout=timeout, sleep=sleep, monotonic=monotonic)
-    start_q = tuple(m.q if m.populated else 0.0 for m in start_state.motor_states)
+    start_q = tuple(m.q if m.populated else 0.0 for m in start_state.joints)
     hold = body._position_command(start_q)
     if body_gains == 'zero':
-        hold = replace(hold, motor_cmds=tuple(replace(cmd, kp=0.0, kd=0.0, dq=0.0, tau=0.0)
-                                              for cmd in hold.motor_cmds))
+        hold = replace(hold, joints=tuple(replace(cmd, kp=0.0, kd=0.0, dq=0.0, tau=0.0)
+                                              for cmd in hold.joints))
     gains = 'kp=kd=0' if body_gains == 'zero' else 'existing DEMO_KP/FIXED_STAND_KD'
     emit(f'body: --body-gains {body_gains}, 31-slot measured q, {gains}, dq=tau=0; '
          'hands use independent EE commands; no body zero/return trajectory')
@@ -203,7 +203,7 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
             # Retain the current pose using the inherited endpoint tolerance;
             # abort instead of continuing hand movement if the body drifts.
             if any(abs(m.q - q) > body.RETURN_ENDPOINT_POSITION_TOLERANCE_RAD
-                   for m, q in zip(state.motor_states, start_q) if m.populated):
+                   for m, q in zip(state.joints, start_q) if m.populated):
                 raise RuntimeError('body departed from its held pose')
             controller.publish(replace(hold, input_state_id=state.state_id,
                                        input_state_ts_real_us=state.ts_state_real_us))

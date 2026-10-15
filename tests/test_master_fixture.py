@@ -26,7 +26,7 @@ class ExistingMasterFixture(unittest.TestCase):
         policy.default=tuple(default)
         policy.previous_actions=(.25,)*12
         by_name={name:(q[i],dq[i]) for i,name in enumerate(policy.names)}
-        for name,motor in zip(body.joint_names,state.motor_states):
+        for name,motor in zip(body.joint_names,state.joints):
             if name in by_name:motor.q,motor.dq=by_name[name]
         state.imu_states[1].state=NS(quaternion=(1.,0.,0.,0.),gyroscope=(.1,-.2,.3))
         obs=policy.observation(state,body,(.4,-.2,.6,.855),'HIP')

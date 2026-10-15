@@ -21,12 +21,12 @@ from .transport import _decode_control_status
 from ._body_codec import decode_body_state, unpack_body_cmd
 from ._motor_codec import unpack_motor_states
 from .types import HumanoidLowState
-from .body_types import HumCmd, BODY_SLOTS
+from .body_types import BodyCmd, BODY_SLOTS
 
 
 TOPICS = {
     "body_state": "/sdk/foot_humanoid/body_state",
-    "hum_cmd": "/sdk/foot_humanoid/hum_cmd",
+    "body_cmd": "/sdk/foot_humanoid/body_cmd",
     "control_status": "/sdk/foot_humanoid/control/status",
 }
 # Historical MCAP kinds are explicit offline choices, never live or command fallbacks.
@@ -36,7 +36,7 @@ ARCHIVE_TOPICS = {
 }
 MODULES = {
     "body_state": ("lowlevel.BodyState", "BodyState"),
-    "hum_cmd": ("lowlevel.HumCmd", "HumCmd"),
+    "body_cmd": ("lowlevel.BodyCmd", "BodyCmd"),
     "lowstate": ("lowlevel.HumanoidLowState", "HumanoidLowState"),
     "external_command": ("lowlevel.LowCmd", "LowCmd"),
     "control_status": ("locomotion_sdk.ControlStatus", "ControlStatus"),
@@ -105,15 +105,15 @@ def decode(kind, payload, bindings):
         return _json_feedback(asdict(record))
     if kind == "body_state":
         state = decode_body_state(view)
-        if len(state.motor_states) != BODY_SLOTS:
-            raise ValueError("requires fixed31 BodyState")
+        if len(state.joints) != BODY_SLOTS:
+            raise ValueError("requires31-slot BodyState")
         return _json_feedback(asdict(state))
-    if kind == "hum_cmd":
-        motors = unpack_body_cmd(view.MotorCmd())
+    if kind == "body_cmd":
+        motors = unpack_body_cmd(view)
         if len(motors) != BODY_SLOTS:
-            raise ValueError("requires fixed31 HumCmd")
+            raise ValueError("requires31-slot BodyCmd")
         quat = view.RootQuat()
-        command = HumCmd(cmd_id=view.CmdId(), motor_cmds=motors,
+        command = BodyCmd(cmd_id=view.CmdId(), joints=motors,
                          protocol_version=view.ProtocolVersion(), action=view.Action(),
                          session_id=view.SessionId(), sequence=view.Sequence(),
                          input_state_id=view.InputStateId(), input_state_ts_real_us=view.InputStateTsRealUs(),

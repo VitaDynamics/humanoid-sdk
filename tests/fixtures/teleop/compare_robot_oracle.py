@@ -44,7 +44,7 @@ def generate(model_path, root):
         state=dict(state_id=1000+k,ts_state_real_us=1792000000000000+k*20000,attitude_valid=True,
                    imu_states=[dict(location='TRUNK',valid_fields=3,state=dict(quaternion=(0,1,0,0),gyroscope=(9,8,7))),
                                dict(location='HIP',valid_fields=3,state=dict(quaternion=quat,gyroscope=(.1*k,-.2*k,.3*k)))],
-                   motor_states=[dict(body_index=i,populated=n!='waist_roll_joint',valid_fields=0 if n=='waist_roll_joint' else 3,
+                   joints=[dict(body_index=i,populated=n!='waist_roll_joint',valid_fields=0 if n=='waist_roll_joint' else 3,
                                       q=lookup.get(n,0.)+.001*i*(k+1),dq=-.003*(i+1)*k)
                                  for i,n in enumerate(NAMES)])
         observation=p.observation(objects(state),objects(body),command,'HIP')

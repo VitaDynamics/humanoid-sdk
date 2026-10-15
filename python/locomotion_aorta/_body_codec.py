@@ -1,46 +1,38 @@
-"""Bulk fixed31 paths for the pinned public schema, guarded by generated goldens."""
+"""Bulk 31-slot vector paths for the pinned public schema, guarded by generated goldens."""
 import struct
 from dataclasses import fields
 from typing import Any
 from .body_types import (
-    BODY_SLOTS, BodyJointState, BodyImuState, BodyImuSample, BodyAppliedCommand,
-    BodyState, HumMotorCmd, BodyJointCapability, BodyMotorIdentity, BodyInfo,
+    BODY_SLOTS, BodyJointState, BodyImuState, BodyImuSample, BodyAppliedCmd,
+    BodyState, BodyJointCmd, BodyJointCapability, BodyMotorIdentity, BodyInfo,
     GripperInfo, EndEffectorCapability, RobotInfo, GetRobotInfoResponse,
 )
 
-# Offsets and sizes from actual S2 generated factory/accessors, not old vectors.
+# Layouts and vector slots from the actual final S2 generated accessors.
 _COMMAND = struct.Struct("<" + "fffff" * BODY_SLOTS)
 _JOINT_STATE = struct.Struct("<H??BxHQQQfffffI")
 _MOTOR = struct.Struct("<fffff")
-_BODY_JOINTS_SLOT = 22  # actual generated BodyState.MotorStates, id9
-_APPLIED_MOTORS_SLOT = 14  # actual generated BodyAppliedCommand.MotorCmd, id5
+_BODY_JOINTS_SLOT = 22  # BodyState.joints / BodyCmd.joints, id9
+_APPLIED_JOINTS_SLOT = 14  # BodyAppliedCmd.joints, id5
 
 
-def create_body_cmd(builder: Any, motors: tuple[HumMotorCmd, ...]) -> int:
-    if len(motors) != BODY_SLOTS:
-        raise ValueError("HumCmd requires exactly31 motor slots")
-    payload = _COMMAND.pack(*(v for m in motors for v in (m.q, m.dq, m.tau, m.kp, m.kd)))
-    builder.Prep(4, _COMMAND.size)
+def create_body_cmd(builder: Any, joints: tuple[BodyJointCmd, ...]) -> int:
+    if len(joints) != BODY_SLOTS:
+        raise ValueError("BodyCmd requires exactly31 joint slots")
+    payload = _COMMAND.pack(*(v for joint in joints for v in (joint.q, joint.dq, joint.tau, joint.kp, joint.kd)))
+    builder.StartVector(_MOTOR.size, len(joints), 4)
     end = builder.Head()
     builder.head = end - len(payload)
     builder.Bytes[builder.Head():end] = payload
-    return builder.Offset()
+    return builder.EndVector()
 
 
-def _inline_data(block: Any, width: int) -> memoryview:
-    data = memoryview(block._tab.Bytes).cast("B")
-    pos = block._tab.Pos
-    if pos < 0 or pos + width > len(data):
-        raise ValueError("body inline struct outside buffer")
-    return data[pos:pos + width]
-
-
-def _inline_field_data(view: Any, slot: int, width: int, alignment: int) -> memoryview | None:
+def _vector_field_data(view: Any, slot: int, stride: int, alignment: int) -> memoryview | None:
     data = memoryview(view._tab.Bytes).cast("B")
     pos, size = view._tab.Pos, len(data)
     def bounds(start: int, length: int) -> None:
         if start < 0 or start + length > size:
-            raise ValueError("body table outside buffer")
+            raise ValueError("body vector outside buffer")
     bounds(pos, 4)
     vtable = pos - struct.unpack_from('<i', data, pos)[0]
     bounds(vtable, 4)
@@ -52,20 +44,34 @@ def _inline_field_data(view: Any, slot: int, width: int, alignment: int) -> memo
     offset = struct.unpack_from('<H', data, vtable + slot)[0] if slot < length else 0
     if not offset:
         return None
-    if offset < 4 or offset + width > object_size or (pos + offset) % alignment:
-        raise ValueError("body inline field outside table or misaligned")
-    return data[pos + offset:pos + offset + width]
+    field = pos + offset
+    if offset < 4 or offset + 4 > object_size or field % 4:
+        raise ValueError("body vector field outside table or misaligned")
+    relative = struct.unpack_from('<I', data, field)[0]
+    if relative < 4:
+        raise ValueError("invalid body vector offset")
+    vector = field + relative
+    bounds(vector, 4)
+    count = struct.unpack_from('<I', data, vector)[0]
+    if count != BODY_SLOTS:
+        raise ValueError("body vector requires exactly31 joint slots")
+    payload = vector + 4
+    if payload % alignment:
+        raise ValueError("body vector payload misaligned")
+    bounds(payload, count * stride)
+    return data[payload:payload + count * stride]
 
 
 def unpack_body_joints(view: Any) -> tuple[BodyJointState, ...]:
-    data = _inline_field_data(view, _BODY_JOINTS_SLOT, _JOINT_STATE.size * BODY_SLOTS, 8)
+    data = _vector_field_data(view, _BODY_JOINTS_SLOT, _JOINT_STATE.size, 8)
     return () if data is None else tuple(BodyJointState(*v) for v in _JOINT_STATE.iter_unpack(data))
 
 
-def unpack_body_cmd(block: Any) -> tuple[HumMotorCmd, ...]:
-    if block is None:
+def unpack_body_cmd(view: Any, *, slot: int = _BODY_JOINTS_SLOT) -> tuple[BodyJointCmd, ...]:
+    if view is None:
         return ()
-    return tuple(HumMotorCmd(*v) for v in _MOTOR.iter_unpack(_inline_data(block, _COMMAND.size)))
+    data = _vector_field_data(view, slot, _MOTOR.size, 4)
+    return () if data is None else tuple(BodyJointCmd(*v) for v in _MOTOR.iter_unpack(data))
 
 
 def _getter(name: str) -> str:
@@ -94,10 +100,8 @@ def decode_body_state(view: Any) -> BodyState:
     applied = view.AppliedCmd()
     echo = None
     if applied is not None:
-        data = _inline_field_data(applied, _APPLIED_MOTORS_SLOT, _COMMAND.size, 4)
-        motors = () if data is None else tuple(HumMotorCmd(*v) for v in _MOTOR.iter_unpack(data))
-        echo = _dto(applied, BodyAppliedCommand, motor_cmds=motors)
-    return _dto(view, BodyState, motor_states=unpack_body_joints(view),
+        echo = _dto(applied, BodyAppliedCmd, joints=unpack_body_cmd(applied, slot=_APPLIED_JOINTS_SLOT))
+    return _dto(view, BodyState, joints=unpack_body_joints(view),
                 imu_states=tuple(imus), applied_cmd=echo)
 
 

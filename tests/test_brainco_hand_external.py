@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from examples import brainco_hand_external as demo
-from locomotion_aorta import HUM_CMD_TOPIC, HandState, HandJointState, HandCmd, HandJointCmd
+from locomotion_aorta import BODY_CMD_TOPIC, HandState, HandJointState, HandCmd, HandJointCmd
 from test_examples import FakeClock, RecordingController
 from test_hand import codec, info_obj
 from lowlevel.HandInfo import HandInfo
@@ -62,10 +62,10 @@ class ExternalHandTest(unittest.TestCase):
     def test_body_holds_original_pose_and_hands_use_only_independent_publish(self):
         c = self.controller(); hands = [FakeHand('left'), FakeHand('right')]
         self.run_demo(c, hands, body_gains='hold')
-        body_commands = [command for topic, command in c.transport.published if topic == HUM_CMD_TOPIC]
+        body_commands = [command for topic, command in c.transport.published if topic == BODY_CMD_TOPIC]
         self.assertGreater(len(body_commands), 100)
-        baseline = demo.body._position_command(tuple(0.0 if i == 14 else .1 for i in range(31))).motor_cmds
-        self.assertTrue(all(cmd.motor_cmds == baseline for cmd in body_commands))
+        baseline = demo.body._position_command(tuple(0.0 if i == 14 else .1 for i in range(31))).joints
+        self.assertTrue(all(cmd.joints == baseline for cmd in body_commands))
         for hand in hands:
             self.assertGreater(len(hand.commands), 0)
             self.assertAlmostEqual(hand.commands[-1][0][0], .005, places=6)
@@ -83,11 +83,11 @@ class ExternalHandTest(unittest.TestCase):
     def test_zero_gains_preserve_measured_q_and_independent_hand_motion(self):
         c = self.controller(); hands = [FakeHand('left'), FakeHand('right')]
         self.run_demo(c, hands, body_gains='zero')
-        commands = [command for topic, command in c.transport.published if topic == HUM_CMD_TOPIC]
+        commands = [command for topic, command in c.transport.published if topic == BODY_CMD_TOPIC]
         self.assertGreater(len(commands), 100)
         for command in commands:
-            self.assertEqual(len(command.motor_cmds), 31)
-            for i, motor in enumerate(command.motor_cmds):
+            self.assertEqual(len(command.joints), 31)
+            for i, motor in enumerate(command.joints):
                 self.assertEqual(motor.q, 0.0 if i == 14 else .1)
                 self.assertEqual((motor.kp, motor.kd, motor.dq, motor.tau), (0., 0., 0., 0.))
         self.assertTrue(all(len(hand.commands) > 0 for hand in hands))

@@ -17,6 +17,7 @@ std::vector<uint8_t> MakeInfo() {
       std::chrono::system_clock::now().time_since_epoch()).count();
   info.body = std::make_unique<lowlevel::BodyInfoT>();
   info.body->slot_count = 31;
+  info.body->roster_version = 1;
   for (uint16_t j = 0; j < 31; ++j) {
     const bool present = j != 14;
     info.body->joint_names.push_back("mock_joint_" + std::to_string(j));

@@ -11,13 +11,14 @@ std::vector<uint8_t> MakeState(uint16_t sequence) {
   lowlevel::BodyStateT state;
   state.protocol_version = 1;
   state.state_id = sequence;
+  state.roster_version = 1;
   state.ts_state_real_us = state.ts_state_pub_us = state.ts_consumed_us = wall_us;
   state.attitude_valid = true;
   state.aorta_header = std::make_unique<aorta::sys::AortaHeaderT>();
   state.aorta_header->sequence = sequence;
   state.aorta_header->publish_stamp_ns = wall_us * 1000;
   state.aorta_header->publisher_node = "sdk_ci_mock";
-  std::array<lowlevel::BodyJointState, 31> joints;
+  std::vector<lowlevel::BodyJointState> joints(31);
   for (size_t j = 0; j < joints.size(); ++j) {
     const bool present = j != 14;
     const float q = present ? static_cast<float>(sequence % 1024) * .0001f + j * .01f
@@ -26,7 +27,7 @@ std::vector<uint8_t> MakeState(uint16_t sequence) {
         present ? lowlevel::BodySampleStatus_OK : lowlevel::BodySampleStatus_UNCONFIGURED,
         present ? 63 : 0, 0, wall_us, wall_us, q, .1f, 0.f, .2f, -12.f, 0);
   }
-  state.motor_states = std::make_unique<lowlevel::BodyJointStates>(joints);
+  state.joints = std::move(joints);
   for (int j = 0; j < 2; ++j) {
     auto imu = std::make_unique<lowlevel::BodyImuSampleT>();
     imu->location = static_cast<lowlevel::BodyImuLocation>(j);

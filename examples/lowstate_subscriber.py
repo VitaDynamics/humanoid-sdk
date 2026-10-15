@@ -14,7 +14,7 @@ def run_once(
 ) -> None:
     state = controller.wait_body_state(timeout)
     emit(f"state_id={state.state_id} ts_state_real_us={state.ts_state_real_us}")
-    for index, motor in enumerate(state.motor_states):
+    for index, motor in enumerate(state.joints):
         emit(f"joint[{index}] populated={motor.populated} valid_fields={motor.valid_fields} q={motor.q:.6f} dq={motor.dq:.6f}")
 
 

@@ -70,7 +70,7 @@ def build(directory):
     generated = directory / "generated"
     generated.mkdir(exist_ok=True)
     schemas = {}
-    for name in ("body_state", "hum_cmd", "get_robot_info"):
+    for name in ("body_state", "body_cmd", "get_robot_info"):
         meta = importlib.import_module(name + "_schema_meta")
         bfbs = generated / (name + ".bfbs")
         bfbs.write_bytes(meta.SCHEMA_BFBS)

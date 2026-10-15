@@ -1,4 +1,4 @@
-"""Action 17 observation/ONNX -> D2 EXTERNAL HumCmd example draft.
+"""Action 17 observation/ONNX -> D2 EXTERNAL BodyCmd example draft.
 
 No transport is imported in dry-run. Model paths always come from --model.
 """
@@ -101,7 +101,7 @@ class Policy:
 
     def observation(self, state: Any, body: Any, command: Sequence[float], hip: Any) -> tuple[float, ...]:
         indices = self.roster(body)
-        if len(state.motor_states) != 31:
+        if len(state.joints) != 31:
             raise ValueError('BodyState must contain the 31 public joints')
         samples = [sample for sample in state.imu_states if sample.location == hip]
         if len(samples) != 1 or samples[0].state is None:
@@ -116,7 +116,7 @@ class Policy:
         q, dq = [], []
         for name in self.names:
             i = indices[name]
-            joint = state.motor_states[i]
+            joint = state.joints[i]
             if joint.body_index != i or not joint.populated or joint.valid_fields & 3 != 3:
                 raise ValueError(f'policy joint feedback is invalid: {name}')
             q.append(joint.q)
@@ -223,10 +223,10 @@ class Model:
         return tuple(float(x) for x in result[0])
 
 
-def humcmd(api: Any, targets: Sequence[MotorTarget], state: Any, cmd_id: int) -> Any:
-    return api.HumCmd(cmd_id=cmd_id,
-                      motor_cmds=tuple(api.HumMotorCmd(q=m.q,dq=m.dq,tau=m.tau,kp=m.kp,kd=m.kd) for m in targets),
-                      action=api.HumCmdAction.EXTERNAL,
+def bodycmd(api: Any, targets: Sequence[MotorTarget], state: Any, cmd_id: int) -> Any:
+    return api.BodyCmd(cmd_id=cmd_id,
+                      joints=tuple(api.BodyJointCmd(q=m.q,dq=m.dq,tau=m.tau,kp=m.kp,kd=m.kd) for m in targets),
+                      action=api.BodyCmdAction.EXTERNAL,
                       input_state_id=state.state_id,
                       input_state_ts_real_us=state.ts_state_real_us)
 
@@ -270,7 +270,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
             if stop.is_set():
                 break
             # Keep all D2 controller/session/capability/watchdog/command guards in publish.
-            controller.publish(humcmd(api,targets,state,cmd_id))
+            controller.publish(bodycmd(api,targets,state,cmd_id))
             cmd_id = (cmd_id+1) & 0xffff
             deadline = max(deadline+policy.period, monotonic())
             sleep(max(0.0,deadline-monotonic()))

@@ -10,8 +10,8 @@ binary wheels and compiler inputs, without robot connectivity or hardware.
 without path filters. Each of **50, 100, 200, …, 1000 Hz** runs for at least
 **60 seconds**, sequentially, without perf/strace/py-spy. A C++ process publishes
 31-slot `BodyState` (fixed motor structs, two IMUs; applied echo omitted);
-the current checkout's Python SDK decodes it, constructs31 `HumMotorCmd`s,
-and publishes `HumCmd`. The Mock verifies the FlatBuffer and copies all31 slots.
+the current checkout's Python SDK decodes it, constructs31 `BodyJointCmd`s,
+and publishes `BodyCmd`. The Mock verifies the FlatBuffer and copies all31 slots.
 This measures the generated C++ decoder/copy endpoint, **not** the complete
 locomotion admission/interpolation/actuator pipeline.
 

@@ -52,7 +52,7 @@ class OfflineInstallTest(unittest.TestCase):
                 [python, "-I", "-c",
                  "import aorta, flatbuffers, locomotion_aorta; "
                  "import importlib.metadata as metadata; "
-                 "import locomotion_sdk.ControlStatus, lowlevel.HumCmd, lowlevel.BodyState; "
+                 "import locomotion_sdk.ControlStatus, lowlevel.BodyCmd, lowlevel.BodyState; "
                  "from locomotion_aorta.transport import _load_aorta_bindings; "
                  "_load_aorta_bindings(); "
                  "from locomotion_aorta._hand_codec import load_bindings; load_bindings(); "
