@@ -177,6 +177,8 @@ and reports. It does not establish robot performance or motion acceptance.
 
 ## Independent AGX grippers (in preparation)
 
+The single `examples/gripper_external.py` entry contains the EXTERNAL lifecycle,
+body zero/hold, single-side targets/return and optional dual-side sine mode.
 `GripperClient` uses `/sdk/foot_humanoid/gripper/<left|right>/{cmd,state,info}`.
 It shares the same `GripperInfo` DTO with `get_robot_info`; there is no per-side
 info RPC and no gripper slot in the 31-joint BodyCmd. The default example and
@@ -216,6 +218,17 @@ it cannot be used as execution evidence. The gripper sample, host target and
 latest-received trace keys stay separate; a host echo is
 not proof of device execution or arrival. Zero trace timestamps remain unknown,
 including AGX write_ack. No robot connection or motion has been tested here.
+
+After the same on-site authorization, `--side both --pattern sine` uses one
+EXTERNAL session for body zero/hold, simultaneous-phase gripper targets,
+return to the entry openings, then CANCEL. Defaults are 0.01–0.08 m, a 10 s
+period and 30 s of sine streaming; transitions add to the total runtime.
+`--speed-m-s 0` keeps the robot configuration default. The two topic writes
+share one time phase but do not promise atomic device output or arrival.
+
+```bash
+python examples/gripper_external.py --side both --pattern sine --body-pose zero --body-gains hold --period-s 10 --duration 30 --confirm-motion
+```
 
 ## PC policy example (in preparation)
 

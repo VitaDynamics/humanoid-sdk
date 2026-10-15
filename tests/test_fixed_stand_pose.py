@@ -6,7 +6,7 @@ import unittest
 from body_fixtures import robot_info_reply
 from examples import external_control as body
 from examples.fixed_stand_pose import FixedStandPose
-from examples.gripper_external_lifecycle import run_external
+from examples.gripper_external import run_external
 from examples import gripper_external as gripper_demo
 from locomotion_aorta import BODY_CMD_TOPIC
 from test_examples import FakeClock, RecordingController

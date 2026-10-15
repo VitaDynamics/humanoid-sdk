@@ -7,7 +7,7 @@ from examples import external_control as body
 from test_examples import FakeClock, RecordingController
 from locomotion_aorta import BODY_CMD_TOPIC
 
-from examples.gripper_external_lifecycle import run_external
+from examples.gripper_external import run_external
 
 
 class ExternalLifecycleTest(unittest.TestCase):
