@@ -9,7 +9,6 @@ check: test
 	$(PYTHON) examples/lowstate_subscriber.py --help
 	$(PYTHON) examples/external_control.py --help
 	$(PYTHON) examples/teleop_policy.py --help
-	$(PYTHON) examples/brainco_hand_control.py --help
 	$(PYTHON) examples/brainco_hand_external.py --help
 	$(PYTHON) examples/brainco_capture.py --help
 	$(PYTHON) examples/gripper_external.py --help

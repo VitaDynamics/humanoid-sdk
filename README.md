@@ -34,6 +34,20 @@ Documentation: [Humanoid documentation](https://vitadynamics.feishu.cn/wiki/Mu1h
 [SDK guide](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh),
 and [PC networking and Zenoh configuration](https://vitadynamics.feishu.cn/wiki/M1vEw22vziSNAjkHVCncFlu1nyh).
 
+## Examples
+
+| Main demo | Behavior already implemented |
+|---|---|
+| `examples/gripper_external.py` | One entry for read-only gripper info/state, single-side target/return and dual-side sine; motion shares body zero/hold and one EXTERNAL lifecycle. |
+| `examples/brainco_hand_external.py` | Independent hand info/state/touch and authorized hand motion; `examples/brainco_capture.py` records/exports feedback. |
+| `examples/teleop_policy.py` | PC-local ONNX inference and gamepad input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
+
+Basic examples remain `examples/external_control.py` for body EXTERNAL,
+`examples/lowstate_subscriber.py` for read-only BodyState, and
+`examples/fixed_stand_pose.py` as the robot-profile zero-pose helper.
+The policy demo is not limited to offline use; installation or `--help`
+does not authorize live motion.
+
 ## Offline installation and read-only check
 
 Use a complete, matching offline bundle on your Linux computer. Create a
@@ -129,7 +143,7 @@ against every joint's advertised `dq_max`. The default fractions remain
 25% -> 75% -> 25%; `--low-frac 0 --high-frac 1` selects declared endpoints.
 `--pattern sequential` moves one joint at a time, keeping other targets low;
 `--loop` repeats until SIGINT/SIGTERM or a safety failure. No automatic retry is
-performed. The legacy `brainco_hand_control.py` forwards to this entry.
+performed.
 
 The body receives measured-pose 31-slot BodyCmd frames; hand commands use only
 `/sdk/foot_humanoid/hand/<side>/cmd`. `--body-gains zero` selects kp=kd=dq=tau=0,
