@@ -5,16 +5,19 @@ name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
 with Python 3.10 or newer.
 
 Dependencies are pinned to Aorta SDK and messages `2026.10.12` (ABI 13),
-`vbot-humanoid-msgs==0.1.0`, and `flatbuffers==25.9.23`. Obtain the matching
+`vbot-humanoid-msgs==0.1.1`, and `flatbuffers==25.9.23`. Obtain the matching
 wheels from this repository's [Releases](https://github.com/VitaDynamics/humanoid-sdk/releases),
 using the `dependency_release_tag` in [compatibility.json](compatibility.json)
 (`v0.1.0-rc.4`). Verify wheel filenames and SHA-256s against that manifest;
-do not substitute older wheels if an asset is missing.
+do not substitute older wheels if an asset is missing. The EE `0.1.1` release
+assets are being prepared; until they are available, use only the reviewed
+public candidate bundle for host validation, not a private/HIL wheel.
 
 The HumanoidLowState wire layout differs from rc.2/rc.3, including the
 `motor_states` field ID. LowCmd and the control messages retain their layouts.
-The SDK and robot must use matching schema hashes. Public DTOs, topics, QoS,
-control semantics and joint order are unchanged.
+The SDK and robot must use matching schema hashes. The body remains on the
+42-command/44-feedback contract;
+independent public EE topics and typed hand RPCs are added.
 
 Documentation: [Humanoid documentation](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg),
 [SDK guide](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh),
@@ -69,6 +72,71 @@ automatic expiry; `timeout` only bounds the entry wait. Old callers must remove
 can let loaded limbs fall. Client failure does not automatically release
 ownership. Command watchdogs and validation remain active. Use compatible robot
 software supporting unlimited control; an older server rejection is an error.
+
+## Independent Revo2 hands
+
+Use the public EE wheel pinned in [compatibility.json](compatibility.json).
+The distribution is `vbot-humanoid-msgs`; generated imports retain `lowlevel`,
+`locomotion_sdk`, `aorta.services.humanoid_locomotion` and `*_schema_meta`.
+Do not install the full private `vita-msgs` wheel or a temporary HIL wheel.
+This branch requires the EE candidate and its matching release assets; the
+older `0.1.0` public wheel does not provide the new hand roots.
+
+With connection authorization and the configured peer profile, read both hands:
+
+```bash
+python examples/brainco_hand_external.py --dry-run --side both --group default --timeout 5
+```
+
+The default entry is also read-only: no lease, hand command or touch write.
+`HandClient` reads info/state/touch topics; `wait_info(timeout=5)` waits for the
+first info sample or returns its cache. HandInfo is published about once a second;
+late subscribers wait for a subsequent sample, with no historical replay promise.
+Only the typed `set_touch` control RPC remains. After that control call, the demo
+waits for a later info event with the acknowledged `touch_enabled` value;
+`ts_info_us` need not change. `wait_info(after_info=client.info)` can request a
+later event without clearing the info cache used by command publication.
+Left/right wire values are 1/2; they differ from the device register numbering.
+
+This candidate uses the T021 public EE layout. HandState stores the three
+sample timestamps once per message and exposes five `ts_cmd_*` stages; zero
+future stages remain unmeasured. Touch uses `state_id`, `ts_state_pub_us` and
+`raw_words`, with geometry from HandInfo. Old candidate recordings require their
+matching SDK; the MCAP exporter refuses BFBS that differ from loaded bindings.
+`HandJointState` 的 `*_raw` 字段仅供诊断，含义随设备型号变化，不应依赖。
+
+After separate on-site motion authorization, support, an attendant and an
+emergency stop, a right-hand sequential round can be run with:
+
+```bash
+python examples/brainco_hand_external.py --side right --group default --timeout 5 --body-gains zero --pattern sequential --confirm-motion
+```
+
+The default speed is **20 degrees/s**, converted to float32 rad/s and checked
+against every joint's advertised `dq_max`. The default fractions remain
+25% -> 75% -> 25%; `--low-frac 0 --high-frac 1` selects declared endpoints.
+`--pattern sequential` moves one joint at a time, keeping other targets low;
+`--loop` repeats until SIGINT/SIGTERM or a safety failure. No automatic retry is
+performed. The legacy `brainco_hand_control.py` forwards to this entry.
+
+The body receives measured-pose 42-slot LowCmd frames; hand commands use only
+`/sdk/foot_humanoid/hand/<side>/cmd`. `--body-gains zero` selects kp=kd=dq=tau=0,
+with q still measured; it does not support the body or instantly zero gains
+during EXTERNAL entry. The default `hold` gains reuse `external_control.py`.
+The existing 0.05 rad body drift guard, freshness, ownership, sequence and
+hand-limit checks remain active.
+
+Normal exit, faults and SIGINT/SIGTERM stop new targets and attempt CANCEL,
+which must confirm PASSIVE. There is no automatic neutral hand trajectory;
+PASSIVE can let loaded body limbs fall. A killed client does not guarantee
+lease release. Hand session/sequence and body EXTERNAL generation are separate.
+
+`examples/brainco_capture.py` subscribes to independent hand topics plus body
+LowCmd/LowState/ControlStatus and exports MCAP with the optional `hil` extra.
+Missing or nonfinite hand feedback is retained as JSON null, never a synthetic
+zero. Five-stage robot timestamps use Vita host microseconds; zero future stages
+are unmeasured. Public HandState carries these stages; no separate public trace
+root is required. Host tests and packaging do not establish device HIL.
 
 ## Development and offline packaging
 
