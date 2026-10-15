@@ -40,7 +40,7 @@ def extract_source(archive, directory):
             if not path.parts or path.is_absolute() or ".." in path.parts or path.parts[0] != source.name:
                 raise RuntimeError("unsafe archive member")
         if source.exists():
-            shutil.rmtree(source)  # only this task's extracted dependency, not its build cache
+            shutil.rmtree(source)
         tar.extractall(directory, members=members)
     return source
 
@@ -52,9 +52,10 @@ def build(directory):
     if platform.machine() != "x86_64":
         raise RuntimeError("this CI benchmark is Linux x86_64 only")
     versions = {p: importlib.metadata.version(p) for p in
-                ("aorta-sdk", "aorta-msgs", "flatbuffers")}
+                ("aorta-sdk", "aorta-msgs", "vbot-humanoid-msgs", "flatbuffers")}
     for name, version in versions.items():
-        expected = manifest["flatbuffers_version" if name == "flatbuffers" else "aorta_version"]
+        expected = manifest["flatbuffers_version" if name == "flatbuffers" else
+                            "humanoid_msgs_version" if name == "vbot-humanoid-msgs" else "aorta_version"]
         if version != expected:
             raise RuntimeError(f"{name}: {version} != pinned {expected}")
     archive = directory / "flatbuffers.tar.gz"
@@ -74,15 +75,23 @@ def build(directory):
         bfbs = generated / (name + ".bfbs")
         bfbs.write_bytes(meta.SCHEMA_BFBS)
         schemas[name] = digest(bfbs)
+        if schemas[name] != manifest["schema_sha256"][name]:
+            raise RuntimeError(f"{name}: BFBS differs from pinned schemas")
         run(cmake / "flatc", "--cpp", "--gen-object-api", "--gen-all",
             "-o", generated, bfbs)
     import aorta
     core = Path(aorta.__file__).parent / "libaorta_core.so"
+    # The wheel carries the unversioned file; the linker records its ABI SONAME.
+    core_link = directory / f"libaorta_core.so.{manifest['aorta_abi_version']}"
+    core_link.unlink(missing_ok=True)
+    core_link.symlink_to(core)
     run("g++", "-std=c++17", "-O2", "-pthread", "-Wall", "-Wextra", "-Werror",
+        "-DAORTA_EXPECTED_ABI=" + str(manifest["aorta_abi_version"]),
         "-I" + str(source / "include"), "-I" + str(generated),
         ROOT / "tests/latency/mock.cpp", ROOT / "tests/latency/state.cpp", core,
-        "-Wl,-rpath," + str(core.parent), "-o", directory / "mock")
-    result = {"versions": versions, "aorta_revision": manifest["aorta_revision"],
+        "-Wl,-rpath," + str(directory), "-o", directory / "mock")
+    result = {"versions": versions,
+              "aorta_abi_version": manifest["aorta_abi_version"],
               "core_sha256": digest(core), "flatbuffers_source_sha256": FB_SHA,
               "bfbs_sha256": schemas, "mock_sha256": digest(directory / "mock"),
               "compiler": subprocess.check_output(["g++", "--version"], text=True).splitlines()[0]}

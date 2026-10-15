@@ -1,6 +1,7 @@
 """Build-input integrity checks; no download or compiler invocation."""
 import hashlib
 import io
+import json
 from pathlib import Path
 import sys
 import tarfile
@@ -26,6 +27,19 @@ class LatencyBuildTest(unittest.TestCase):
             entry.size = len(data)
             archive.addfile(entry, io.BytesIO(data))
         return hashlib.sha256(self.archive.read_bytes()).hexdigest()
+
+    def test_product_version_checked_before_downloading_build_inputs(self):
+        manifest = json.loads((build_mock.ROOT / "compatibility.json").read_text())
+        versions = {"aorta-sdk": manifest["aorta_version"],
+                    "aorta-msgs": manifest["aorta_version"],
+                    "flatbuffers": manifest["flatbuffers_version"],
+                    "vbot-humanoid-msgs": "wrong-product-version"}
+        with patch.object(build_mock.platform, "machine", return_value="x86_64"), \
+             patch.object(build_mock.importlib.metadata, "version", side_effect=versions.__getitem__), \
+             patch.object(build_mock.urllib.request, "urlopen",
+                          side_effect=AssertionError("download before product check")):
+            with self.assertRaisesRegex(RuntimeError, "vbot-humanoid-msgs"):
+                build_mock.build(self.directory)
 
     def test_reuse_restores_modified_missing_and_extra_files(self):
         with patch.object(build_mock, "FB_SHA", self.archive_with()):

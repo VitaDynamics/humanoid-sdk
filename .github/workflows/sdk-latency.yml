@@ -40,9 +40,10 @@ jobs:
           manifest = json.loads(pathlib.Path('compatibility.json').read_text())
           wheelhouse = pathlib.Path(os.environ['RUNNER_TEMP']) / 'wheelhouse'
           names = [n for n in manifest['wheel_sha256'] if n.endswith(('-linux_x86_64.whl', '-any.whl'))]
-          if sorted(n.split('-')[0] for n in names) != ['aorta_msgs', 'aorta_sdk', 'flatbuffers']:
+          if sorted(n.split('-')[0] for n in names) != ['aorta_msgs', 'aorta_sdk', 'flatbuffers', 'vbot_humanoid_msgs']:
               raise RuntimeError('incomplete pinned wheelhouse')
-          command = ['gh', 'release', 'download', 'v0.1.0-rc.2', '--repo', os.environ['GITHUB_REPOSITORY'],
+          command = ['gh', 'release', 'download', manifest['dependency_release_tag'],
+                     '--repo', os.environ['GITHUB_REPOSITORY'],
                      '--dir', str(wheelhouse)]
           for name in names:
               command.extend(['--pattern', name])

@@ -51,9 +51,13 @@ class OfflineInstallTest(unittest.TestCase):
             subprocess.run(
                 [python, "-I", "-c",
                  "import aorta, flatbuffers, locomotion_aorta; "
+                 "import importlib.metadata as metadata; "
                  "import locomotion_sdk.ControlStatus, lowlevel.LowCmd; "
                  "from locomotion_aorta.transport import _load_aorta_bindings; "
-                 "_load_aorta_bindings(); print('real bindings OK')"], check=True,
+                 "_load_aorta_bindings(); "
+                 f"assert metadata.version('vbot-humanoid-msgs') == {manifest['humanoid_msgs_version']!r}; "
+                 f"assert aorta.load_library().aorta_abi_version() == {manifest['aorta_abi_version']}; "
+                 "print('real bindings and pinned humanoid bindings/native ABI OK')"], check=True,
             )
             for example in ("lowstate_subscriber.py", "external_control.py"):
                 subprocess.run(

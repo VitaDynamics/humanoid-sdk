@@ -1,5 +1,4 @@
-// Test-only declaration subset of the cbindgen C API at Aorta
-// 71008719f5958df7f09d522f1d585c6748956ce1 (ABI 8).
+// Test-only declaration subset of the Aorta 2026.10.12 C API (ABI 13).
 // No middleware implementation: link the pinned aorta-sdk wheel's shared
 // library.
 #pragma once
@@ -62,6 +61,7 @@ struct aorta_pub_options_t {
   const uint8_t *schema_bfbs;
   uintptr_t schema_bfbs_len;
   uintptr_t max_message_size;
+  const char *schema_root_type;
 };
 struct aorta_schema_hash_view_t {
   const uint8_t *hex;
@@ -92,7 +92,8 @@ aorta_result_t aorta_subscriber_new(aorta_node_t, const char *,
                                     aorta_on_msg_cb, void *, aorta_sub_t *);
 }
 static_assert(sizeof(void *) == 8 && sizeof(aorta_qos_t) == 12);
-static_assert(sizeof(aorta_pub_options_t) == 32);
+static_assert(sizeof(aorta_pub_options_t) == 40);
+static_assert(offsetof(aorta_pub_options_t, schema_root_type) == 32);
 static_assert(offsetof(aorta_pub_options_t, schema_bfbs) == 8);
 static_assert(sizeof(aorta_bytes_view_t) == 24);
 static_assert(sizeof(aorta_msg_context_t) == 56);

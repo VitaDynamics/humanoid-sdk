@@ -15,8 +15,8 @@ _U16 = struct.Struct("<H")
 _U32 = struct.Struct("<I")
 _S32 = struct.Struct("<i")
 _VTABLE_HEADER = struct.Struct("<HH")
-_STATE_VECTOR_SLOT = 20  # motor_states, not the legacy motor_state.
-# Vtable slots/types from aorta-msgs 2026.9.10+humanoid.7100871:
+_STATE_VECTOR_SLOT = 8  # motor_states id 2: 4 + 2 * field ID.
+# Vtable slots/types from vbot-humanoid-msgs HumanoidMotorState:
 # Q, Dq, TauEst (float32), Temperature (signed int8).
 _STATE_FIELDS = ((12, "f", 4), (14, "f", 4), (18, "f", 4), (26, "b", 1))
 

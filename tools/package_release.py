@@ -1,4 +1,4 @@
-"""Assemble a self-contained offline bundle; never download or publish it."""
+"""Bundle pinned SDK/runtime/base/humanoid wheels."""
 
 import argparse
 import hashlib

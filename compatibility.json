@@ -1,22 +1,33 @@
 {
   "manifest_version": 1,
   "sdk_version": "0.1.0",
-  "robot_profile": "A-sample full",
-  "aorta_revision": "71008719f5958df7f09d522f1d585c6748956ce1",
-  "aorta_version": "2026.9.10+humanoid.7100871",
-  "aorta_build_run": "https://github.com/VitaDynamics/aorta/actions/runs/34485667816",
+  "aorta_version": "2026.10.12",
   "flatbuffers_version": "25.9.23",
   "python_requires": ">=3.10",
-  "platforms": ["linux_x86_64", "linux_aarch64"],
+  "platforms": [
+    "linux_x86_64",
+    "linux_aarch64"
+  ],
   "external_version": 1,
   "command_slots": 42,
   "state_slots": 44,
   "session_mode": "peer",
   "pc_session_profile": "config/pc_session_peer.json5",
   "wheel_sha256": {
+    "aorta_msgs-2026.10.12-py3-none-any.whl": "236a064080055e7204e4bf20f3a9dd9e82d9f322a44a9d78cf6de0b1ac00f68a",
+    "aorta_sdk-2026.10.12-py3-none-linux_aarch64.whl": "c1f7a03e023cbb50b1ec9252393f72f4713392af02e0ace7766461667760c333",
+    "aorta_sdk-2026.10.12-py3-none-linux_x86_64.whl": "900d143041a422f9c3f7023aad7334c0ebcc17e0c549e0ed3a0e6f10c02b9afa",
     "flatbuffers-25.9.23-py2.py3-none-any.whl": "255538574d6cb6d0a79a17ec8bc0d30985913b87513a01cce8bcdb6b4c44d0e2",
-    "aorta_sdk-2026.9.10+humanoid.7100871-py3-none-linux_x86_64.whl": "20945a5c74c8b614ec995a37e7d63a6a91971b262ca5042882c4ef5cfdb64049",
-    "aorta_sdk-2026.9.10+humanoid.7100871-py3-none-linux_aarch64.whl": "84e33de14a4d28daf904363bae835bbfa2db0e0196ecd6ed6aa3f0acec4cdc69",
-    "aorta_msgs-2026.9.10+humanoid.7100871-py3-none-any.whl": "b4440adfb3d58371c088483715ab32e1263a9b4cb3f61e193afc05a99605a57d"
-  }
+    "vbot_humanoid_msgs-0.1.0-py3-none-any.whl": "53490698203abfce14c5a2192bc0e8eb315c1bf039c463d4c9d4097d917a2f29"
+  },
+  "dependency_release_tag": "v0.1.0-rc.4",
+  "aorta_abi_version": 13,
+  "schema_sha256": {
+    "humanoid_low_state": "91fefd1105d46c16c148ca2c8aa6a058ed8a8aeb9e9a2db9bb01469d29928587",
+    "low_cmd": "174dff3712997f8e26d56f160af36e73eada86a65717350a503cfa83226e86fa",
+    "control_request": "4e9009a2487c76e04421761871e6799d98b0b2816217dfe904240afd97eb88cc",
+    "control_ack": "282cb25f8ec719272f37d4e2041a749aa8d32a5022054e3c911e6cba0ff7d1ec",
+    "control_status": "cc897baf058703077ece4cbdc1f61b7c443905dbe1e24f204451ccf629afebf6"
+  },
+  "humanoid_msgs_version": "0.1.0"
 }

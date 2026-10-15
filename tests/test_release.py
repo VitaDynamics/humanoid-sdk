@@ -15,6 +15,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseTest(unittest.TestCase):
+    def test_compatibility_contains_only_consumer_inputs(self):
+        manifest = json.loads((ROOT / "compatibility.json").read_text())
+        self.assertEqual(set(manifest), {
+            "manifest_version", "sdk_version", "aorta_version", "flatbuffers_version",
+            "humanoid_msgs_version", "python_requires", "platforms", "external_version",
+            "command_slots", "state_slots", "session_mode", "pc_session_profile",
+            "wheel_sha256", "dependency_release_tag", "aorta_abi_version", "schema_sha256",
+        })
+        self.assertEqual(sorted(n.split("-")[0] for n in manifest["wheel_sha256"]),
+                         ["aorta_msgs", "aorta_sdk", "aorta_sdk", "flatbuffers", "vbot_humanoid_msgs"])
+
     def test_pc_profile_is_peer_and_contains_only_deployment_placeholders(self):
         profile = json.loads((ROOT / "config/pc_session_peer.json5").read_text())
         self.assertEqual(profile["mode"], "peer")

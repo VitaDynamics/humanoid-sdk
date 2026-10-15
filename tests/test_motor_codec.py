@@ -13,7 +13,7 @@ import lowlevel.HumanoidMotorState as motor_state_module
 import lowlevel.MotorCmd as motor_cmd_module
 
 from locomotion_aorta import HumanoidLowState, LowCmd, MotorCommand, MotorState
-from locomotion_aorta import transport
+from locomotion_aorta import transport, _motor_codec
 
 
 def reference_fill_low_cmd(bindings, command, builder, header):
@@ -50,7 +50,7 @@ def encode(bindings, command, fill, initial_size=256, include_header=True):
 
 
 def build_state(motors, *, reverse_fields=False, force_defaults=False,
-                include_vector=True, extra_field=False):
+                include_vector=True, extra_field=False, ts_consumed_us=0):
     builder = flatbuffers.Builder(1)
     builder.ForceDefaults(force_defaults)
     offsets = []
@@ -76,6 +76,7 @@ def build_state(motors, *, reverse_fields=False, force_defaults=False,
     state_module.HumanoidLowStateAddStateId(builder, 65000)
     state_module.HumanoidLowStateAddTsStateReal(builder, 1_789_988_776_655_443)
     state_module.HumanoidLowStateAddAttitudeValid(builder, False)
+    state_module.HumanoidLowStateAddTsConsumedUs(builder, ts_consumed_us)
     builder.Finish(state_module.HumanoidLowStateEnd(builder))
     return builder.Output()
 
@@ -163,6 +164,41 @@ class MotorCommandCodecTest(unittest.TestCase):
 
 
 class MotorStateCodecTest(unittest.TestCase):
+    def test_codec_slots_match_installed_generated_bindings(self):
+        from inspect import getsource
+        import ast
+        import textwrap
+
+        def slot(accessor):
+            tree = ast.parse(textwrap.dedent(getsource(accessor)))
+            offsets = [node.args[0].value for node in ast.walk(tree)
+                       if isinstance(node, ast.Call)
+                       and isinstance(node.func, ast.Attribute)
+                       and node.func.attr == "Offset"
+                       and len(node.args) == 1
+                       and isinstance(node.args[0], ast.Constant)]
+            self.assertEqual(len(offsets), 1)
+            return offsets[0]
+
+        self.assertEqual(_motor_codec._STATE_VECTOR_SLOT,
+                         slot(state_module.HumanoidLowState.MotorStates))
+        fields = motor_state_module.HumanoidMotorState
+        self.assertEqual(tuple(item[0] for item in _motor_codec._STATE_FIELDS),
+                         tuple(slot(getattr(fields, name))
+                               for name in ("Q", "Dq", "TauEst", "Temperature")))
+
+    def test_44_motor_states_with_zero_and_nonzero_consumed_timestamp(self):
+        motors = [dict(Q=i + .125, Dq=-i - .25, TauEst=i * 2 + .5,
+                       Temperature=i - 22) for i in range(44)]
+        for timestamp in (0, 123456789):
+            with self.subTest(ts_consumed_us=timestamp):
+                data = build_state(motors, ts_consumed_us=timestamp)
+                view = state_module.HumanoidLowState.GetRootAs(data)
+                self.assertEqual(view.TsConsumedUs(), timestamp)
+                self.assertEqual(view.MotorStatesLength(), 44)
+                state = self.assert_same_state(data)
+                self.assertEqual(len(state.motor_states), 44)
+
     def assert_same_state(self, data, offset=0):
         view = state_module.HumanoidLowState.GetRootAs(data, offset)
         expected, actual = reference_decode(view), transport._decode_humanoid_lowstate(view)
@@ -269,7 +305,7 @@ class MotorStateCodecTest(unittest.TestCase):
             with self.subTest(corruption=corruption):
                 bad = bytearray(data)
                 view = state_module.HumanoidLowState.GetRootAs(bad)
-                first = view._tab.Vector(view._tab.Offset(20))
+                first = view._tab.Vector(view._tab.Offset(_motor_codec._STATE_VECTOR_SLOT))
                 pos = first + struct.unpack_from("<I", bad, first)[0]
                 vtable = pos - struct.unpack_from("<i", bad, pos)[0]
                 if corruption == "count":

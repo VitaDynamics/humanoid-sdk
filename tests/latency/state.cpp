@@ -31,16 +31,15 @@ std::vector<uint8_t> MakeState(uint16_t sequence) {
                           : lowlevel::HumanoidSlotRole_RESERVED;
     m->thermal_integral = {1, 2, 3};
     state.motor_states.push_back(std::move(m));
-    state.motor_state.emplace_back(1, q, .1f, 0.f, .2f, q, .1f, 0.f, 30, 0);
-    state.relative_motor_cmd.emplace_back(j < 42 ? 1 : 0, q, 0, 0, 0, 0);
+    state.relative_motor_cmd.emplace_back(j < 42 ? 1 : 0, j < 42 ? q : 0.f, 0, 0, 0, 0);
   }
   for (int j = 0; j < 2; ++j) {
     auto imu = std::make_unique<lowlevel::ImuSampleT>();
     imu->location = static_cast<lowlevel::ImuLocation>(j);
     std::array<float, 4> quat{1, 0, 0, 0};
     std::array<float, 3> gyro{0, 0, 0}, accel{0, 0, 9.81f}, rpy{0, 0, 0};
-    imu->state = std::make_unique<lowlevel::ImuState>(quat, gyro, accel, rpy);
-    imu->status = 1;
+    imu->state = std::make_unique<lowlevel::HumanoidImuState>(quat, gyro, accel, rpy);
+    imu->status = lowlevel::HumanoidSampleStatus_OK;
     imu->ts_ingested_us = imu->ts_assembled_us = wall_us;
     state.imu_states.push_back(std::move(imu));
   }
