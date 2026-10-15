@@ -13,7 +13,7 @@ from locomotion_aorta import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
     CONTROL_STATUS_TOPIC,
-    HUM_CMD_TOPIC,
+    BODY_CMD_TOPIC,
     BODY_STATE_TOPIC,
     ControlAck,
     ExternalControlError,
@@ -26,8 +26,8 @@ from locomotion_aorta import (
     ExternalPhase,
     BodyState,
     InvalidCommandError,
-    HumCmd,
-    HumMotorCmd,
+    BodyCmd,
+    BodyJointCmd,
     NotRunningError,
 )
 
@@ -87,10 +87,10 @@ class ControllerHarness:
         self.transport.on_publish = on_publish
 
 
-def make_command(cmd_id: int, *, q: float = 0.0) -> HumCmd:
-    return HumCmd(
+def make_command(cmd_id: int, *, q: float = 0.0) -> BodyCmd:
+    return BodyCmd(
         cmd_id=cmd_id,
-        motor_cmds=tuple(HumMotorCmd(q=q) for _ in range(31)),
+        joints=tuple(BodyJointCmd(q=q) for _ in range(31)),
     )
 
 
@@ -147,7 +147,7 @@ class ExternalControllerTest(unittest.TestCase):
         fake_bindings = SimpleNamespace(
             aorta=fake_aorta,
             control_request_schema_meta=object(),
-            hum_cmd_schema_meta=object(),
+            body_cmd_schema_meta=object(),
             body_state_decoder=object(),
             control_ack_decoder=object(),
             control_status_decoder=object(),
@@ -175,8 +175,8 @@ class ExternalControllerTest(unittest.TestCase):
                     "realtime",
                 ),
                 (
-                    fake_bindings.hum_cmd_schema_meta,
-                    HUM_CMD_TOPIC,
+                    fake_bindings.body_cmd_schema_meta,
+                    BODY_CMD_TOPIC,
                     "realtime",
                 ),
             ],
@@ -264,12 +264,12 @@ class ExternalControllerTest(unittest.TestCase):
         first = BodyState(
             state_id=10,
             ts_state_real_us=100,
-            motor_states=(sample_motor(q=0.1, dq=0.2),),
+            joints=(sample_motor(q=0.1, dq=0.2),),
         )
         latest = BodyState(
             state_id=11,
             ts_state_real_us=200,
-            motor_states=(sample_motor(q=0.3, dq=0.4),),
+            joints=(sample_motor(q=0.3, dq=0.4),),
         )
         harness.transport.emit(BODY_STATE_TOPIC, first)
         harness.transport.emit(BODY_STATE_TOPIC, latest)
@@ -659,7 +659,7 @@ class ExternalControllerTest(unittest.TestCase):
         published_commands = [
             message
             for topic, message in harness.transport.published
-            if topic == HUM_CMD_TOPIC
+            if topic == BODY_CMD_TOPIC
         ]
         self.assertEqual([message.cmd_id for message in published_commands], [1, 2])
         self.assertEqual(
@@ -709,7 +709,7 @@ class ExternalControllerTest(unittest.TestCase):
         published_commands = [
             message
             for topic, message in harness.transport.published
-            if topic == HUM_CMD_TOPIC
+            if topic == BODY_CMD_TOPIC
         ]
         self.assertEqual([message.cmd_id for message in published_commands], [60000, 7])
         self.assertEqual(
@@ -733,7 +733,7 @@ class ExternalControllerTest(unittest.TestCase):
         published_commands = [
             message
             for topic, message in harness.transport.published
-            if topic == HUM_CMD_TOPIC
+            if topic == BODY_CMD_TOPIC
         ]
         self.assertEqual(
             [message.session_id for message in published_commands],
@@ -755,7 +755,7 @@ class ExternalControllerTest(unittest.TestCase):
 
         self.assertFalse(
             any(
-                topic == HUM_CMD_TOPIC
+                topic == BODY_CMD_TOPIC
                 for topic, _ in harness.transport.published
             )
         )
@@ -769,16 +769,16 @@ class ExternalControllerTest(unittest.TestCase):
         invalid_commands = (
             make_command(0),
             make_command(1 << 16),
-            HumCmd(cmd_id=1, motor_cmds=()),
-            HumCmd(
+            BodyCmd(cmd_id=1, joints=()),
+            BodyCmd(
                 cmd_id=1,
-                motor_cmds=(HumMotorCmd(q=math.nan),)
-                + tuple(HumMotorCmd() for _ in range(30)),
+                joints=(BodyJointCmd(q=math.nan),)
+                + tuple(BodyJointCmd() for _ in range(30)),
             ),
-            HumCmd(
+            BodyCmd(
                 cmd_id=1,
-                motor_cmds=(HumMotorCmd(q=True),)
-                + tuple(HumMotorCmd() for _ in range(30)),
+                joints=(BodyJointCmd(q=True),)
+                + tuple(BodyJointCmd() for _ in range(30)),
             ),
         )
         for invalid_command in invalid_commands:
@@ -787,9 +787,9 @@ class ExternalControllerTest(unittest.TestCase):
                     harness.controller.publish(invalid_command)
 
         harness.controller.publish(
-            HumCmd(
+            BodyCmd(
                 cmd_id=1,
-                motor_cmds=tuple(HumMotorCmd(q=1e9, tau=-1e9) for _ in range(31)),
+                joints=tuple(BodyJointCmd(q=1e9, tau=-1e9) for _ in range(31)),
             )
         )
 
@@ -809,7 +809,7 @@ class ExternalControllerTest(unittest.TestCase):
         harness.controller.enter_external(timeout=0.1)
         for count in (0, 1, 30, 32, 42, 44, 45):
             with self.subTest(count=count), self.assertRaises(InvalidCommandError):
-                harness.controller.publish(HumCmd(1, tuple(HumMotorCmd() for _ in range(count))))
+                harness.controller.publish(BodyCmd(1, tuple(BodyJointCmd() for _ in range(count))))
         harness.controller.publish(make_command(1))
 
     def test_unpopulated_slot_is_not_physically_validated(self):
@@ -818,12 +818,12 @@ class ExternalControllerTest(unittest.TestCase):
         harness.accept_enter()
         harness.controller.enter_external(timeout=0.1)
         harness.controller.get_robot_info()
-        motors = list(make_command(1).motor_cmds)
-        motors[14] = HumMotorCmd(q=math.nan, dq=math.inf)
-        harness.controller.publish(HumCmd(1, tuple(motors)))
-        motors[13] = HumMotorCmd(q=math.nan)
+        motors = list(make_command(1).joints)
+        motors[14] = BodyJointCmd(q=math.nan, dq=math.inf)
+        harness.controller.publish(BodyCmd(1, tuple(motors)))
+        motors[13] = BodyJointCmd(q=math.nan)
         with self.assertRaises(InvalidCommandError):
-            harness.controller.publish(HumCmd(1, tuple(motors)))
+            harness.controller.publish(BodyCmd(1, tuple(motors)))
 
     def test_exit_waits_until_status_no_longer_reports_external(self) -> None:
         harness = ControllerHarness()

@@ -13,10 +13,10 @@ do not substitute older wheels if an asset is missing. The public body/EE `0.1.2
 assets are being prepared; until they are available, use only the reviewed
 public candidate bundle for host validation, not a private/HIL wheel.
 
-EXTERNAL uses fixed31 `HumCmd`, `BodyState`, and typed `get_robot_info`.
+EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
 Match the robot's public schema hashes and roster to [compatibility.json](compatibility.json).
 Control requests use protocol2; ACK/Status remain protocol1; new body roots use
-protocol1. HumCmd action is explicitly encoded using the generated EXTERNAL
+protocol1. BodyCmd action is explicitly encoded using the generated EXTERNAL
 symbol. Entry remains by action name and lease; the command does not activate
 EXTERNAL. Older robots rejecting v2 receive no automatic downgrade or LowCmd
 fallback. Discovery preserves partial body/hand results and actual field/limit
@@ -38,7 +38,7 @@ python3 -m venv venv
 source venv/bin/activate
 python -m pip install --no-index --find-links wheelhouse locomotion-aorta==0.1.0
 python -m pip check
-python -c 'import aorta, flatbuffers, locomotion_aorta; import lowlevel.HumCmd, lowlevel.BodyState, locomotion_sdk.ControlStatus'
+python -c 'import aorta, flatbuffers, locomotion_aorta; import lowlevel.BodyCmd, lowlevel.BodyState, locomotion_sdk.ControlStatus'
 ```
 
 Copy [config/pc_session_peer.json5](config/pc_session_peer.json5) outside the
@@ -116,7 +116,7 @@ against every joint's advertised `dq_max`. The default fractions remain
 `--loop` repeats until SIGINT/SIGTERM or a safety failure. No automatic retry is
 performed. The legacy `brainco_hand_control.py` forwards to this entry.
 
-The body receives measured-pose31-slot HumCmd frames; hand commands use only
+The body receives measured-pose31-slot BodyCmd frames; hand commands use only
 `/sdk/foot_humanoid/hand/<side>/cmd`. `--body-gains zero` selects kp=kd=dq=tau=0,
 with q still measured; it does not support the body or instantly zero gains
 during EXTERNAL entry. The default `hold` gains reuse `external_control.py`.

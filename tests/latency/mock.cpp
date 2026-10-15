@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "aorta_abi.h"
-#include "hum_cmd_generated.h"
+#include "body_cmd_generated.h"
 
 std::vector<uint8_t> MakeState(uint16_t sequence);
 aorta_service_t StartInfoService(aorta_node_t node, const std::string &endpoint,
@@ -53,14 +53,14 @@ void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
     }
     flatbuffers::Verifier verifier(bytes.data(), bytes.size());
     if (bytes.size() != view->total_len ||
-        !lowlevel::VerifyHumCmdBuffer(verifier))
-      throw std::runtime_error("invalid HumCmd FlatBuffer");
-    const auto *cmd = lowlevel::GetHumCmd(bytes.data());
-    const auto *motors = cmd->motor_cmd();
-    if (!motors || motors->joints()->size() != 31)
+        !lowlevel::VerifyBodyCmdBuffer(verifier))
+      throw std::runtime_error("invalid BodyCmd FlatBuffer");
+    const auto *cmd = lowlevel::GetBodyCmd(bytes.data());
+    const auto *motors = cmd->joints();
+    if (!motors || motors->size() != 31)
       throw std::runtime_error("expected31 slots");
-    std::array<lowlevel::HumMotorCmd, 31> copied;
-    for (size_t j = 0; j < copied.size(); ++j) copied[j] = *motors->joints()->Get(j);
+    std::array<lowlevel::BodyJointCmd, 31> copied;
+    for (size_t j = 0; j < copied.size(); ++j) copied[j] = *motors->Get(j);
     Reply row{cmd->session_id(),
               cmd->sequence(),
               cmd->cmd_id(),
@@ -71,7 +71,7 @@ void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
                 row.sequence <= 65000 && row.cmd_id == row.sequence &&
                 cmd->protocol_version() == 1 && cmd->input_state_id() == row.sequence &&
                 cmd->input_state_ts_real_us() > 0 &&
-                cmd->action() == lowlevel::HumCmdAction_EXTERNAL;
+                cmd->action() == lowlevel::BodyCmdAction_EXTERNAL;
     for (size_t j = 0; j < copied.size(); ++j) {
       if (j == 14) continue;  // declared uninstalled: no physical validation
       const float q =

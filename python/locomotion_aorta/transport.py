@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ._body_codec import create_body_cmd, decode_body_state, decode_robot_info_response
-from .body_types import HumCmd, GetRobotInfoResponse
+from .body_types import BodyCmd, GetRobotInfoResponse
 from .types import (
     ControlAck,
     ControlOperation,
@@ -18,7 +18,7 @@ from .types import (
 
 
 BODY_STATE_TOPIC = "/sdk/foot_humanoid/body_state"
-HUM_CMD_TOPIC = "/sdk/foot_humanoid/hum_cmd"
+BODY_CMD_TOPIC = "/sdk/foot_humanoid/body_cmd"
 GET_ROBOT_INFO_SERVICE = "/sdk/foot_humanoid/get_robot_info"
 CONTROL_REQUEST_TOPIC = "/sdk/foot_humanoid/control/request"
 CONTROL_ACK_TOPIC = "/sdk/foot_humanoid/control/ack"
@@ -49,9 +49,9 @@ class Transport(Protocol):
 class _AortaBindings:
     aorta: Any
     control_request_module: Any
-    hum_cmd_module: Any
+    body_cmd_module: Any
     control_request_schema_meta: Any
-    hum_cmd_schema_meta: Any
+    body_cmd_schema_meta: Any
     body_state_decoder: Callable[[bytes], Any]
     get_robot_info_request: Any
     get_robot_info_response: Any
@@ -78,10 +78,10 @@ class _AortaTransport:
                     qos=realtime,
                 )
             )
-            self.publishers[HUM_CMD_TOPIC] = (
+            self.publishers[BODY_CMD_TOPIC] = (
                 self.node.create_publisher_typed(
-                    self._bindings.hum_cmd_schema_meta,
-                    HUM_CMD_TOPIC,
+                    self._bindings.body_cmd_schema_meta,
+                    BODY_CMD_TOPIC,
                     qos=realtime,
                 )
             )
@@ -119,10 +119,10 @@ class _AortaTransport:
                 )
             )
             return
-        if not isinstance(message, HumCmd):
-            raise TypeError("body command topic requires HumCmd")
+        if not isinstance(message, BodyCmd):
+            raise TypeError("body command topic requires BodyCmd")
         publisher.publish_typed(
-            lambda builder, header: _fill_hum_cmd(
+            lambda builder, header: _fill_body_cmd(
                 self._bindings, message, builder, header
             )
         )
@@ -198,15 +198,15 @@ def _load_aorta_bindings() -> _AortaBindings:
     control_ack = importlib.import_module("locomotion_sdk.ControlAck")
     control_status = importlib.import_module("locomotion_sdk.ControlStatus")
     body_state = importlib.import_module("lowlevel.BodyState")
-    hum_cmd = importlib.import_module("lowlevel.HumCmd")
+    body_cmd = importlib.import_module("lowlevel.BodyCmd")
     return _AortaBindings(
         aorta=aorta,
         control_request_module=control_request,
-        hum_cmd_module=hum_cmd,
+        body_cmd_module=body_cmd,
         control_request_schema_meta=importlib.import_module(
             "control_request_schema_meta"
         ),
-        hum_cmd_schema_meta=importlib.import_module("hum_cmd_schema_meta"),
+        body_cmd_schema_meta=importlib.import_module("body_cmd_schema_meta"),
         body_state_decoder=body_state.BodyState.GetRootAs,
         get_robot_info_request=importlib.import_module("aorta.services.humanoid_locomotion.GetRobotInfoRequest"),
         get_robot_info_response=importlib.import_module("aorta.services.humanoid_locomotion.GetRobotInfoResponse"),
@@ -239,28 +239,29 @@ def _fill_control_request(
     return module.ControlRequestEnd(builder)
 
 
-def _fill_hum_cmd(
-    bindings: _AortaBindings, command: HumCmd, builder: Any, header: int,
+def _fill_body_cmd(
+    bindings: _AortaBindings, command: BodyCmd, builder: Any, header: int,
 ) -> int:
-    module = bindings.hum_cmd_module
-    module.HumCmdStart(builder)
-    module.HumCmdAddAortaHeader(builder, header)
-    module.HumCmdAddMotorCmd(builder, create_body_cmd(builder, command.motor_cmds))
+    module = bindings.body_cmd_module
+    joints = create_body_cmd(builder, command.joints)
+    module.BodyCmdStart(builder)
+    module.BodyCmdAddAortaHeader(builder, header)
+    module.BodyCmdAddJoints(builder, joints)
     for name in ("protocol_version", "session_id", "sequence", "cmd_id", "input_state_id",
                  "input_state_ts_real_us", "ts_client_created_us", "ts_client_send_us"):
         getter = ''.join(part.capitalize() for part in name.split('_'))
-        getattr(module, 'HumCmdAdd' + getter)(builder, getattr(command, name))
+        getattr(module, 'BodyCmdAdd' + getter)(builder, getattr(command, name))
     # Action is present even when equal to the schema default. Keep other defaults unchanged.
     previous = builder.forceDefaults
     builder.ForceDefaults(True)
     try:
-        module.HumCmdAddAction(builder, command.action)
+        module.BodyCmdAddAction(builder, command.action)
     finally:
         builder.ForceDefaults(previous)
     if command.root_quat is not None:
-        from lowlevel.HumRootQuatWxyz import CreateHumRootQuatWxyz
-        module.HumCmdAddRootQuat(builder, CreateHumRootQuatWxyz(builder, *command.root_quat))
-    return module.HumCmdEnd(builder)
+        from lowlevel.RootQuatWxyz import CreateRootQuatWxyz
+        module.BodyCmdAddRootQuat(builder, CreateRootQuatWxyz(builder, *command.root_quat))
+    return module.BodyCmdEnd(builder)
 
 
 def _fill_robot_info_request(module: Any, builder: Any, header: int) -> int:

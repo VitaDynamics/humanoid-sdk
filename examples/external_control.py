@@ -9,9 +9,9 @@ from locomotion_aorta import (
     ExternalController,
     ExternalPhase,
     BodyState,
-    HumCmd,
-    HumMotorCmd,
-    HumCmdAction,
+    BodyCmd,
+    BodyJointCmd,
+    BodyCmdAction,
     BODY_SLOTS,
     ServiceStatus,
 )
@@ -50,7 +50,7 @@ def run(
         monotonic=monotonic,
     )
     start_q = tuple(
-        motor.q if motor.populated else 0.0 for motor in start_state.motor_states
+        motor.q if motor.populated else 0.0 for motor in start_state.joints
     )
     return_q = list(start_q)
     # Offset only the elbows toward zero to avoid the observed hip interference.
@@ -185,7 +185,7 @@ def _wait_for_stationary_body_state(
             last_new_time = now
             if any(
                 abs(motor.dq) > STATIONARY_DQ_RAD_S
-                for motor in latest.motor_states if motor.populated
+                for motor in latest.joints if motor.populated
             ):
                 stationary_since = None
             elif stationary_since is None:
@@ -204,12 +204,12 @@ def _validate_body_state(
 ) -> None:
     if not state.attitude_valid:
         raise RuntimeError("body state attitude is invalid")
-    if len(state.motor_states) != COMMAND_SLOTS:
+    if len(state.joints) != COMMAND_SLOTS:
         raise RuntimeError(
-            f"body state has {len(state.motor_states)} motor slots; "
+            f"body state has {len(state.joints)} motor slots; "
             f"{COMMAND_SLOTS} required"
         )
-    for index, motor in enumerate(state.motor_states):
+    for index, motor in enumerate(state.joints):
         if not motor.populated:
             continue
         if motor.valid_fields & 3 != 3:
@@ -231,14 +231,14 @@ def _segment_steps(start_q: Sequence[float]) -> int:
     return math.ceil(duration_s / PERIOD_S)
 
 
-def _position_command(q: Sequence[float], state: BodyState | None = None) -> HumCmd:
+def _position_command(q: Sequence[float], state: BodyState | None = None) -> BodyCmd:
     if len(q) != COMMAND_SLOTS:
         raise ValueError(f"position command must contain {COMMAND_SLOTS} slots")
     commands = tuple(
-        HumMotorCmd(q=position, kp=kp, kd=kd)
+        BodyJointCmd(q=position, kp=kp, kd=kd)
         for position, kp, kd in zip(q, DEMO_KP, FIXED_STAND_KD)
     )
-    return HumCmd(cmd_id=1, motor_cmds=commands, action=HumCmdAction.EXTERNAL,
+    return BodyCmd(cmd_id=1, joints=commands, action=BodyCmdAction.EXTERNAL,
                   input_state_id=0 if state is None else state.state_id,
                   input_state_ts_real_us=0 if state is None else state.ts_state_real_us)
 
@@ -277,7 +277,7 @@ def _publish_dwell(
             not motor.populated or (abs(motor.q - target_q) <= position_tolerance_rad
             and abs(motor.dq) <= STATIONARY_DQ_RAD_S)
             for motor, target_q in zip(
-                state.motor_states[:COMMAND_SLOTS], target
+                state.joints[:COMMAND_SLOTS], target
             )
         )
         if at_endpoint:

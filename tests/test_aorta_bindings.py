@@ -6,12 +6,12 @@ from locomotion_aorta import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
     CONTROL_STATUS_TOPIC,
-    HUM_CMD_TOPIC,
+    BODY_CMD_TOPIC,
     BODY_STATE_TOPIC,
     ControlOperation,
     ControlRequest,
-    HumCmd,
-    HumMotorCmd,
+    BodyCmd,
+    BodyJointCmd,
 )
 
 
@@ -20,7 +20,7 @@ class AortaBindingContractTest(unittest.TestCase):
         required_modules = (
             "aorta",
             "lowlevel.BodyState",
-            "lowlevel.HumCmd",
+            "lowlevel.BodyCmd",
             "locomotion_sdk.ControlRequest",
             "locomotion_sdk.ControlAck",
             "locomotion_sdk.ControlStatus",
@@ -42,10 +42,10 @@ class AortaBindingContractTest(unittest.TestCase):
             "lowlevel.BodyState": (
                 "ProtocolVersion", "RosterVersion", "StateId", "TsStateRealUs",
                 "TsStatePubUs", "TsConsumedUs", "AttitudeValid", "ImuStates",
-                "MotorStates", "AppliedCmd",
+                "Joints", "AppliedCmd",
             ),
-            "lowlevel.HumCmd": (
-                "MotorCmd", "CmdId", "ProtocolVersion", "SessionId", "Sequence",
+            "lowlevel.BodyCmd": (
+                "Joints", "CmdId", "ProtocolVersion", "SessionId", "Sequence",
                 "InputStateId", "InputStateTsRealUs", "Action", "RootQuat",
             ),
             "locomotion_sdk.ControlRequest": (
@@ -132,20 +132,20 @@ class AortaBindingContractTest(unittest.TestCase):
         self.assertEqual(request_view.LeaseId(), b"lease-1")
         self.assertEqual(request_view.RequestedLeaseMs(), 0)
 
-        command = HumCmd(
+        command = BodyCmd(
             cmd_id=17,
-            motor_cmds=tuple(HumMotorCmd(q=0.25, kp=30.0, kd=1.5) for _ in range(31)),
+            joints=tuple(BodyJointCmd(q=0.25, kp=30.0, kd=1.5) for _ in range(31)),
             protocol_version=1,
             session_id=42,
             sequence=3,
         )
         builder = flatbuffers.Builder(256)
-        root = transport_module._fill_hum_cmd(bindings, command, builder, 0)
+        root = transport_module._fill_body_cmd(bindings, command, builder, 0)
         builder.Finish(root)
-        command_view = bindings.hum_cmd_module.HumCmd.GetRootAs(builder.Output())
+        command_view = bindings.body_cmd_module.BodyCmd.GetRootAs(builder.Output())
         self.assertEqual(command_view.CmdId(), 17)
-        self.assertEqual(command_view.MotorCmd().JointsLength(), 31)
-        self.assertAlmostEqual(command_view.MotorCmd().Joints(0).Q(), 0.25)
+        self.assertEqual(command_view.JointsLength(), 31)
+        self.assertAlmostEqual(command_view.Joints(0).Q(), 0.25)
         self.assertEqual(command_view.ProtocolVersion(), 1)
         self.assertEqual(command_view.SessionId(), 42)
         self.assertEqual(command_view.Sequence(), 3)
@@ -178,7 +178,7 @@ class AortaBindingContractTest(unittest.TestCase):
         builder.Finish(module.BodyStateEnd(builder))
         state = transport_module.decode_body_state(module.BodyState.GetRootAs(builder.Output()))
         self.assertEqual(state.ts_state_real_us, 1_234_567)
-        self.assertEqual(state.motor_states, ())
+        self.assertEqual(state.joints, ())
 
     def test_public_topic_constants_match_the_protocol(self) -> None:
         self.assertEqual(BODY_STATE_TOPIC, "/sdk/foot_humanoid/body_state")
@@ -187,7 +187,7 @@ class AortaBindingContractTest(unittest.TestCase):
         )
         self.assertEqual(CONTROL_ACK_TOPIC, "/sdk/foot_humanoid/control/ack")
         self.assertEqual(CONTROL_STATUS_TOPIC, "/sdk/foot_humanoid/control/status")
-        self.assertEqual(HUM_CMD_TOPIC, "/sdk/foot_humanoid/hum_cmd")
+        self.assertEqual(BODY_CMD_TOPIC, "/sdk/foot_humanoid/body_cmd")
 
 
 if __name__ == "__main__":

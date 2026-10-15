@@ -7,11 +7,11 @@ import unittest
 from types import SimpleNamespace
 import flatbuffers
 from locomotion_aorta import (
-    HumCmd, HumMotorCmd, HumCmdAction, BodySampleStatus, BodyImuLocation,
+    BodyCmd, BodyJointCmd, BodyCmdAction, BodySampleStatus, BodyImuLocation,
     BodySlotRole, EndEffectorKind, ServiceStatus,
 )
 from locomotion_aorta import _body_codec as codec
-from locomotion_aorta.transport import _fill_hum_cmd
+from locomotion_aorta.transport import _fill_body_cmd
 
 
 def module(name):
@@ -19,8 +19,8 @@ def module(name):
 
 
 def make_command(seed=0):
-    return HumCmd(17, tuple(HumMotorCmd(i + seed + .125, -i - .25, i * .5, i + 1., .75)
-                            for i in range(31)), action=HumCmdAction.EXTERNAL,
+    return BodyCmd(17, tuple(BodyJointCmd(i + seed + .125, -i - .25, i * .5, i + 1., .75)
+                            for i in range(31)), action=BodyCmdAction.EXTERNAL,
                   session_id=42, sequence=7, input_state_id=123, input_state_ts_real_us=456,
                   ts_client_created_us=789, ts_client_send_us=901)
 
@@ -29,30 +29,32 @@ def encode(command, *, generated=False, initial_size=1, prefix=0):
     builder = flatbuffers.Builder(initial_size)
     if prefix:
         builder.CreateByteVector(bytes(prefix))
-    m = module('HumCmd')
+    m = module('BodyCmd')
     if generated:
-        body = module('HumBodyCmd')
-        m.HumCmdStart(builder)
-        m.HumCmdAddAortaHeader(builder, 0)
-        cols = [tuple(getattr(j, field) for j in command.motor_cmds)
-                for field in ('q', 'dq', 'tau', 'kp', 'kd')]
-        m.HumCmdAddMotorCmd(builder, body.CreateHumBodyCmd(builder, *cols))
-        m.HumCmdAddProtocolVersion(builder, command.protocol_version)
-        m.HumCmdAddSessionId(builder, command.session_id)
-        m.HumCmdAddSequence(builder, command.sequence)
-        m.HumCmdAddCmdId(builder, command.cmd_id)
-        m.HumCmdAddInputStateId(builder, command.input_state_id)
-        m.HumCmdAddInputStateTsRealUs(builder, command.input_state_ts_real_us)
-        m.HumCmdAddTsClientCreatedUs(builder, command.ts_client_created_us)
-        m.HumCmdAddTsClientSendUs(builder, command.ts_client_send_us)
+        joint = module('BodyJointCmd')
+        m.BodyCmdStartJointsVector(builder, len(command.joints))
+        for value in reversed(command.joints):
+            joint.CreateBodyJointCmd(builder, value.q, value.dq, value.tau, value.kp, value.kd)
+        vector = builder.EndVector()
+        m.BodyCmdStart(builder)
+        m.BodyCmdAddAortaHeader(builder, 0)
+        m.BodyCmdAddJoints(builder, vector)
+        m.BodyCmdAddProtocolVersion(builder, command.protocol_version)
+        m.BodyCmdAddSessionId(builder, command.session_id)
+        m.BodyCmdAddSequence(builder, command.sequence)
+        m.BodyCmdAddCmdId(builder, command.cmd_id)
+        m.BodyCmdAddInputStateId(builder, command.input_state_id)
+        m.BodyCmdAddInputStateTsRealUs(builder, command.input_state_ts_real_us)
+        m.BodyCmdAddTsClientCreatedUs(builder, command.ts_client_created_us)
+        m.BodyCmdAddTsClientSendUs(builder, command.ts_client_send_us)
         builder.ForceDefaults(True)
-        m.HumCmdAddAction(builder, command.action)
+        m.BodyCmdAddAction(builder, command.action)
         builder.ForceDefaults(False)
         if command.root_quat is not None:
-            m.HumCmdAddRootQuat(builder, module('HumRootQuatWxyz').CreateHumRootQuatWxyz(builder, *command.root_quat))
-        root = m.HumCmdEnd(builder)
+            m.BodyCmdAddRootQuat(builder, module('RootQuatWxyz').CreateRootQuatWxyz(builder, *command.root_quat))
+        root = m.BodyCmdEnd(builder)
     else:
-        root = _fill_hum_cmd(SimpleNamespace(hum_cmd_module=m), command, builder, 0)
+        root = _fill_body_cmd(SimpleNamespace(body_cmd_module=m), command, builder, 0)
     builder.Finish(root)
     return bytes(builder.Output())
 
@@ -76,6 +78,16 @@ def make_state():
     m.BodyStateStartImuStatesVector(builder, len(imus))
     for imu in reversed(imus): builder.PrependUOffsetTRelative(imu)
     imus = builder.EndVector()
+    cols = [tuple(range(31)), tuple(i != 14 for i in range(31)), (False,) * 31,
+            tuple(BodySampleStatus.UNCONFIGURED if i == 14 else BodySampleStatus.OK for i in range(31)),
+            tuple(0 if i == 14 else 63 for i in range(31)),
+            tuple(range(31)), tuple(1000 + i for i in range(31)), tuple(2000 + i for i in range(31)),
+            tuple(math.nan if i == 14 else i + .125 for i in range(31)),
+            (-.25,) * 31, (.5,) * 31, (-.75,) * 31, (-12.5,) * 31, tuple(range(31))]
+    m.BodyStateStartJointsVector(builder, 31)
+    for values in reversed(tuple(zip(*cols))):
+        module('BodyJointState').CreateBodyJointState(builder, *values)
+    joints = builder.EndVector()
     m.BodyStateStart(builder)
     m.BodyStateAddProtocolVersion(builder, 1)
     m.BodyStateAddStateId(builder, 91)
@@ -83,13 +95,7 @@ def make_state():
     m.BodyStateAddTsStatePubUs(builder, 1_234_890)
     m.BodyStateAddImuStates(builder, imus)
     m.BodyStateAddAttitudeValid(builder, True)
-    cols = [tuple(range(31)), tuple(i != 14 for i in range(31)), (False,) * 31,
-            tuple(BodySampleStatus.UNCONFIGURED if i == 14 else BodySampleStatus.OK for i in range(31)),
-            tuple(0 if i == 14 else 63 for i in range(31)),
-            tuple(range(31)), tuple(1000 + i for i in range(31)), tuple(2000 + i for i in range(31)),
-            tuple(math.nan if i == 14 else i + .125 for i in range(31)),
-            (-.25,) * 31, (.5,) * 31, (-.75,) * 31, (-12.5,) * 31, tuple(range(31))]
-    m.BodyStateAddMotorStates(builder, module('BodyJointStates').CreateBodyJointStates(builder, *cols))
+    m.BodyStateAddJoints(builder, joints)
     builder.Finish(m.BodyStateEnd(builder))
     data = bytes(builder.Output())
     return data, m.BodyState.GetRootAs(data)
@@ -99,58 +105,56 @@ class BodyCodecTest(unittest.TestCase):
     def test_bulk_is_byte_identical_to_real_factory_with_growth_padding_and_actions(self):
         for size in (1, 7, 64, 4096):
             for prefix in (0, 1, 3, 17):
-                for action in (HumCmdAction.EXTERNAL, HumCmdAction.HUMANOID_TRACKING, HumCmdAction.UNKNOWN):
+                for action in (BodyCmdAction.EXTERNAL, BodyCmdAction.HUMANOID_TRACKING, BodyCmdAction.UNKNOWN):
                     with self.subTest(size=size, prefix=prefix, action=action):
                         command = dataclasses.replace(make_command(prefix), action=action,
-                                                      root_quat=(1., 0., 0., 0.) if action == HumCmdAction.HUMANOID_TRACKING else None)
+                                                      root_quat=(1., 0., 0., 0.) if action == BodyCmdAction.HUMANOID_TRACKING else None)
                         actual = encode(command, initial_size=size, prefix=prefix)
                         self.assertEqual(actual, encode(command, generated=True, initial_size=size, prefix=prefix))
-                        view = module('HumCmd').HumCmd.GetRootAs(actual)
+                        view = module('BodyCmd').BodyCmd.GetRootAs(actual)
                         self.assertEqual(view.Action(), action)
                         self.assertNotEqual(view._tab.Offset(24), 0)  # action id10 is explicitly present
-                        self.assertEqual(view.MotorCmd().JointsLength(), 31)
-                        self.assertEqual(view.MotorCmd().Joints(30).Q(), command.motor_cmds[30].q)
+                        self.assertEqual(view.JointsLength(), 31)
+                        self.assertEqual(view.Joints(30).Q(), command.joints[30].q)
 
     def test_no_vector_or_wrong_width_is_accepted_by_bulk(self):
         for count in (0, 30, 32, 42, 44):
             with self.subTest(count=count), self.assertRaises(ValueError):
-                codec.create_body_cmd(flatbuffers.Builder(1), (HumMotorCmd(),) * count)
+                codec.create_body_cmd(flatbuffers.Builder(1), (BodyJointCmd(),) * count)
 
     def test_state_matches_every_real_accessor_and_keeps_invalid_roll_and_clocks(self):
         data, view = make_state()
         state = codec.decode_body_state(view)
-        self.assertEqual(len(state.motor_states), 31)
+        self.assertEqual(len(state.joints), 31)
         self.assertEqual(state.ts_state_real_us, 1_234_567)
         self.assertEqual(state.ts_state_pub_us, 1_234_890)
-        for i, joint in enumerate(state.motor_states):
-            generated = view.MotorStates().Joints(i)
+        for i, joint in enumerate(state.joints):
+            generated = view.Joints(i)
             for field in dataclasses.fields(joint):
                 value = getattr(joint, field.name)
                 expected = getattr(generated, codec._getter(field.name))()
                 if isinstance(value, float) and math.isnan(value): self.assertTrue(math.isnan(expected))
                 else: self.assertEqual(value, expected)
-        self.assertFalse(state.motor_states[14].populated)
-        self.assertEqual(state.motor_states[14].valid_fields, 0)
-        self.assertEqual(state.motor_states[0].temperature_deg_c, -12.5)
+        self.assertFalse(state.joints[14].populated)
+        self.assertEqual(state.joints[14].valid_fields, 0)
+        self.assertEqual(state.joints[0].temperature_deg_c, -12.5)
         self.assertIsNone(state.applied_cmd)
         self.assertEqual([s.location for s in state.imu_states], [BodyImuLocation.TRUNK, BodyImuLocation.HIP])
         self.assertEqual(state.imu_states[1].state.rpy, (-1., 2., 3.))
         self.assertEqual(state.imu_states[1].device_timestamp_ms, 876)
         self.assertEqual(state.imu_states[1].host_timestamp_us, 987654)
 
-    def test_truncated_inline_payload_is_rejected(self):
+    def test_truncated_vector_payload_is_rejected(self):
         data, view = make_state()
-        pos = view.MotorStates()._tab.Pos
+        pos = view.Joints(0)._tab.Pos
         for missing in (1, 20, 56, 1736):
             short = data[:pos + 1736 - missing]
             with self.subTest(missing=missing), self.assertRaises((ValueError, struct.error)):
                 codec.unpack_body_joints(module('BodyState').BodyState.GetRootAs(short))
 
     def test_actual_generated_layout_and_table_slots_guard_bulk_assumptions(self):
-        self.assertEqual(module('HumMotorCmd').HumMotorCmd.SizeOf(), codec._MOTOR.size)
-        self.assertEqual(module('HumBodyCmd').HumBodyCmd.SizeOf(), codec._COMMAND.size)
+        self.assertEqual(module('BodyJointCmd').BodyJointCmd.SizeOf(), codec._MOTOR.size)
         self.assertEqual(module('BodyJointState').BodyJointState.SizeOf(), codec._JOINT_STATE.size)
-        self.assertEqual(module('BodyJointStates').BodyJointStates.SizeOf(), codec._JOINT_STATE.size * 31)
         class Probe:
             Pos = 0
             Bytes = bytes(2048)
@@ -160,16 +164,16 @@ class BodyCodecTest(unittest.TestCase):
         for name, getters, expected in (
             ('BodyJointState', [codec._getter(f.name) for f in dataclasses.fields(codec.BodyJointState)],
              [0,2,3,4,6,8,16,24,32,36,40,44,48,52]),
-            ('HumMotorCmd', ['Q','Dq','Tau','Kp','Kd'], [0,4,8,12,16]),
-            ('BodyState', ['MotorStates'], [22]),
-            ('HumCmd', ['MotorCmd','Action','RootQuat'], [22,24,26]),
+            ('BodyJointCmd', ['Q','Dq','Tau','Kp','Kd'], [0,4,8,12,16]),
+            ('BodyState', ['JointsLength'], [22]),
+            ('BodyCmd', ['JointsLength','Action','RootQuat'], [22,24,26]),
         ):
             view = getattr(module(name), name)(); probe = Probe(); view._tab = probe
             for getter in getters: getattr(view, getter)()
             self.assertEqual(probe.positions, expected)
 
     def test_robot_info_preserves_real_body_and_failed_end_effector_in_partial_reply(self):
-        # Object API is used only for regular tables/vector structs, never fixed-array T.Pack.
+        # The actual final public object API packs regular tables/vector structs.
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
         from lowlevel.RobotInfo import RobotInfoT
         from lowlevel.BodyInfo import BodyInfoT
@@ -196,23 +200,26 @@ class BodyCodecTest(unittest.TestCase):
         self.assertIsNone(result.info.end_effectors[0].hand)
 
     def test_applied_echo_is_optional_and_preserves_generated_unknown_default(self):
-        m, applied = module('BodyState'), module('BodyAppliedCommand')
+        m, applied = module('BodyState'), module('BodyAppliedCmd')
         builder = flatbuffers.Builder(1)
-        applied.BodyAppliedCommandStart(builder)
-        applied.BodyAppliedCommandAddSessionId(builder, 77)
-        applied.BodyAppliedCommandAddSequence(builder, 88)
-        applied.BodyAppliedCommandAddTsFirstOutputUs(builder, 99)
-        applied.BodyAppliedCommandAddSourceKeyValid(builder, True)
-        applied.BodyAppliedCommandAddMotorCmd(builder, module('HumBodyCmd').CreateHumBodyCmd(
-            builder, *((.5,) * 31 for _ in range(5))))
-        echo = applied.BodyAppliedCommandEnd(builder)
+        applied.BodyAppliedCmdStartJointsVector(builder, 31)
+        for _ in range(31):
+            module('BodyJointCmd').CreateBodyJointCmd(builder, .5,.5,.5,.5,.5)
+        joints = builder.EndVector()
+        applied.BodyAppliedCmdStart(builder)
+        applied.BodyAppliedCmdAddSessionId(builder, 77)
+        applied.BodyAppliedCmdAddSequence(builder, 88)
+        applied.BodyAppliedCmdAddTsFirstOutputUs(builder, 99)
+        applied.BodyAppliedCmdAddSourceKeyValid(builder, True)
+        applied.BodyAppliedCmdAddJoints(builder, joints)
+        echo = applied.BodyAppliedCmdEnd(builder)
         m.BodyStateStart(builder); m.BodyStateAddAppliedCmd(builder, echo)
         builder.Finish(m.BodyStateEnd(builder))
         state = codec.decode_body_state(m.BodyState.GetRootAs(builder.Output()))
-        self.assertEqual(state.applied_cmd.action, HumCmdAction.UNKNOWN)
+        self.assertEqual(state.applied_cmd.action, BodyCmdAction.UNKNOWN)
         self.assertEqual((state.applied_cmd.session_id, state.applied_cmd.sequence, state.applied_cmd.ts_first_output_us), (77,88,99))
         self.assertTrue(state.applied_cmd.source_key_valid)
-        self.assertEqual(state.applied_cmd.motor_cmds[30], HumMotorCmd(.5,.5,.5,.5,.5))
+        self.assertEqual(state.applied_cmd.joints[30], BodyJointCmd(.5,.5,.5,.5,.5))
 
     def test_typed_rpc_uses_real_request_response_and_keeps_failed_status(self):
         from unittest.mock import patch
@@ -241,7 +248,7 @@ class BodyCodecTest(unittest.TestCase):
             def close(self): pass
         qos = SimpleNamespace(realtime_control=lambda: None)
         fake_aorta = SimpleNamespace(Node=Node, QoS=qos, ClientOptions=lambda **kw: kw)
-        bindings = SimpleNamespace(aorta=fake_aorta, control_request_schema_meta=object(), hum_cmd_schema_meta=object(),
+        bindings = SimpleNamespace(aorta=fake_aorta, control_request_schema_meta=object(), body_cmd_schema_meta=object(),
                                    get_robot_info_request=request_module, get_robot_info_response=reply_module,
                                    get_robot_info_schema_meta=importlib.import_module('get_robot_info_schema_meta'))
         with patch.object(transport,'_load_aorta_bindings',return_value=bindings):
@@ -254,10 +261,10 @@ class BodyCodecTest(unittest.TestCase):
             self.assertEqual(len(t.node.calls),1)
             self.assertEqual(t.node.calls[0][0][0],transport.GET_ROBOT_INFO_SERVICE)
             self.assertEqual(client.matches,[500,500])
-            self.assertEqual(set(t.publishers),{transport.HUM_CMD_TOPIC, transport.CONTROL_REQUEST_TOPIC})
+            self.assertEqual(set(t.publishers),{transport.BODY_CMD_TOPIC, transport.CONTROL_REQUEST_TOPIC})
         finally: t.close()
 
-    def test_corrupt_parent_vtable_and_inline_offsets_are_rejected(self):
+    def test_corrupt_parent_vtable_and_vector_offsets_are_rejected(self):
         original, view = make_state()
         root = view._tab.Pos
         vtable = root - struct.unpack_from('<i', original, root)[0]
@@ -271,3 +278,16 @@ class BodyCodecTest(unittest.TestCase):
         broken = bytearray(original);struct.pack_into('<i',broken,root,2**30)
         with self.assertRaises(ValueError):
             codec.unpack_body_joints(module('BodyState').BodyState.GetRootAs(broken))
+
+    def test_corrupt_vector_length_offset_and_alignment_are_rejected(self):
+        original, view = make_state()
+        field = view._tab.Pos + view._tab.Offset(codec._BODY_JOINTS_SLOT)
+        vector = field + struct.unpack_from('<I', original, field)[0]
+        for count in (0, 30, 32, 42, 44, 0xffffffff):
+            data = bytearray(original); struct.pack_into('<I', data, vector, count)
+            with self.subTest(count=count), self.assertRaises(ValueError):
+                codec.unpack_body_joints(module('BodyState').BodyState.GetRootAs(data))
+        for offset in (0, 1, 0xffffffff):
+            data = bytearray(original); struct.pack_into('<I', data, field, offset)
+            with self.subTest(offset=offset), self.assertRaises(ValueError):
+                codec.unpack_body_joints(module('BodyState').BodyState.GetRootAs(data))

@@ -6,7 +6,7 @@ from locomotion_aorta import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
     CONTROL_STATUS_TOPIC,
-    HUM_CMD_TOPIC,
+    BODY_CMD_TOPIC,
     BODY_STATE_TOPIC,
     ControlAck,
     ControlOperation,
@@ -76,7 +76,7 @@ class RecordingController:
         self.calls.append("publish")
         self.controller.publish(command)
         if self.follow_commands:
-            self.measured_q = [motor.q for motor in command.motor_cmds]
+            self.measured_q = [motor.q for motor in command.joints]
 
     def exit_external(self, timeout: float):
         self.calls.append("exit_external")
@@ -104,7 +104,7 @@ class RecordingController:
             BodyState(
                 state_id=self.state_id,
                 ts_state_real_us=int(self.clock.monotonic() * 1_000_000),
-                motor_states=tuple(
+                joints=tuple(
                     sample_motor(q=q, dq=dq, body_index=i, populated=i != 14)
                     for i, (q, dq) in enumerate(zip(emitted_q, self.measured_dq))
                 ),
@@ -113,7 +113,7 @@ class RecordingController:
         )
 
     def _on_publish(self, topic, message) -> None:
-        if topic == HUM_CMD_TOPIC:
+        if topic == BODY_CMD_TOPIC:
             self.command_count += 1
             self.command_times.append(self.clock.monotonic())
             phase = ExternalPhase.RUNNING
@@ -256,39 +256,39 @@ class ExamplesSmokeTest(unittest.TestCase):
         commands = [
             message
             for topic, message in harness.transport.published
-            if topic == HUM_CMD_TOPIC
+            if topic == BODY_CMD_TOPIC
         ]
         self.assertEqual(len(commands), 301)
         self.assertEqual(
             [command.sequence for command in commands],
             list(range(1, 302)),
         )
-        self.assertEqual(len(commands[0].motor_cmds), 31)
+        self.assertEqual(len(commands[0].joints), 31)
         self.assertTrue(
-            all(motor.q == (0.0 if i == 14 else 0.1) for i, motor in enumerate(commands[0].motor_cmds))
+            all(motor.q == (0.0 if i == 14 else 0.1) for i, motor in enumerate(commands[0].joints))
         )
         self.assertTrue(
-            all(motor.q == 0.0 for motor in commands[100].motor_cmds)
+            all(motor.q == 0.0 for motor in commands[100].joints)
         )
-        for slot, motor in enumerate(commands[250].motor_cmds):
+        for slot, motor in enumerate(commands[250].joints):
             self.assertEqual(motor.q, 0.0 if slot in (14, 18, 25) else 0.1)
         max_step = max(
-            abs(current.motor_cmds[0].q - previous.motor_cmds[0].q)
+            abs(current.joints[0].q - previous.joints[0].q)
             for previous, current in zip(commands, commands[1:])
         )
         self.assertLessEqual(max_step, 0.002)
-        self.assertEqual(commands[0].motor_cmds[0].kp, 100.0)
-        self.assertEqual(commands[0].motor_cmds[14].kp, 0.0)
-        self.assertEqual(commands[0].motor_cmds[14].kd, 0.0)
+        self.assertEqual(commands[0].joints[0].kp, 100.0)
+        self.assertEqual(commands[0].joints[14].kp, 0.0)
+        self.assertEqual(commands[0].joints[14].kd, 0.0)
         for command in commands:
             for slot in (15, 18, 22, 25):
-                self.assertEqual(command.motor_cmds[slot].kp, 80.0)
+                self.assertEqual(command.joints[slot].kp, 80.0)
                 self.assertEqual(
-                    command.motor_cmds[slot].kd,
+                    command.joints[slot].kd,
                     1.0 if slot in (18, 25) else 2.0,
                 )
             for slot in (16, 17, 23, 24):
-                self.assertEqual(command.motor_cmds[slot].kp, 40.0)
+                self.assertEqual(command.joints[slot].kp, 40.0)
         self.assertEqual(output[-1], "CANCEL confirmed PASSIVE")
 
     def test_return_offsets_only_elbows_toward_zero_without_crossing_zero(self):
@@ -311,16 +311,16 @@ class ExamplesSmokeTest(unittest.TestCase):
                 )
                 commands = [
                     message for topic, message in harness.transport.published
-                    if topic == HUM_CMD_TOPIC
+                    if topic == BODY_CMD_TOPIC
                 ]
-                for slot, motor in enumerate(commands[-1].motor_cmds):
+                for slot, motor in enumerate(commands[-1].joints):
                     expected = {14: 0.0, 18: expected_left, 25: expected_right}.get(
                         slot, 0.1
                     )
                     self.assertAlmostEqual(motor.q, expected)
                 for slot, start in ((18, left), (25, right)):
                     positions = [
-                        command.motor_cmds[slot].q for command in commands
+                        command.joints[slot].q for command in commands
                     ]
                     self.assertGreaterEqual(min(positions), min(start, 0.0))
                     self.assertLessEqual(max(positions), max(start, 0.0))
@@ -430,9 +430,9 @@ class ExamplesSmokeTest(unittest.TestCase):
         self.assertEqual(requests[0].requested_lease_ms, 0)
         commands = [
             message for topic, message in harness.transport.published
-            if topic == HUM_CMD_TOPIC
+            if topic == BODY_CMD_TOPIC
         ]
-        positions = [command.motor_cmds[26].q for command in commands]
+        positions = [command.joints[26].q for command in commands]
         self.assertEqual(positions[0], -1.95)
         self.assertIn(0.0, positions)
         self.assertEqual(positions[-1], -1.95)
@@ -604,7 +604,7 @@ class ExamplesSmokeTest(unittest.TestCase):
                     harness, timeout=5.0, sleep=sleep_with_feedback,
                     monotonic=clock.monotonic,
                 )
-                self.assertEqual(state.motor_states[26].dq, 0.0)
+                self.assertEqual(state.joints[26].dq, 0.0)
                 self.assertGreaterEqual(clock.now + 1e-12, earliest_finish)
                 self.assertLess(clock.now, earliest_finish + 0.06)
                 self.assertNotIn("enter_external", harness.calls)

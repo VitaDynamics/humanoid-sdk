@@ -12,7 +12,7 @@ from .transport import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
     CONTROL_STATUS_TOPIC,
-    HUM_CMD_TOPIC,
+    BODY_CMD_TOPIC,
     BODY_STATE_TOPIC,
     GET_ROBOT_INFO_SERVICE,
 )
@@ -37,7 +37,7 @@ __all__ = [
     "ControlRequest",
     "ControlStatus",
     "ControllerClosedError",
-    "HUM_CMD_TOPIC",
+    "BODY_CMD_TOPIC",
     "GET_ROBOT_INFO_SERVICE",
     "ExternalControlError",
     "ExternalControlTimeoutError",
@@ -63,16 +63,16 @@ __all__ += [
 ]
 
 from .body_types import (
-    BODY_SLOTS, BODY_PROTOCOL_VERSION, HumMotorCmd, HumCmd, HumCmdAction,
+    BODY_SLOTS, BODY_PROTOCOL_VERSION, BodyJointCmd, BodyCmd, BodyCmdAction,
     BodyState, BodyJointState, BodyImuState, BodyImuSample, BodyImuLocation,
-    BodySampleStatus, BodyAppliedCommand, BodySlotRole, BodyJointCapability,
+    BodySampleStatus, BodyAppliedCmd, BodySlotRole, BodyJointCapability,
     BodyMotorIdentity, BodyInfo, RobotInfo, EndEffectorKind, EndEffectorCapability,
     GripperInfo, GetRobotInfoResponse, ServiceStatus,
 )
 __all__ += [
-    "BODY_SLOTS", "BODY_PROTOCOL_VERSION", "HumMotorCmd", "HumCmd", "HumCmdAction",
+    "BODY_SLOTS", "BODY_PROTOCOL_VERSION", "BodyJointCmd", "BodyCmd", "BodyCmdAction",
     "BodyState", "BodyJointState", "BodyImuState", "BodyImuSample", "BodyImuLocation",
-    "BodySampleStatus", "BodyAppliedCommand", "BodySlotRole", "BodyJointCapability",
+    "BodySampleStatus", "BodyAppliedCmd", "BodySlotRole", "BodyJointCapability",
     "BodyMotorIdentity", "BodyInfo", "RobotInfo", "EndEffectorKind", "EndEffectorCapability",
     "GripperInfo", "GetRobotInfoResponse", "ServiceStatus",
 ]
