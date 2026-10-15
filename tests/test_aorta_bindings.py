@@ -6,12 +6,12 @@ from locomotion_aorta import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
     CONTROL_STATUS_TOPIC,
-    EXTERNAL_COMMAND_TOPIC,
-    LOWSTATE_TOPIC,
+    BODY_CMD_TOPIC,
+    BODY_STATE_TOPIC,
     ControlOperation,
     ControlRequest,
-    LowCmd,
-    MotorCommand,
+    BodyCmd,
+    BodyJointCmd,
 )
 
 
@@ -19,8 +19,8 @@ class AortaBindingContractTest(unittest.TestCase):
     def test_real_aorta_and_generated_control_bindings_are_available(self) -> None:
         required_modules = (
             "aorta",
-            "lowlevel.HumanoidLowState",
-            "lowlevel.LowCmd",
+            "lowlevel.BodyState",
+            "lowlevel.BodyCmd",
             "locomotion_sdk.ControlRequest",
             "locomotion_sdk.ControlAck",
             "locomotion_sdk.ControlStatus",
@@ -39,31 +39,14 @@ class AortaBindingContractTest(unittest.TestCase):
         )
 
         required_accessors = {
-            "lowlevel.HumanoidLowState": (
-                "ImuStates",
-                "MotorStates",
-                "StateId",
-                "TsStateReal",
-                "TsStatePub",
-                "InputCmdId",
-                "AttitudeValid",
-                "TsConsumedUs",
-                "CmdId",
-                "InputStateId",
-                "InputStateTsReal",
-                "TsInferInputState",
-                "TsInputCmdIntoMotor",
-                "TsBeforeInfer",
-                "TsAfterInfer",
-                "MaxAbsObs",
-                "RelativeMotorCmd",
+            "lowlevel.BodyState": (
+                "ProtocolVersion", "RosterVersion", "StateId", "TsStateRealUs",
+                "TsStatePubUs", "TsConsumedUs", "AttitudeValid", "ImuStates",
+                "Joints", "AppliedCmd",
             ),
-            "lowlevel.LowCmd": (
-                "MotorCmd",
-                "CmdId",
-                "ExternalVersion",
-                "ExternalSessionId",
-                "ExternalSequence",
+            "lowlevel.BodyCmd": (
+                "Joints", "CmdId", "ProtocolVersion", "SessionId", "Sequence",
+                "InputStateId", "InputStateTsRealUs", "Action", "RootQuat",
             ),
             "locomotion_sdk.ControlRequest": (
                 "ProtocolVersion",
@@ -143,28 +126,29 @@ class AortaBindingContractTest(unittest.TestCase):
         request_view = bindings.control_request_module.ControlRequest.GetRootAs(
             builder.Output()
         )
+        self.assertEqual(request_view.ProtocolVersion(), 2)
         self.assertEqual(request_view.Operation(), 2)
         self.assertEqual(request_view.RequestId(), b"request-1")
         self.assertEqual(request_view.LeaseId(), b"lease-1")
         self.assertEqual(request_view.RequestedLeaseMs(), 0)
 
-        command = LowCmd(
+        command = BodyCmd(
             cmd_id=17,
-            motor_cmds=(MotorCommand(mode=10, q=0.25, kp=30.0, kd=1.5),),
-            external_version=1,
-            external_session_id=42,
-            external_sequence=3,
+            joints=tuple(BodyJointCmd(q=0.25, kp=30.0, kd=1.5) for _ in range(31)),
+            protocol_version=1,
+            session_id=42,
+            sequence=3,
         )
         builder = flatbuffers.Builder(256)
-        root = transport_module._fill_low_cmd(bindings, command, builder, 0)
+        root = transport_module._fill_body_cmd(bindings, command, builder, 0)
         builder.Finish(root)
-        command_view = bindings.low_cmd_module.LowCmd.GetRootAs(builder.Output())
+        command_view = bindings.body_cmd_module.BodyCmd.GetRootAs(builder.Output())
         self.assertEqual(command_view.CmdId(), 17)
-        self.assertEqual(command_view.MotorCmdLength(), 1)
-        self.assertAlmostEqual(command_view.MotorCmd(0).Q(), 0.25)
-        self.assertEqual(command_view.ExternalVersion(), 1)
-        self.assertEqual(command_view.ExternalSessionId(), 42)
-        self.assertEqual(command_view.ExternalSequence(), 3)
+        self.assertEqual(command_view.JointsLength(), 31)
+        self.assertAlmostEqual(command_view.Joints(0).Q(), 0.25)
+        self.assertEqual(command_view.ProtocolVersion(), 1)
+        self.assertEqual(command_view.SessionId(), 42)
+        self.assertEqual(command_view.Sequence(), 3)
 
     def test_prepare_encodes_zero_duration_with_real_bindings(self) -> None:
         import flatbuffers
@@ -185,26 +169,25 @@ class AortaBindingContractTest(unittest.TestCase):
         self.assertEqual(view.LeaseId(), b"")
         self.assertEqual(view.RequestedLeaseMs(), 0)
 
-    def test_lowstate_timestamp_converts_microseconds_to_nanoseconds(self) -> None:
+    def test_body_timestamp_preserves_the_robot_microsecond_clock(self) -> None:
         import flatbuffers
-        import lowlevel.HumanoidLowState as lowstate_module
-
+        import lowlevel.BodyState as module
         builder = flatbuffers.Builder(128)
-        lowstate_module.HumanoidLowStateStart(builder)
-        lowstate_module.HumanoidLowStateAddTsStateReal(builder, 1_234_567)
-        builder.Finish(lowstate_module.HumanoidLowStateEnd(builder))
-        view = lowstate_module.HumanoidLowState.GetRootAs(builder.Output())
-        state = transport_module._decode_humanoid_lowstate(view)
-        self.assertEqual(state.stamp_ns, 1_234_567_000)
+        module.BodyStateStart(builder)
+        module.BodyStateAddTsStateRealUs(builder, 1_234_567)
+        builder.Finish(module.BodyStateEnd(builder))
+        state = transport_module.decode_body_state(module.BodyState.GetRootAs(builder.Output()))
+        self.assertEqual(state.ts_state_real_us, 1_234_567)
+        self.assertEqual(state.joints, ())
 
     def test_public_topic_constants_match_the_protocol(self) -> None:
-        self.assertEqual(LOWSTATE_TOPIC, "/sdk/foot_humanoid/lowstate")
+        self.assertEqual(BODY_STATE_TOPIC, "/sdk/foot_humanoid/body_state")
         self.assertEqual(
             CONTROL_REQUEST_TOPIC, "/sdk/foot_humanoid/control/request"
         )
         self.assertEqual(CONTROL_ACK_TOPIC, "/sdk/foot_humanoid/control/ack")
         self.assertEqual(CONTROL_STATUS_TOPIC, "/sdk/foot_humanoid/control/status")
-        self.assertEqual(EXTERNAL_COMMAND_TOPIC, "/locomotion/external_command")
+        self.assertEqual(BODY_CMD_TOPIC, "/sdk/foot_humanoid/body_cmd")
 
 
 if __name__ == "__main__":

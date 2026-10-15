@@ -1,19 +1,19 @@
+from body_fixtures import sample_motor, robot_info_reply
 import unittest
 
-from examples import external_control, lowstate_subscriber
+from examples import external_control, body_state_subscriber
 from locomotion_aorta import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
     CONTROL_STATUS_TOPIC,
-    EXTERNAL_COMMAND_TOPIC,
-    LOWSTATE_TOPIC,
+    BODY_CMD_TOPIC,
+    BODY_STATE_TOPIC,
     ControlAck,
     ControlOperation,
     ControlStatus,
     ExternalController,
     ExternalPhase,
-    HumanoidLowState,
-    MotorState,
+    BodyState,
 )
 from fake_transport import FakeTransport
 
@@ -48,22 +48,25 @@ class RecordingController:
         self.calls: list[str] = []
         self.status_sequence = 0
         self.state_id = 6
-        self.measured_q = [0.1] * 42
-        self.measured_dq = [0.0] * 42
+        self.measured_q = [0.1] * 31
+        self.measured_dq = [0.0] * 31
         self.attitude_valid = True
         self.command_count = 0
         self.command_times: list[float] = []
         self.transport.on_publish = self._on_publish
-        self._emit_lowstate()
+        self._emit_body_state()
 
     @property
     def status(self):
         return self.controller.status
 
-    def wait_lowstate(self, timeout: float):
-        self.calls.append("wait_lowstate")
-        self._emit_lowstate()
-        return self.controller.wait_lowstate(timeout)
+    def wait_body_state(self, timeout: float):
+        self.calls.append("wait_body_state")
+        self._emit_body_state()
+        return self.controller.wait_body_state(timeout)
+
+    def get_robot_info(self, timeout: float):
+        return self.controller.get_robot_info(timeout)
 
     def enter_external(self, timeout: float):
         self.calls.append("enter_external")
@@ -73,7 +76,7 @@ class RecordingController:
         self.calls.append("publish")
         self.controller.publish(command)
         if self.follow_commands:
-            self.measured_q = [motor.q for motor in command.motor_cmds]
+            self.measured_q = [motor.q for motor in command.joints]
 
     def exit_external(self, timeout: float):
         self.calls.append("exit_external")
@@ -82,7 +85,7 @@ class RecordingController:
     def close(self) -> None:
         self.controller.close()
 
-    def _emit_lowstate(self) -> None:
+    def _emit_body_state(self) -> None:
         if self.advance_lowstate and not (
             self.stale_after_commands is not None
             and self.command_count >= self.stale_after_commands
@@ -97,20 +100,20 @@ class RecordingController:
         ):
             emitted_q = [q + self.drift_position_rad for q in emitted_q]
         self.transport.emit(
-            LOWSTATE_TOPIC,
-            HumanoidLowState(
+            BODY_STATE_TOPIC,
+            BodyState(
                 state_id=self.state_id,
-                stamp_ns=int(self.clock.monotonic() * 1_000_000_000),
-                motor_states=tuple(
-                    MotorState(q=q, dq=dq)
-                    for q, dq in zip(emitted_q, self.measured_dq)
+                ts_state_real_us=int(self.clock.monotonic() * 1_000_000),
+                joints=tuple(
+                    sample_motor(q=q, dq=dq, body_index=i, populated=i != 14)
+                    for i, (q, dq) in enumerate(zip(emitted_q, self.measured_dq))
                 ),
                 attitude_valid=self.attitude_valid,
             ),
         )
 
     def _on_publish(self, topic, message) -> None:
-        if topic == EXTERNAL_COMMAND_TOPIC:
+        if topic == BODY_CMD_TOPIC:
             self.command_count += 1
             self.command_times.append(self.clock.monotonic())
             phase = ExternalPhase.RUNNING
@@ -214,22 +217,22 @@ class FakeClock:
 
 
 class ExamplesSmokeTest(unittest.TestCase):
-    def test_lowstate_example_prints_snapshot_without_entering_external(self):
+    def test_body_state_example_prints_snapshot_without_entering_external(self):
         harness = RecordingController(FakeClock())
         self.addCleanup(harness.close)
         output: list[str] = []
 
-        lowstate_subscriber.run_once(
+        body_state_subscriber.run_once(
             harness, timeout=0.1, emit=output.append
         )
 
-        self.assertEqual(harness.calls, ["wait_lowstate"])
+        self.assertEqual(harness.calls, ["wait_body_state"])
         self.assertEqual(
             output,
-            ["state_id=8 stamp_ns=0"]
+            ["state_id=8 ts_state_real_us=0"]
             + [
-                f"joint[{index}] q=0.100000 dq=0.000000"
-                for index in range(42)
+                f"joint[{index}] populated={index != 14} valid_fields={3 if index != 14 else 0} q=0.100000 dq=0.000000"
+                for index in range(31)
             ],
         )
 
@@ -247,45 +250,45 @@ class ExamplesSmokeTest(unittest.TestCase):
             emit=output.append,
         )
 
-        self.assertEqual(harness.calls[0], "wait_lowstate")
+        self.assertEqual(harness.calls[0], "wait_body_state")
         self.assertIn("enter_external", harness.calls)
         self.assertEqual(harness.calls[-1], "exit_external")
         commands = [
             message
             for topic, message in harness.transport.published
-            if topic == EXTERNAL_COMMAND_TOPIC
+            if topic == BODY_CMD_TOPIC
         ]
         self.assertEqual(len(commands), 301)
         self.assertEqual(
-            [command.external_sequence for command in commands],
+            [command.sequence for command in commands],
             list(range(1, 302)),
         )
-        self.assertEqual(len(commands[0].motor_cmds), 42)
+        self.assertEqual(len(commands[0].joints), 31)
         self.assertTrue(
-            all(motor.q == 0.1 for motor in commands[0].motor_cmds)
+            all(motor.q == (0.0 if i == 14 else 0.1) for i, motor in enumerate(commands[0].joints))
         )
         self.assertTrue(
-            all(motor.q == 0.0 for motor in commands[100].motor_cmds)
+            all(motor.q == 0.0 for motor in commands[100].joints)
         )
-        for slot, motor in enumerate(commands[250].motor_cmds):
-            self.assertEqual(motor.q, 0.0 if slot in (17, 21) else 0.1)
+        for slot, motor in enumerate(commands[250].joints):
+            self.assertEqual(motor.q, 0.0 if slot in (14, 18, 25) else 0.1)
         max_step = max(
-            abs(current.motor_cmds[0].q - previous.motor_cmds[0].q)
+            abs(current.joints[0].q - previous.joints[0].q)
             for previous, current in zip(commands, commands[1:])
         )
         self.assertLessEqual(max_step, 0.002)
-        self.assertEqual(commands[0].motor_cmds[0].kp, 100.0)
-        self.assertEqual(commands[0].motor_cmds[25].kp, 0.0)
-        self.assertEqual(commands[0].motor_cmds[25].kd, 0.0)
+        self.assertEqual(commands[0].joints[0].kp, 100.0)
+        self.assertEqual(commands[0].joints[14].kp, 0.0)
+        self.assertEqual(commands[0].joints[14].kd, 0.0)
         for command in commands:
-            for slot in (14, 17, 18, 21):
-                self.assertEqual(command.motor_cmds[slot].kp, 80.0)
+            for slot in (15, 18, 22, 25):
+                self.assertEqual(command.joints[slot].kp, 80.0)
                 self.assertEqual(
-                    command.motor_cmds[slot].kd,
-                    1.0 if slot in (17, 21) else 2.0,
+                    command.joints[slot].kd,
+                    1.0 if slot in (18, 25) else 2.0,
                 )
-            for slot in (15, 16, 19, 20):
-                self.assertEqual(command.motor_cmds[slot].kp, 40.0)
+            for slot in (16, 17, 23, 24):
+                self.assertEqual(command.joints[slot].kp, 40.0)
         self.assertEqual(output[-1], "CANCEL confirmed PASSIVE")
 
     def test_return_offsets_only_elbows_toward_zero_without_crossing_zero(self):
@@ -300,24 +303,24 @@ class ExamplesSmokeTest(unittest.TestCase):
                 clock = FakeClock()
                 harness = RecordingController(clock)
                 self.addCleanup(harness.close)
-                harness.measured_q[17] = left
-                harness.measured_q[21] = right
+                harness.measured_q[18] = left
+                harness.measured_q[25] = right
                 external_control.run(
                     harness, timeout=1.0, sleep=clock.sleep,
                     monotonic=clock.monotonic, emit=lambda _: None,
                 )
                 commands = [
                     message for topic, message in harness.transport.published
-                    if topic == EXTERNAL_COMMAND_TOPIC
+                    if topic == BODY_CMD_TOPIC
                 ]
-                for slot, motor in enumerate(commands[-1].motor_cmds):
-                    expected = {17: expected_left, 21: expected_right}.get(
+                for slot, motor in enumerate(commands[-1].joints):
+                    expected = {14: 0.0, 18: expected_left, 25: expected_right}.get(
                         slot, 0.1
                     )
                     self.assertAlmostEqual(motor.q, expected)
-                for slot, start in ((17, left), (21, right)):
+                for slot, start in ((18, left), (25, right)):
                     positions = [
-                        command.motor_cmds[slot].q for command in commands
+                        command.joints[slot].q for command in commands
                     ]
                     self.assertGreaterEqual(min(positions), min(start, 0.0))
                     self.assertLessEqual(max(positions), max(start, 0.0))
@@ -415,7 +418,7 @@ class ExamplesSmokeTest(unittest.TestCase):
         clock = FakeClock()
         harness = RecordingController(clock)
         self.addCleanup(harness.close)
-        harness.measured_q[31] = -1.95
+        harness.measured_q[26] = -1.95
         external_control.run(
             harness, timeout=1.0, sleep=clock.sleep,
             monotonic=clock.monotonic, emit=lambda _: None,
@@ -427,9 +430,9 @@ class ExamplesSmokeTest(unittest.TestCase):
         self.assertEqual(requests[0].requested_lease_ms, 0)
         commands = [
             message for topic, message in harness.transport.published
-            if topic == EXTERNAL_COMMAND_TOPIC
+            if topic == BODY_CMD_TOPIC
         ]
-        positions = [command.motor_cmds[31].q for command in commands]
+        positions = [command.joints[26].q for command in commands]
         self.assertEqual(positions[0], -1.95)
         self.assertIn(0.0, positions)
         self.assertEqual(positions[-1], -1.95)
@@ -444,7 +447,7 @@ class ExamplesSmokeTest(unittest.TestCase):
         clock = FakeClock()
         harness = RecordingController(clock)
         self.addCleanup(harness.close)
-        harness.measured_q = [3.0] * 42
+        harness.measured_q = [3.0] * 31
 
         external_control.run(
             harness,
@@ -473,7 +476,7 @@ class ExamplesSmokeTest(unittest.TestCase):
         harness = RecordingController(clock, advance_lowstate=False)
         self.addCleanup(harness.close)
 
-        with self.assertRaisesRegex(RuntimeError, "lowstate.*stale"):
+        with self.assertRaisesRegex(RuntimeError, "body state.*stale"):
             external_control.run(
                 harness,
                 timeout=1.0,
@@ -535,7 +538,7 @@ class ExamplesSmokeTest(unittest.TestCase):
         harness = RecordingController(clock, stale_after_commands=1)
         self.addCleanup(harness.close)
 
-        with self.assertRaisesRegex(RuntimeError, "lowstate became stale"):
+        with self.assertRaisesRegex(RuntimeError, "body state became stale"):
             external_control.run(
                 harness,
                 timeout=1.0,
@@ -592,16 +595,16 @@ class ExamplesSmokeTest(unittest.TestCase):
 
                 def sleep_with_feedback(duration):
                     clock.sleep(duration)
-                    harness.measured_dq[31] = (
+                    harness.measured_dq[26] = (
                         -0.07326 if spike_start <= clock.now < spike_end else 0.0
                     )
 
                 sleep_with_feedback(0)
-                state = external_control._wait_for_stationary_lowstate(
+                state = external_control._wait_for_stationary_body_state(
                     harness, timeout=5.0, sleep=sleep_with_feedback,
                     monotonic=clock.monotonic,
                 )
-                self.assertEqual(state.motor_states[31].dq, 0.0)
+                self.assertEqual(state.joints[26].dq, 0.0)
                 self.assertGreaterEqual(clock.now + 1e-12, earliest_finish)
                 self.assertLess(clock.now, earliest_finish + 0.06)
                 self.assertNotIn("enter_external", harness.calls)
@@ -610,7 +613,7 @@ class ExamplesSmokeTest(unittest.TestCase):
         clock = FakeClock()
         harness = RecordingController(clock)
         self.addCleanup(harness.close)
-        harness.measured_dq[31] = 0.051
+        harness.measured_dq[26] = 0.051
         with self.assertRaisesRegex(RuntimeError, "timed out"):
             external_control.run(
                 harness, timeout=5.0, sleep=clock.sleep,
@@ -622,11 +625,11 @@ class ExamplesSmokeTest(unittest.TestCase):
 
     def test_external_example_rejects_moving_or_invalid_preflight(self):
         for invalid_setup, error in (
-            (lambda h: setattr(h, "measured_dq", [0.051] * 42), "timed out"),
+            (lambda h: setattr(h, "measured_dq", [0.051] * 31), "timed out"),
             (lambda h: setattr(h, "attitude_valid", False), "attitude"),
-            (lambda h: setattr(h, "measured_q", [0.0] * 41), "42 required"),
-            (lambda h: setattr(h, "measured_q", [float("nan")] * 42), "finite"),
-            (lambda h: setattr(h, "measured_dq", [float("nan")] * 42), "finite"),
+            (lambda h: setattr(h, "measured_q", [0.0] * 30), "31 required"),
+            (lambda h: setattr(h, "measured_q", [float("nan")] * 31), "finite"),
+            (lambda h: setattr(h, "measured_dq", [float("nan")] * 31), "finite"),
         ):
             with self.subTest(error=error):
                 clock = FakeClock()
@@ -651,7 +654,7 @@ class ExamplesSmokeTest(unittest.TestCase):
         clock = FakeClock()
         harness = RecordingController(clock, advance_lowstate=False)
         self.addCleanup(harness.close)
-        harness.measured_dq[31] = -0.07326
+        harness.measured_dq[26] = -0.07326
         with self.assertRaisesRegex(RuntimeError, "stale"):
             external_control.run(
                 harness, timeout=5.0, sleep=clock.sleep,

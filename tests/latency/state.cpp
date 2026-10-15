@@ -1,50 +1,45 @@
 #include <array>
 #include <chrono>
+#include <limits>
 #include <vector>
+#include "body_state_generated.h"
 
-#include "humanoid_low_state_generated.h"
-
-// Separate translation unit: both BFBS-generated headers contain common types.
+// Separate translation unit: flattened BFBS headers duplicate common types.
 std::vector<uint8_t> MakeState(uint16_t sequence) {
   const auto wall_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                           std::chrono::system_clock::now().time_since_epoch())
-                           .count();
-  lowlevel::HumanoidLowStateT state;
+      std::chrono::system_clock::now().time_since_epoch()).count();
+  lowlevel::BodyStateT state;
+  state.protocol_version = 1;
   state.state_id = sequence;
-  state.ts_state_real = state.ts_state_pub = state.ts_consumed_us = wall_us;
+  state.roster_version = 1;
+  state.ts_state_real_us = state.ts_state_pub_us = state.ts_consumed_us = wall_us;
   state.attitude_valid = true;
   state.aorta_header = std::make_unique<aorta::sys::AortaHeaderT>();
   state.aorta_header->sequence = sequence;
   state.aorta_header->publish_stamp_ns = wall_us * 1000;
   state.aorta_header->publisher_node = "sdk_ci_mock";
-  for (size_t j = 0; j < 44; ++j) {
-    const float q = static_cast<float>(sequence % 1024) * .0001f + j * .01f;
-    auto m = std::make_unique<lowlevel::HumanoidMotorStateT>();
-    m->ts_ingested_us = m->ts_assembled_us = wall_us;
-    m->q = m->q_raw = q;
-    m->dq = m->dq_raw = .1f;
-    m->tau_est = .2f;
-    m->temperature = 30;
-    m->mode = 1;
-    m->slot_index = j;
-    m->slot_role = j < 42 ? lowlevel::HumanoidSlotRole_ACTIVE
-                          : lowlevel::HumanoidSlotRole_RESERVED;
-    m->thermal_integral = {1, 2, 3};
-    state.motor_states.push_back(std::move(m));
-    state.relative_motor_cmd.emplace_back(j < 42 ? 1 : 0, j < 42 ? q : 0.f, 0, 0, 0, 0);
+  std::vector<lowlevel::BodyJointState> joints(31);
+  for (size_t j = 0; j < joints.size(); ++j) {
+    const bool present = j != 14;
+    const float q = present ? static_cast<float>(sequence % 1024) * .0001f + j * .01f
+                            : std::numeric_limits<float>::quiet_NaN();
+    joints[j] = lowlevel::BodyJointState(j, present, false,
+        present ? lowlevel::BodySampleStatus_OK : lowlevel::BodySampleStatus_UNCONFIGURED,
+        present ? 63 : 0, 0, wall_us, wall_us, q, .1f, 0.f, .2f, -12.f, 0);
   }
+  state.joints = std::move(joints);
   for (int j = 0; j < 2; ++j) {
-    auto imu = std::make_unique<lowlevel::ImuSampleT>();
-    imu->location = static_cast<lowlevel::ImuLocation>(j);
+    auto imu = std::make_unique<lowlevel::BodyImuSampleT>();
+    imu->location = static_cast<lowlevel::BodyImuLocation>(j);
     std::array<float, 4> quat{1, 0, 0, 0};
     std::array<float, 3> gyro{0, 0, 0}, accel{0, 0, 9.81f}, rpy{0, 0, 0};
-    imu->state = std::make_unique<lowlevel::HumanoidImuState>(quat, gyro, accel, rpy);
-    imu->status = lowlevel::HumanoidSampleStatus_OK;
-    imu->ts_ingested_us = imu->ts_assembled_us = wall_us;
+    imu->state = std::make_unique<lowlevel::BodyImuState>(quat, gyro, accel, rpy);
+    imu->status = lowlevel::BodySampleStatus_OK;
+    imu->valid_fields = 127;
+    imu->ts_ingested_us = imu->ts_assembled_us = imu->host_timestamp_us = wall_us;
     state.imu_states.push_back(std::move(imu));
   }
   flatbuffers::FlatBufferBuilder builder;
-  builder.Finish(lowlevel::HumanoidLowState::Pack(builder, &state));
-  return {builder.GetBufferPointer(),
-          builder.GetBufferPointer() + builder.GetSize()};
+  builder.Finish(lowlevel::BodyState::Pack(builder, &state));
+  return {builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize()};
 }

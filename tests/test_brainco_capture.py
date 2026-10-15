@@ -98,11 +98,14 @@ class BrainCoCaptureTest(unittest.TestCase):
                 capture.decode("left_hand_touch", data, bindings)
 
     def test_lowcmd_real_binding_preserves_all_fields(self):
-        from examples import external_control as demo
-        from locomotion_aorta import transport
-        command = demo._position_command((0.1,) * 42)
+        # Historical archive fixture: use the preserved generated42 encoder,
+        # never call the current31 demo/transport to manufacture an old command.
+        import lowlevel.LowCmd as module
+        from locomotion_aorta.types import LowCmd, MotorCommand
+        from test_motor_codec import reference_fill_low_cmd
+        command = LowCmd(1,tuple(MotorCommand(mode=10,q=.1,kp=30.,kd=1.5) for _ in range(42)))
         builder = flatbuffers.Builder(4096)
-        builder.Finish(transport._fill_low_cmd(transport._load_aorta_bindings(), command, builder, 0))
+        builder.Finish(reference_fill_low_cmd(SimpleNamespace(low_cmd_module=module),command,builder,0))
         row = capture.decode("external_command", bytes(builder.Output()), capture.load_bindings())
         self.assertEqual(row["cmd_id"], 1)
         self.assertEqual(len(row["motor_cmds"]), 42)
@@ -282,3 +285,28 @@ class BrainCoCaptureTest(unittest.TestCase):
         self.assertEqual(row['inhibit_reason'], 4)
         self.assertEqual(row['ts_acquired_hw_us'], 17)
         self.assertNotIn('ts_acquired_hw_us', row['joints'][0])
+
+
+class PublicBodyCaptureTest(unittest.TestCase):
+    def test_current_body_state_keeps_unpopulated_quality_and_null(self):
+        from test_body_codec import make_state
+        data, _ = make_state()
+        row = capture.decode('body_state',data,capture.load_bindings())
+        self.assertEqual(len(row['joints']),31)
+        self.assertFalse(row['joints'][14]['populated'])
+        self.assertIsNone(row['joints'][14]['q'])
+        self.assertEqual(row['joints'][14]['valid_fields'],0)
+        self.assertTrue(row['nonfinite_feedback'])
+        self.assertEqual(row['ts_state_real_us'],1_234_567)
+
+    def test_current_command_keeps_action_and_body_causality_without_mode(self):
+        from test_body_codec import make_command, encode
+        from locomotion_aorta import BodyCmdAction
+        row=capture.decode('body_cmd',encode(make_command()),capture.load_bindings())
+        self.assertEqual(row['action'],BodyCmdAction.EXTERNAL)
+        self.assertEqual(len(row['joints']),31)
+        self.assertEqual(row['input_state_id'],123)
+        self.assertNotIn('mode',row['joints'][0])
+        self.assertNotIn('lowstate',capture.TOPICS)
+        self.assertNotIn('external_command',capture.TOPICS)
+        self.assertIn('lowstate',capture.MODULES)  # explicit archive parsing retained

@@ -10,9 +10,13 @@
 #include <vector>
 
 #include "aorta_abi.h"
-#include "low_cmd_generated.h"
+#include "body_cmd_generated.h"
 
 std::vector<uint8_t> MakeState(uint16_t sequence);
+aorta_service_t StartInfoService(aorta_node_t node, const std::string &endpoint,
+                                const std::string &bfbs, const std::string &hash);
+uint64_t InfoRequests();
+uint64_t InfoErrors();
 using Clock = std::chrono::steady_clock;
 uint64_t Now() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -49,28 +53,31 @@ void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
     }
     flatbuffers::Verifier verifier(bytes.data(), bytes.size());
     if (bytes.size() != view->total_len ||
-        !lowlevel::VerifyLowCmdBuffer(verifier))
-      throw std::runtime_error("invalid LowCmd FlatBuffer");
-    const auto *cmd = lowlevel::GetLowCmd(bytes.data());
-    const auto *motors = cmd->motor_cmd();
-    if (!motors || motors->size() != 42)
-      throw std::runtime_error("expected 42 slots");
-    std::array<lowlevel::MotorCmd, 42> copied;
+        !lowlevel::VerifyBodyCmdBuffer(verifier))
+      throw std::runtime_error("invalid BodyCmd FlatBuffer");
+    const auto *cmd = lowlevel::GetBodyCmd(bytes.data());
+    const auto *motors = cmd->joints();
+    if (!motors || motors->size() != 31)
+      throw std::runtime_error("expected31 slots");
+    std::array<lowlevel::BodyJointCmd, 31> copied;
     for (size_t j = 0; j < copied.size(); ++j) copied[j] = *motors->Get(j);
-    Reply row{cmd->external_session_id(),
-              cmd->external_sequence(),
+    Reply row{cmd->session_id(),
+              cmd->sequence(),
               cmd->cmd_id(),
               entered,
               Now(),
               true};
     row.valid = row.session == capture.session && row.sequence > 0 &&
                 row.sequence <= 65000 && row.cmd_id == row.sequence &&
-                cmd->external_version() == 1;
+                cmd->protocol_version() == 1 && cmd->input_state_id() == row.sequence &&
+                cmd->input_state_ts_real_us() > 0 &&
+                cmd->action() == lowlevel::BodyCmdAction_EXTERNAL;
     for (size_t j = 0; j < copied.size(); ++j) {
+      if (j == 14) continue;  // declared uninstalled: no physical validation
       const float q =
           static_cast<float>(row.sequence % 1024) * .0001f + j * .01f;
       const auto &m = copied[j];
-      row.valid = row.valid && m.mode() == 1 && std::isfinite(m.q()) &&
+      row.valid = row.valid && std::isfinite(m.q()) &&
                   std::abs(m.q() - q) < 1e-6f && m.dq() == .1f &&
                   m.tau() == .2f && m.kp() == 1.f && m.kd() == .5f;
     }
@@ -87,10 +94,11 @@ void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
 
 int main(int argc, char **argv) {
   aorta_node_t node = 0;
+  aorta_service_t info_service = 0;
   Capture capture;
   try {
-    if (argc != 6)
-      throw std::runtime_error("mock DIRECTORY SESSION RATE SECONDS SCHEMA");
+    if (argc != 8)
+      throw std::runtime_error("mock DIRECTORY SESSION RATE SECONDS STATE_SCHEMA INFO_SCHEMA INFO_HASH");
     const std::filesystem::path directory(argv[1]);
     capture.session = std::stoull(argv[2]);
     const int hz = std::stoi(argv[3]);
@@ -104,6 +112,7 @@ int main(int argc, char **argv) {
         "/bench/sdk_latency/" + std::to_string(capture.session);
     capture.replies.reserve(65000);
     Check(aorta_node_new("sdk_ci_mock", "default", &node));
+    info_service = StartInfoService(node, prefix + "/get_robot_info", argv[6], argv[7]);
     auto command_qos = aorta_qos_preset(AORTA_QOS_PRESET_REALTIME_CONTROL);
     aorta_sub_t subscriber = 0;
     Check(aorta_subscriber_new(node, (prefix + "/command").c_str(),
@@ -114,7 +123,7 @@ int main(int argc, char **argv) {
                                 {});
     if (schema.empty()) throw std::runtime_error("missing schema BFBS");
     aorta_pub_options_t options{};
-    options.schema_root_type = "lowlevel.HumanoidLowState";
+    options.schema_root_type = "lowlevel.BodyState";
     options.schema_bfbs = schema.data();
     options.schema_bfbs_len = schema.size();
     auto state_qos = aorta_qos_preset(AORTA_QOS_PRESET_SENSOR_DATA);
@@ -151,6 +160,8 @@ int main(int argc, char **argv) {
     }
     std::this_thread::sleep_for(
         std::chrono::seconds(3));  // bounded reply drain
+    Check(aorta_service_free(info_service));
+    info_service = 0;
     Check(aorta_node_free(node));
     node = 0;  // callbacks quiesce before Capture storage is released
     std::ofstream sent_file(directory / "sent.csv"),
@@ -166,13 +177,17 @@ int main(int argc, char **argv) {
                << r.callback_ns << ',' << r.copied_ns << ',' << r.valid << '\n';
     sent_file.close();
     received.close();
-    if (!sent_file || !received || capture.errors)
+    std::ofstream info_receipt(directory / "robot_info.json");
+    info_receipt << "{\"requests\":" << InfoRequests() << ",\"errors\":" << InfoErrors() << "}\n";
+    info_receipt.close();
+    if (!sent_file || !received || !info_receipt || capture.errors || InfoErrors() || !InfoRequests())
       throw std::runtime_error("capture/write errors");
     std::cout << "sent=" << sent.size()
               << " received=" << capture.replies.size() << '\n';
     return 0;
   } catch (const std::exception &e) {
     std::cerr << e.what() << '\n';
+    if (info_service) aorta_service_free(info_service);
     if (node) aorta_node_free(node);
     return 1;
   }

@@ -19,7 +19,7 @@ class ReleaseTest(unittest.TestCase):
         manifest = json.loads((ROOT / "compatibility.json").read_text())
         self.assertEqual(set(manifest), {
             "manifest_version", "sdk_version", "aorta_version", "flatbuffers_version",
-            "humanoid_msgs_version", "python_requires", "platforms", "external_version",
+            "humanoid_msgs_version", "python_requires", "platforms", "external_version", "control_request_version",
             "command_slots", "state_slots", "session_mode", "pc_session_profile",
             "wheel_sha256", "dependency_release_tag", "aorta_abi_version", "schema_sha256",
         })
@@ -52,8 +52,10 @@ class ReleaseTest(unittest.TestCase):
             (root / "CLAUDE.md").symlink_to("AGENTS.md")
             for name in ("examples", "python/locomotion_aorta", "config", "dist", "wheels"):
                 (root / name).mkdir(parents=True)
-            hand_examples = ("brainco_hand_external.py", "brainco_hand_control.py", "brainco_capture.py")
-            for name in hand_examples:
+            examples = ("brainco_hand_external.py", "brainco_capture.py", "gripper_external.py",
+                        "external_control.py", "body_state_subscriber.py", "teleop_policy.py",
+                        "fixed_stand_pose.py", "fixed_stand_profile.json", "action17_contract.json")
+            for name in examples:
                 shutil.copyfile(ROOT / "examples" / name, root / "examples" / name)
             source = ROOT / "config/pc_session_peer.json5"
             if source.exists():
@@ -76,11 +78,14 @@ class ReleaseTest(unittest.TestCase):
             self.assertEqual(bundled.read_bytes(), source.read_bytes())
             self.assertEqual([p.name for p in (output / "config").iterdir()], [source.name])
             manifest = json.loads((output / "MANIFEST.json").read_text())
-            for name in hand_examples:
+            for name in examples:
                 relative = "examples/" + name
                 self.assertEqual((output / relative).read_bytes(), (ROOT / relative).read_bytes())
                 self.assertEqual(manifest["files"][relative],
                                  hashlib.sha256((ROOT / relative).read_bytes()).hexdigest())
+            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py"):
+                self.assertFalse((output / "examples" / retired).exists())
+                self.assertNotIn("examples/" + retired, manifest["files"])
             self.assertEqual(manifest["pc_session_profile"], "config/pc_session_peer.json5")
             self.assertEqual(manifest["files"]["config/pc_session_peer.json5"],
                              hashlib.sha256(bundled.read_bytes()).hexdigest())

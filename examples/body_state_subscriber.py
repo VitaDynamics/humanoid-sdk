@@ -12,14 +12,14 @@ def run_once(
     timeout: float,
     emit: Callable[[str], None] = print,
 ) -> None:
-    state = controller.wait_lowstate(timeout)
-    emit(f"state_id={state.state_id} stamp_ns={state.stamp_ns}")
-    for index, motor in enumerate(state.motor_states):
-        emit(f"joint[{index}] q={motor.q:.6f} dq={motor.dq:.6f}")
+    state = controller.wait_body_state(timeout)
+    emit(f"state_id={state.state_id} ts_state_real_us={state.ts_state_real_us}")
+    for index, motor in enumerate(state.joints):
+        emit(f"joint[{index}] populated={motor.populated} valid_fields={motor.valid_fields} q={motor.q:.6f} dq={motor.dq:.6f}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Read one humanoid lowstate")
+    parser = argparse.ArgumentParser(description="Read one public31 body state")
     parser.add_argument("--group", default="default")
     parser.add_argument("--timeout", type=float, default=5.0)
     args = parser.parse_args()

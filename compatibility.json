@@ -9,8 +9,8 @@
     "linux_aarch64"
   ],
   "external_version": 1,
-  "command_slots": 42,
-  "state_slots": 44,
+  "command_slots": 31,
+  "state_slots": 31,
   "session_mode": "peer",
   "pc_session_profile": "config/pc_session_peer.json5",
   "wheel_sha256": {
@@ -18,21 +18,29 @@
     "aorta_sdk-2026.10.12-py3-none-linux_aarch64.whl": "c1f7a03e023cbb50b1ec9252393f72f4713392af02e0ace7766461667760c333",
     "aorta_sdk-2026.10.12-py3-none-linux_x86_64.whl": "900d143041a422f9c3f7023aad7334c0ebcc17e0c549e0ed3a0e6f10c02b9afa",
     "flatbuffers-25.9.23-py2.py3-none-any.whl": "255538574d6cb6d0a79a17ec8bc0d30985913b87513a01cce8bcdb6b4c44d0e2",
-    "vbot_humanoid_msgs-0.1.1-py3-none-any.whl": "fa9f32aff499e02ba03a7c10a4d36d215a4581fb5720fb0f1b2cf05e48efe448"
+    "vbot_humanoid_msgs-0.1.2-py3-none-any.whl": "a5b1ff6a071b968edc00d5ce88a31ad5d17a7adf7fa8992bad5601f1f3da5606"
   },
   "dependency_release_tag": "v0.1.0-rc.4",
   "aorta_abi_version": 13,
   "schema_sha256": {
+    "body_cmd": "16fc6c592e874a226e0976d7ab73002843510eb6e48c968e6d7cd615f11fe8c1",
+    "body_state": "841b861428898ef44033292e8adaff3ce9ba2de3237c10143b65a8e108585001",
     "control_ack": "282cb25f8ec719272f37d4e2041a749aa8d32a5022054e3c911e6cba0ff7d1ec",
     "control_request": "4e9009a2487c76e04421761871e6799d98b0b2816217dfe904240afd97eb88cc",
     "control_status": "cc897baf058703077ece4cbdc1f61b7c443905dbe1e24f204451ccf629afebf6",
+    "get_robot_info": "36fe1b2f1fbdccc51236e6df13186a82717fc6e71b242dd00f0443fefdebfca1",
+    "gripper_cmd": "8cb945b15d3f2f34d02dbb4db3ff471560ad59be9afd634c1e2d74ba3d683fda",
+    "gripper_info": "116c2c227a99868c8080e0366079cf60395841c23e7eaa310fc3fe7d4f0b5564",
+    "gripper_state": "1c3ca1edaa3cffd1f8bba417f329eb3ce92280a0f38fa4d384ecbd80389f3497",
     "hand_cmd": "4f9a2b136241a1d2e0b32caf86487b509371b6d165c1020e32e752640d39bdf4",
     "hand_info": "e1b1c9acbdde2defaeab6996dfeb58fc55bcc2706235fde535eab8a4cc9981e8",
     "hand_set_touch": "1fe757111414c2aebe78e8152c8864e65111e910e90e7d541e150155805ddcd9",
     "hand_state": "84cdfcb9b9078030901d4ec7279f1d9f98d5c6fe607cef7bbd6944daae0d8e13",
     "hand_touch": "16a4a441e41832570a601adfa12703bec0ba7ddcb8ef993f630e59acd21d31db",
     "humanoid_low_state": "91fefd1105d46c16c148ca2c8aa6a058ed8a8aeb9e9a2db9bb01469d29928587",
-    "low_cmd": "174dff3712997f8e26d56f160af36e73eada86a65717350a503cfa83226e86fa"
+    "low_cmd": "174dff3712997f8e26d56f160af36e73eada86a65717350a503cfa83226e86fa",
+    "robot_info": "8ad71e50797b8a26d59ccbf9bab481d2dfef62d2443b3b5b26e9130364b0b8f5"
   },
-  "humanoid_msgs_version": "0.1.1"
+  "humanoid_msgs_version": "0.1.2",
+  "control_request_version": 2
 }

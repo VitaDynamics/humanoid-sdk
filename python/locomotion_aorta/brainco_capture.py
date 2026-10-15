@@ -16,16 +16,27 @@ import re
 import threading
 import time
 
-from . import _hand_codec
-from .transport import _decode_control_status, _decode_humanoid_lowstate
+from . import _hand_codec, _gripper_codec
+from .transport import _decode_control_status
+from ._body_codec import decode_body_state, unpack_body_cmd
+from ._motor_codec import unpack_motor_states
+from .types import HumanoidLowState
+from .body_types import BodyCmd, BODY_SLOTS
 
 
 TOPICS = {
-    "lowstate": "/sdk/foot_humanoid/lowstate",
-    "external_command": "/locomotion/external_command",
+    "body_state": "/sdk/foot_humanoid/body_state",
+    "body_cmd": "/sdk/foot_humanoid/body_cmd",
     "control_status": "/sdk/foot_humanoid/control/status",
 }
+# Historical MCAP kinds are explicit offline choices, never live or command fallbacks.
+ARCHIVE_TOPICS = {
+    "lowstate": "/sdk/foot_humanoid/lowstate",
+    "external_command": "/locomotion/external_command",
+}
 MODULES = {
+    "body_state": ("lowlevel.BodyState", "BodyState"),
+    "body_cmd": ("lowlevel.BodyCmd", "BodyCmd"),
     "lowstate": ("lowlevel.HumanoidLowState", "HumanoidLowState"),
     "external_command": ("lowlevel.LowCmd", "LowCmd"),
     "control_status": ("locomotion_sdk.ControlStatus", "ControlStatus"),
@@ -35,6 +46,10 @@ for _side in ("left", "right"):
                          ("touch", "HandTouch"), ("info", "HandInfo")):
         _key = f"{_side}_hand_{_kind}"
         TOPICS[_key] = f"/sdk/foot_humanoid/hand/{_side}/{_kind}"
+        MODULES[_key] = ("lowlevel." + _root, _root)
+    for _kind, _root in (("cmd", "GripperCmd"), ("state", "GripperState"), ("info", "GripperInfo")):
+        _key = f"{_side}_gripper_{_kind}"
+        TOPICS[_key] = f"/sdk/foot_humanoid/gripper/{_side}/{_kind}"
         MODULES[_key] = ("lowlevel." + _root, _root)
 
 
@@ -63,6 +78,23 @@ def load_bindings():
                            "lowlevel.HandTouch; no handwritten decoder fallback") from error
 
 
+def _json_feedback(result):
+    nonfinite = False
+    def value(item):
+        nonlocal nonfinite
+        if isinstance(item, float) and not math.isfinite(item):
+            nonfinite = True
+            return None
+        if isinstance(item, dict):
+            return {key: value(v) for key, v in item.items()}
+        if isinstance(item, (tuple, list)):
+            return [value(v) for v in item]
+        return item
+    result = value(result)
+    result["nonfinite_feedback"] = nonfinite
+    return result
+
+
 def binding_schema_hash(kind):
     root = MODULES[kind][1]
     stem = re.sub(r'(?<!^)(?=[A-Z])', '_', root).lower()
@@ -74,32 +106,42 @@ def decode(kind, payload, bindings):
     if not isinstance(payload, bytes) or not 8 <= len(payload) <= 65536:
         raise ValueError("invalid or oversized FlatBuffer payload")
     view = bindings[kind](payload)
+    if "_gripper_" in kind:
+        side, gripper_kind = kind.split("_gripper_")
+        record = getattr(_gripper_codec, "decode_" + gripper_kind)(view)
+        if record.side != (1 if side == "left" else 2):
+            raise ValueError("Gripper message side differs from selected topic")
+        return _json_feedback(asdict(record))
     if "_hand_" in kind:
         side, hand_kind = kind.split("_hand_")
         record = getattr(_hand_codec, "decode_" + hand_kind)(view)
         if record.side != (1 if side == "left" else 2):
             raise ValueError("Hand message side differs from selected topic")
-        result = asdict(record)
-        # NOT_READY can legitimately carry NaN. JSON null preserves absence;
-        # never synthesize a zero angle/current from missing hand feedback.
-        nonfinite = False
-        def json_value(value):
-            nonlocal nonfinite
-            if isinstance(value, float) and not math.isfinite(value):
-                nonfinite = True
-                return None
-            if isinstance(value, dict):
-                return {key: json_value(item) for key, item in value.items()}
-            if isinstance(value, (tuple, list)):
-                return [json_value(item) for item in value]
-            return value
-        result = json_value(result)
-        result["nonfinite_feedback"] = nonfinite
-        return result
+        # NOT_READY and an unpopulated body slot may carry NaN; JSON null
+        # records absence without synthesizing a healthy zero.
+        return _json_feedback(asdict(record))
+    if kind == "body_state":
+        state = decode_body_state(view)
+        if len(state.joints) != BODY_SLOTS:
+            raise ValueError("requires31-slot BodyState")
+        return _json_feedback(asdict(state))
+    if kind == "body_cmd":
+        motors = unpack_body_cmd(view)
+        if len(motors) != BODY_SLOTS:
+            raise ValueError("requires31-slot BodyCmd")
+        quat = view.RootQuat()
+        command = BodyCmd(cmd_id=view.CmdId(), joints=motors,
+                         protocol_version=view.ProtocolVersion(), action=view.Action(),
+                         session_id=view.SessionId(), sequence=view.Sequence(),
+                         input_state_id=view.InputStateId(), input_state_ts_real_us=view.InputStateTsRealUs(),
+                         ts_client_created_us=view.TsClientCreatedUs(), ts_client_send_us=view.TsClientSendUs(),
+                         root_quat=None if quat is None else (quat.W(),quat.X(),quat.Y(),quat.Z()))
+        return _json_feedback(asdict(command))
     if kind == "lowstate":
         if view.MotorStatesLength() != 44:
             raise ValueError("requires 44-slot humanoid LowState")
-        state = _decode_humanoid_lowstate(view)
+        state = HumanoidLowState(state_id=view.StateId(), stamp_ns=view.TsStateReal() * 1000,
+                                 motor_states=unpack_motor_states(view), attitude_valid=view.AttitudeValid())
         result = asdict(state)
         result["input_cmd_id"] = view.InputCmdId()
         result["per_motor_freshness"] = "not_available"
@@ -229,7 +271,7 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
 def export_mcap(source: Path, output: Path, metadata, topic_map, schema_hashes, *, bindings=None):
     """Offline export. Exact topic and BFBS hashes are mandatory, no suffix guessing."""
     metadata_checked(metadata)
-    if (not topic_map or any(kind not in TOPICS for kind in topic_map.values())
+    if (not topic_map or any(kind not in MODULES for kind in topic_map.values())
             or len(set(topic_map.values())) != len(topic_map)):
         raise ValueError("topic_map must map distinct exact topics to distinct known kinds")
     for kind in topic_map.values():

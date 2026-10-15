@@ -44,6 +44,6 @@ class PublicEeBindingTest(unittest.TestCase):
                      'HandSetTouchRequest', 'HandSetTouchResponse'):
             with self.subTest(name=name):
                 self.assertTrue(callable(getattr(getattr(bindings, name), name).GetRootAs))
-        for name in ('hand_cmd_trace', 'gripper_cmd', 'gripper_state', 'gripper_info'):
+        for name in ('hand_cmd_trace',):
             with self.subTest(removed_root=name), self.assertRaises(ImportError):
                 importlib.import_module(name + '_schema_meta')
