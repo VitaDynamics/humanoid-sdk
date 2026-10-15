@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from examples import gripper_external as demo
+from locomotion_aorta.gripper_types import GripperHostTarget
 from test_examples import FakeClock, RecordingController
 from test_fixed_stand_pose import body_info
 from body_fixtures import robot_info_reply
@@ -82,6 +83,25 @@ class SineTest(unittest.TestCase):
         self.assertTrue(any('error_m=' in e and 'reported_torque_nm=' in e and 'status_raw=' in e
                             and 'inhibit=' in e for e in events))
         self.assertTrue(any('BODY_HOLD summary observation_only=true' in e for e in events))
+
+    def test_entry_and_return_duration_formula_uses_latest_robot_host_target(self):
+        case = self.setup_case()
+        for client, q in zip(case[1], (.08, .01)):
+            client._state = replace(client._state, host_target_valid=True,
+                                    host_target=GripperHostTarget(q, .5))
+        self.run_case(case)
+        transitions = [line for line in case[-1] if 'linear_duration_s=' in line]
+        self.assertEqual(len(transitions), 2)
+        self.assertIn('stage=entry', transitions[0])
+        self.assertIn('stage=return', transitions[1])
+        self.assertAlmostEqual(float(transitions[0].split('linear_duration_s=')[1].split()[0]), 1.25)
+        self.assertAlmostEqual(float(transitions[1].split('linear_duration_s=')[1].split()[0]), 3.)
+        for side, start, end in [('left', .08, .02), ('right', .01, .07)]:
+            line = next(e for e in case[-1] if f'stage=return side={side}' in e)
+            values = dict(word.split('=', 1) for word in line.split() if '=' in word)
+            self.assertAlmostEqual(float(values['target_m']),
+                                   start+(end-start)*float(values['elapsed_s'])/3., places=7)
+        self.assertEqual([g.commands[-1].q for g in case[1]], [.02, .07])
 
     def test_default_30_seconds_covers_three_sine_cycles(self):
         case = self.setup_case()

@@ -297,6 +297,23 @@ class _GripperGuard:
                  and state.trace_sequence == self.submitted.sequence and state.ts_cmd_accepted_us))
 
 
+def _transition_duration(start, target, rate, minimum=0.0):
+    delta = abs(target - start)
+    if delta == 0:
+        return minimum
+    if rate <= 0:
+        raise ValueError('configured opening rate is zero; no finite transition duration')
+    return max(minimum, delta / rate)
+
+
+def _opening_start(info, state):
+    # The robot host target is its rate-limited command, not measured arrival.
+    q = (state.host_target.q if state.host_target_valid and state.host_target is not None
+         else state.sample.q)
+    validate_target(info, q)
+    return q
+
+
 def run(controller, client, *, q, dq=0.0, torque_cmd_nm=None,
         timeout=5.0, duration=body.DWELL_S, body_gains='hold',
         body_pose='measured', return_to_start=False,
@@ -307,6 +324,8 @@ def run(controller, client, *, q, dq=0.0, torque_cmd_nm=None,
     validate_target(info, q, dq, torque_cmd_nm)
     initial = client.wait_state(timeout)
     validate_state(info, initial)
+    rate = dq if dq > 0 else info.max_opening_rate_m_s
+    _transition_duration(_opening_start(info, initial), q, rate, duration)
     if return_to_start:
         validate_target(info, initial.sample.q, dq, torque_cmd_nm)
     emit(f'{client.side}: q={q} m, dq={dq} m/s host cap '
@@ -327,8 +346,11 @@ def run(controller, client, *, q, dq=0.0, torque_cmd_nm=None,
                 raise TimeoutError('gripper output did not become enabled after EXTERNAL entry')
         targets = (q, initial.sample.q) if return_to_start else (q,)
         for target in targets:
-            emit(f'gripper leg target={target} m; same EXTERNAL session')
-            deadline = monotonic() + duration
+            start = _opening_start(info, state)
+            seconds = _transition_duration(start, target, rate, duration)
+            emit(f'gripper leg target={target} m start={start} m rate_m_s={rate} '
+                 f'streaming_duration_s={seconds}; same EXTERNAL session; device arrival not inferred')
+            deadline = monotonic() + seconds
             next_print = monotonic()
             while monotonic() < deadline:
                 frame()
@@ -466,7 +488,8 @@ def run_sine(controller, clients, *, low=.01, high=.08, period=10.0, duration=30
             # AGX dq=0 resolves to the same effective max_opening_rate published
             # in Info. Use that configured rate for a common linear duration;
             # the robot still owns its per-frame rate limiter.
-            seconds = max(abs(b-a) / i.max_opening_rate_m_s for a, b, i in zip(start, end, infos))
+            seconds = max(_transition_duration(a, b, i.max_opening_rate_m_s)
+                          for a, b, i in zip(start, end, infos))
             emit(f'GRIPPER_SINE stage={stage} linear_duration_s={seconds} dq=0')
             def position(elapsed):
                 if seconds == 0 or elapsed >= seconds:
@@ -477,8 +500,9 @@ def run_sine(controller, clients, *, low=.01, high=.08, period=10.0, duration=30
 
         transition('entry', tuple(s.sample.q for s in states), (mid, mid))
         stream('sine', lambda elapsed: (sine_opening(elapsed, low=low, high=high, period=period),)*2, duration)
-        endpoint = sine_opening(duration, low=low, high=high, period=period)
-        transition('return', (endpoint, endpoint), entry)
+        states = [guard.feedback(True) for guard in guards]
+        transition('return', tuple(_opening_start(info, state)
+                                   for info, state in zip(infos, states)), entry)
         final_deadline = monotonic() + timeout
         while True:
             frame()
@@ -507,19 +531,19 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None):
                         help='sine: both sides, same EXTERNAL session, always return to entry openings')
     parser.add_argument('--sine-min-m', type=float, default=.01)
     parser.add_argument('--sine-max-m', type=float, default=.08)
-    parser.add_argument('--period-s', type=float, default=10., help='sine period; coordinator default 10s, owner may change')
+    parser.add_argument('--period-s', type=float, default=10., help='sine period in seconds (default: 10)')
     parser.add_argument('--group', default='default')
     parser.add_argument('--timeout', type=float, default=5.0)
     parser.add_argument('--target-m', type=float, help='absolute total opening target; required for motion')
     parser.add_argument('--speed-m-s', type=float, default=0.0, help='host cap; 0 leaves robot configuration default')
     parser.add_argument('--torque-cmd-nm', type=float, default=None,
                         help='signed software motor-side Nm; omitted=config hold, explicit 0=0')
-    parser.add_argument('--duration', type=float, default=None, help='streaming seconds: sine default30, target default1')
+    parser.add_argument('--duration', type=float, default=None, help='sine streaming seconds (default 30); minimum per target leg (default 1); device arrival not inferred')
     parser.add_argument('--body-gains', choices=('hold', 'zero'), default='hold')
     parser.add_argument('--body-pose', choices=('measured', 'zero'), default='measured',
                         help='zero uses frozen FIXED_STAND gains and real-time linear entry')
     parser.add_argument('--return-to-start', action='store_true',
-                        help='after target streaming, return once to the initial measured gripper opening')
+                        help='stream one return to the initial measured opening using the rate-based duration; device arrival not inferred')
     parser.add_argument('--dry-run', action='store_true', help='read-only subscriptions, no lease or commands')
     parser.add_argument('--confirm-motion', action='store_true', help='requires separate current on-site authorization')
     args = parser.parse_args(argv)

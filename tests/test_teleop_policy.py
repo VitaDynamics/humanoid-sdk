@@ -253,6 +253,8 @@ class LifecycleTests(unittest.TestCase):
             def get_robot_info(self, timeout):
                 return NS(info=NS(body=body), status=API.ServiceStatus.SUCCESS, error_message='')
             def wait_body_state(self, timeout):
+                if len(reads) >= 100:
+                    raise AssertionError('test read budget exceeded: frozen BodyState loop did not terminate')
                 reads.append(timeout)
                 state.state_id = ids[min(len(reads)-1, len(ids)-1)]
                 if stop_during_wait and len(reads) == 3:
@@ -305,6 +307,8 @@ class LifecycleTests(unittest.TestCase):
                         return NS(info=NS(body=body), status=API.ServiceStatus.SUCCESS, error_message='')
                     def wait_body_state(self, timeout):
                         self.reads += 1
+                        if self.reads > 100:
+                            raise AssertionError('test read budget exceeded: frozen BodyState loop did not terminate')
                         state.state_id = 10 if self.reads == 1 else 11 if self.reads == 2 else tail
                         return state
                     def enter_external(self, timeout):

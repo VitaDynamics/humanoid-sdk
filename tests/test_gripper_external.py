@@ -82,6 +82,33 @@ class GripperExampleTest(unittest.TestCase):
         self.assertTrue(any('confirmed PASSIVE' in e for e in self.events))
         self.assertTrue(any('not inferred' in e for e in self.events))
 
+    def test_transition_duration_formula_and_minimum_are_exact(self):
+        self.assertAlmostEqual(demo._transition_duration(.01, .08, .02), 3.5)
+        self.assertAlmostEqual(demo._transition_duration(.08, .01, .01), 7.)
+        self.assertEqual(demo._transition_duration(.01, .02, .02, 1.), 1.)
+        self.assertEqual(demo._transition_duration(.02, .02, 0., 1.), 1.)
+        with self.assertRaisesRegex(ValueError, 'no finite transition'):
+            demo._transition_duration(.01, .02, 0.)
+
+    def test_each_target_leg_uses_host_target_rate_and_minimum_duration(self):
+        for dq, minimum, expected in [(0., .08, (3.25, 2.)),
+                                      (.01, .08, (6.5, 4.)),
+                                      (0., 4., (4., 4.))]:
+            with self.subTest(dq=dq, minimum=minimum):
+                self.events.clear()
+                c, gripper = self.controller(), FakeGripper()
+                gripper._state = replace(gripper._state, host_target_valid=True,
+                                        host_target=GripperHostTarget(.01, .5))
+                self.run_demo(c, gripper, dq=dq, duration=minimum, return_to_start=True)
+                legs = [line for line in self.events if line.startswith('gripper leg target=')]
+                self.assertEqual(len(legs), 2)
+                for line, seconds in zip(legs, expected):
+                    actual = float(line.split('streaming_duration_s=')[1].split(';')[0])
+                    self.assertAlmostEqual(actual, seconds)
+                    self.assertIn('start=0.01 m', line)  # Measured sample remains0.05.
+                self.assertEqual(gripper.commands[-1].q, .05)
+                self.assertEqual(c.calls.count('exit_external'), 1)
+
     def test_unknown_sample_or_excessive_command_fails_before_lease(self):
         for changes, options in (({'sample_valid': False}, {}), ({}, {'q': .2}),
                                  ({}, {'dq': .03}), ({}, {'torque_cmd_nm': -2.})):

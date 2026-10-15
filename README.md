@@ -222,6 +222,13 @@ python examples/gripper_external.py --side right --target-m "$TARGET_OPENING_M" 
 
 The example enters EXTERNAL through the existing body preflight/PREPARE/COMMIT,
 holds the measured 31-slot body pose and exits through CANCEL to PASSIVE.
+In target mode, each leg streams for at least `max(duration, abs(target-start)/rate)`:
+`rate` is positive `--speed-m-s`, or Info's configured `max_opening_rate_m_s`
+when speed is 0. The segment starts at the robot's published `host_target.q`
+when valid, otherwise its measured opening. `--return-to-start` streams one
+return to the entry measured opening under the same rule. Sine return also
+starts from the latest valid robot host target, with measured fallback.
+This budgets command travel time; it does not infer physical device arrival.
 `--body-pose zero --body-gains hold` instead ramps to zero using the recorded
 robot FIXED_STAND profile, then holds zero in the same EXTERNAL session.
 Zero-settle error/speed/dwell and this gripper example's body hold drift are

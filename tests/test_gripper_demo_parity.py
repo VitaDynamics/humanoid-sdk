@@ -1,4 +1,4 @@
-"""Per-command parity with the split demo at c231c4f; synthetic, never HIL.
+"""Per-command regression for T059's approved travel-duration contract; not HIL.
 
 Each digest covers the complete dataclass payload, including all body joints,
 keys and timestamps. UUID and client-clock sources are fixed in this test only.
@@ -21,7 +21,7 @@ from body_fixtures import robot_info_reply
 from test_gripper_external import FakeGripper
 
 
-BASE = 'c231c4fb2a476af3051f363ced13d9880f553271'
+CONTRACT = 'T059-return-duration-v2'
 CASES = {
     'single_target': dict(zero=False, sine=False, back=False),
     'single_round_trip': dict(zero=False, sine=False, back=True),
@@ -85,10 +85,10 @@ def command_trace(case):
     return {'rows': rows, 'error': error}, payloads
 
 
-class ConsolidationParityTest(unittest.TestCase):
-    def test_every_command_and_time_matches_the_preconsolidation_demo(self):
-        fixture = json.loads((Path(__file__).parent/'fixtures/gripper-demo-c231c4f.json').read_text())
-        self.assertEqual(fixture['source_head'], BASE)
+class GripperSequenceTest(unittest.TestCase):
+    def test_every_command_and_time_matches_the_return_duration_contract(self):
+        fixture = json.loads((Path(__file__).parent/'fixtures/gripper-demo-return-duration-v2.json').read_text())
+        self.assertEqual(fixture['contract'], CONTRACT)
         self.assertEqual(set(fixture['cases']), set(CASES))
         for case in CASES:
             with self.subTest(case=case):
