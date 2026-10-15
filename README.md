@@ -1,8 +1,8 @@
 # Humanoid SDK
 
-This D2 successor is in preparation. The official 0.1.2 CI asset SHA is pending;
-its manifest value is null and installation/packaging is blocked until release.
-Local integration targets S2 0db27b9376d5 (local public wheel only).
+This D2 successor uses the released public body/EE schema `0.1.2` from
+S2 daadf8f7449e. Its official CI-built wheel is pinned in the manifest and
+available with its SHA-256 sidecar in dependency release `v0.1.0-rc.4`.
 Its RobotInfo/get_robot_info layout removes the end-effector info-service
 endpoint; use matching generated bindings and robot software. Earlier 6520
 pre-release RobotInfo buffers are incompatible with this checkout.
@@ -16,9 +16,9 @@ Dependencies are pinned to Aorta SDK and messages `2026.10.12` (ABI 13),
 wheels from this repository's [Releases](https://github.com/VitaDynamics/humanoid-sdk/releases),
 using the `dependency_release_tag` in [compatibility.json](compatibility.json)
 (`v0.1.0-rc.4`). Verify wheel filenames and SHA-256s against that manifest;
-do not substitute older wheels if an asset is missing. The public body/EE `0.1.2` release
-assets are being prepared; until they are available, use only the reviewed
-public candidate bundle for host validation, not a private/HIL wheel.
+do not substitute older wheels if an asset is missing. The public body/EE
+`0.1.2` wheel and sidecar are included in that dependency release; use the
+public wheel rather than a private/HIL wheel.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
 Match the robot's public schema hashes and roster to [compatibility.json](compatibility.json).
@@ -90,8 +90,8 @@ Use the public EE wheel pinned in [compatibility.json](compatibility.json).
 The distribution is `vbot-humanoid-msgs`; generated imports retain `lowlevel`,
 `locomotion_sdk`, `aorta.services.humanoid_locomotion` and `*_schema_meta`.
 Do not install the full private `vita-msgs` wheel or a temporary HIL wheel.
-This branch requires the EE candidate and its matching release assets; the
-older `0.1.0` public wheel does not provide the new hand roots.
+The pinned public `0.1.2` wheel provides the new hand roots; the older
+`0.1.0` public wheel does not.
 
 With connection authorization and the configured peer profile, read both hands:
 
@@ -109,7 +109,7 @@ waits for a later info event with the acknowledged `touch_enabled` value;
 later event without clearing the info cache used by command publication.
 Left/right wire values are 1/2; they differ from the device register numbering.
 
-This candidate uses the T021 public EE layout. HandState stores the three
+HandState uses the T021 public EE layout. It stores the three
 sample timestamps once per message and exposes five `ts_cmd_*` stages; zero
 future stages remain unmeasured. Touch uses `state_id`, `ts_state_pub_us` and
 `raw_words`, with geometry from HandInfo. Old candidate recordings require their
