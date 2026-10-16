@@ -13,6 +13,10 @@ dependencies = [
     "flatbuffers==25.9.23",
 ]
 
+[project.optional-dependencies]
+tracking-demo = ["numpy>=1.24,<3", "onnxruntime==1.23.2"]
+tracking-replay = ["mcap==1.3.1", "mcap-ros2-support==0.5.7"]
+
 [tool.setuptools]
 package-dir = {"" = "python"}
 

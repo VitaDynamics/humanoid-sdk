@@ -94,6 +94,47 @@ CANCEL；命令断流保护、控制权校验和安全检查保持不变。客�
 需要支持零时长无限期的机器人软件；旧服务端拒绝时会报错，不回退到有限期请求。
 这些是源码变更，尚未进入已发布的 `v0.1.0-rc.1` 包；安装仍须核对匹配的发布组合。
 
+## 旧 42 槽 tracking 对照脚本
+
+本分支基于 `30d9320`，仅用于 `integration/for-master-rebase-demo-20261011`
+的旧 LowCmd42 / LowState44。固定依赖为上面的 `7100871` 组合，不能混用新版
+BodyCmd31 或重新排布字段的消息 wheel。脚本与配置分别为
+[tracking_policy.py](examples/tracking_policy.py) 和
+[groot_tracking_asample.json](examples/groot_tracking_asample.json)。
+模型、PC peer 私有配置由部署方提供；本分支不是已发布的正式交付包。
+
+在本 checkout 的独立 venv 安装 `'.[tracking-demo,tracking-replay]'` 后，先离线运行：
+
+```bash
+python examples/tracking_policy.py --model /host/actor_g1.onnx --dry-run \
+  --steps 100 --log /tmp/tracking-dry-run.jsonl
+python examples/tracking_policy.py --model /host/actor_g1.onnx \
+  --replay-mcap /host/humanoid_20261016T145707_968+0800.mcap \
+  --steps 300 --log /tmp/tracking-replay.jsonl
+```
+
+默认参考为训练默认站姿，从实测姿态做在线策略 lead-in；可用 `--motion clip.npz`
+在站立 3 秒后衔接命名关节 NPZ。读取 ONNX 自带的 28 关节、1520 维观测、50 Hz
+周期和未来参考间隔，不硬编码成另一个模型的配置。关节映射、HIP IMU、历史顺序、
+增益和脚踝限幅力矩补偿与 C++ tracking 对齐。当前不接入 PICO 或 SONIC planner。
+
+现场逐机授权和支撑、看护、急停确认完成，PC peer 配置与 group 核验后，才运行：
+
+```bash
+python examples/tracking_policy.py --model /host/actor_g1.onnx --live \
+  --confirm-motion --duration 30 --log /tmp/tracking-live.jsonl
+```
+
+此命令申请 EXTERNAL 并运动全身，退出发送 CANCEL 并确认 PASSIVE。PASSIVE 可能让
+负载肢体下落；客户端被强制终止时不能保证自动释放控制权。机器人端须已配置
+`parallel_ankle.pd.strategy=virtual_pd` 和 EXTERNAL 的 `ankle_virtual_pd_intent=true`；
+脚本不修改这些项，也不关闭机器人端插值。反馈过期、推理超过预算、拒绝/丢包计数变化
+或控制权变化时停止发命令，不自动重试运动。
+
+每次使用新的 JSONL 路径。日志含完整观测、输入状态编号、动作、限幅和力矩补偿、
+本机反馈缓存年龄、推理耗时及发布时刻；机器人源时间原样回传，不假定 PC/S100 时钟
+同步。回放仅验证推理链路；真实通信延迟与稳定性均为 `not_measured`。
+
 ## 部署避坑
 
 - `env.sh` 不安装 FlatBuffers；完整 wheelhouse 已将它列为依赖，不用 `--no-deps`。
@@ -113,7 +154,7 @@ PR 的 `SDK latency report` 检查在 x86 上运行 Python SDK ↔ C++ Mock 通�
 维护者安装匹配的 Aorta wheels 后，在独立 venv 内执行：
 
 ```bash
-python -m pip install --find-links wheelhouse -e . build
+python -m pip install --find-links wheelhouse -e '.[tracking-demo,tracking-replay]' build
 make check
 make build
 python tools/package_release.py --wheelhouse wheelhouse --output dist/offline-bundle

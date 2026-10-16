@@ -8,6 +8,7 @@ check: test
 	$(PYTHON) -m pip check
 	$(PYTHON) examples/lowstate_subscriber.py --help
 	$(PYTHON) examples/external_control.py --help
+	$(PYTHON) examples/tracking_policy.py --help
 	test -L CLAUDE.md
 	test "$$(readlink CLAUDE.md)" = AGENTS.md
 	cmp AGENTS.md CLAUDE.md

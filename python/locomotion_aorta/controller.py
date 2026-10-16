@@ -458,6 +458,16 @@ def _validate_command(command: LowCmd) -> None:
         raise InvalidCommandError("cmd_id must be an integer in [1, 65535]")
     if not isinstance(command.motor_cmds, tuple) or not command.motor_cmds:
         raise InvalidCommandError("motor_cmds must be a non-empty tuple")
+    for name, bits in (("input_state_id", 16), ("input_state_ts_real", 64),
+                       ("ts_infer_input_state", 64), ("ts_before_infer", 64),
+                       ("ts_after_infer", 64)):
+        value = getattr(command, name)
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < (1 << bits):
+            raise InvalidCommandError(f"{name} must be an unsigned {bits}-bit integer")
+    value = command.max_abs_obs
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or not 0 <= value <= 3.4028234663852886e38):
+        raise InvalidCommandError("max_abs_obs must be a finite nonnegative float32")
     for index, motor in enumerate(command.motor_cmds):
         if not isinstance(motor, MotorCommand):
             raise InvalidCommandError(

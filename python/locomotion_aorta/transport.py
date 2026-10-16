@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -13,6 +14,7 @@ from .types import (
     ControlStatus,
     ExternalPhase,
     HumanoidLowState,
+    ImuSample,
     LowCmd,
 )
 
@@ -218,6 +220,16 @@ def _fill_low_cmd(
     module.LowCmdAddExternalVersion(builder, command.external_version)
     module.LowCmdAddExternalSessionId(builder, command.external_session_id)
     module.LowCmdAddExternalSequence(builder, command.external_sequence)
+    for name, value in (
+        ("InputStateId", command.input_state_id),
+        ("InputStateTsReal", command.input_state_ts_real),
+        ("TsInferInputState", command.ts_infer_input_state),
+        ("TsBeforeInfer", command.ts_before_infer),
+        ("TsAfterInfer", command.ts_after_infer),
+        ("MaxAbsObs", command.max_abs_obs),
+    ):
+        if value:
+            getattr(module, "LowCmdAdd" + name)(builder, value)
     return module.LowCmdEnd(builder)
 
 
@@ -256,11 +268,33 @@ def _decode_control_status(view: Any) -> ControlStatus:
 
 
 def _decode_humanoid_lowstate(view: Any) -> HumanoidLowState:
+    received = time.monotonic_ns()
+    imus = []
+    for index in range(getattr(view, "ImuStatesLength", lambda: 0)()):
+        sample = view.ImuStates(index)
+        if sample is None:
+            raise ValueError("null ImuSample in HumanoidLowState")
+        state = sample.State()
+        imus.append(ImuSample(
+            location=int(sample.Location()), status=int(sample.Status()),
+            quaternion=tuple(float(state.Quaternion(i)) for i in range(4)) if state else (),
+            gyroscope=tuple(float(state.Gyroscope(i)) for i in range(3)) if state else (),
+            accelerometer=tuple(float(state.Accelerometer(i)) for i in range(3)) if state else (),
+            rpy=tuple(float(state.Rpy(i)) for i in range(3)) if state else (),
+            ts_sampled_us=int(sample.TsSampledUs()),
+            ts_acquired_hw_us=int(sample.TsAcquiredHwUs()),
+            ts_ingested_us=int(sample.TsIngestedUs()),
+            ts_assembled_us=int(sample.TsAssembledUs()),
+        ))
     return HumanoidLowState(
         state_id=int(view.StateId()),
         stamp_ns=int(view.TsStateReal()) * 1000,
         motor_states=unpack_motor_states(view),
         attitude_valid=bool(view.AttitudeValid()),
+        imu_states=tuple(imus),
+        ts_state_pub_us=int(getattr(view, "TsStatePub", lambda: 0)()),
+        ts_consumed_us=int(getattr(view, "TsConsumedUs", lambda: 0)()),
+        received_monotonic_ns=received,
     )
 
 

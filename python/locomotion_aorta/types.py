@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -40,6 +40,12 @@ class LowCmd:
     external_version: int = 0
     external_session_id: int = 0
     external_sequence: int = 0
+    input_state_id: int = 0
+    input_state_ts_real: int = 0
+    ts_infer_input_state: int = 0
+    ts_before_infer: int = 0
+    ts_after_infer: int = 0
+    max_abs_obs: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,11 +57,29 @@ class MotorState:
 
 
 @dataclass(frozen=True, slots=True)
+class ImuSample:
+    location: int
+    status: int
+    quaternion: tuple[float, ...]
+    gyroscope: tuple[float, ...]
+    accelerometer: tuple[float, ...] = ()
+    rpy: tuple[float, ...] = ()
+    ts_sampled_us: int = 0
+    ts_acquired_hw_us: int = 0
+    ts_ingested_us: int = 0
+    ts_assembled_us: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class HumanoidLowState:
     state_id: int
     stamp_ns: int
     motor_states: tuple[MotorState, ...]
     attitude_valid: bool = True
+    imu_states: tuple[ImuSample, ...] = ()
+    ts_state_pub_us: int = 0
+    ts_consumed_us: int = 0
+    received_monotonic_ns: int = field(default=0, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
