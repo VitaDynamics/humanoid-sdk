@@ -154,6 +154,18 @@ class StateSourceTest(unittest.TestCase):
             with self.assertRaises(StateSourceClosedError):
                 future.result(1)
 
+    def test_large_finite_wait_does_not_overflow_platform_wait_and_close_wakes_it(self):
+        s=self.source()
+        entered=threading.Event();original=s._condition.wait
+        def wait(timeout):
+            self.assertLessEqual(timeout,threading.TIMEOUT_MAX)
+            entered.set()
+            return original(timeout)
+        with mock.patch.object(s._condition,'wait',side_effect=wait), ThreadPoolExecutor(max_workers=1) as pool:
+            future=pool.submit(s.snapshot,1e300)
+            self.assertTrue(entered.wait(1));s.close()
+            with self.assertRaises(StateSourceClosedError):future.result(1)
+
     def test_new_frame_wakes_after_token_waiter(self):
         s = self.source()
         s._stream.emit()

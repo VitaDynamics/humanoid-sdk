@@ -145,7 +145,8 @@ class BodyStateSource:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise StateSourceTimeoutError("timed out waiting for body state")
-                self._condition.wait(None if math.isinf(remaining) else remaining)
+                self._condition.wait(None if math.isinf(remaining)
+                                     else min(remaining, threading.TIMEOUT_MAX))
 
     def close(self) -> None:
         with self._condition:
