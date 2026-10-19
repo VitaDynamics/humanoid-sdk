@@ -69,7 +69,10 @@ New captures directly sample `CLOCK_REALTIME` in both processes for all eight
 stages and RTT (ns, reported as ms). The original `CLOCK_MONOTONIC` fields remain
 in raw CSV for regression and within-process frequency/publish-call elapsed time.
 There is no offset conversion. Historical captures without REALTIME remain readable
-and are explicitly labeled legacy; partial REALTIME records or negative stages fail.
+and are explicitly labeled legacy; incomplete REALTIME records still fail integrity.
+Negative REALTIME differences/order inversions are counted and displayed, never a new
+pass/fail threshold. Signed raw differences remain in CSV and statistics; clock steps
+do not represent physical negative latency. MONOTONIC integrity checks remain unchanged.
 The eight original stage boundaries, full windows, ID/content gates and rate sweep remain. Rates use `(count - 1) / (last stamp - first stamp)` per stream;
 counts and durations are retained so losses cannot be hidden by that estimator.
 Stage bars use **means of the same matched rows**, whose sum is mean RTT.
@@ -110,3 +113,6 @@ direct REALTIME receipt and whole snapshots surviving close. The per-frame file
 handshake is integration evidence, not a speed benchmark. It uses isolated loopback
 and private topics, one synthetic state publisher, no control publisher or lease.
 It does not replace the original 11×60s gate or establish device/aarch64 acceptance.
+
+The original 11×60s matrix runs before SDK/report unit tests and the additional
+read-only source probe. A later probe/test failure cannot skip that original measurement.

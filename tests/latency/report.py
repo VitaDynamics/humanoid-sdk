@@ -42,9 +42,9 @@ def indexed(rows):
     return result
 
 
-def stats(values):
+def stats(values, *, allow_negative=False):
     values = sorted(values)
-    if not values or any(not math.isfinite(v) or v < 0 for v in values):
+    if not values or any(not math.isfinite(v) or (v < 0 and not allow_negative) for v in values):
         raise ValueError("empty/negative/nonfinite measurement")
     def quantile(p):
         x = (len(values) - 1) * p
@@ -92,34 +92,40 @@ def analyze(directory, session, seconds, rate):
     # remain readable and are explicitly labeled; never mix clocks in a segment.
     realtime = any(any(k.endswith('_realtime_ns') for k in row)
                    for rows in (sent, client, received) for row in rows.values())
+    clock_order_anomalies = {}
     if realtime:
         required = ((sent, ('publish_realtime_ns', 'return_realtime_ns')),
                     (client, tuple(k.replace('_ns', '_realtime_ns') for k in
                      ('decode_ns', 'decoded_ns', 'built_ns', 'fill_ns', 'filled_ns', 'bytes_ns', 'returned_ns'))),
                     (received, ('callback_realtime_ns', 'copied_realtime_ns')))
-        for rows, keys in required:
+        for stream, (rows, keys) in zip(('sender', 'python', 'mock'), required):
             if any(any(k not in row or row[k] <= 0 for k in keys) for row in rows.values()):
                 raise ValueError('incomplete REALTIME capture')
-            for row in rows.values():
-                stamps = [row[k] for k in keys]
-                if stamps != sorted(stamps):
-                    raise ValueError('invalid REALTIME stage order')
+            clock_order_anomalies[stream] = sum(
+                [row[k] for k in keys] != sorted(row[k] for k in keys)
+                for row in rows.values())
     stages_spec = REALTIME_STAGES if realtime else STAGES
     joined = []
     for seq in sorted(received):
         row = {**sent[seq], **client[seq], **received[seq]}
         for start, end, _ in stages_spec:
-            if row[end] < row[start]:
+            if row[end] < row[start] and not realtime:
                 raise ValueError(f"non-monotonic stage {start}/{end}: {seq}")
         joined.append(row)
     with (directory / "joined.csv").open("w", newline="") as out:
         writer = csv.DictWriter(out, fieldnames=list(joined[0]))
         writer.writeheader()
         writer.writerows(joined)
-    stages = [{"label": label, **stats([(r[end] - r[start]) / 1e6 for r in joined])}
+    stages = [{"label": label,
+               "negative_samples": sum(r[end] < r[start] for r in joined),
+               **stats([(r[end] - r[start]) / 1e6 for r in joined], allow_negative=realtime)}
               for start, end, label in stages_spec]
+    rtt_start, rtt_end = stages_spec[0][0], stages_spec[-1][1]
     return {
         "clock": "CLOCK_REALTIME" if realtime else "legacy CLOCK_MONOTONIC",
+        "realtime_order_anomalies": clock_order_anomalies,
+        "negative_realtime_stage_samples": sum(s['negative_samples'] for s in stages) if realtime else 0,
+        "negative_realtime_rtt_samples": sum(r[rtt_end] < r[rtt_start] for r in joined) if realtime else 0,
         "rate_hz": rate, "requested_seconds": seconds, "active_seconds": active_ns / 1e9,
         "sent": len(sent), "python_received": len(client), "mock_received": len(received),
         "missing_state": len(sent) - len(client), "missing_reply": len(client) - len(received),
@@ -127,8 +133,7 @@ def analyze(directory, session, seconds, rate):
         "python_receive_hz": frequency(client.values(), "decode_ns"),
         "python_send_hz": frequency(client.values(), "bytes_ns"),
         "mock_receive_hz": frequency(received.values(), "callback_ns"),
-        "rtt": stats([(r["copied_realtime_ns" if realtime else "copied_ns"] -
-                        r["publish_realtime_ns" if realtime else "publish_ns"]) / 1e6 for r in joined]),
+        "rtt": stats([(r[rtt_end] - r[rtt_start]) / 1e6 for r in joined], allow_negative=realtime),
         "sdk_publish_call": stats([(r["returned_ns"] - r["built_ns"]) / 1e6 for r in client.values()]),
         "stages": stages,
     }
@@ -136,13 +141,15 @@ def analyze(directory, session, seconds, rate):
 
 def proportional_bar(value, scale, width=32):
     """GFM-safe chart, rounded to 1/8 cell; no image hosting or renderer required."""
+    if value < 0:
+        return "-" + proportional_bar(-value, scale, width - 1)
     units = round(value / (scale or 1) * width * 8)
     whole, fraction = divmod(units, 8)
     return ("█" * whole + " ▏▎▍▌▋▊▉"[fraction].strip()).ljust(width)
 
 
 def summary_chart(title, unit, results, series):
-    scale = max(value for _, values in series for value in values) or 1
+    scale = max(abs(value) for _, values in series for value in values) or 1
     lines = [f"## {title}", "", f"各行共用比例尺：满宽 = {scale:.6f} {unit}；左侧为目标 Hz。", "", "```text"]
     for index, result in enumerate(results):
         for label, values in series:
@@ -163,6 +170,18 @@ def overview_series(results):
     )
 
 
+def stage_scale(results):
+    return max((abs(metric['mean_ms']) for r in results
+                for metric in (r['rtt'], *r['stages'])), default=1) or 1
+
+
+def clock_note(result):
+    return (f"REALTIME 负分段 {result.get('negative_realtime_stage_samples', 0)}，"
+            f"负 RTT {result.get('negative_realtime_rtt_samples', 0)}；"
+            f"进程内时间倒序 {sum(result.get('realtime_order_anomalies', {}).values())}。"
+            "保留有符号原始时间差，时钟异常不判门禁失败，也不表示物理负延迟。")
+
+
 def markdown_summary(manifest):
     results = manifest["results"]
     summary = ["# Python SDK ↔ C++ Mock latency", "", f"Status: **{manifest['status']}**", "",
@@ -181,19 +200,20 @@ def markdown_summary(manifest):
     if results:
         summary.extend(summary_chart(title, unit, results, series) for title, unit, series in overview_series(results))
         summary.extend(["## 八阶段耗时", "", "同一批配对帧的阶段均值之和 = RTT 均值；分位数不能相加。",
-                        "比例图以最大平均 RTT 为统一满宽；小于显示分辨率的耗时仍保留数值。", ""])
-        scale = max(r["rtt"]["mean_ms"] for r in results) or 1
+                        "比例图以最大绝对阶段/RTT均值为统一满宽；负号与原始数值保留。", ""])
+        scale = stage_scale(results)
         for r in results:
             summary.extend(["<details>", f"<summary>{r['rate_hz']} Hz：八阶段图与明细</summary>", "",
                             f"实际发送 {r['active_seconds']:.3f} s；完整往返 {r['rtt']['n']} 帧；满宽 {scale:.6f} ms。", "", "```text"])
             for s in r["stages"]:
                 summary.append(f"|{proportional_bar(s['mean_ms'], scale)}| {s['mean_ms']:.6f} ms  {s['label']}")
-            summary.extend(["```", "", "|阶段/指标|均值 ms|P50 ms|P95 ms|P99 ms|最大 ms|",
-                            "|---|---:|---:|---:|---:|---:|"])
+            summary.extend(["```", "", clock_note(r), "", "|阶段/指标|均值 ms|P50 ms|P95 ms|P99 ms|最大 ms|负样本数|",
+                            "|---|---:|---:|---:|---:|---:|---:|"])
             metrics = [(s["label"], s) for s in r["stages"]]
             metrics.append(("SDK publish 调用（重叠，不计入阶段和）", r["sdk_publish_call"]))
             for label, metric in metrics:
-                summary.append(f"|{label}|" + "|".join(f"{metric[key]:.6f}" for key in STAT_KEYS) + "|")
+                summary.append(f"|{label}|" + "|".join(f"{metric[key]:.6f}" for key in STAT_KEYS)
+                               + f"|{metric.get('negative_samples', 0)}|")
             summary.extend(["", "</details>", ""])
     summary.extend(["", "Hardware/model/CAN/HIL: NOT_MEASURED. No profiler attached.",
                     "Loss is reported, not hidden; this is a report-integrity gate, not an absolute latency SLA."])
@@ -207,18 +227,23 @@ def html_window(result, scale):
     bars = "".join(f'<span style="width:{s["mean_ms"] / scale * 100:.6f}%;background:{color}" '
                    f'title="{html.escape(s["label"])}: {s["mean_ms"]:.6f} ms"></span>'
                    for s, color in zip(result["stages"], COLORS))
+    if result.get('negative_realtime_stage_samples', 0) or any(s['mean_ms'] < 0 for s in result['stages']):
+        timeline = '<p>REALTIME 存在负分段；时间轴略，原始差值与计数见表。</p>'
+    else:
+        timeline = (f'<div class="timeline">{bars}</div><small>统一比例时间轴：全宽 {scale:.6f} ms；'
+                    '各段为同一批配对帧的均值，之和等于 RTT 均值。</small>')
     metrics = [(s["label"], s) for s in result["stages"]]
     metrics.append(("SDK publish 调用（重叠，不计入阶段和）", result["sdk_publish_call"]))
     rows = "".join(f'<tr><td>{html.escape(label)}</td>' +
-                   "".join(f'<td>{s[key]:.6f}</td>' for key in STAT_KEYS) + '</tr>' for label, s in metrics)
+                   "".join(f'<td>{s[key]:.6f}</td>' for key in STAT_KEYS) +
+                   f'<td>{s.get("negative_samples", 0)}</td></tr>' for label, s in metrics)
     return (f'<section><h2>{result["rate_hz"]} Hz</h2>'
             f'<p>实际发送窗口 {result["active_seconds"]:.3f} s；完整往返 {p["n"]} 帧；'
             f'RTT 均值 {p["mean_ms"]:.6f} ms，P95 {p["p95_ms"]:.6f} ms。</p>'
             f'<p>Mock 发送 / Python 收到 / Mock 收到：{result["sent"]} / {result["python_received"]} / {result["mock_received"]}；'
             f'缺失状态 / 回复：{result["missing_state"]} / {result["missing_reply"]}。</p>'
-            f'<div class="timeline">{bars}</div><small>统一比例时间轴：全宽 {scale:.6f} ms；'
-            f'各段为同一批配对帧的均值，之和等于 RTT 均值。</small>'
-            f'<table><tr><th>阶段/指标</th><th>均值 ms</th><th>P50</th><th>P95</th><th>P99</th><th>最大</th></tr>{rows}</table></section>')
+            f'<p>{clock_note(result)}</p>{timeline}'
+            f'<table><tr><th>阶段/指标</th><th>均值 ms</th><th>P50</th><th>P95</th><th>P99</th><th>最大</th><th>负样本数</th></tr>{rows}</table></section>')
 
 
 def render(directory, manifest):
@@ -227,7 +252,7 @@ def render(directory, manifest):
     (directory / "results.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
     (directory / "summary.md").write_text(markdown_summary(manifest))
     results = manifest["results"]
-    scale = max((r["rtt"]["mean_ms"] for r in results), default=1) or 1
+    scale = stage_scale(results)
     legend = "".join(f'<li style="color:{color}">{html.escape(label)}</li>' for (_, _, label), color in zip(STAGES, COLORS))
     charts = "".join(chart(title, unit, results, series) for title, unit, series in overview_series(results)) if results else ""
     status = html.escape(manifest["status"])
@@ -253,20 +278,22 @@ def render(directory, manifest):
 def chart(title, unit, results, series):
     colors = ["#3182bd", "#e6550d", "#31a354", "#756bb1"]
     xmax = max(r["rate_hz"] for r in results)
-    ymax = max(v for _, values in series for v in values) * 1.05 or 1
+    ymin = min(0, min(v for _, values in series for v in values)) * 1.05
+    ymax = max(0, max(v for _, values in series for v in values)) * 1.05
+    span = ymax - ymin or 1
     out = [f'<h2>{html.escape(title)}</h2><svg viewBox="0 0 950 290" role="img" aria-label="{html.escape(title)}">']
     for i in range(5):
         y = 240 - i * 55
         out.append(f'<path d="M70,{y}H910" stroke="#e5e7eb"/>'
-                   f'<text x="5" y="{y}" font-size="12">{ymax * i / 4:.3f}</text>')
+                   f'<text x="5" y="{y}" font-size="12">{ymin + span * i / 4:.3f}</text>')
     for row in results:
         x = 70 + row["rate_hz"] / xmax * 840
         out.append(f'<text x="{x}" y="260" text-anchor="middle" font-size="12">{row["rate_hz"]}</text>')
     for (label, values), color in zip(series, colors):
-        points = " ".join(f'{70 + r["rate_hz"] / xmax * 840},{240 - v / ymax * 220}' for r, v in zip(results, values))
+        points = " ".join(f'{70 + r["rate_hz"] / xmax * 840},{240 - (v - ymin) / span * 220}' for r, v in zip(results, values))
         out.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="2"/>')
         for row, value in zip(results, values):
-            out.append(f'<circle cx="{70 + row["rate_hz"] / xmax * 840}" cy="{240 - value / ymax * 220}" r="3" fill="{color}">'
+            out.append(f'<circle cx="{70 + row["rate_hz"] / xmax * 840}" cy="{240 - (value - ymin) / span * 220}" r="3" fill="{color}">'
                        f'<title>{html.escape(label)}: {value:.6f} {unit} @ {row["rate_hz"]} Hz</title></circle>')
     out.append(f'<text x="15" y="12">{unit}</text><text x="750" y="285">目标发送频率 Hz</text></svg><p>')
     out.extend(f'<span style="color:{color};margin-right:24px">● {html.escape(label)}</span>' for (label, _), color in zip(series, colors))

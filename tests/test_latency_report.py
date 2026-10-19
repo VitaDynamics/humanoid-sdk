@@ -62,10 +62,42 @@ class LatencyReportTest(unittest.TestCase):
         for row in self.client:del row['decode_realtime_ns']
         with self.assertRaisesRegex(ValueError,'incomplete REALTIME'):self.analyze()
 
-    def test_realtime_clock_step_is_report_failure_not_clipped_or_dropped(self):
+    def test_realtime_clock_step_is_counted_without_failing_or_clipping(self):
         self.add_realtime()
         self.received[0]['callback_realtime_ns']=1
-        with self.assertRaisesRegex(ValueError,'non-monotonic'):self.analyze()
+        result=self.analyze()
+        self.assertEqual(result['negative_realtime_stage_samples'],1)
+        self.assertEqual(result['stages'][6]['negative_samples'],1)
+        self.assertLess(result['stages'][6]['mean_ms'],0)
+        self.assertEqual(result['rtt']['n'],3)
+        render(self.directory,{'status':'PASS','results':[result]})
+        for name in ('summary.md','report.html'):
+            text=(self.directory/name).read_text()
+            self.assertIn('REALTIME 负分段 1',text)
+            self.assertIn('负样本数',text)
+            self.assertIn('PASS',text)
+        self.assertNotIn('width:-',(self.directory/'report.html').read_text())
+
+    def test_negative_realtime_rtt_and_local_order_are_anomalies_only(self):
+        self.add_realtime()
+        for row in self.received:
+            row['callback_realtime_ns']=10
+            row['copied_realtime_ns']=5
+        result=self.analyze()
+        self.assertEqual(result['negative_realtime_rtt_samples'],3)
+        self.assertEqual(result['negative_realtime_stage_samples'],6)
+        self.assertEqual(result['realtime_order_anomalies']['mock'],3)
+        self.assertLess(result['rtt']['mean_ms'],0)
+        render(self.directory,{'status':'PASS','results':[result]})
+        self.assertLess((self.directory/'summary.md').stat().st_size,1_000_000)
+
+    def test_original_ci_matrix_precedes_new_unit_tests_and_source_probe(self):
+        workflow=(Path(__file__).resolve().parents[1]/'.github/workflows/sdk-latency.yml').read_text()
+        matrix=workflow.index('- name: Measure all frequencies')
+        self.assertLess(matrix,workflow.index('- name: Run SDK/report unit tests'))
+        self.assertLess(matrix,workflow.index('- name: Real read-only state source integration'))
+        self.assertIn('--seconds 60',workflow)
+        self.assertIn('--rates 50 100 200 300 400 500 600 700 800 900 1000',workflow)
 
     def test_loss_is_visible_without_nearest_timestamp_pairing(self):
         self.received.pop(1)

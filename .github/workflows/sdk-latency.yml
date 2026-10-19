@@ -52,18 +52,12 @@ jobs:
               if hashlib.sha256((wheelhouse / name).read_bytes()).hexdigest() != manifest['wheel_sha256'][name]:
                   raise RuntimeError(f'checksum mismatch: {name}')
           PY
-      - name: Install pinned bindings and run SDK/report unit tests
+      - name: Install pinned bindings
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --no-index "$RUNNER_TEMP"/wheelhouse/*.whl
           python -m pip check
-          PYTHONPATH=python:tests python -m unittest discover -s tests -v
-      - name: Real read-only state source integration
-        shell: bash
-        run: |
-          set -euo pipefail
-          python tests/latency/state_source_probe.py --output "$RUNNER_TEMP/state-source-results"
       - name: Build standalone C++ Mock
         shell: bash
         run: |
@@ -82,6 +76,16 @@ jobs:
           if r['status'] != 'PASS' or len(r['results']) != 11:
               raise RuntimeError('incomplete full latency report')
           PY
+      - name: Run SDK/report unit tests after the original matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=python:tests python -m unittest discover -s tests -v
+      - name: Real read-only state source integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/latency/state_source_probe.py --output "$RUNNER_TEMP/state-source-results"
       - name: Publish summary (including setup/test failures)
         if: ${{ always() }}
         shell: bash
