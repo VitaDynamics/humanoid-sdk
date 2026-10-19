@@ -231,7 +231,7 @@ class ExamplesSmokeTest(unittest.TestCase):
             output,
             ["state_id=8 ts_state_real_us=0"]
             + [
-                f"joint[{index}] populated={index != 14} valid_fields={3 if index != 14 else 0} q=0.100000 dq=0.000000"
+                f"joint[{index}] status={7 if index == 14 else 1} error_code=0 q=0.100000 dq=0.000000"
                 for index in range(31)
             ],
         )

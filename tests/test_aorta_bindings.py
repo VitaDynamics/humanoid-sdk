@@ -135,7 +135,7 @@ class AortaBindingContractTest(unittest.TestCase):
         command = BodyCmd(
             cmd_id=17,
             joints=tuple(BodyJointCmd(q=0.25, kp=30.0, kd=1.5) for _ in range(31)),
-            protocol_version=1,
+            protocol_version=2,
             session_id=42,
             sequence=3,
         )
@@ -146,7 +146,7 @@ class AortaBindingContractTest(unittest.TestCase):
         self.assertEqual(command_view.CmdId(), 17)
         self.assertEqual(command_view.JointsLength(), 31)
         self.assertAlmostEqual(command_view.Joints(0).Q(), 0.25)
-        self.assertEqual(command_view.ProtocolVersion(), 1)
+        self.assertEqual(command_view.ProtocolVersion(), 2)
         self.assertEqual(command_view.SessionId(), 42)
         self.assertEqual(command_view.Sequence(), 3)
 
@@ -174,6 +174,7 @@ class AortaBindingContractTest(unittest.TestCase):
         import lowlevel.BodyState as module
         builder = flatbuffers.Builder(128)
         module.BodyStateStart(builder)
+        module.BodyStateAddProtocolVersion(builder, 2)
         module.BodyStateAddTsStateRealUs(builder, 1_234_567)
         builder.Finish(module.BodyStateEnd(builder))
         state = transport_module.decode_body_state(module.BodyState.GetRootAs(builder.Output()))

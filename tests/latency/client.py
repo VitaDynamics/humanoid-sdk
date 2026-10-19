@@ -71,14 +71,14 @@ def main():
     def callback(state):
         with lock:
             try:
-                if state.protocol_version != 1 or len(state.joints) != 31 or not 0 < state.state_id <= 65000:
+                if state.protocol_version != 2 or len(state.joints) != 31 or not 0 < state.state_id <= 65000:
                     raise ValueError("invalid state slots/sequence")
                 command = BodyCmd(
-                    cmd_id=state.state_id, protocol_version=1, action=BodyCmdAction.EXTERNAL,
+                    cmd_id=state.state_id, protocol_version=2, action=BodyCmdAction.EXTERNAL,
                     session_id=args.session, sequence=state.state_id,
                     input_state_id=state.state_id, input_state_ts_real_us=state.ts_state_real_us,
-                    joints=tuple(BodyJointCmd(m.q, m.dq, m.tau_est, 1., .5) if m.populated else BodyJointCmd()
-                                    for m in state.joints))
+                    joints=tuple(BodyJointCmd(m.q, m.dq, m.tau_est, 1., .5) if cap.populated else BodyJointCmd()
+                                    for m, cap in zip(state.joints, body.joints)))
                 built_ns = time.monotonic_ns()
                 built_realtime_ns = time.time_ns()
                 transport.publish(sdk.BODY_CMD_TOPIC, command)

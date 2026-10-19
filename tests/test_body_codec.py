@@ -70,7 +70,10 @@ def make_state():
         imu_module.BodyImuSampleAddState(builder, module('BodyImuState').CreateBodyImuState(
             builder, (1., 0., 0., 0.), (.1, .2, .3), (0., 0., 9.81), (-1., 2., 3.)))
         imu_module.BodyImuSampleAddStatus(builder, BodySampleStatus.OK)
-        imu_module.BodyImuSampleAddValidFields(builder, 127)
+        imu_module.BodyImuSampleAddTsSampledUs(builder, 101)
+        imu_module.BodyImuSampleAddTsAcquiredHwUs(builder, 102)
+        imu_module.BodyImuSampleAddTsIngestedUs(builder, 103)
+        imu_module.BodyImuSampleAddTsAssembledUs(builder, 104)
         imu_module.BodyImuSampleAddDeviceTimestampMs(builder, 876)
         imu_module.BodyImuSampleAddHostTimestampUs(builder, 987654)
         imus.append(imu_module.BodyImuSampleEnd(builder))
@@ -78,18 +81,17 @@ def make_state():
     m.BodyStateStartImuStatesVector(builder, len(imus))
     for imu in reversed(imus): builder.PrependUOffsetTRelative(imu)
     imus = builder.EndVector()
-    cols = [tuple(range(31)), tuple(i != 14 for i in range(31)), (False,) * 31,
+    cols = [tuple(range(31)),
             tuple(BodySampleStatus.UNCONFIGURED if i == 14 else BodySampleStatus.OK for i in range(31)),
-            tuple(0 if i == 14 else 63 for i in range(31)),
             tuple(range(31)), tuple(1000 + i for i in range(31)), tuple(2000 + i for i in range(31)),
             tuple(math.nan if i == 14 else i + .125 for i in range(31)),
-            (-.25,) * 31, (.5,) * 31, (-.75,) * 31, (-12.5,) * 31, tuple(range(31))]
+            (-.25,) * 31, (-.75,) * 31, tuple(-7 if i == 30 else i for i in range(31))]
     m.BodyStateStartJointsVector(builder, 31)
     for values in reversed(tuple(zip(*cols))):
         module('BodyJointState').CreateBodyJointState(builder, *values)
     joints = builder.EndVector()
     m.BodyStateStart(builder)
-    m.BodyStateAddProtocolVersion(builder, 1)
+    m.BodyStateAddProtocolVersion(builder, 2)
     m.BodyStateAddStateId(builder, 91)
     m.BodyStateAddTsStateRealUs(builder, 1_234_567)
     m.BodyStateAddTsStatePubUs(builder, 1_234_890)
@@ -135,20 +137,44 @@ class BodyCodecTest(unittest.TestCase):
                 expected = getattr(generated, codec._getter(field.name))()
                 if isinstance(value, float) and math.isnan(value): self.assertTrue(math.isnan(expected))
                 else: self.assertEqual(value, expected)
-        self.assertFalse(state.joints[14].populated)
-        self.assertEqual(state.joints[14].valid_fields, 0)
-        self.assertEqual(state.joints[0].temperature_deg_c, -12.5)
+        self.assertEqual(state.joints[14].status, BodySampleStatus.UNCONFIGURED)
+        self.assertEqual(state.joints[0].error_code, 0)
+        self.assertEqual(state.joints[30].error_code, -7)
+        self.assertEqual(state.joints[0].tau_est, -.75)
         self.assertIsNone(state.applied_cmd)
         self.assertEqual([s.location for s in state.imu_states], [BodyImuLocation.TRUNK, BodyImuLocation.HIP])
         self.assertEqual(state.imu_states[1].state.rpy, (-1., 2., 3.))
         self.assertEqual(state.imu_states[1].device_timestamp_ms, 876)
         self.assertEqual(state.imu_states[1].host_timestamp_us, 987654)
+        sample = state.imu_states[1]
+        self.assertEqual((sample.ts_sampled_us, sample.ts_acquired_hw_us,
+                          sample.ts_ingested_us, sample.ts_assembled_us), (101, 102, 103, 104))
+
+    def test_v1_is_rejected_before_any_fixed_stride_or_imu_decode(self):
+        from types import SimpleNamespace
+        # Only protocol_version is safe to read from the incompatible v1 frame.
+        for version in (0, 1, 3):
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, 'protocol_version'):
+                codec.decode_body_state(SimpleNamespace(ProtocolVersion=lambda: version))
+
+    def test_joint_error_enum_and_removed_dto_fields_follow_public_bindings(self):
+        from locomotion_aorta import JointError, BodyJointState, BodyImuSample
+        self.assertEqual((JointError.NONE, JointError.TIMEOUT, JointError.UNKNOWN), (0, 20, 255))
+        self.assertEqual([f.name for f in dataclasses.fields(BodyJointState)],
+                         ['body_index', 'status', 'ts_acquired_hw_us', 'ts_ingested_us',
+                          'ts_assembled_us', 'q', 'dq', 'tau_est', 'error_code'])
+        for cls in (BodyJointState, BodyImuSample):
+            names = {f.name for f in dataclasses.fields(cls)}
+            self.assertFalse(names & {'populated', 'is_mock', 'valid_fields', 'ddq', 'temperature_deg_c', 'lost'})
+        # Preserve unknown numeric errors; do not add an enum-range gate.
+        sample = BodyJointState(0, BodySampleStatus.OK, error_code=123)
+        self.assertEqual(sample.error_code, 123)
 
     def test_truncated_vector_payload_is_rejected(self):
         data, view = make_state()
         pos = view.Joints(0)._tab.Pos
-        for missing in (1, 20, 56, 1736):
-            short = data[:pos + 1736 - missing]
+        for missing in (1, 20, 48, 1488):
+            short = data[:pos + 1488 - missing]
             with self.subTest(missing=missing), self.assertRaises((ValueError, struct.error)):
                 codec.unpack_body_joints(module('BodyState').BodyState.GetRootAs(short))
 
@@ -163,9 +189,10 @@ class BodyCodecTest(unittest.TestCase):
             def Get(self, flags, pos): self.positions.append(int(pos)); return 0
         for name, getters, expected in (
             ('BodyJointState', [codec._getter(f.name) for f in dataclasses.fields(codec.BodyJointState)],
-             [0,2,3,4,6,8,16,24,32,36,40,44,48,52]),
+             [0,2,8,16,24,32,36,40,44]),
             ('BodyJointCmd', ['Q','Dq','Tau','Kp','Kd'], [0,4,8,12,16]),
             ('BodyState', ['JointsLength'], [22]),
+            ('BodyImuSample', ['DeviceTimestampMs', 'HostTimestampUs'], [20,22]),
             ('BodyCmd', ['JointsLength','Action','RootQuat'], [22,24,26]),
         ):
             view = getattr(module(name), name)(); probe = Probe(); view._tab = probe
@@ -266,7 +293,7 @@ class BodyCodecTest(unittest.TestCase):
         applied.BodyAppliedCmdAddSourceKeyValid(builder, True)
         applied.BodyAppliedCmdAddJoints(builder, joints)
         echo = applied.BodyAppliedCmdEnd(builder)
-        m.BodyStateStart(builder); m.BodyStateAddAppliedCmd(builder, echo)
+        m.BodyStateStart(builder); m.BodyStateAddProtocolVersion(builder, 2); m.BodyStateAddAppliedCmd(builder, echo)
         builder.Finish(m.BodyStateEnd(builder))
         state = codec.decode_body_state(m.BodyState.GetRootAs(builder.Output()))
         self.assertEqual(state.applied_cmd.action, BodyCmdAction.UNKNOWN)

@@ -31,11 +31,11 @@ NAMES = (
 def fixture():
     body = NS(slot_count=31,joint_names=NAMES,
               joints=tuple(NS(populated=n!='waist_roll_joint') for n in NAMES))
-    motors = tuple(NS(body_index=i,populated=n!='waist_roll_joint',valid_fields=0 if n=='waist_roll_joint' else 3,
+    motors = tuple(NS(body_index=i,status=7 if n=='waist_roll_joint' else 1,
                       q=float(i),dq=float(100+i)) for i,n in enumerate(NAMES))
     # TRUNK first and deliberately different, preventing accidental imu_states[0].
-    trunk = NS(location='TRUNK',state=NS(quaternion=(0,1,0,0),gyroscope=(9,9,9)),valid_fields=3)
-    hip = NS(location='HIP',state=NS(quaternion=(1,0,0,0),gyroscope=(1,2,3)),valid_fields=3)
+    trunk = NS(location='TRUNK',state=NS(quaternion=(0,1,0,0),gyroscope=(9,9,9)),status=1)
+    hip = NS(location='HIP',state=NS(quaternion=(1,0,0,0),gyroscope=(1,2,3)),status=1)
     state = NS(joints=motors,imu_states=(trunk,hip),attitude_valid=True,
                state_id=987654321,ts_state_real_us=1792000000123456)
     return body,state
@@ -86,14 +86,14 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(obs[4:7],(1,2,3))
 
     def test_invalid_hip_does_not_fall_back_to_trunk(self):
-        self.state.imu_states[1].valid_fields=1
+        self.state.imu_states[1].status=2
         with self.assertRaises(ValueError):
             self.policy.observation(self.state,self.body,(0,0,0,.75),'HIP')
 
     def test_missing_joint_or_nan_rejected_but_roll_not_read(self):
         self.state.joints[14].q=float('nan')
         self.policy.observation(self.state,self.body,(0,0,0,.75),'HIP')
-        self.state.joints[20].valid_fields=0
+        self.state.joints[20].status=2
         with self.assertRaises(ValueError):
             self.policy.observation(self.state,self.body,(0,0,0,.75),'HIP')
 
@@ -399,12 +399,10 @@ class ActualSdkDtoIntegration(unittest.TestCase):
                            for i,j in enumerate(body.joints))
         typed_body = api.BodyInfo(0,31,body.joint_names,capability,
                                  tuple(api.BodyMotorIdentity('synthetic',i+1,j.populated) for i,j in enumerate(capability)))
-        motors = tuple(api.BodyJointState(m.body_index,m.populated,False,
-                         api.BodySampleStatus.OK if m.populated else api.BodySampleStatus.UNCONFIGURED,
-                         m.valid_fields,q=m.q,dq=m.dq) for m in state.joints)
+        motors = tuple(api.BodyJointState(m.body_index,m.status,q=m.q,dq=m.dq) for m in state.joints)
         imus = tuple(api.BodyImuSample(getattr(api.BodyImuLocation,m.location),
                          api.BodyImuState(m.state.quaternion,m.state.gyroscope,(0.,0.,9.81),(0.,0.,0.)),
-                         api.BodySampleStatus.OK,m.valid_fields) for m in state.imu_states)
+                         m.status) for m in state.imu_states)
         typed_state = api.BodyState(state.state_id,motors,ts_state_real_us=state.ts_state_real_us,
                                    attitude_valid=True,imu_states=imus)
         policy = Policy(METADATA,CONTRACT)

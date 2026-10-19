@@ -32,8 +32,8 @@ class FixedStandPose:
         if len(state.joints) != len(self.info.joints):
             raise ValueError('BodyState differs from Info roster')
         for name, cap, sample in zip(self.info.joint_names, self.info.joints, state.joints):
-            if sample.populated != cap.populated or sample.body_index != cap.body_index:
-                raise ValueError(f'{name}: BodyState population/index differs from Info')
+            if sample.body_index != cap.body_index:
+                raise ValueError(f'{name}: BodyState index differs from Info')
             values.append(sample.q if cap.populated else 0.0)
         self.check(values)
         return tuple(values)

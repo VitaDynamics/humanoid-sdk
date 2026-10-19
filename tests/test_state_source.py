@@ -36,6 +36,16 @@ class StateSourceTest(unittest.TestCase):
         self.addCleanup(source.close)
         return source
 
+    def test_snapshot_caches_incompatible_body_revision_error(self):
+        from types import SimpleNamespace
+        from locomotion_aorta.state import BodyStateSnapshot
+        decoder = mock.Mock(return_value=SimpleNamespace(ProtocolVersion=lambda: 1))
+        snapshot = BodyStateSnapshot(b'old', decoder, 1, 2)
+        for _ in range(2):
+            with self.assertRaisesRegex(ValueError, 'protocol_version'):
+                snapshot.body_state()
+        decoder.assert_called_once_with(b'old')
+
     def test_default_timeout_and_after_use_received_object_identity(self):
         source = self.source()
         self.assertEqual(source.group, 'default')

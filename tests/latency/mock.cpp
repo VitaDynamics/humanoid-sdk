@@ -80,7 +80,7 @@ void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
               true};
     row.valid = row.session == capture.session && row.sequence > 0 &&
                 row.sequence <= 65000 && row.cmd_id == row.sequence &&
-                cmd->protocol_version() == 1 && cmd->input_state_id() == row.sequence &&
+                cmd->protocol_version() == 2 && cmd->input_state_id() == row.sequence &&
                 cmd->input_state_ts_real_us() > 0 &&
                 cmd->action() == lowlevel::BodyCmdAction_EXTERNAL;
     for (size_t j = 0; j < copied.size(); ++j) {

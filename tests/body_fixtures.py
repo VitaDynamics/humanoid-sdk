@@ -5,9 +5,9 @@ from locomotion_aorta import (
 )
 
 def sample_motor(*, q=0.0, dq=0.0, body_index=0, populated=True):
-    return BodyJointState(body_index, populated, False,
+    return BodyJointState(body_index,
                           BodySampleStatus.OK if populated else BodySampleStatus.UNCONFIGURED,
-                          3 if populated else 0, q=q, dq=dq)
+                          q=q, dq=dq)
 
 def robot_info_reply():
     joints = tuple(BodyJointCapability(i, BodySlotRole.ACTIVE, False, i != 14,

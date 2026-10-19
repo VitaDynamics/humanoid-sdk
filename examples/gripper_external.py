@@ -10,7 +10,7 @@ from pathlib import Path
 import time
 
 from locomotion_aorta.gripper import validate_info, validate_target
-from locomotion_aorta import InhibitReason
+from locomotion_aorta import InhibitReason, BodySampleStatus
 
 # The existing SDK body example remains the authority for its unchanged guards.
 _body_spec = importlib.util.spec_from_file_location(
@@ -50,8 +50,8 @@ def _observe_zero_dwell(frame, target, *, body, monotonic, emit):
     for sample in range(samples):
         state = frame(target)  # Retains the lifecycle's safety/protocol checks.
         error = max((abs(j.q - q) for j, q in zip(state.joints, target)
-                     if j.populated), default=0.0)
-        speed = max((abs(j.dq) for j in state.joints if j.populated), default=0.0)
+                     if j.status != BodySampleStatus.UNCONFIGURED), default=0.0)
+        speed = max((abs(j.dq) for j in state.joints if j.status != BodySampleStatus.UNCONFIGURED), default=0.0)
         peak_error = max(peak_error, error)
         peak_speed = max(peak_speed, speed)
         emit(f'ZERO_DWELL observation_only=true sample={sample + 1} '
@@ -83,7 +83,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
         plan = module.FixedStandPose(info)  # Reject all bad/missing zero limits before PREPARE.
     initial = body._wait_for_stationary_body_state(
         controller, timeout=timeout, sleep=sleep, monotonic=monotonic)
-    pose = tuple(j.q if j.populated else 0.0 for j in initial.joints)
+    pose = tuple(j.q if cap.populated else 0.0 for j, cap in zip(initial.joints, info.joints))
     if plan is not None:
         plan.measured(initial)
     hold = body._position_command(pose)
@@ -95,7 +95,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
     traces = []
     hold_samples = 0
     hold_peak_abs_error = [0.0] * len(pose)
-    hold_slots = tuple(i for i, joint in enumerate(initial.joints) if joint.populated)
+    hold_slots = tuple(i for i, cap in enumerate(info.joints) if cap.populated)
     try:
         if plan is not None:
             from locomotion_aorta import CONTROL_ACK_TOPIC, CONTROL_STATUS_TOPIC

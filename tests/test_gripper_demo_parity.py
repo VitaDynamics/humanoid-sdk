@@ -1,7 +1,8 @@
 """Per-command regression for T059's approved travel-duration contract; not HIL.
 
-Each digest covers the complete dataclass payload, including all body joints,
-keys and timestamps. UUID and client-clock sources are fixed in this test only.
+BODY protocol 2 is asserted, then normalized to 1 solely for the frozen T059
+trace digest. The digest retains all other payload fields, including body
+joints, keys and timestamps. UUID and client-clock sources are fixed in this test only.
 The rows preserve publication order and simulated time across body and grippers.
 """
 from dataclasses import asdict, replace
@@ -40,6 +41,9 @@ def command_trace(case):
     def record(topic, command):
         data = asdict(command)
         payloads.append(data)
+        if topic == BODY_CMD_TOPIC:
+            assert data['protocol_version'] == 2
+            data = dict(data, protocol_version=1)  # Only the assigned BODY revision changed.
         digest = hashlib.sha256(json.dumps(data, sort_keys=True, separators=(',', ':'),
                                            allow_nan=False).encode()).hexdigest()
         rows.append([topic, clock.monotonic(), digest])

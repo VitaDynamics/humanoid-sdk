@@ -12,6 +12,7 @@ from locomotion_aorta import (
     BodyCmd,
     BodyJointCmd,
     BodyCmdAction,
+    BodySampleStatus,
     BODY_SLOTS,
     ServiceStatus,
 )
@@ -42,7 +43,7 @@ def run(
     monotonic: Callable[[], float] = time.monotonic,
     emit: Callable[[str], None] = print,
 ) -> None:
-    require_body_info(controller, timeout)
+    info = require_body_info(controller, timeout)
     start_state = _wait_for_stationary_body_state(
         controller,
         timeout=timeout,
@@ -50,7 +51,7 @@ def run(
         monotonic=monotonic,
     )
     start_q = tuple(
-        motor.q if motor.populated else 0.0 for motor in start_state.joints
+        motor.q if cap.populated else 0.0 for motor, cap in zip(start_state.joints, info.joints)
     )
     return_q = list(start_q)
     # Offset only the elbows toward zero to avoid the observed hip interference.
@@ -185,7 +186,7 @@ def _wait_for_stationary_body_state(
             last_new_time = now
             if any(
                 abs(motor.dq) > STATIONARY_DQ_RAD_S
-                for motor in latest.joints if motor.populated
+                for motor in latest.joints if motor.status != BodySampleStatus.UNCONFIGURED
             ):
                 stationary_since = None
             elif stationary_since is None:
@@ -210,9 +211,9 @@ def _validate_body_state(
             f"{COMMAND_SLOTS} required"
         )
     for index, motor in enumerate(state.joints):
-        if not motor.populated:
+        if motor.status == BodySampleStatus.UNCONFIGURED:
             continue
-        if motor.valid_fields & 3 != 3:
+        if motor.status != BodySampleStatus.OK:
             raise RuntimeError(f"body state motor[{index}] q/dq is unavailable")
         if not math.isfinite(motor.q) or not math.isfinite(motor.dq):
             raise RuntimeError(f"body state motor[{index}] q/dq is not finite")
@@ -274,7 +275,7 @@ def _publish_dwell(
         state = publish(target)
         now = monotonic()
         at_endpoint = all(
-            not motor.populated or (abs(motor.q - target_q) <= position_tolerance_rad
+            motor.status == BodySampleStatus.UNCONFIGURED or (abs(motor.q - target_q) <= position_tolerance_rad
             and abs(motor.dq) <= STATIONARY_DQ_RAD_S)
             for motor, target_q in zip(
                 state.joints[:COMMAND_SLOTS], target

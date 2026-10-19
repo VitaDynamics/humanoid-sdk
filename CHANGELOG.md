@@ -6,8 +6,14 @@
   control requests use protocol 2, without automatic protocol downgrade.
 - Provide independent hand and AGX gripper clients and examples. Grippers use
   their own topics and do not occupy BodyCmd slots.
-- Pin Aorta SDK/messages 2026.10.12 (ABI 13), public vbot-humanoid-msgs 0.1.2
-  and FlatBuffers 25.9.23; dependency wheel hashes remain unchanged.
+- Pin Aorta SDK/messages 2026.10.12 (ABI 13), public vbot-humanoid-msgs 0.1.3
+  and FlatBuffers 25.9.23; pin the new schema wheel and actual BFBS hashes.
+- Use BODY protocol 2 for BodyCmd/BodyState. BodyJointState changes from 56 to
+  48 bytes: remove populated/is_mock/valid_fields/ddq/temperature, replace lost
+  with signed JointError error_code, and retain all three joint timestamps.
+  Remove IMU temperature/valid_fields while preserving remaining field IDs.
+  Reject mismatched BODY versions before decoding joints; control/RobotInfo
+  versions remain unchanged. BodyInfo still supplies installation capabilities.
 - Switch the optional teleop demo from Python ORT 1.23.2 to an embedded C++
   ORT 1.20.1 CPU backend, matching the robot. This intentionally changes
   numerical outputs: 82/120 values were not bit-identical across versions.

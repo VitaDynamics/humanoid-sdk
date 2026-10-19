@@ -293,9 +293,11 @@ class PublicBodyCaptureTest(unittest.TestCase):
         data, _ = make_state()
         row = capture.decode('body_state',data,capture.load_bindings())
         self.assertEqual(len(row['joints']),31)
-        self.assertFalse(row['joints'][14]['populated'])
+        self.assertEqual(row['joints'][14]['status'],7)
         self.assertIsNone(row['joints'][14]['q'])
-        self.assertEqual(row['joints'][14]['valid_fields'],0)
+        self.assertEqual(row['joints'][14]['error_code'],14)
+        self.assertNotIn('valid_fields',row['joints'][14])
+        self.assertNotIn('populated',row['joints'][14])
         self.assertTrue(row['nonfinite_feedback'])
         self.assertEqual(row['ts_state_real_us'],1_234_567)
 

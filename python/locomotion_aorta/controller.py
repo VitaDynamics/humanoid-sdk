@@ -204,8 +204,6 @@ class ExternalController:
             population = None
             if self._body_info is not None and len(self._body_info.joints) == BODY_SLOTS:
                 population = tuple(j.populated for j in self._body_info.joints)
-            elif self._latest_body_state is not None and len(self._latest_body_state.joints) == BODY_SLOTS:
-                population = tuple(j.populated for j in self._latest_body_state.joints)
             _validate_command(command, population)
             status = self._latest_status
             if not self._status_allows_publish(status):

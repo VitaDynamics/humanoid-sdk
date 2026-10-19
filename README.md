@@ -4,12 +4,12 @@ SDK **0.2.0** is in preparation; packaging and release are pending.
 This version provides public body31/EXTERNAL, independent hand/gripper
 clients, Aorta 2026.10.12 and an independent read-only BodyStateSource.
 
-This D2 successor uses the released public body/EE schema `0.1.2` from
-S2 daadf8f7449e. Its official CI-built wheel is pinned in the manifest and
-available with its SHA-256 sidecar in dependency release `v0.1.0-rc.4`.
-Its RobotInfo/get_robot_info layout removes the end-effector info-service
-endpoint; use matching generated bindings and robot software. Earlier 6520
-pre-release RobotInfo buffers are incompatible with this checkout.
+This candidate requires public body/EE schema **0.1.3** and BODY protocol 2.
+Its 48-byte BodyJointState layout is incompatible with 0.1.2 (56 bytes); use
+matching robot software and generated bindings. The 0.1.3 dependency wheel is
+a local candidate, not a published asset. `dependency_release_tag` remains
+unset until its release is approved; installation requires the complete
+matching candidate wheelhouse and hashes in [compatibility.json](compatibility.json).
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
@@ -21,23 +21,29 @@ Version 0.2.1 is planned to restore general platform support through separate
 platform and pure Python wheels under the same SDK package name.
 
 Dependencies are pinned to Aorta SDK and messages `2026.10.12` (ABI 13),
-`vbot-humanoid-msgs==0.1.2`, and `flatbuffers==25.9.23`. Obtain the matching
-wheels from this repository's [Releases](https://github.com/VitaDynamics/humanoid-sdk/releases),
-using the `dependency_release_tag` in [compatibility.json](compatibility.json)
-(`v0.1.0-rc.4`). Verify wheel filenames and SHA-256s against that manifest;
-do not substitute older wheels if an asset is missing. The public body/EE
-`0.1.2` wheel and sidecar are included in that dependency release; use the
-public wheel rather than a private/HIL wheel.
+`vbot-humanoid-msgs==0.1.3`, and `flatbuffers==25.9.23`. Verify wheel filenames
+and SHA-256s against [compatibility.json](compatibility.json). The prior
+dependency release `v0.1.0-rc.4` contains schema 0.1.2 and cannot supply this
+candidate's complete dependency set; do not substitute that older schema.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
 Match the robot's public schema hashes and roster to [compatibility.json](compatibility.json).
 Control requests use protocol 2; ACK/Status remain protocol 1; new body roots use
-protocol 1. BodyCmd action is explicitly encoded using the generated EXTERNAL
+protocol 2. BodyCmd action is explicitly encoded using the generated EXTERNAL
 symbol. Entry remains by action name and lease; the command does not activate
 EXTERNAL. Older robots rejecting v2 receive no automatic downgrade or LowCmd
 fallback. Discovery preserves partial body/hand results and actual field/limit
 validity. The logical waist-roll slot can be unpopulated; it is skipped in
 physical validation and output, and never represents a healthy zero sample.
+
+BodyJointState exposes index, sample status, q, dq, tau_est, the signed
+JointError error_code and three acquisition/ingestion/assembly timestamps.
+State populated/is_mock/valid_fields/ddq/temperature/lost fields are removed;
+BodyImuSample also removes temperature and valid_fields. Use BodyInfo for
+installation, command capabilities and limits, and status for sample quality.
+Command validation uses learned BodyInfo population; until discovery it
+validates all 31 command slots. RobotInfo and independent hand/gripper
+contracts remain unchanged.
 
 Documentation: [Humanoid documentation](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg),
 [SDK guide](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh),

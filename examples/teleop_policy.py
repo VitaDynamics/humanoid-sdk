@@ -17,6 +17,8 @@ import time
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
+from lowlevel.BodySampleStatus import BodySampleStatus
+
 
 def f32(value: float) -> float:
     return struct.unpack('f', struct.pack('f', value))[0]
@@ -107,8 +109,8 @@ class Policy:
         if len(samples) != 1 or samples[0].state is None:
             raise ValueError('BodyState lacks one unambiguous HIP IMU sample')
         sample = samples[0]
-        # 016 validity bits: quaternion=bit0, gyroscope=bit1; no invented timeout.
-        if not state.attitude_valid or sample.valid_fields & 3 != 3:
+        # Use the remaining sample-quality field from the generated public contract.
+        if not state.attitude_valid or sample.status != BodySampleStatus.OK:
             raise ValueError('HIP attitude/gyro feedback is invalid')
         quat, gyro = tuple(sample.state.quaternion), tuple(sample.state.gyroscope)
         if len(quat) != 4 or len(gyro) != 3 or len(command) != 4:
@@ -117,7 +119,7 @@ class Policy:
         for name in self.names:
             i = indices[name]
             joint = state.joints[i]
-            if joint.body_index != i or not joint.populated or joint.valid_fields & 3 != 3:
+            if joint.body_index != i or joint.status != BodySampleStatus.OK:
                 raise ValueError(f'policy joint feedback is invalid: {name}')
             q.append(joint.q)
             dq.append(joint.dq)

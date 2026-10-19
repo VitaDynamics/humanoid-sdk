@@ -20,7 +20,7 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(set(manifest), {
             "manifest_version", "sdk_version", "aorta_version", "flatbuffers_version",
             "humanoid_msgs_version", "python_requires", "platforms", "external_version", "control_request_version",
-            "command_slots", "state_slots", "session_mode", "pc_session_profile",
+            "command_slots", "state_slots", "session_mode", "pc_session_profile", "body_protocol_version",
             "wheel_sha256", "dependency_release_tag", "aorta_abi_version", "schema_sha256",
         })
         self.assertEqual(manifest["python_requires"], "==3.10.*")
