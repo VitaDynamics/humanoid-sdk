@@ -87,10 +87,9 @@ class ControllerHarness:
         self.transport.on_publish = on_publish
 
 
-def make_command(cmd_id: int, *, q: float = 0.0) -> BodyCmd:
+def make_command(sequence_hint: int, *, q: float = 0.0) -> BodyCmd:
     return BodyCmd(
-        cmd_id=cmd_id,
-        joints=tuple(BodyJointCmd(q=q) for _ in range(31)),
+        sequence=sequence_hint, joints=tuple(BodyJointCmd(q=q) for _ in range(31)),
     )
 
 
@@ -661,7 +660,7 @@ class ExternalControllerTest(unittest.TestCase):
             for topic, message in harness.transport.published
             if topic == BODY_CMD_TOPIC
         ]
-        self.assertEqual([message.cmd_id for message in published_commands], [1, 2])
+        self.assertEqual([message.sequence for message in published_commands], [1, 2])
         self.assertEqual(
             [message.protocol_version for message in published_commands], [2, 2]
         )
@@ -697,7 +696,7 @@ class ExternalControllerTest(unittest.TestCase):
         with self.assertRaises(NotRunningError):
             harness.controller.publish(make_command(1))
 
-    def test_publish_does_not_use_legacy_cmd_id_for_external_ordering(self) -> None:
+    def test_publish_assigns_sequence_independently_of_caller_hint(self) -> None:
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)
         harness.accept_enter()
@@ -711,10 +710,22 @@ class ExternalControllerTest(unittest.TestCase):
             for topic, message in harness.transport.published
             if topic == BODY_CMD_TOPIC
         ]
-        self.assertEqual([message.cmd_id for message in published_commands], [60000, 7])
+        self.assertTrue(all(not hasattr(message, 'cmd_id') for message in published_commands))
         self.assertEqual(
             [message.sequence for message in published_commands], [1, 2]
         )
+
+    def test_publish_returns_actual_key_and_sequence_does_not_wrap_at_uint16(self):
+        harness = ControllerHarness()
+        self.addCleanup(harness.controller.close)
+        harness.accept_enter()
+        harness.controller.enter_external(timeout=.1)
+        harness.controller._next_external_sequence = 65535
+        published = [harness.controller.publish(make_command(0)) for _ in range(3)]
+        self.assertEqual([(m.session_id, m.sequence) for m in published],
+                         [(42, 65535), (42, 65536), (42, 65537)])
+        actual = [m for topic, m in harness.transport.published if topic == BODY_CMD_TOPIC]
+        self.assertEqual(published, actual)
 
     def test_new_running_generation_restarts_external_sequence(self) -> None:
         harness = ControllerHarness()
@@ -767,16 +778,12 @@ class ExternalControllerTest(unittest.TestCase):
         harness.controller.enter_external(timeout=0.1)
 
         invalid_commands = (
-            make_command(0),
-            make_command(1 << 16),
-            BodyCmd(cmd_id=1, joints=()),
+            BodyCmd(joints=()),
             BodyCmd(
-                cmd_id=1,
                 joints=(BodyJointCmd(q=math.nan),)
                 + tuple(BodyJointCmd() for _ in range(30)),
             ),
             BodyCmd(
-                cmd_id=1,
                 joints=(BodyJointCmd(q=True),)
                 + tuple(BodyJointCmd() for _ in range(30)),
             ),
@@ -788,7 +795,6 @@ class ExternalControllerTest(unittest.TestCase):
 
         harness.controller.publish(
             BodyCmd(
-                cmd_id=1,
                 joints=tuple(BodyJointCmd(q=1e9, tau=-1e9) for _ in range(31)),
             )
         )
@@ -809,7 +815,7 @@ class ExternalControllerTest(unittest.TestCase):
         harness.controller.enter_external(timeout=0.1)
         for count in (0, 1, 30, 32, 42, 44, 45):
             with self.subTest(count=count), self.assertRaises(InvalidCommandError):
-                harness.controller.publish(BodyCmd(1, tuple(BodyJointCmd() for _ in range(count))))
+                harness.controller.publish(BodyCmd(tuple(BodyJointCmd() for _ in range(count))))
         harness.controller.publish(make_command(1))
 
     def test_unpopulated_slot_is_not_physically_validated(self):
@@ -820,10 +826,10 @@ class ExternalControllerTest(unittest.TestCase):
         harness.controller.get_robot_info()
         motors = list(make_command(1).joints)
         motors[14] = BodyJointCmd(q=math.nan, dq=math.inf)
-        harness.controller.publish(BodyCmd(1, tuple(motors)))
+        harness.controller.publish(BodyCmd(tuple(motors)))
         motors[13] = BodyJointCmd(q=math.nan)
         with self.assertRaises(InvalidCommandError):
-            harness.controller.publish(BodyCmd(1, tuple(motors)))
+            harness.controller.publish(BodyCmd(tuple(motors)))
 
     def test_exit_waits_until_status_no_longer_reports_external(self) -> None:
         harness = ControllerHarness()

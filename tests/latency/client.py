@@ -74,7 +74,7 @@ def main():
                 if state.protocol_version != 2 or len(state.joints) != 31 or not 0 < state.state_id <= 65000:
                     raise ValueError("invalid state slots/sequence")
                 command = BodyCmd(
-                    cmd_id=state.state_id, protocol_version=2, action=BodyCmdAction.EXTERNAL,
+                    protocol_version=2, action=BodyCmdAction.EXTERNAL,
                     session_id=args.session, sequence=state.state_id,
                     input_state_id=state.state_id, input_state_ts_real_us=state.ts_state_real_us,
                     joints=tuple(BodyJointCmd(m.q, m.dq, m.tau_est, 1., .5) if cap.populated else BodyJointCmd()

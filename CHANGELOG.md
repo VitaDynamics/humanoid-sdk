@@ -9,11 +9,18 @@
 - Pin Aorta SDK/messages 2026.10.12 (ABI 13), public vbot-humanoid-msgs 0.1.3
   and FlatBuffers 25.9.23; pin the new schema wheel and actual BFBS hashes.
 - Use BODY protocol 2 for BodyCmd/BodyState. BodyJointState changes from 56 to
-  48 bytes: remove populated/is_mock/valid_fields/ddq/temperature, replace lost
-  with signed JointError error_code, and retain all three joint timestamps.
-  Remove IMU temperature/valid_fields while preserving remaining field IDs.
+  40 bytes: slot-ordered three timestamps, q/dq/tau_est and existing JointError.
+  Remove body_index/status/populated/is_mock/valid_fields/ddq/temperature/lost.
+  Preserve real faults first, then missing/stale=TIMEOUT, nonfinite/FK=UNKNOWN,
+  otherwise NONE; uninstalled/MOCK use NONE and installation comes from BodyInfo.
+  IMU status/rpy remain; temperature/valid_fields/duplicate device and host
+  timestamps become deprecated slots 7/8/9/10. Append HEAD=2 to HIP=0/TRUNK=1.
+  Replace the nested applied echo with applied_session_id/applied_sequence and
+  control-cycle ts_first_output_us, latched after successful send (TRACKING0).
+  Remove BodyCmd.cmd_id and use session/sequence in BODY logs. publish returns
+  the stamped command. Public state/input-state IDs retain all 64 bits.
   Reject mismatched BODY versions before decoding joints; control/RobotInfo
-  versions remain unchanged. BodyInfo still supplies installation capabilities.
+  versions remain unchanged.
 - Switch the optional teleop demo from Python ORT 1.23.2 to an embedded C++
   ORT 1.20.1 CPU backend, matching the robot. This intentionally changes
   numerical outputs: 82/120 values were not bit-identical across versions.

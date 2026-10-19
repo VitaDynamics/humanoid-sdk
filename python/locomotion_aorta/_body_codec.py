@@ -3,17 +3,16 @@ import struct
 from dataclasses import fields
 from typing import Any
 from .body_types import (
-    BODY_SLOTS, BODY_PROTOCOL_VERSION, BodyJointState, BodyImuState, BodyImuSample, BodyAppliedCmd,
+    BODY_SLOTS, BODY_PROTOCOL_VERSION, BodyJointState, BodyImuState, BodyImuSample,
     BodyState, BodyJointCmd, BodyJointCapability, BodyMotorIdentity, BodyInfo,
     EndEffectorCapability, RobotInfo, GetRobotInfoResponse,
 )
 
 # Layouts and vector slots from the public 0.1.3 / BODY v2 generated accessors.
 _COMMAND = struct.Struct("<" + "fffff" * BODY_SLOTS)
-_JOINT_STATE = struct.Struct("<HB5xQQQfffi")
+_JOINT_STATE = struct.Struct("<QQQfffi")
 _MOTOR = struct.Struct("<fffff")
 _BODY_JOINTS_SLOT = 22  # BodyState.joints / BodyCmd.joints, id9
-_APPLIED_JOINTS_SLOT = 14  # BodyAppliedCmd.joints, id5
 
 
 def create_body_cmd(builder: Any, joints: tuple[BodyJointCmd, ...]) -> int:
@@ -67,13 +66,6 @@ def unpack_body_joints(view: Any) -> tuple[BodyJointState, ...]:
     return () if data is None else tuple(BodyJointState(*v) for v in _JOINT_STATE.iter_unpack(data))
 
 
-def unpack_body_cmd(view: Any, *, slot: int = _BODY_JOINTS_SLOT) -> tuple[BodyJointCmd, ...]:
-    if view is None:
-        return ()
-    data = _vector_field_data(view, slot, _MOTOR.size, 4)
-    return () if data is None else tuple(BodyJointCmd(*v) for v in _MOTOR.iter_unpack(data))
-
-
 def _getter(name: str) -> str:
     return ''.join(part.capitalize() for part in name.split('_'))
 
@@ -100,12 +92,8 @@ def decode_body_state(view: Any) -> BodyState:
                         for j in range(getattr(state, _getter(name) + 'Length')()))
             for name in ('quaternion', 'gyroscope', 'accelerometer', 'rpy')})
         imus.append(_dto(sample, BodyImuSample, state=imu))
-    applied = view.AppliedCmd()
-    echo = None
-    if applied is not None:
-        echo = _dto(applied, BodyAppliedCmd, joints=unpack_body_cmd(applied, slot=_APPLIED_JOINTS_SLOT))
     return _dto(view, BodyState, joints=unpack_body_joints(view),
-                imu_states=tuple(imus), applied_cmd=echo)
+                imu_states=tuple(imus))
 
 
 def decode_robot_info(view: Any) -> RobotInfo:

@@ -12,7 +12,7 @@ from locomotion_aorta import (
     BodyCmd,
     BodyJointCmd,
     BodyCmdAction,
-    BodySampleStatus,
+    JointError,
     BODY_SLOTS,
     ServiceStatus,
 )
@@ -46,6 +46,7 @@ def run(
     info = require_body_info(controller, timeout)
     start_state = _wait_for_stationary_body_state(
         controller,
+        body_info=info,
         timeout=timeout,
         sleep=sleep,
         monotonic=monotonic,
@@ -108,7 +109,7 @@ def run(
                 )
 
             state = controller.wait_body_state(timeout)
-            _validate_body_state(state, require_stationary=False)
+            _validate_body_state(state, body_info=info, require_stationary=False)
             now = monotonic()
             if state.state_id != last_state_id:
                 last_state_id = state.state_id
@@ -126,6 +127,7 @@ def run(
         _publish_dwell(
             publish_frame,
             zero_q,
+            body_info=info,
             monotonic=monotonic,
             label="zero",
             position_tolerance_rad=ZERO_ENDPOINT_POSITION_TOLERANCE_RAD,
@@ -135,6 +137,7 @@ def run(
         _publish_dwell(
             publish_frame,
             return_q,
+            body_info=info,
             monotonic=monotonic,
             label="return",
             position_tolerance_rad=RETURN_ENDPOINT_POSITION_TOLERANCE_RAD,
@@ -166,6 +169,7 @@ def require_body_info(controller: ExternalController, timeout: float):
 def _wait_for_stationary_body_state(
     controller: ExternalController,
     *,
+    body_info,
     timeout: float,
     sleep: Callable[[float], None],
     monotonic: Callable[[], float],
@@ -179,14 +183,14 @@ def _wait_for_stationary_body_state(
     while monotonic() < deadline:
         remaining = deadline - monotonic()
         latest = controller.wait_body_state(max(remaining, 0.001))
-        _validate_body_state(latest, require_stationary=False)
+        _validate_body_state(latest, body_info=body_info, require_stationary=False)
         now = monotonic()
         if latest.state_id != last_state_id:
             last_state_id = latest.state_id
             last_new_time = now
             if any(
                 abs(motor.dq) > STATIONARY_DQ_RAD_S
-                for motor in latest.joints if motor.status != BodySampleStatus.UNCONFIGURED
+                for motor, cap in zip(latest.joints, body_info.joints) if cap.populated
             ):
                 stationary_since = None
             elif stationary_since is None:
@@ -201,7 +205,7 @@ def _wait_for_stationary_body_state(
 
 
 def _validate_body_state(
-    state: BodyState, *, require_stationary: bool
+    state: BodyState, *, body_info, require_stationary: bool
 ) -> None:
     if not state.attitude_valid:
         raise RuntimeError("body state attitude is invalid")
@@ -210,11 +214,11 @@ def _validate_body_state(
             f"body state has {len(state.joints)} motor slots; "
             f"{COMMAND_SLOTS} required"
         )
-    for index, motor in enumerate(state.joints):
-        if motor.status == BodySampleStatus.UNCONFIGURED:
+    for index, (motor, cap) in enumerate(zip(state.joints, body_info.joints)):
+        if not cap.populated:
             continue
-        if motor.status != BodySampleStatus.OK:
-            raise RuntimeError(f"body state motor[{index}] q/dq is unavailable")
+        if motor.error_code != JointError.NONE:
+            raise RuntimeError(f"body state motor[{index}] error_code={motor.error_code}")
         if not math.isfinite(motor.q) or not math.isfinite(motor.dq):
             raise RuntimeError(f"body state motor[{index}] q/dq is not finite")
         if require_stationary and abs(motor.dq) > STATIONARY_DQ_RAD_S:
@@ -239,7 +243,7 @@ def _position_command(q: Sequence[float], state: BodyState | None = None) -> Bod
         BodyJointCmd(q=position, kp=kp, kd=kd)
         for position, kp, kd in zip(q, DEMO_KP, FIXED_STAND_KD)
     )
-    return BodyCmd(cmd_id=1, joints=commands, action=BodyCmdAction.EXTERNAL,
+    return BodyCmd(joints=commands, action=BodyCmdAction.EXTERNAL,
                   input_state_id=0 if state is None else state.state_id,
                   input_state_ts_real_us=0 if state is None else state.ts_state_real_us)
 
@@ -265,6 +269,7 @@ def _publish_dwell(
     publish: Callable[[Sequence[float]], BodyState],
     target: Sequence[float],
     *,
+    body_info,
     monotonic: Callable[[], float],
     label: str,
     position_tolerance_rad: float,
@@ -275,10 +280,10 @@ def _publish_dwell(
         state = publish(target)
         now = monotonic()
         at_endpoint = all(
-            motor.status == BodySampleStatus.UNCONFIGURED or (abs(motor.q - target_q) <= position_tolerance_rad
+            not cap.populated or (abs(motor.q - target_q) <= position_tolerance_rad
             and abs(motor.dq) <= STATIONARY_DQ_RAD_S)
-            for motor, target_q in zip(
-                state.joints[:COMMAND_SLOTS], target
+            for motor, target_q, cap in zip(
+                state.joints[:COMMAND_SLOTS], target, body_info.joints
             )
         )
         if at_endpoint:

@@ -23,7 +23,6 @@ class BodyJointCmd:
 
 @dataclass(frozen=True, slots=True)
 class BodyCmd:
-    cmd_id: int
     joints: tuple[BodyJointCmd, ...]
     action: int = BodyCmdAction.EXTERNAL
     protocol_version: int = BODY_PROTOCOL_VERSION
@@ -37,8 +36,6 @@ class BodyCmd:
 
 @dataclass(frozen=True, slots=True)
 class BodyJointState:
-    body_index: int
-    status: int
     ts_acquired_hw_us: int = 0
     ts_ingested_us: int = 0
     ts_assembled_us: int = 0
@@ -63,21 +60,10 @@ class BodyImuSample:
     ts_acquired_hw_us: int = 0
     ts_ingested_us: int = 0
     ts_assembled_us: int = 0
-    device_timestamp_ms: int = 0
-    host_timestamp_us: int = 0
-
-@dataclass(frozen=True, slots=True)
-class BodyAppliedCmd:
-    action: int = BodyCmdAction.UNKNOWN
-    session_id: int = 0
-    sequence: int = 0
-    cmd_id: int = 0
-    ts_first_output_us: int = 0
-    joints: tuple[BodyJointCmd, ...] = ()
-    source_key_valid: bool = False
 
 @dataclass(frozen=True, slots=True)
 class BodyState:
+    """uint64 state/correlation IDs; first-output stamp is a control-cycle time."""
     state_id: int
     joints: tuple[BodyJointState, ...]
     protocol_version: int = BODY_PROTOCOL_VERSION
@@ -87,7 +73,9 @@ class BodyState:
     ts_consumed_us: int = 0
     attitude_valid: bool = False
     imu_states: tuple[BodyImuSample, ...] = ()
-    applied_cmd: BodyAppliedCmd | None = None
+    applied_session_id: int = 0
+    applied_sequence: int = 0
+    ts_first_output_us: int = 0
 
 @dataclass(frozen=True, slots=True)
 class BodyJointCapability:

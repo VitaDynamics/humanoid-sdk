@@ -159,7 +159,7 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
              f'pattern={pattern}, loop={loop}, fractions={low_frac:g}/{high_frac:g}')
     body_info = body.require_body_info(controller, timeout)
     start_state = body._wait_for_stationary_body_state(
-        controller, timeout=timeout, sleep=sleep, monotonic=monotonic)
+        controller, body_info=body_info, timeout=timeout, sleep=sleep, monotonic=monotonic)
     start_q = tuple(m.q if cap.populated else 0.0 for m, cap in zip(start_state.joints, body_info.joints))
     hold = body._position_command(start_q)
     if body_gains == 'zero':
@@ -193,7 +193,7 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
                     or status.reject_count != entered.reject_count):
                 raise RuntimeError('body EXTERNAL ownership/phase/reject_count changed')
             state = controller.wait_body_state(timeout)
-            body._validate_body_state(state, require_stationary=False)
+            body._validate_body_state(state, body_info=body_info, require_stationary=False)
             now = monotonic()
             if state.state_id != last_body_id:
                 last_body_id, last_body_change = state.state_id, now

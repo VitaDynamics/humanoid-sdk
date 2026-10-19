@@ -75,7 +75,7 @@ def analyze(directory, session, seconds, rate):
         if row["session"] != session:
             raise ValueError("wrong session")
     for row in received.values():
-        if row["valid"] != 1 or row["cmd_id"] != row["sequence"]:
+        if row["valid"] != 1:
             raise ValueError("invalid command content/ID")
     active_ns = sent[max(sent)]["publish_ns"] - sent[1]["publish_ns"]
     if active_ns < seconds * 1e9:

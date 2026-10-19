@@ -19,7 +19,7 @@ Both processes use real Aorta, sensor-data/realtime-control QoS defaults, unique
 `/bench/sdk_latency/<session>/...` topics and peer sessions restricted to
 `127.0.0.1`. Multicast/gossip scouting, SHM and compression are disabled. A synthetic typed `get_robot_info` RPC is served under the same isolated
 benchmark prefix and queried once by the client. No control lease, production
-actuator topic or timer is started. This is host RPC evidence, never robot readback. Synthetic positions are correlated by session, sequence, cmd_id and
+actuator topic or timer is started. This is host RPC evidence, never robot readback. Synthetic positions are correlated by session and sequence, plus
 validated31-slot content, never by nearest timestamp. Scheduling does not
 intentionally burst to catch up. Capture is bounded to 65,000 rows per window;
 process watchdogs only terminate the benchmark's own process groups.

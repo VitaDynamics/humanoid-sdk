@@ -101,7 +101,7 @@ class ZeroPoseTest(unittest.TestCase):
         commands = self.commands(c)
         self.assertTrue(all(j.q == .2 for i, j in enumerate(commands[0].joints) if i != 14))
         self.assertTrue(all(j.q == 0 for j in commands[-1].joints))
-        self.assertEqual([m.cmd_id for m in commands], list(range(1, len(commands)+1)))
+        self.assertEqual([m.sequence for m in commands], list(range(1, len(commands)+1)))
         for cmd in commands:
             self.assertEqual((cmd.joints[14].q, cmd.joints[14].dq, cmd.joints[14].tau,
                               cmd.joints[14].kp, cmd.joints[14].kd), (0.,)*5)

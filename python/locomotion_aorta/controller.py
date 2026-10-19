@@ -198,7 +198,7 @@ class ExternalController:
             self._best_effort_cancel()
             raise
 
-    def publish(self, command: BodyCmd) -> None:
+    def publish(self, command: BodyCmd) -> BodyCmd:
         with self._condition:
             self._ensure_open()
             population = None
@@ -239,6 +239,7 @@ class ExternalController:
             )
             self._next_external_sequence += 1
         self.transport.publish(BODY_CMD_TOPIC, external_command)
+        return external_command
 
     def exit_external(self, timeout: float) -> ControlStatus:
         deadline = _deadline(timeout)
@@ -472,9 +473,6 @@ def _status_is_newer(
 def _validate_command(command: BodyCmd, populated: tuple[bool, ...] | None = None) -> None:
     if not isinstance(command, BodyCmd):
         raise InvalidCommandError("command must be a BodyCmd")
-    if (isinstance(command.cmd_id, bool) or not isinstance(command.cmd_id, int)
-            or not 0 < command.cmd_id < (1 << 16)):
-        raise InvalidCommandError("cmd_id must be an integer in [1, 65535]")
     if not isinstance(command.joints, tuple) or len(command.joints) != BODY_SLOTS:
         raise InvalidCommandError("joints must be a 31-slot tuple")
     if command.action != BodyCmdAction.EXTERNAL:

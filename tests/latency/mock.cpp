@@ -13,7 +13,7 @@
 #include "aorta_abi.h"
 #include "body_cmd_generated.h"
 
-std::vector<uint8_t> MakeState(uint16_t sequence);
+std::vector<uint8_t> MakeState(uint64_t sequence);
 aorta_service_t StartInfoService(aorta_node_t node, const std::string &endpoint,
                                 const std::string &bfbs, const std::string &hash);
 uint64_t InfoRequests();
@@ -34,7 +34,7 @@ void Check(int rc) {
   if (rc != 0) throw std::runtime_error("Aorta result=" + std::to_string(rc));
 }
 struct Reply {
-  uint64_t session, sequence, cmd_id, callback_ns, copied_ns;
+  uint64_t session, sequence, callback_ns, copied_ns;
   uint64_t callback_realtime_ns, copied_realtime_ns;
   bool valid;
 };
@@ -72,14 +72,13 @@ void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
     for (size_t j = 0; j < copied.size(); ++j) copied[j] = *motors->Get(j);
     Reply row{cmd->session_id(),
               cmd->sequence(),
-              cmd->cmd_id(),
               entered,
               Now(),
               entered_realtime,
               RealtimeNow(),
               true};
     row.valid = row.session == capture.session && row.sequence > 0 &&
-                row.sequence <= 65000 && row.cmd_id == row.sequence &&
+                row.sequence <= 65000 &&
                 cmd->protocol_version() == 2 && cmd->input_state_id() == row.sequence &&
                 cmd->input_state_ts_real_us() > 0 &&
                 cmd->action() == lowlevel::BodyCmdAction_EXTERNAL;
@@ -186,9 +185,9 @@ int main(int argc, char **argv) {
                 << ',' << r.size << ',' << r.publish_realtime_ns << ','
                 << r.return_realtime_ns << '\n';
     std::lock_guard<std::mutex> lock(capture.mutex);
-    received << "session,sequence,cmd_id,callback_ns,copied_ns,valid,callback_realtime_ns,copied_realtime_ns\n";
+    received << "session,sequence,callback_ns,copied_ns,valid,callback_realtime_ns,copied_realtime_ns\n";
     for (const auto &r : capture.replies)
-      received << r.session << ',' << r.sequence << ',' << r.cmd_id << ','
+      received << r.session << ',' << r.sequence << ','
                << r.callback_ns << ',' << r.copied_ns << ',' << r.valid << ','
                << r.callback_realtime_ns << ',' << r.copied_realtime_ns << '\n';
     sent_file.close();

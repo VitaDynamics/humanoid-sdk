@@ -130,7 +130,7 @@ def decode(kind, payload, bindings):
         if len(motors) != BODY_SLOTS:
             raise ValueError("requires31-slot BodyCmd")
         quat = view.RootQuat()
-        command = BodyCmd(cmd_id=view.CmdId(), joints=motors,
+        command = BodyCmd(joints=motors,
                          protocol_version=view.ProtocolVersion(), action=view.Action(),
                          session_id=view.SessionId(), sequence=view.Sequence(),
                          input_state_id=view.InputStateId(), input_state_ts_real_us=view.InputStateTsRealUs(),

@@ -8,11 +8,9 @@ def state_object(*, applied=False):
     obj.rosterVersion = 7
     obj.tsConsumedUs = 991
     if applied:
-        obj.appliedCmd = module('BodyAppliedCmd').BodyAppliedCmdT(
-            action=13, sessionId=781, sequence=992, cmdId=123,
-            tsFirstOutputUs=131313, sourceKeyValid=True,
-            joints=[module('BodyJointCmd').BodyJointCmdT(
-                q=i+.25, dq=-i, tau=2., kp=3., kd=4.) for i in range(31)])
+        obj.appliedSessionId = 781
+        obj.appliedSequence = 992
+        obj.tsFirstOutputUs = 131313
     return obj
 
 

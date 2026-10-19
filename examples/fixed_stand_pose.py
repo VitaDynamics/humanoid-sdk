@@ -32,8 +32,6 @@ class FixedStandPose:
         if len(state.joints) != len(self.info.joints):
             raise ValueError('BodyState differs from Info roster')
         for name, cap, sample in zip(self.info.joint_names, self.info.joints, state.joints):
-            if sample.body_index != cap.body_index:
-                raise ValueError(f'{name}: BodyState index differs from Info')
             values.append(sample.q if cap.populated else 0.0)
         self.check(values)
         return tuple(values)
@@ -62,7 +60,7 @@ class FixedStandPose:
         self.check(q)
         return q
 
-    def command(self, q, state, cmd_id):
+    def command(self, q, state):
         self.check(q)
         commands = []
         for name, cap, value in zip(self.info.joint_names, self.info.joints, q):
@@ -74,5 +72,5 @@ class FixedStandPose:
                 # Fixed public 31 wire placeholder; server populated mask prevents
                 # physical output. Never use an uninstalled slot's q or gains.
                 commands.append(BodyJointCmd())
-        return BodyCmd(cmd_id=cmd_id, joints=tuple(commands), action=BodyCmdAction.EXTERNAL,
+        return BodyCmd(joints=tuple(commands), action=BodyCmdAction.EXTERNAL,
                        input_state_id=state.state_id, input_state_ts_real_us=state.ts_state_real_us)

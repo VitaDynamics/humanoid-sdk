@@ -22,7 +22,7 @@ class LatencyReportTest(unittest.TestCase):
             self.client.append(dict(session=123, sequence=seq, decode_ns=begin + 100,
                 decoded_ns=begin + 200, built_ns=begin + 300, fill_ns=begin + 400,
                 filled_ns=begin + 500, bytes_ns=begin + 600, returned_ns=begin + 650))
-            self.received.append(dict(session=123, sequence=seq, cmd_id=seq,
+            self.received.append(dict(session=123, sequence=seq,
                 callback_ns=begin + 700, copied_ns=begin + 800, valid=1))
 
     def analyze(self):

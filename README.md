@@ -5,11 +5,14 @@ This version provides public body31/EXTERNAL, independent hand/gripper
 clients, Aorta 2026.10.12 and an independent read-only BodyStateSource.
 
 This candidate requires public body/EE schema **0.1.3** and BODY protocol 2.
-Its 48-byte BodyJointState layout is incompatible with 0.1.2 (56 bytes); use
+Its 40-byte BodyJointState layout is incompatible with 0.1.2 (56 bytes); use
 matching robot software and generated bindings. The 0.1.3 dependency wheel is
 a local candidate, not a published asset. `dependency_release_tag` remains
 unset until its release is approved; installation requires the complete
 matching candidate wheelhouse and hashes in [compatibility.json](compatibility.json).
+The consolidated BODY revision is awaiting its regenerated 0.1.3 wheel and
+updated manifest hashes. Do not install this intermediate source revision
+with an earlier 0.1.3 candidate.
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
@@ -36,14 +39,33 @@ fallback. Discovery preserves partial body/hand results and actual field/limit
 validity. The logical waist-roll slot can be unpopulated; it is skipped in
 physical validation and output, and never represents a healthy zero sample.
 
-BodyJointState exposes index, sample status, q, dq, tau_est, the signed
-JointError error_code and three acquisition/ingestion/assembly timestamps.
-State populated/is_mock/valid_fields/ddq/temperature/lost fields are removed;
-BodyImuSample also removes temperature and valid_fields. Use BodyInfo for
-installation, command capabilities and limits, and status for sample quality.
+BodyJointState contains three acquisition/ingestion/assembly timestamps,
+q, dq, tau_est and the signed JointError error_code. The tuple position is the
+slot identity; installation, capabilities and limits come from BodyInfo.
+For installed non-MOCK joints, the producer preserves a real nonzero fault
+first, otherwise uses TIMEOUT (20) for missing/stale feedback, UNKNOWN (255)
+for nonfinite values or ankle FK failure, and NONE (0) otherwise. Uninstalled
+and MOCK slots use NONE; NONE alone does not mean a joint is installed.
+The 27 existing JointError values are unchanged. The SDK preserves received
+codes, including unknown numeric values, without synthesizing another status.
+BodyImuSample keeps status and rpy (degrees), and removes temperature,
+valid_fields and duplicate device/host timestamps (deprecated IDs 7/8/9/10).
+Both public and internal IMU locations retain HIP=0/TRUNK=1 (chest), adding
+HEAD=2. Public state_id and BodyCmd.input_state_id remain full uint64 values.
 Command validation uses learned BodyInfo population; until discovery it
 validates all 31 command slots. RobotInfo and independent hand/gripper
 contracts remain unchanged.
+
+BodyCmd has no cmd_id: correlate BODY commands and logs by session_id and
+sequence. ExternalController.publish returns the command with the actual
+assigned session/sequence after its transport publish succeeds.
+BodyState carries applied_session_id, applied_sequence and ts_first_output_us
+instead of a nested 31-joint echo. These identify the command affecting output
+at the state frame's time; all three are zero without an observed applied
+command. The timestamp is robot-host Unix epoch microseconds for the control
+cycle when interpolation alpha>0 first affects output, latched only after a
+successful send. It is not hardware send-completion time. TRACKING currently
+reports zero for this timestamp.
 
 Documentation: [Humanoid documentation](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg),
 [SDK guide](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh),

@@ -1,4 +1,5 @@
 from body_fixtures import sample_motor, robot_info_reply
+import math
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -76,9 +77,10 @@ class RecordingController:
 
     def publish(self, command):
         self.calls.append("publish")
-        self.controller.publish(command)
+        published = self.controller.publish(command)
         if self.follow_commands:
             self.measured_q = [motor.q for motor in command.joints]
+        return published
 
     def exit_external(self, timeout: float):
         self.calls.append("exit_external")
@@ -231,10 +233,23 @@ class ExamplesSmokeTest(unittest.TestCase):
             output,
             ["state_id=8 ts_state_real_us=0"]
             + [
-                f"joint[{index}] status={7 if index == 14 else 1} error_code=0 q=0.100000 dq=0.000000"
+                f"joint[{index}] error_code=0 q=0.100000 dq=0.000000"
                 for index in range(31)
             ],
         )
+
+    def test_body_info_masks_absent_slots_and_installed_errors_are_rejected(self):
+        from dataclasses import replace
+        motors = [sample_motor() for _ in range(31)]
+        motors[14] = sample_motor(q=math.nan, dq=math.inf)
+        state = BodyState(1, tuple(motors), attitude_valid=True)
+        info = robot_info_reply().info.body
+        external_control._validate_body_state(state, body_info=info, require_stationary=True)
+        for error in (3, 20, 255):
+            motors[0] = replace(motors[0], error_code=error)
+            with self.subTest(error=error), self.assertRaisesRegex(RuntimeError, f'error_code={error}'):
+                external_control._validate_body_state(replace(state, joints=tuple(motors)),
+                                                      body_info=info, require_stationary=False)
 
     def test_external_example_runs_full_body_round_trip_and_enters_passive(self):
         clock = FakeClock()
@@ -601,7 +616,7 @@ class ExamplesSmokeTest(unittest.TestCase):
 
                 sleep_with_feedback(0)
                 state = external_control._wait_for_stationary_body_state(
-                    harness, timeout=5.0, sleep=sleep_with_feedback,
+                    harness, body_info=robot_info_reply().info.body, timeout=5.0, sleep=sleep_with_feedback,
                     monotonic=clock.monotonic,
                 )
                 self.assertEqual(state.joints[26].dq, 0.0)

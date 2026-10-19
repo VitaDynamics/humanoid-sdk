@@ -288,14 +288,15 @@ class BrainCoCaptureTest(unittest.TestCase):
 
 
 class PublicBodyCaptureTest(unittest.TestCase):
-    def test_current_body_state_keeps_unpopulated_quality_and_null(self):
+    def test_current_body_state_keeps_slot_order_errors_and_nonfinite_null(self):
         from test_body_codec import make_state
         data, _ = make_state()
         row = capture.decode('body_state',data,capture.load_bindings())
         self.assertEqual(len(row['joints']),31)
-        self.assertEqual(row['joints'][14]['status'],7)
+        self.assertNotIn('status',row['joints'][14])
+        self.assertNotIn('body_index',row['joints'][14])
         self.assertIsNone(row['joints'][14]['q'])
-        self.assertEqual(row['joints'][14]['error_code'],14)
+        self.assertEqual(row['joints'][14]['error_code'],0)
         self.assertNotIn('valid_fields',row['joints'][14])
         self.assertNotIn('populated',row['joints'][14])
         self.assertTrue(row['nonfinite_feedback'])

@@ -5,7 +5,7 @@
 #include "body_state_generated.h"
 
 // Separate translation unit: flattened BFBS headers duplicate common types.
-std::vector<uint8_t> MakeState(uint16_t sequence) {
+std::vector<uint8_t> MakeState(uint64_t sequence) {
   const auto wall_us = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
   lowlevel::BodyStateT state;
@@ -23,8 +23,7 @@ std::vector<uint8_t> MakeState(uint16_t sequence) {
     const bool present = j != 14;
     const float q = present ? static_cast<float>(sequence % 1024) * .0001f + j * .01f
                             : std::numeric_limits<float>::quiet_NaN();
-    joints[j] = lowlevel::BodyJointState(j,
-        present ? lowlevel::BodySampleStatus_OK : lowlevel::BodySampleStatus_UNCONFIGURED,
+    joints[j] = lowlevel::BodyJointState(
         0, wall_us, wall_us, q, .1f, .2f, lowlevel::JointError_NONE);
   }
   state.joints = std::move(joints);
@@ -35,7 +34,7 @@ std::vector<uint8_t> MakeState(uint16_t sequence) {
     std::array<float, 3> gyro{0, 0, 0}, accel{0, 0, 9.81f}, rpy{0, 0, 0};
     imu->state = std::make_unique<lowlevel::BodyImuState>(quat, gyro, accel, rpy);
     imu->status = lowlevel::BodySampleStatus_OK;
-    imu->ts_ingested_us = imu->ts_assembled_us = imu->host_timestamp_us = wall_us;
+    imu->ts_ingested_us = imu->ts_assembled_us = wall_us;
     state.imu_states.push_back(std::move(imu));
   }
   flatbuffers::FlatBufferBuilder builder;

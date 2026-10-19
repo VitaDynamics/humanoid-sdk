@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
 from lowlevel.BodySampleStatus import BodySampleStatus
+from lowlevel.JointError import JointError
 
 
 def f32(value: float) -> float:
@@ -119,7 +120,7 @@ class Policy:
         for name in self.names:
             i = indices[name]
             joint = state.joints[i]
-            if joint.body_index != i or joint.status != BodySampleStatus.OK:
+            if joint.error_code != JointError.NONE:
                 raise ValueError(f'policy joint feedback is invalid: {name}')
             q.append(joint.q)
             dq.append(joint.dq)
@@ -228,9 +229,8 @@ class Model:
         return tuple(float(x) for x in result[0])
 
 
-def bodycmd(api: Any, targets: Sequence[MotorTarget], state: Any, cmd_id: int) -> Any:
-    return api.BodyCmd(cmd_id=cmd_id,
-                      joints=tuple(api.BodyJointCmd(q=m.q,dq=m.dq,tau=m.tau,kp=m.kp,kd=m.kd) for m in targets),
+def bodycmd(api: Any, targets: Sequence[MotorTarget], state: Any) -> Any:
+    return api.BodyCmd(joints=tuple(api.BodyJointCmd(q=m.q,dq=m.dq,tau=m.tau,kp=m.kp,kd=m.kd) for m in targets),
                       action=api.BodyCmdAction.EXTERNAL,
                       input_state_id=state.state_id,
                       input_state_ts_real_us=state.ts_state_real_us)
@@ -262,7 +262,6 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
         if entered.phase != api.ExternalPhase.RUNNING or entered.current_action != 'EXTERNAL':
             raise RuntimeError('PREPARE/ACK/COMMIT did not reach actual EXTERNAL RUNNING')
         deadline = monotonic()
-        cmd_id = 1
         while not stop.is_set():
             status = controller.status
             if status is None or any(getattr(status,key) != getattr(entered,key)
@@ -290,8 +289,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
             if stop.is_set():
                 break
             # Keep all D2 controller/session/capability/watchdog/command guards in publish.
-            controller.publish(bodycmd(api,targets,state,cmd_id))
-            cmd_id = cmd_id % 0xffff + 1
+            controller.publish(bodycmd(api,targets,state))
             deadline = max(deadline+policy.period, monotonic())
             sleep(max(0.0,deadline-monotonic()))
     finally:
