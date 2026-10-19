@@ -3,6 +3,7 @@ import argparse
 import email
 import hashlib
 import json
+import logging
 from pathlib import Path
 import struct
 import subprocess
@@ -64,8 +65,19 @@ def main():
         if args.output.exists():
             raise SystemExit("use a new output directory; do not mix previous wheels")
         subprocess.run([sys.executable, "-m", "auditwheel", "show", str(args.wheel)], check=True)
-        subprocess.run([sys.executable, "-m", "auditwheel", "repair", "--only-plat", "--plat",
-                        "manylinux_2_35_" + args.arch, "--wheel-dir", str(args.output), str(args.wheel)], check=True)
+        # auditwheel 6.4.2's CLI choices list only the host architecture.
+        # Its target-aware repair entrypoint performs the actual wheel/ELF,
+        # symbol-version, ISA and policy checks for either architecture.
+        from auditwheel.main_repair import execute
+        logging.basicConfig(level=logging.INFO)
+        options = argparse.Namespace(
+            EXCLUDE=[], WHEEL_DIR=args.output, WHEEL_FILE=[args.wheel],
+            PLAT="manylinux_2_35_" + args.arch, ONLY_PLAT=True,
+            LIB_SDIR=".libs", UPDATE_TAGS=True, STRIP=False,
+            ZIP_COMPRESSION_LEVEL=-1, DISABLE_ISA_EXT_CHECK=False)
+        rc = execute(options, parser)
+        if rc:
+            raise SystemExit(rc)
         result = inspect(next(args.output.glob("*.whl")))
         print(json.dumps(result, indent=2))
         return

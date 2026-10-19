@@ -31,7 +31,9 @@ Repair uses auditwheel with the owner-selected `manylinux_2_35_<arch>` policy;
 it validates the binary and metadata instead of renaming a file. Actual symbol
 requirements may be older than the product baseline; the tag never claims an
 older environment than the audited binary supports. The pinned auditwheel version detects the wheel target architecture for cross
-builds. Save the raw wheel and audit logs. Do not strip. The wrapper compiles with `-O3 -g -DNDEBUG`, without added
+builds. The tool calls the pinned repair entrypoint with the requested target
+because the upstream CLI's choices enumerate host platforms. Wheel/ELF machine,
+versioned-symbol and ISA checks remain enabled. Save the raw wheel and audit logs. Do not strip. The wrapper compiles with `-O3 -g -DNDEBUG`, without added
 LTO, and links with `--disable-new-dtags` to keep `$ORIGIN/.libs` as DT_RPATH.
 The official ORT libraries and their notices ship with it. PEP639 license-file
 metadata declares all included upstream licenses; no project license is inferred.
