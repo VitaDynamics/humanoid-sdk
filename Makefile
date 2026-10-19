@@ -4,6 +4,8 @@ PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 test:
 	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python:tests $(PYTHON) -m unittest discover -s tests -v
 
+check check-hil: export PYTHONPATH := python:tests
+
 check: test
 	$(PYTHON) -m pip check
 	$(PYTHON) examples/body_state_subscriber.py --help
