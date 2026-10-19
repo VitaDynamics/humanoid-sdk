@@ -2,15 +2,11 @@
 
 SDK 0.2.0 embeds the pybind11/Microsoft ORT 1.20.1 CPU backend directly in
 its only distribution, `locomotion-aorta`. There is no standalone backend
-package and no pure Python SDK wheel for this release. The private
-`locomotion_aorta._onnx` subtree is imported only when a demo constructs a model;
+package and no pure Python SDK wheel for this release. The inference backend is loaded only when a demo constructs a model;
 SDK core imports do not load it. The `teleop-demo` extra contains NumPy and
 pygame; there is no Python ORT fallback.
 
-SDK 0.2.0 supports **CPython 3.10, Linux x86_64 and aarch64, Ubuntu 22.04+**
-(glibc 2.35 / GLIBCXX 3.4.29+). Both audited architecture wheels are required
-before release. Version 0.2.1 is planned to restore general platform support
-through platform and pure Python wheels under the same SDK package name.
+See the [SDK README](../README.md) for the supported hosts and release scope.
 
 ## Local build and release audit
 
@@ -55,26 +51,14 @@ Missing either architecture, generic Linux tags, incorrect target ABI, missing
 license files, stripped debug symbols or extension RUNPATH fail this release
 check. It does not execute foreign binaries or establish device acceptance.
 
-## Interface and errors
+## Inference behavior
 
-```python
-from locomotion_aorta._onnx import Session
-session = Session(model_path, intra_threads=1, inter_threads=1)
-output = session.run(session.inputs[0].name, session.outputs[0].name, float32_array)
-```
-
-Thread counts are required keywords and passed to ORT unchanged; 0 uses ORT's
-default. Existing demos retain their original values. IO descriptors expose
-name, shape and dtype; metadata is copied. Non-tensor IO raises ValueError.
-Unknown rank is delegated to ORT, not treated as a scalar-only input. Float32
-dtypes are compared by value; nonnative byte order is not implicitly cast.
-Input data is snapshotted under the GIL, Run releases it, and each output owns
-its storage. No policy normalization, clipping, history or transport is here.
-
-The private test interface below is not imported from the SDK root.
-Wrong names, known shape/dtype and non-tensor IO raise ValueError; missing
-keywords or non-array arguments raise TypeError. ORT load/run failures become
-RuntimeError with context. The loaded runtime must report version1.20.1.
+The policy example owns model construction and supplies the original thread
+counts and IO contract. Model loading and inference errors remain Python
+exceptions; there is no policy normalization, clipping, history or transport
+in the inference backend. Customer code uses the documented SDK and examples,
+not the private extension interface. The tests below exercise that interface
+internally, including dtype/shape validation and output ownership.
 
 ## Tests and parity
 

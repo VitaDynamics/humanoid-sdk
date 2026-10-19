@@ -173,6 +173,46 @@ zero. Five-stage robot timestamps use Vita host microseconds; zero future stages
 are unmeasured. Public HandState carries these stages; no separate public trace
 root is required. Host tests and packaging do not establish device HIL.
 
+## Read-only body state
+
+`BodyStateSource` subscribes only to BodyState; it creates no control publisher,
+service client or lease. It is independent of `ExternalController`.
+
+```python
+from locomotion_aorta import BodyStateSource
+
+source = BodyStateSource(group="default")
+try:
+    frame = source.snapshot()  # default timeout: 5 seconds
+    state = frame.body_state()  # decode this frame once, on first access
+    print(state.state_id, frame.received_monotonic_ns, frame.received_realtime_ns)
+    next_frame = source.snapshot(timeout=1.0, after=frame)
+finally:
+    source.close()
+```
+
+`snapshot(timeout=5.0, after=None)` uses a finite positive timeout, as the hand
+and gripper clients do. It returns the latest cached snapshot, or waits for a
+different received object when `after` is given. Repeated or reset producer
+state IDs can therefore still produce another snapshot; callers retain their
+own producer freshness/validity checks. Timeout raises `TimeoutError`, invalid
+timeout raises `ValueError`, and a closed source raises `RuntimeError` and wakes
+waiters. Closing takes precedence over cached frames and does not send CANCEL.
+
+Snapshots own their payload bytes and remain usable after later frames or
+source close. Decode results, including decode errors, are retained per frame;
+errors surface on `body_state()` access, never in the receive callback. Read
+state IDs, robot timestamps and validity directly from the returned `BodyState`.
+The two receipt timestamps are direct SDK-host nanosecond clock reads:
+MONOTONIC for local elapsed time and REALTIME as Unix epoch time. They are not
+converted into one another or into robot/device acquisition clock domains.
+
+The single-frame CLI uses this same read-only source:
+
+```bash
+python examples/body_state_subscriber.py --group default --timeout 5
+```
+
 ## Development and offline packaging
 
 Install the four pinned runtime dependencies, not the SDK wheel, into a
@@ -303,7 +343,7 @@ CANCEL exit. Before every live inference it waits up to the existing `--timeout`
 for a strictly increasing BodyState `state_id`; unchanged or older feedback is
 not reused for another inference or leg command, and timeout attempts CANCEL.
 The SDK wheel already contains the C++ ONNX Runtime 1.20.1 CPU backend and
-its shared libraries. Only constructing a model imports `locomotion_aorta._onnx`;
+its shared libraries. Only constructing a model loads the bundled inference backend;
 core imports and example `--help` do not load it. There is no Python ONNX
 Runtime fallback. The optional `teleop-demo` extra installs only NumPy and
 pygame from a complete matching demo wheelhouse:
@@ -317,13 +357,6 @@ The backend intentionally matches the robot's ORT 1.20.1 instead of the
 previous Python ORT 1.23.2. Outputs are not bit-identical to the old extra:
 82 of 120 values differed in the archived comparison. Acceptance uses a
 test-only Python ORT 1.20.1 oracle with exact finite float32 equality.
-SDK 0.2.0, including this demo, supports only CPython 3.10 on Linux
-x86_64/aarch64, Ubuntu 22.04 or newer (glibc 2.35 and GLIBCXX 3.4.29 or newer).
-Both SDK cp310 architecture wheels must be built and audited before release;
-there is no separate native distribution. The wheel ABI/platform tags and
-`Requires-Python` enforce the installation support scope. General platform
-support is planned again for 0.2.1.
-
 No compiler or robot filesystem is needed to consume the SDK wheel. Source
 build instructions are in `demo_onnx/README.md`; the offline bundle already
 contains the compiled backend and ORT inside each SDK wheel. `--model` is required; no

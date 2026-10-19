@@ -1,5 +1,7 @@
 from body_fixtures import sample_motor, robot_info_reply
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 from examples import external_control, body_state_subscriber
 from locomotion_aorta import (
@@ -218,15 +220,13 @@ class FakeClock:
 
 class ExamplesSmokeTest(unittest.TestCase):
     def test_body_state_example_prints_snapshot_without_entering_external(self):
-        harness = RecordingController(FakeClock())
-        self.addCleanup(harness.close)
+        state = BodyState(state_id=8, ts_state_real_us=0, attitude_valid=True,
+                          joints=tuple(sample_motor(q=0.1, dq=0.0, body_index=i,
+                                                    populated=i != 14) for i in range(31)))
+        source = SimpleNamespace(snapshot=mock.Mock(return_value=SimpleNamespace(body_state=lambda: state)))
         output: list[str] = []
-
-        body_state_subscriber.run_once(
-            harness, timeout=0.1, emit=output.append
-        )
-
-        self.assertEqual(harness.calls, ["wait_body_state"])
+        body_state_subscriber.run_once(source, timeout=0.1, emit=output.append)
+        source.snapshot.assert_called_once_with(0.1)
         self.assertEqual(
             output,
             ["state_id=8 ts_state_real_us=0"]

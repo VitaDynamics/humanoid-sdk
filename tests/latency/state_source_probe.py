@@ -9,7 +9,7 @@ import sys
 import time
 
 ROOT=Path(__file__).resolve().parents[2]
-sys.path[:0]=[str(ROOT/'python'),str(ROOT/'tests'),str(ROOT/'tests/latency')]
+sys.path[:0]=[str(ROOT/'tests'),str(ROOT/'tests/latency')]
 
 
 def publisher(directory,session):
@@ -44,44 +44,43 @@ def run(output):
         if key.startswith(('AORTA_','ZENOH_')):os.environ.pop(key)
     os.environ['AORTA_LOG_TOPIC_ENABLED']='false'
     results=[]
-    for mode in ('eager','on_demand'):
-        directory=output/mode;directory.mkdir();session=time.time_ns()
-        with socket.socket() as probe:
-            probe.bind(('127.0.0.1',0));port=probe.getsockname()[1]
-        config_files(directory,port)
-        clean={k:v for k,v in os.environ.items() if not k.startswith(('ZENOH_','AORTA_'))}
-        # The caller starts this parent in an isolated environment; the config is set before Node construction.
-        os.environ['ZENOH_SESSION_CONFIG_URI']=str(directory/'python.json')
-        stream.BODY_STATE_TOPIC=f'/bench/sdk_state_source/{session}/body_state'
-        source=BodyStateSource(group='default',conversion=mode)
-        rows=[];child=None
-        with (directory/'publisher.log').open('w') as log:
-            try:
-                child=subprocess.Popen([sys.executable,__file__,'--output',str(directory),'--publisher',str(session)],
-                    env={**clean,'ZENOH_SESSION_CONFIG_URI':str(directory/'mock.json'),'RUST_LOG':'error'},
-                    stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
-                previous=None
-                for seq,state_id in enumerate((91,91,0),1):
-                    snapshot=source.snapshot(5,after_token=previous)
-                    assert snapshot.body_state().state_id==state_id
-                    rows.append(dict(sequence=seq,token_sequence=snapshot.token.sequence,state_id=state_id,
-                                     received_realtime_ns=snapshot.received_realtime_ns))
-                    previous=snapshot.token
-                    (directory/f'ack-{seq}').touch()
-                assert child.wait(timeout=5)==0
-                source.close()
-                assert snapshot.body_state().joints[30].q==30.125
-                sent=json.loads((directory/'publisher.json').read_text())
-                assert len(sent)==len(rows)==3
-                for a,b in zip(sent,rows):
-                    assert b['received_realtime_ns']>=a['publish_realtime_ns']
-                assert [r['token_sequence'] for r in rows]==[1,2,3]
-                results.append(dict(conversion=mode,received=rows,private_state_publishers=1,
-                                    control_publishers=0,
-                                    closed_snapshot_valid=True))
-            finally:
-                source.close()
-                if child is not None:terminate(child)
+    directory=output;session=time.time_ns()
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1',0));port=probe.getsockname()[1]
+    config_files(directory,port)
+    clean={k:v for k,v in os.environ.items() if not k.startswith(('ZENOH_','AORTA_'))}
+    # The caller starts this parent in an isolated environment; the config is set before Node construction.
+    os.environ['ZENOH_SESSION_CONFIG_URI']=str(directory/'python.json')
+    stream.BODY_STATE_TOPIC=f'/bench/sdk_state_source/{session}/body_state'
+    source=BodyStateSource(group='default')
+    rows=[];child=None
+    with (directory/'publisher.log').open('w') as log:
+        try:
+            child=subprocess.Popen([sys.executable,__file__,'--output',str(directory),'--publisher',str(session)],
+                env={**clean,'ZENOH_SESSION_CONFIG_URI':str(directory/'mock.json'),'RUST_LOG':'error'},
+                stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+            previous=None
+            for seq,state_id in enumerate((91,91,0),1):
+                snapshot=source.snapshot(5,after=previous)
+                assert snapshot.body_state().state_id==state_id
+                rows.append(dict(sequence=seq,state_id=state_id,
+                                 received_monotonic_ns=snapshot.received_monotonic_ns,
+                                 received_realtime_ns=snapshot.received_realtime_ns))
+                previous=snapshot
+                (directory/f'ack-{seq}').touch()
+            assert child.wait(timeout=5)==0
+            source.close()
+            assert snapshot.body_state().joints[30].q==30.125
+            sent=json.loads((directory/'publisher.json').read_text())
+            assert len(sent)==len(rows)==3
+            for a,b in zip(sent,rows):
+                assert b['received_realtime_ns']>=a['publish_realtime_ns']
+            results.append(dict(received=rows,private_state_publishers=1,
+                                control_publishers=0,
+                                closed_snapshot_valid=True))
+        finally:
+            source.close()
+            if child is not None:terminate(child)
     result=dict(status='PASS',results=results,clock='CLOCK_REALTIME direct on both processes',
                 boundary='IPC integration with per-frame file handshake; not timed performance evidence. No lease or robot topic.')
     (output/'result.json').write_text(json.dumps(result,indent=2)+'\n')

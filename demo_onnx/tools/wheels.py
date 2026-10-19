@@ -34,8 +34,6 @@ def inspect(path):
         actual = {req.name: str(req.specifier) for req in requirements if req.marker is None}
         if metadata["Requires-Python"] != "==3.10.*" or actual != core:
             raise ValueError("unexpected SDK Python/core dependencies")
-        if any(req.name == "locomotion-aorta-demo-onnx" for req in requirements):
-            raise ValueError("SDK must not depend on a separate native distribution")
         licenses = metadata.get_all("License-File", [])
         if len(licenses) != 3 or any(info + "/licenses/" + n not in wheel.namelist() for n in licenses):
             raise ValueError("three declared license files must exist in dist-info")

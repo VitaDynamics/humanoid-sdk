@@ -30,7 +30,7 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
 
 ## Installation and deployment workflow
 
-1. Inspect the selected target's OS, architecture, Python version (3.10 for SDK 0.2.0) and
+1. Inspect the selected target's OS, architecture, Python version (see the README support scope) and
    existing installation. Verify the SDK release manifest against the robot's
    deployed Aorta/schema revision; do not choose wheels solely by date or latest
    tag. Use the architecture-matching Linux `aorta_sdk` wheel and matching

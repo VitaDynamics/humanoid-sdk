@@ -1,18 +1,16 @@
-"""Real public generated payloads; fake stream isolates lifecycle from the network."""
+"""Actual public body31 payloads with an isolated state-only stream."""
+import gc
 import math
 import threading
 import unittest
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest import mock
 
 from fake_transport import FakeTransport
 from test_body_codec import make_state, module
-from locomotion_aorta import (
-    BodyStateSource, FrameToken, StateSourceClosedError, StateSourceTimeoutError,
-    ExternalController,
-    BODY_STATE_TOPIC,
-)
+from locomotion_aorta import BodyStateSource, BodyStateSnapshot, ExternalController, BODY_STATE_TOPIC
 from locomotion_aorta import state as state_module
 from locomotion_aorta._state_stream import _StateStream
 
@@ -23,225 +21,174 @@ class FakeStream:
         self.close = mock.Mock()
 
     def emit(self, data=None):
-        if data is None:
-            data = make_state()[0]
-        self.callback(data, module('BodyState').BodyState.GetRootAs)
+        self.callback(make_state()[0] if data is None else data,
+                      module('BodyState').BodyState.GetRootAs)
 
 
 class StateSourceTest(unittest.TestCase):
     def setUp(self):
-        self.patch = mock.patch.object(state_module, 'create_state_stream', side_effect=FakeStream)
-        self.factory = self.patch.start()
-        self.addCleanup(self.patch.stop)
+        patch = mock.patch.object(state_module, 'create_state_stream', side_effect=FakeStream)
+        self.factory = patch.start()
+        self.addCleanup(patch.stop)
 
-    def source(self, conversion='on_demand', group='test'):
-        source = BodyStateSource(group=group, conversion=conversion)
+    def source(self, **kwargs):
+        source = BodyStateSource(**kwargs)
         self.addCleanup(source.close)
         return source
 
-    def test_zero_timeout_poll_and_after_token(self):
-        s = self.source()
-        with self.assertRaises(StateSourceTimeoutError):
-            s.snapshot(0)
-        s._stream.emit()
-        a = s.snapshot(0)
-        self.assertIs(a, s.snapshot(0))
-        with self.assertRaises(StateSourceTimeoutError):
-            s.snapshot(0, after_token=a.token)
-        s._stream.emit()  # Same state_id is a distinct local receive event.
-        b = s.snapshot(0, after_token=a.token)
-        self.assertEqual(a.metadata.state_id, b.metadata.state_id)
-        self.assertEqual(b.token.sequence, a.token.sequence + 1)
-        self.assertNotEqual(a.token, b.token)
+    def test_default_timeout_and_after_use_received_object_identity(self):
+        source = self.source()
+        self.assertEqual(source.group, 'default')
+        source._stream.emit()
+        with mock.patch.object(state_module, '_deadline', wraps=state_module._deadline) as deadline:
+            first = source.snapshot()
+            deadline.assert_called_once_with(5.0)
+        self.assertIs(first, source.snapshot())
+        with self.assertRaises(TimeoutError) as error:
+            source.snapshot(.001, after=first)
+        self.assertIs(type(error.exception), TimeoutError)
+        source._stream.emit()  # Same producer state_id, new receive object.
+        second = source.snapshot(after=first)
+        self.assertIsNot(first, second)
+        self.assertEqual(first.body_state().state_id, second.body_state().state_id)
 
-    def test_argument_validation_and_source_identity(self):
-        s, other = self.source(), self.source()
-        other._stream.emit()
-        for value in (-1, -math.inf, math.nan, True, None, '0'):
+    def test_timeout_and_text_validation(self):
+        source = self.source()
+        for value in (0, -1, math.inf, -math.inf, math.nan, True, None, '0'):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                s.snapshot(value)
-        for token in (other.snapshot(0).token, 'bad', FrameToken(s._source_id, 0),
-                      FrameToken(s._source_id, True)):
-            with self.subTest(token=token), self.assertRaises(ValueError):
-                s.snapshot(0, after_token=token)
-        for args in ({'group': '', 'conversion': 'eager'},
-                     {'group': 'a', 'conversion': 'automatic'},
-                     {'group': 'a', 'conversion': 'eager', 'node_name': ''}):
-            with self.assertRaises(ValueError):
-                BodyStateSource(**args)
+                source.snapshot(value)
+        with self.assertRaises(TimeoutError):
+            source.snapshot(.001)
+        for kwargs in ({'group': ''}, {'group': None}, {'node_name': ''}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                BodyStateSource(**kwargs)
 
-    def test_direct_realtime_and_monotonic_reads_and_readonly_properties(self):
-        s = self.source()
+    def test_direct_clocks_and_readonly_properties(self):
+        source = self.source()
         with mock.patch.object(state_module.time, 'monotonic_ns', return_value=7) as mono, \
              mock.patch.object(state_module.time, 'time_ns', return_value=900000000000001) as real:
-            s._stream.emit()
-        snapshot = s.snapshot(0)
-        self.assertEqual(snapshot.received_monotonic_ns, 7)
-        self.assertEqual(snapshot.received_realtime_ns, 900000000000001)
+            source._stream.emit()
+        frame = source.snapshot()
+        self.assertEqual(frame.received_monotonic_ns, 7)
+        self.assertEqual(frame.received_realtime_ns, 900000000000001)
         mono.assert_called_once_with()
         real.assert_called_once_with()
-        for name in ('token', 'metadata', 'received_monotonic_ns', 'received_realtime_ns'):
+        for name in ('received_monotonic_ns', 'received_realtime_ns'):
             with self.assertRaises(AttributeError):
-                setattr(snapshot, name, 123)
+                setattr(frame, name, 123)
 
     def test_immutable_payload_and_old_snapshot_survives_close(self):
-        s = self.source()
+        source = self.source()
         data = bytearray(make_state()[0])
-        s._stream.emit(data)
-        old = s.snapshot(0)
+        source._stream.emit(data)
+        old = source.snapshot()
         data[:] = bytes(len(data))
-        s._stream.emit()
-        s.close()
-        s.close()
+        source._stream.emit()
+        source.close()
+        source.close()
         self.assertEqual(old.body_state().state_id, 91)
         self.assertTrue(math.isnan(old.body_state().joints[14].q))
-        s._stream.close.assert_called_once_with()
-        with self.assertRaises(StateSourceClosedError):
-            s.snapshot(0)
-        s._stream.emit()  # Late callback is ignored.
-        self.assertEqual(old.token.sequence, 1)
+        source._stream.close.assert_called_once_with()
+        with self.assertRaisesRegex(RuntimeError, 'closed') as error:
+            source.snapshot()
+        self.assertIs(type(error.exception), RuntimeError)
+        source._stream.emit()  # Late callback is harmless.
+        self.assertEqual(old.body_state().state_id, 91)
 
-    def test_eager_and_on_demand_conversion_and_multi_reader_cache(self):
-        original = state_module.decode_body_state
-        for conversion in ('eager', 'on_demand'):
-            with self.subTest(conversion=conversion):
-                s = self.source(conversion)
-                with mock.patch.object(state_module, 'decode_body_state', wraps=original) as decode:
-                    s._stream.emit()
-                    snapshot = s.snapshot(0)
-                    self.assertEqual(decode.call_count, int(conversion == 'eager'))
-                    with ThreadPoolExecutor(max_workers=8) as pool:
-                        values = list(pool.map(lambda _: snapshot.body_state(), range(32)))
-                    self.assertEqual(decode.call_count, 1)
-                    self.assertTrue(all(v is values[0] for v in values))
-                    s._stream.emit()
-                    s.snapshot(0).body_state()
-                    self.assertEqual(decode.call_count, 2)
-
-    def test_decode_failure_is_not_cached_or_replaced_with_previous_frame(self):
-        s = self.source()
-        s._stream.emit()
-        good = s.snapshot(0)
-        s._stream.emit(b'bad')
-        bad = s.snapshot(0, after_token=good.token)
-        for _ in range(2):
-            with self.assertRaises(Exception) as error:
-                bad.body_state()
-            self.assertNotIsInstance(error.exception, StateSourceTimeoutError)
-        self.assertEqual(good.body_state().state_id, 91)
-
-    def test_eager_callback_error_matches_full_decoder_and_can_recover(self):
-        s = self.source('eager')
-        with self.assertRaises(Exception) as eager:
-            s._stream.emit(b'bad')
-        with self.assertRaises(type(eager.exception)):
-            state_module.decode_body_state(module('BodyState').BodyState.GetRootAs(b'bad'))
-        with self.assertRaises(type(eager.exception)):
-            s.snapshot(0).body_state()
-        s._stream.emit()
-        good=s.snapshot(0)
-        self.assertEqual(good.metadata.state_id, 91)
-        with self.assertRaises(type(eager.exception)):s._stream.emit(b'bad')
-        received=s.snapshot(0,after_token=good.token)
-        with self.assertRaises(type(eager.exception)):received.body_state()
-        self.assertEqual(good.body_state().state_id,91)
-
-    def test_source_close_wakes_unbounded_waiter(self):
-        s = self.source()
-        started = threading.Event()
-        def wait():
-            started.set()
-            return s.snapshot(math.inf)
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(wait)
-            self.assertTrue(started.wait(1))
-            s.close()
-            with self.assertRaises(StateSourceClosedError):
-                future.result(1)
-
-    def test_large_finite_wait_does_not_overflow_platform_wait_and_close_wakes_it(self):
-        s=self.source()
-        entered=threading.Event();original=s._condition.wait
-        def wait(timeout):
-            self.assertLessEqual(timeout,threading.TIMEOUT_MAX)
-            entered.set()
-            return original(timeout)
-        with mock.patch.object(s._condition,'wait',side_effect=wait), ThreadPoolExecutor(max_workers=1) as pool:
-            future=pool.submit(s.snapshot,1e300)
-            self.assertTrue(entered.wait(1));s.close()
-            with self.assertRaises(StateSourceClosedError):future.result(1)
-
-    def test_new_frame_wakes_after_token_waiter(self):
-        s = self.source()
-        s._stream.emit()
-        first = s.snapshot(0)
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(s.snapshot, 1, after_token=first.token)
-            s._stream.emit()
-            self.assertGreater(future.result(1).token.sequence, first.token.sequence)
-
-    def test_concurrent_eager_callbacks_do_not_publish_older_frame_last(self):
-        s = self.source('eager')
+    def test_lazy_decode_once_with_concurrent_readers_and_live_callback(self):
+        source = self.source()
         entered, release = threading.Event(), threading.Event()
         original = state_module.decode_body_state
         def decode(view):
-            if threading.current_thread().name == 'older-frame':
-                entered.set()
-                self.assertTrue(release.wait(2))
+            entered.set()
+            if not release.wait(2):
+                raise RuntimeError('test decoder was not released')
             return original(view)
-        with mock.patch.object(state_module, 'decode_body_state', side_effect=decode):
-            thread = threading.Thread(target=s._stream.emit, name='older-frame')
-            thread.start()
+        with mock.patch.object(state_module, 'decode_body_state', side_effect=decode) as call:
+            source._stream.emit()
+            first = source.snapshot()
+            call.assert_not_called()
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                futures = [pool.submit(first.body_state) for _ in range(32)]
+                try:
+                    self.assertTrue(entered.wait(1))
+                    # The receive callback never takes the decoder's cache lock.
+                    source._stream.emit()
+                    second = source.snapshot(after=first)
+                    self.assertIsNot(first, second)
+                finally:
+                    release.set()
+                values = [future.result(2) for future in futures]
+            self.assertEqual(call.call_count, 1)
+            self.assertTrue(all(value is values[0] for value in values))
+            second.body_state()
+            self.assertEqual(call.call_count, 2)
+
+    def test_decode_failure_is_deferred_cached_and_never_replaced_with_old_data(self):
+        source = self.source()
+        source._stream.emit()
+        good = source.snapshot()
+        self.assertEqual(good.body_state().state_id, 91)
+        decoder = mock.Mock(wraps=module('BodyState').BodyState.GetRootAs)
+        source._stream.callback(b'bad', decoder)  # Callback does not decode or raise.
+        decoder.assert_not_called()
+        bad = source.snapshot(after=good)
+        failures = []
+        for _ in range(2):
+            with self.assertRaises(Exception) as error:
+                bad.body_state()
+            failures.append(error.exception)
+        self.assertIs(failures[0], failures[1])
+        decoder.assert_called_once_with(b'bad')
+        with self.assertRaises(type(failures[0])):
+            state_module.decode_body_state(module('BodyState').BodyState.GetRootAs(b'bad'))
+        self.assertEqual(good.body_state().state_id, 91)
+        source._stream.emit()
+        self.assertEqual(source.snapshot(after=bad).body_state().state_id, 91)
+
+    def test_close_wakes_waiter_using_the_default_deadline(self):
+        source = self.source()
+        entered = threading.Event()
+        def wait():
+            entered.set()
+            return source.snapshot()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(wait)
             self.assertTrue(entered.wait(1))
-            s._stream.emit()
-            self.assertEqual(s.snapshot(0).token.sequence, 2)
-            release.set()
-            thread.join(2)
-            self.assertFalse(thread.is_alive())
-            self.assertEqual(s.snapshot(0).token.sequence, 2)
+            source.close()
+            with self.assertRaisesRegex(RuntimeError, 'closed'):
+                future.result(1)
 
-
-
-
-
-
-
-
-
-    def test_public_source_has_only_whole_frame_access(self):
-        import inspect
-        import locomotion_aorta as sdk
-        s=self.source();s._stream.emit();frame=s.snapshot(0)
-        self.assertFalse(hasattr(frame,'select'))
-        self.assertFalse(hasattr(frame,'applied_cmd'))
-        self.assertFalse(hasattr(sdk,'JointSelection'))
-        self.assertFalse(hasattr(sdk,'JointColumns'))
-        self.assertNotIn('state_source',inspect.signature(ExternalController).parameters)
+    def test_new_frame_wakes_after_snapshot_waiter(self):
+        source = self.source()
+        source._stream.emit()
+        first = source.snapshot()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(source.snapshot, 1, after=first)
+            source._stream.emit()
+            self.assertIsNot(future.result(1), first)
 
     def test_replaced_snapshot_releases_without_cyclic_gc(self):
-        import gc,weakref
-        class TrackedSnapshot(state_module.BodyStateSnapshot):
-            __slots__=('__weakref__',)
-        enabled=gc.isenabled();gc.disable()
+        enabled = gc.isenabled()
+        gc.disable()
         try:
-            frame=TrackedSnapshot(make_state()[0],module('BodyState').BodyState.GetRootAs,
-                                  FrameToken('lifetime',1),1,2)
-            state=frame.body_state();metadata=frame.metadata
-            reference=weakref.ref(frame)
+            frame = BodyStateSnapshot(make_state()[0], module('BodyState').BodyState.GetRootAs, 1, 2)
+            state = frame.body_state()
+            reference = weakref.ref(frame)
             del frame
             self.assertIsNone(reference())
-            self.assertEqual(state.state_id,metadata.state_id)
+            self.assertEqual(state.state_id, 91)
         finally:
-            if enabled:gc.enable()
+            if enabled:
+                gc.enable()
 
-    def test_default_controller_still_uses_original_body_subscription(self):
+    def test_default_controller_keeps_its_original_subscription(self):
         transport = FakeTransport()
-        c = ExternalController(_transport=transport)
-        self.addCleanup(c.close)
+        controller = ExternalController(_transport=transport)
+        self.addCleanup(controller.close)
         self.assertIn(BODY_STATE_TOPIC, transport.callbacks)
 
-    def test_state_only_adapter_has_no_publisher_or_client_factory(self):
-        # Deliberately no publisher/client methods: calling either fails the test.
+    def test_state_only_adapter_needs_no_publisher_or_client_factory(self):
         node = SimpleNamespace(create_subscriber=mock.Mock(return_value=object()), close=mock.Mock())
         aorta = SimpleNamespace(Node=mock.Mock(return_value=node),
                                 QoS=SimpleNamespace(sensor_data=lambda: 'sensor'))

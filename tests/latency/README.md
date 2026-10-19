@@ -111,8 +111,8 @@ failed reports rather than retrying until green. Run builds serially on shared b
 ## Independent state source integration
 
 `state_source_probe.py --output <new-directory>` verifies real Aorta state-only
-subscriptions in both conversion modes, local tokens across repeated/reset state_id,
-direct REALTIME receipt and whole snapshots surviving close. The per-frame file
+a lazy state-only subscription, snapshot object identity across repeated/reset
+state_id, direct MONOTONIC/REALTIME receipt and snapshots surviving close. The per-frame file
 handshake is integration evidence, not a speed benchmark. It uses isolated loopback
 and private topics, one synthetic state publisher, no control publisher or lease.
 It does not replace the original 11×60s gate or establish device/aarch64 acceptance.
