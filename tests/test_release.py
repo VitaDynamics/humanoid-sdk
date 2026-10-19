@@ -67,7 +67,8 @@ class ReleaseTest(unittest.TestCase):
                 (root / "wheels" / name).write_bytes(payload)
                 compatibility["wheel_sha256"][name] = hashlib.sha256(payload).hexdigest()
             (root / "compatibility.json").write_text(json.dumps(compatibility))
-            (root / "dist/locomotion_aorta-0.1.0-py3-none-any.whl").write_bytes(b"sdk fixture")
+            sdk_wheel = root / "dist" / f"locomotion_aorta-{compatibility['sdk_version']}-py3-none-any.whl"
+            sdk_wheel.write_bytes(b"sdk fixture")
             output = Path(temporary) / "bundle"
             with mock.patch.object(package_release, "ROOT", root), mock.patch.object(
                 package_release.subprocess, "check_output", side_effect=["fixture-head\n", ""]

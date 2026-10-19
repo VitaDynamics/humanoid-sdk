@@ -1,5 +1,9 @@
 # Humanoid SDK
 
+SDK **0.2.0** is in preparation; packaging and release are pending.
+This version provides public body31/EXTERNAL, independent hand/gripper
+clients, Aorta 2026.10.12 and an independent read-only BodyStateSource.
+
 This D2 successor uses the released public body/EE schema `0.1.2` from
 S2 daadf8f7449e. Its official CI-built wheel is pinned in the manifest and
 available with its SHA-256 sidecar in dependency release `v0.1.0-rc.4`.
@@ -57,7 +61,7 @@ bundle root:
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-python -m pip install --no-index --find-links wheelhouse locomotion-aorta==0.1.0
+python -m pip install --no-index --find-links wheelhouse locomotion-aorta==0.2.0
 python -m pip check
 python -c 'import aorta, flatbuffers, locomotion_aorta; import lowlevel.BodyCmd, lowlevel.BodyState, locomotion_sdk.ControlStatus'
 ```
