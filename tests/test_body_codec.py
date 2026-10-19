@@ -110,9 +110,31 @@ class BodyCodecTest(unittest.TestCase):
                         self.assertEqual(actual, encode(command, generated=True, initial_size=size, prefix=prefix))
                         view = module('BodyCmd').BodyCmd.GetRootAs(actual)
                         self.assertEqual(view.Action(), action)
-                        self.assertNotEqual(view._tab.Offset(24), 0)  # action id10 is explicitly present
+                        self.assertNotEqual(view._tab.Offset(22), 0)  # action id9 is explicitly present
                         self.assertEqual(view.JointsLength(), 31)
                         self.assertEqual(view.Joints(30).Q(), command.joints[30].q)
+
+    def test_compact_command_vector_id8_is_distinct_from_state_id9(self):
+        # Construct the new table directly: this test can run before regenerating
+        # BodyCmd bindings, and cannot accidentally inherit their former id9.
+        from flatbuffers.table import Table
+        command = make_command()
+        builder = flatbuffers.Builder(1)
+        builder.StartVector(20, 31, 4)
+        for joint in reversed(command.joints):
+            module('BodyJointCmd').CreateBodyJointCmd(
+                builder, joint.q, joint.dq, joint.tau, joint.kp, joint.kd)
+        vector = builder.EndVector()
+        builder.StartObject(11)
+        builder.PrependUOffsetTRelativeSlot(8, vector, 0)
+        builder.PrependUint8Slot(9, BodyCmdAction.EXTERNAL, 0)
+        builder.Finish(builder.EndObject())
+        data = bytes(builder.Output())
+        view = SimpleNamespace(_tab=Table(data, struct.unpack_from('<I', data)[0]))
+        self.assertEqual(codec.unpack_body_cmd(view), command.joints)
+        # The old shared id9 slot now contains the action scalar, not a vector.
+        with self.assertRaises(ValueError):
+            codec.unpack_body_cmd(view, slot=22)
 
     def test_no_vector_or_wrong_width_is_accepted_by_bulk(self):
         for count in (0, 30, 32, 42, 44):
@@ -367,8 +389,8 @@ class BodyCodecTest(unittest.TestCase):
         root = view._tab.Pos
         vtable = root - struct.unpack_from('<i', original, root)[0]
         cases = ((vtable, 3), (vtable + 2, 4),
-                 (vtable + codec._BODY_JOINTS_SLOT, 1),
-                 (vtable + codec._BODY_JOINTS_SLOT, 65535))
+                 (vtable + codec._STATE_JOINTS_SLOT, 1),
+                 (vtable + codec._STATE_JOINTS_SLOT, 65535))
         for at, value in cases:
             data = bytearray(original); struct.pack_into('<H',data,at,value)
             with self.subTest(at=at,value=value), self.assertRaises((ValueError,struct.error)):
@@ -379,7 +401,7 @@ class BodyCodecTest(unittest.TestCase):
 
     def test_corrupt_vector_length_offset_and_alignment_are_rejected(self):
         original, view = make_state()
-        field = view._tab.Pos + view._tab.Offset(codec._BODY_JOINTS_SLOT)
+        field = view._tab.Pos + view._tab.Offset(codec._STATE_JOINTS_SLOT)
         vector = field + struct.unpack_from('<I', original, field)[0]
         for count in (0, 30, 32, 42, 44, 0xffffffff):
             data = bytearray(original); struct.pack_into('<I', data, vector, count)

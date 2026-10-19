@@ -10,6 +10,8 @@ matching robot software and generated bindings. The 0.1.3 dependency wheel is
 a local candidate, not a published asset. `dependency_release_tag` remains
 unset until its release is approved; installation requires the complete
 matching candidate wheelhouse and hashes in [compatibility.json](compatibility.json).
+The table-ID compaction is awaiting regenerated 0.1.3 bindings and manifest
+hashes. Do not install this intermediate source with the earlier candidate.
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
@@ -46,7 +48,10 @@ and MOCK slots use NONE; NONE alone does not mean a joint is installed.
 The 27 existing JointError values are unchanged. The SDK preserves received
 codes, including unknown numeric values, without synthesizing another status.
 BodyImuSample keeps status and rpy (degrees), and removes temperature,
-valid_fields and duplicate device/host timestamps (deprecated IDs 7/8/9/10).
+valid_fields and duplicate device/host timestamps. BodyCmd, BodyState and
+BodyImuSample have no deprecated placeholders: IDs are renumbered contiguously
+while preserving field order (0..10, 0..12 and 0..6 respectively). There are no
+external consumers of 0.1.3 yet; older unpublished candidates cannot be mixed.
 Both public and internal IMU locations retain HIP=0/TRUNK=1 (chest), adding
 HEAD=2 as a reserved position. The current public list follows the actual
 configured HIP and TRUNK locations. Public state_id and BodyCmd.input_state_id

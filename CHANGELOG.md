@@ -14,7 +14,9 @@
   Preserve real faults first, then missing/stale=TIMEOUT, nonfinite/FK=UNKNOWN,
   otherwise NONE; uninstalled/MOCK use NONE and installation comes from BodyInfo.
   IMU status/rpy remain; temperature/valid_fields/duplicate device and host
-  timestamps become deprecated slots 7/8/9/10. Reserve HEAD=2 alongside
+  timestamps are removed without placeholders. Compact the three BODY tables
+  to contiguous field IDs, preserving order; earlier unpublished 0.1.3
+  candidates cannot be mixed. Reserve HEAD=2 alongside
   HIP=0/TRUNK=1; the current configured public list remains HIP and TRUNK.
   Replace the nested applied echo with applied_session_id/applied_sequence and
   control-cycle ts_first_output_us, latched after successful send (TRACKING0).

@@ -12,7 +12,8 @@ from .body_types import (
 _COMMAND = struct.Struct("<" + "fffff" * BODY_SLOTS)
 _JOINT_STATE = struct.Struct("<QQQfffi")
 _MOTOR = struct.Struct("<fffff")
-_BODY_JOINTS_SLOT = 22  # BodyState.joints / BodyCmd.joints, id9
+_STATE_JOINTS_SLOT = 22  # BodyState.joints, id9
+_COMMAND_JOINTS_SLOT = 20  # BodyCmd.joints, id8 after unpublished ID compaction
 
 
 def create_body_cmd(builder: Any, joints: tuple[BodyJointCmd, ...]) -> int:
@@ -62,11 +63,11 @@ def _vector_field_data(view: Any, slot: int, stride: int, alignment: int) -> mem
 
 
 def unpack_body_joints(view: Any) -> tuple[BodyJointState, ...]:
-    data = _vector_field_data(view, _BODY_JOINTS_SLOT, _JOINT_STATE.size, 8)
+    data = _vector_field_data(view, _STATE_JOINTS_SLOT, _JOINT_STATE.size, 8)
     return () if data is None else tuple(BodyJointState(*v) for v in _JOINT_STATE.iter_unpack(data))
 
 
-def unpack_body_cmd(view: Any, *, slot: int = _BODY_JOINTS_SLOT) -> tuple[BodyJointCmd, ...]:
+def unpack_body_cmd(view: Any, *, slot: int = _COMMAND_JOINTS_SLOT) -> tuple[BodyJointCmd, ...]:
     if view is None:
         return ()
     data = _vector_field_data(view, slot, _MOTOR.size, 4)
