@@ -203,23 +203,20 @@ class JoyCommand:
 
 class Model:
     def __init__(self, path: str):
-        import onnxruntime as ort  # optional demo dependency, no SDK core import
-        options = ort.SessionOptions()
-        options.intra_op_num_threads = 1
-        options.inter_op_num_threads = 1
-        self.session = ort.InferenceSession(path, sess_options=options, providers=['CPUExecutionProvider'])
-        inputs, outputs = self.session.get_inputs(), self.session.get_outputs()
+        from locomotion_aorta_demo_onnx import Session  # optional; no SDK core import
+        self.session = Session(path, intra_threads=1, inter_threads=1)
+        inputs, outputs = self.session.inputs, self.session.outputs
         if len(inputs) != 1 or len(outputs) != 1 or inputs[0].shape != [1,492] or outputs[0].shape != [1,12]:
             raise ValueError('expected one [1,492] float input and one [1,12] output')
-        if inputs[0].type != 'tensor(float)' or outputs[0].type != 'tensor(float)':
+        if inputs[0].dtype != 'tensor(float)' or outputs[0].dtype != 'tensor(float)':
             raise ValueError('expected float32 tensors')
         self.input_name, self.output_name = inputs[0].name, outputs[0].name
-        self.metadata = self.session.get_modelmeta().custom_metadata_map
+        self.metadata = self.session.metadata
 
     def infer(self, observation: Sequence[float]) -> tuple[float, ...]:
         import numpy as np
         values = np.asarray(observation, dtype=np.float32).reshape(1,492)
-        result = self.session.run([self.output_name], {self.input_name:values})[0]
+        result = self.session.run(self.input_name, self.output_name, values)
         return tuple(float(x) for x in result[0])
 
 

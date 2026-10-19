@@ -262,7 +262,22 @@ roster, runs a local action 17 ONNX policy, and uses the same EXTERNAL lease and
 CANCEL exit. Before every live inference it waits up to the existing `--timeout`
 for a strictly increasing BodyState `state_id`; unchanged or older feedback is
 not reused for another inference or leg command, and timeout attempts CANCEL.
-Install the optional `teleop-demo` extra for ONNX Runtime and gamepad input. `--model` is required; no model is bundled or selected automatically.
+The optional `demo-onnx` extra selects `locomotion-aorta-demo-onnx==0.2.0`,
+a separate native wheel using C++ ONNX Runtime 1.20.1 CPU. `teleop-demo` adds
+the same backend and pygame. The SDK core does not import it; there is no
+Python ONNX Runtime fallback. The native wheel and its dependencies are still
+in preparation and are not included in the core offline bundle. After obtaining
+the matching Linux/Python/architecture wheel and a complete demo wheelhouse:
+
+```bash
+python -m pip install --no-index --find-links demo-wheelhouse 'locomotion-aorta[teleop-demo]==0.2.0'
+python -m pip check
+```
+
+No compiler or robot filesystem is needed to consume that wheel. The repository
+checkout contains source-build instructions in `demo_onnx/README.md`; the core
+offline bundle does not include that source package. `--model` is required; no
+model is bundled or selected automatically.
 Use `--help` or `--dry-run --body-state-jsonl <capture>` before live use; dry-run
 does not construct SDK transport. The offline validation used a noshoes model;
 replace it with the delivered shoes model and recheck metadata/profile parity

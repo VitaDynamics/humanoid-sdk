@@ -62,8 +62,11 @@ installed native wheel. They do not skip absent dependencies. The ONNX authoring
 package is test-only. A Python ORT oracle is not a runtime dependency.
 
 Real-model comparison uses the same model SHA, float32 inputs and thread counts
-in separate processes: Python ORT 1.23.2 versus this ORT 1.20.1 backend. Follow the
-existing teleop oracle's finite float32 numeric equality (signed zeros equal),
-with no epsilon. If unequal, report first, then diagnose with Python ORT 1.20.1;
-retain both comparisons and never relax the comparator. Existing teleop
-obs/target fixture results alone do not establish inference parity or HIL.
+in separate processes: the test-only Python ORT 1.20.1 oracle versus this
+ORT 1.20.1 backend. Install the oracle in its own environment using
+`demo_onnx/requirements-oracle.txt`; it is not a demo runtime dependency.
+Follow the existing teleop oracle's finite float32 numeric equality (signed
+zeros equal), with no epsilon. The earlier Python ORT 1.23.2 cross-version
+comparison is retained as historical evidence, not an acceptance gate.
+Existing teleop obs/target fixture results alone do not establish inference
+parity or HIL.
