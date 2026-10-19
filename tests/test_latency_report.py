@@ -57,6 +57,23 @@ class LatencyReportTest(unittest.TestCase):
         self.assertAlmostEqual(result['rtt']['mean_ms'],.0008)
         self.assertAlmostEqual(sum(s['mean_ms'] for s in result['stages']),.0008)
 
+    def test_realtime_columns_do_not_disable_monotonic_stage_checks(self):
+        self.add_realtime()
+        cases = [(self.client[0], 'decode_ns', self.sent[0]['publish_ns'] - 1,
+                  'publish_ns/decode_ns'),
+                 (self.received[0], 'callback_ns', self.client[0]['bytes_ns'] - 1,
+                  'bytes_ns/callback_ns'),
+                 (self.received[0], 'copied_ns', self.received[0]['callback_ns'] - 1,
+                  'callback_ns/copied_ns')]
+        for row, key, value, segment in cases:
+            with self.subTest(segment=segment):
+                previous = row[key]
+                row[key] = value
+                with self.assertRaisesRegex(ValueError, 'non-monotonic stage ' + segment):
+                    self.analyze()
+                row[key] = previous
+        self.assertEqual(self.analyze()['clock'], 'CLOCK_REALTIME')
+
     def test_missing_realtime_never_silently_falls_back_or_mixes_clocks(self):
         self.add_realtime()
         for row in self.client:del row['decode_realtime_ns']

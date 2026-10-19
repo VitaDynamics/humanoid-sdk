@@ -72,7 +72,10 @@ There is no offset conversion. Historical captures without REALTIME remain reada
 and are explicitly labeled legacy; incomplete REALTIME records still fail integrity.
 Negative REALTIME differences/order inversions are counted and displayed, never a new
 pass/fail threshold. Signed raw differences remain in CSV and statistics; clock steps
-do not represent physical negative latency. MONOTONIC integrity checks remain unchanged.
+do not represent physical negative latency. All eight same-host MONOTONIC
+stage boundaries must still be nondecreasing, including publish→decode,
+bytes→callback and callback→copied, whether or not REALTIME columns exist.
+A MONOTONIC ordering violation fails integrity; REALTIME inversions only count.
 The eight original stage boundaries, full windows, ID/content gates and rate sweep remain. Rates use `(count - 1) / (last stamp - first stamp)` per stream;
 counts and durations are retained so losses cannot be hidden by that estimator.
 Stage bars use **means of the same matched rows**, whose sum is mean RTT.

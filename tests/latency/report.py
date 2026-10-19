@@ -108,8 +108,10 @@ def analyze(directory, session, seconds, rate):
     joined = []
     for seq in sorted(received):
         row = {**sent[seq], **client[seq], **received[seq]}
-        for start, end, _ in stages_spec:
-            if row[end] < row[start] and not realtime:
+        # Same-host MONOTONIC ordering remains an integrity gate even when
+        # REALTIME is present; signed REALTIME differences are reported below.
+        for start, end, _ in STAGES:
+            if row[end] < row[start]:
                 raise ValueError(f"non-monotonic stage {start}/{end}: {seq}")
         joined.append(row)
     with (directory / "joined.csv").open("w", newline="") as out:
@@ -178,8 +180,8 @@ def stage_scale(results):
 def clock_note(result):
     return (f"REALTIME 负分段 {result.get('negative_realtime_stage_samples', 0)}，"
             f"负 RTT {result.get('negative_realtime_rtt_samples', 0)}；"
-            f"进程内时间倒序 {sum(result.get('realtime_order_anomalies', {}).values())}。"
-            "保留有符号原始时间差，时钟异常不判门禁失败，也不表示物理负延迟。")
+            f"REALTIME 进程内时间倒序 {sum(result.get('realtime_order_anomalies', {}).values())}。"
+            "保留有符号原始时间差，REALTIME 异常仅计数，不表示物理负延迟；MONOTONIC 完整性仍为门禁。")
 
 
 def markdown_summary(manifest):
