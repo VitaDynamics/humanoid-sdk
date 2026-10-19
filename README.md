@@ -45,9 +45,10 @@ For installed non-MOCK joints, the producer preserves a real nonzero fault
 first, otherwise uses TIMEOUT (8) for missing/stale feedback, UNKNOWN (255)
 for nonfinite values or ankle FK failure, and NONE (0) otherwise. Uninstalled
 and MOCK slots use NONE; NONE alone does not mean a joint is installed.
-The 29 JointError values align shared codes with the quadruped contract,
-including TIMEOUT=8 and servo protection codes 41/42; humanoid-only control,
-motor-phase and sensor faults use 15/16/17. The SDK imports this generated
+The 20 JointError values align shared codes with the quadruped contract,
+including TIMEOUT=8 and INVALID_PARAM=30; humanoid-only control, motor-phase
+and sensor faults use 15/16/17. CAN, enable-state and servo-specific extension
+codes are omitted. The SDK imports this generated
 enum and preserves received codes, including unknown numeric values, without
 synthesizing another status.
 BodyImuSample keeps status and rpy (degrees), and removes temperature,

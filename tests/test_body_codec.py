@@ -177,7 +177,7 @@ class BodyCodecTest(unittest.TestCase):
 
     def test_joint_error_enum_and_removed_dto_fields_follow_public_bindings(self):
         from locomotion_aorta import JointError, BodyJointState, BodyImuSample
-        expected = {'NONE': 0, 'OVER_VOLTAGE': 1, 'UNDER_VOLTAGE': 2, 'OVER_CURRENT': 3, 'OVER_TEMPERATURE': 4, 'OVERLOAD': 5, 'ENCODER_FAULT': 6, 'DRIVER_FAULT': 7, 'TIMEOUT': 8, 'ENABLE_REJECTED': 9, 'OVERLOAD_WARNING': 10, 'OVER_TEMP_WARNING': 11, 'JOINT_LIMIT_EXCEEDED': 12, 'STALL': 13, 'ENCODER_NOT_CALIBRATED': 14, 'CONTROL_FAULT': 15, 'MOTOR_PHASE_FAULT': 16, 'SENSOR_FAULT': 17, 'CAN_OPEN': 21, 'CAN_INIT': 22, 'CAN_SEND': 23, 'CAN_RECV': 24, 'INVALID_PARAM': 30, 'NOT_ENABLED': 31, 'ALREADY_ENABLED': 32, 'SERVO_HARDWARE_FAULT': 40, 'SERVO_POSITION_PROTECTION': 41, 'SERVO_THERMAL_INTEGRAL_PROTECTION': 42, 'UNKNOWN': 255}
+        expected = {'NONE': 0, 'OVER_VOLTAGE': 1, 'UNDER_VOLTAGE': 2, 'OVER_CURRENT': 3, 'OVER_TEMPERATURE': 4, 'OVERLOAD': 5, 'ENCODER_FAULT': 6, 'DRIVER_FAULT': 7, 'TIMEOUT': 8, 'ENABLE_REJECTED': 9, 'OVERLOAD_WARNING': 10, 'OVER_TEMP_WARNING': 11, 'JOINT_LIMIT_EXCEEDED': 12, 'STALL': 13, 'ENCODER_NOT_CALIBRATED': 14, 'CONTROL_FAULT': 15, 'MOTOR_PHASE_FAULT': 16, 'SENSOR_FAULT': 17, 'INVALID_PARAM': 30, 'UNKNOWN': 255}
         self.assertEqual({name: getattr(JointError, name) for name in expected}, expected)
         self.assertEqual({name for name in vars(JointError) if name.isupper()}, set(expected))
         self.assertEqual([f.name for f in dataclasses.fields(BodyJointState)],

@@ -10,8 +10,9 @@
   and FlatBuffers 25.9.23; pin the new schema wheel and actual BFBS hashes.
 - Use BODY protocol 2 for BodyCmd/BodyState. BodyJointState changes from 56 to
   40 bytes: slot-ordered three timestamps, q/dq/tau_est and int32 JointError.
-  Align shared error values with quadruped: TIMEOUT=8, servo protection41/42;
-  humanoid-only control/motor-phase/sensor faults use15/16/17 (29 values).
+  Keep 20 approved error values, aligning shared codes with quadruped:
+  TIMEOUT=8, INVALID_PARAM=30, control/motor-phase/sensor faults=15/16/17.
+  Omit CAN, enable-state and servo-specific extension codes.
   Remove body_index/status/populated/is_mock/valid_fields/ddq/temperature/lost.
   Preserve real faults first, then missing/stale=TIMEOUT, nonfinite/FK=UNKNOWN,
   otherwise NONE; uninstalled/MOCK use NONE and installation comes from BodyInfo.
