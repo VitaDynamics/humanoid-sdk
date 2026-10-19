@@ -63,7 +63,10 @@ class VelocityModePolicy:
 
     def bind_body_info(self, body_info=None):
         from locomotion_aorta._policy_state import body_joint_order
-        self.order = body_joint_order(body_info)
+        required_names = list(self.names)
+        if body_info is not None:
+            required_names.extend(n for n in self.config["fixed_joints"] if n in body_info.joint_names)
+        self.order = body_joint_order(body_info, required_names=required_names)
         self.policy_to_body = [self.order.index(name) for name in self.names]
         self.driven_slots = set(self.policy_to_body)
         self.driven_slots.update(self.order.index(n) for n in self.config["fixed_joints"] if n in self.order)

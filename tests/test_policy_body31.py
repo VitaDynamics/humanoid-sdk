@@ -25,7 +25,8 @@ class PublicPolicyStateTest(unittest.TestCase):
         before, _ = p.decode(np.linspace(-1,1,28))
         old = dict(zip(p.order, before.joints))
         names = tuple(reversed(p.order))
-        p.bind_body_info(SimpleNamespace(joint_names=names))
+        p.bind_body_info(SimpleNamespace(joint_names=names,
+                                        joints=[SimpleNamespace(populated=True)]*31))
         after, _ = p.decode(np.linspace(-1,1,28))
         self.assertEqual(dict(zip(names, after.joints)), old)
         self.assertEqual(after.joints[names.index('waist_roll_joint')].kp, 0.)
@@ -92,7 +93,8 @@ class PublicPolicyStateTest(unittest.TestCase):
             with patch.dict(sys.modules, {'locomotion_aorta._onnx': SimpleNamespace(Session=Session)}):
                 p = VelocityModePolicy(root)
             before = dict(zip(p.order,p.decode(np.zeros(28,np.float32))))
-            p.bind_body_info(SimpleNamespace(joint_names=tuple(reversed(ASAMPLE_BODY_JOINT_NAMES))))
+            p.bind_body_info(SimpleNamespace(joint_names=tuple(reversed(ASAMPLE_BODY_JOINT_NAMES)),
+                                            joints=[SimpleNamespace(populated=True)]*31))
             self.assertEqual(dict(zip(p.order,p.decode(np.zeros(28,np.float32)))), before)
             self.assertEqual(p.inventory['body_joint_names'], p.order)
             self.assertEqual(p.inventory['policy_to_body_slot'], p.policy_to_body)

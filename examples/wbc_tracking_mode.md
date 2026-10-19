@@ -40,6 +40,9 @@ alone is not source-time advancement: the original increasing source-time and
 50Hz schedule without catch-up bursts, stop-before-entry behavior and
 CANCEL/PASSIVE verification remain. Exit to PASSIVE can release loaded limbs.
 An exception is not permission for automatic retry or a service restart.
+Before requesting EXTERNAL, RobotInfo must contain all model joint names and
+the fixed neck names, with each of those joints marked populated. Startup
+errors list the missing or unpopulated names and do not take ownership.
 
 Body commands/state have 31 slots. q/dq/tau/kp/kd are in the public joint domain;
 error_code and sampling clocks are retained. Installation and Mock identity

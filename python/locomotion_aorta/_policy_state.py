@@ -37,10 +37,20 @@ ASAMPLE_BODY_JOINT_NAMES = (
 )
 
 
-def body_joint_order(body_info=None):
+def body_joint_order(body_info=None, *, required_names=()):
     names = tuple(body_info.joint_names) if body_info is not None else ASAMPLE_BODY_JOINT_NAMES
+    required_names = tuple(dict.fromkeys(required_names))
+    missing = [name for name in required_names if name not in names]
+    if missing:
+        raise ValueError('get_robot_info roster is missing joints: ' + ', '.join(missing))
     if len(names) != 31 or len(set(names)) != 31:
         raise ValueError("expected 31 unique public body joint names")
+    if body_info is not None and required_names:
+        if len(body_info.joints) != len(names):
+            raise ValueError('get_robot_info capability count differs from roster')
+        missing = [name for name in required_names if not body_info.joints[names.index(name)].populated]
+        if missing:
+            raise ValueError('policy joints are unpopulated: ' + ', '.join(missing))
     return names
 
 

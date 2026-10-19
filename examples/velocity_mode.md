@@ -30,6 +30,9 @@ the mapping, including wrists and the two fixed neck joints. Waist-roll is an
 unpopulated logical slot; it is excluded from the transition. Fingers are no
 longer written through body commands. Their separate clients are unaffected.
 BodyInfo, rather than a NONE error code, indicates installation/Mock status.
+Before live entry, RobotInfo must mark the model joints and each public fixed
+joint used by the policy as populated. Missing or unpopulated joints are listed
+in the startup error; EXTERNAL is not entered.
 
 The model's 28-joint order, history, scaling, clipped-action feedback, target
 limits and ankle feedforward remain unchanged. Current velocity asset metadata

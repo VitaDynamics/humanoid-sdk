@@ -256,7 +256,8 @@ class WbcTrackingPolicy:
 
     def bind_body_info(self, body_info):
         from ._policy_state import body_joint_order
-        self.order = body_joint_order(body_info)
+        self.order = body_joint_order(body_info,
+                                     required_names=(*self.contract.names, *self.profile['fixed_joints']))
         self.mapping = np.array([self.order.index(n) for n in self.contract.names])
 
     def reset(self):
