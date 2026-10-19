@@ -93,8 +93,10 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     manifest = {"status": "NOT_MEASURED", "results": [], "rates": args.rates,
                 "seconds": args.seconds, "platform": platform.platform(), "python": sys.version,
-                "cpu_count": os.cpu_count(), "clock": "CLOCK_MONOTONIC ns", "transport": "TCP loopback; SHM off",
+                "cpu_count": os.cpu_count(), "clock": "CLOCK_REALTIME ns across processes; MONOTONIC for watchdogs/frequencies/local publish elapsed", "transport": "TCP loopback; SHM off",
                 "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+                "source_dirty": subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True),
+                "loadavg": os.getloadavg(),
                 "pr_head": os.environ.get("PR_HEAD_SHA"), "run_id": os.environ.get("GITHUB_RUN_ID"),
                 "source_sha256": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                                   for base in (ROOT / "tests/latency", ROOT / "python/locomotion_aorta")

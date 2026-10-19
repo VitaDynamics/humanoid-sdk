@@ -290,6 +290,23 @@ class StateSourceTest(unittest.TestCase):
         self.assertEqual(len(cancels), 1)
         self.assertEqual(s.snapshot(0).metadata.state_id, 91)
 
+    def test_source_closed_during_publish_decode_cannot_publish_cached_command(self):
+        from test_controller import ControllerHarness, make_command
+        harness=ControllerHarness();harness.controller.close();harness.transport=FakeTransport()
+        s=self.source(group='default');s._stream.emit()
+        c=ExternalController(client_id='test-client',state_source=s,_transport=harness.transport)
+        harness.controller=c;self.addCleanup(c.close);harness.accept_enter();c.enter_external(1)
+        entered,release=threading.Event(),threading.Event()
+        original=state_module.decode_body_state
+        def decode(view):
+            entered.set();self.assertTrue(release.wait(2));return original(view)
+        with mock.patch.object(state_module,'decode_body_state',side_effect=decode), ThreadPoolExecutor(max_workers=1) as pool:
+            future=pool.submit(c.publish,make_command(17))
+            self.assertTrue(entered.wait(1));s.close();release.set()
+            with self.assertRaises(StateSourceClosedError):future.result(1)
+        from locomotion_aorta import BODY_CMD_TOPIC
+        self.assertFalse(any(t==BODY_CMD_TOPIC for t,_ in harness.transport.published))
+
     def test_default_controller_still_uses_original_body_subscription(self):
         transport = FakeTransport()
         c = ExternalController(_transport=transport)

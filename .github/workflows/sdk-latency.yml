@@ -59,6 +59,12 @@ jobs:
           python -m pip install --no-index "$RUNNER_TEMP"/wheelhouse/*.whl
           python -m pip check
           PYTHONPATH=python:tests python -m unittest discover -s tests -v
+      - name: Same-payload decode A/B and real read-only source integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/latency/decode_profile.py --output "$RUNNER_TEMP/decode-results" --warmup 50 --samples 1000
+          python tests/latency/state_source_probe.py --output "$RUNNER_TEMP/state-source-results"
       - name: Build standalone C++ Mock
         shell: bash
         run: |
@@ -92,6 +98,9 @@ jobs:
               render(out, {'status': 'NOT_MEASURED', 'results': [],
                            'error': 'Setup/build failed or run interrupted; inspect job log.'})
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              decode = pathlib.Path(os.environ['RUNNER_TEMP']) / 'decode-results/summary.md'
+              if decode.exists():
+                  summary.write(decode.read_text() + '\n')
               summary.write((out / 'summary.md').read_text())
           PY
       - name: Upload HTML, raw CSV, JSON, logs and provenance
@@ -101,6 +110,8 @@ jobs:
         with:
           name: sdk-latency-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            ${{ runner.temp }}/decode-results/
+            ${{ runner.temp }}/state-source-results/
             ${{ runner.temp }}/latency-results/
             ${{ runner.temp }}/latency-build.log
             ${{ runner.temp }}/latency-build/build.json

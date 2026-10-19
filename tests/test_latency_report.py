@@ -41,6 +41,32 @@ class LatencyReportTest(unittest.TestCase):
         self.assertEqual(result["mock_send_hz"], 1)
         self.assertEqual(result["missing_reply"], 0)
 
+    def add_realtime(self):
+        for rows in (self.sent,self.client,self.received):
+            for row in rows:
+                for key,value in tuple(row.items()):
+                    if key.endswith('_ns'):row[key.replace('_ns','_realtime_ns')]=value+1_700_000_000_000_000_000
+
+    def test_realtime_used_across_processes_even_when_monotonic_offsets_differ(self):
+        self.add_realtime()
+        for row in self.received:
+            row['callback_ns']+=999_000_000
+            row['copied_ns']+=999_000_000
+        result=self.analyze()
+        self.assertEqual(result['clock'],'CLOCK_REALTIME')
+        self.assertAlmostEqual(result['rtt']['mean_ms'],.0008)
+        self.assertAlmostEqual(sum(s['mean_ms'] for s in result['stages']),.0008)
+
+    def test_missing_realtime_never_silently_falls_back_or_mixes_clocks(self):
+        self.add_realtime()
+        for row in self.client:del row['decode_realtime_ns']
+        with self.assertRaisesRegex(ValueError,'incomplete REALTIME'):self.analyze()
+
+    def test_realtime_clock_step_is_report_failure_not_clipped_or_dropped(self):
+        self.add_realtime()
+        self.received[0]['callback_realtime_ns']=1
+        with self.assertRaisesRegex(ValueError,'non-monotonic'):self.analyze()
+
     def test_loss_is_visible_without_nearest_timestamp_pairing(self):
         self.received.pop(1)
         result = self.analyze()

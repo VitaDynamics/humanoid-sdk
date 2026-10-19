@@ -16,6 +16,9 @@ STAGES = (
     ("bytes_ns", "callback_ns", "Aorta 发布入口 → Mock 回调（通信与调度）"),
     ("callback_ns", "copied_ns", "Mock 校验 FlatBuffer 并复制 31 槽命令"),
 )
+REALTIME_STAGES = tuple((start.replace('_ns', '_realtime_ns'),
+                         end.replace('_ns', '_realtime_ns'), label)
+                        for start, end, label in STAGES)
 COLORS = ("#3182bd", "#31a354", "#74c476", "#a1d99b", "#e6550d", "#fd8d3c", "#756bb1", "#9e9ac8")
 STAT_KEYS = ("mean_ms", "p50_ms", "p95_ms", "p99_ms", "max_ms")
 FREQUENCIES = (("Mock 发送状态", "mock_send_hz"), ("Python 收到状态", "python_receive_hz"),
@@ -85,10 +88,27 @@ def analyze(directory, session, seconds, rate):
                                    "filled_ns", "bytes_ns", "returned_ns")]
         if stamps[0] <= 0 or stamps != sorted(stamps):
             raise ValueError("invalid Python stage order")
+    # New captures must be complete dual-clock records. Legacy fixtures/artifacts
+    # remain readable and are explicitly labeled; never mix clocks in a segment.
+    realtime = any(any(k.endswith('_realtime_ns') for k in row)
+                   for rows in (sent, client, received) for row in rows.values())
+    if realtime:
+        required = ((sent, ('publish_realtime_ns', 'return_realtime_ns')),
+                    (client, tuple(k.replace('_ns', '_realtime_ns') for k in
+                     ('decode_ns', 'decoded_ns', 'built_ns', 'fill_ns', 'filled_ns', 'bytes_ns', 'returned_ns'))),
+                    (received, ('callback_realtime_ns', 'copied_realtime_ns')))
+        for rows, keys in required:
+            if any(any(k not in row or row[k] <= 0 for k in keys) for row in rows.values()):
+                raise ValueError('incomplete REALTIME capture')
+            for row in rows.values():
+                stamps = [row[k] for k in keys]
+                if stamps != sorted(stamps):
+                    raise ValueError('invalid REALTIME stage order')
+    stages_spec = REALTIME_STAGES if realtime else STAGES
     joined = []
     for seq in sorted(received):
         row = {**sent[seq], **client[seq], **received[seq]}
-        for start, end, _ in STAGES:
+        for start, end, _ in stages_spec:
             if row[end] < row[start]:
                 raise ValueError(f"non-monotonic stage {start}/{end}: {seq}")
         joined.append(row)
@@ -97,8 +117,9 @@ def analyze(directory, session, seconds, rate):
         writer.writeheader()
         writer.writerows(joined)
     stages = [{"label": label, **stats([(r[end] - r[start]) / 1e6 for r in joined])}
-              for start, end, label in STAGES]
+              for start, end, label in stages_spec]
     return {
+        "clock": "CLOCK_REALTIME" if realtime else "legacy CLOCK_MONOTONIC",
         "rate_hz": rate, "requested_seconds": seconds, "active_seconds": active_ns / 1e9,
         "sent": len(sent), "python_received": len(client), "mock_received": len(received),
         "missing_state": len(sent) - len(client), "missing_reply": len(client) - len(received),
@@ -106,7 +127,8 @@ def analyze(directory, session, seconds, rate):
         "python_receive_hz": frequency(client.values(), "decode_ns"),
         "python_send_hz": frequency(client.values(), "bytes_ns"),
         "mock_receive_hz": frequency(received.values(), "callback_ns"),
-        "rtt": stats([(r["copied_ns"] - r["publish_ns"]) / 1e6 for r in joined]),
+        "rtt": stats([(r["copied_realtime_ns" if realtime else "copied_ns"] -
+                        r["publish_realtime_ns" if realtime else "publish_ns"]) / 1e6 for r in joined]),
         "sdk_publish_call": stats([(r["returned_ns"] - r["built_ns"]) / 1e6 for r in client.values()]),
         "stages": stages,
     }
@@ -145,6 +167,8 @@ def markdown_summary(manifest):
     results = manifest["results"]
     summary = ["# Python SDK ↔ C++ Mock latency", "", f"Status: **{manifest['status']}**", "",
                f"PR head: `{manifest.get('pr_head') or 'local'}`；实际 checkout: `{manifest.get('git_head') or 'NOT_MEASURED'}`。", "",
+               "时钟：新采集八阶段/RTT使用直接采样的CLOCK_REALTIME；历史无REALTIME字段的输入标注legacy。"
+               "频率和SDK publish调用耗时为各进程内MONOTONIC。", "",
                "|Hz|Mock send / Python receive Hz|Python send / Mock receive Hz|RTT P50 / P95 / P99 ms|Missing state / reply|",
                "|---:|---:|---:|---:|---:|"]
     for r in results:
@@ -218,7 +242,7 @@ def render(directory, manifest):
         '.timeline span{display:block;min-width:0}section{margin:36px 0}pre{white-space:pre-wrap}</style>'
         '<h1>Python SDK ↔ C++ Mock 通信延迟</h1>'
         '<p>x86 同主机、两个进程、TCP loopback、SHM 关闭；31 槽状态 → 31 槽回复。'
-        '时钟统一 CLOCK_MONOTONIC。通信段包含 Aorta/Zenoh 排队、调度及回调，不等于纯 TCP 传输。'
+        '八阶段/RTT时钟：新采集 CLOCK_REALTIME；历史输入 legacy CLOCK_MONOTONIC。频率/同进程publish耗时使用MONOTONIC。通信段包含 Aorta/Zenoh 排队、调度及回调，不等于纯 TCP 传输。'
         'Mock 使用官方生成的 FlatBuffer 校验/访问器与内存复制，不运行 locomotion 控制循环。'
         '共享 CI runner 抖动不能外推 S100/HIL；分位数不可相加。SDK publish 调用耗时与往返部分重叠，不能重复相加。</p>'
         '<p>丢失帧如实报告；PASS 表示报告完整有效，不表示通过某个尚未设定的延迟或丢包 SLA。</p>'

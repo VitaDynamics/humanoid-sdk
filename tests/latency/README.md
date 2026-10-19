@@ -65,8 +65,12 @@ Download and unzip it for the full SVG/HTML presentation and raw evidence:
 - per-rate `sent.csv`, `client.csv`, `received.csv`, `joined.csv`, argv, session
   configuration and process logs. No per-frame filesystem I/O in the timed path.
 
-All measurement timestamps use the same host's `CLOCK_MONOTONIC`, in ns; report
-latencies are ms. Rates use `(count - 1) / (last stamp - first stamp)` per stream;
+New captures directly sample `CLOCK_REALTIME` in both processes for all eight
+stages and RTT (ns, reported as ms). The original `CLOCK_MONOTONIC` fields remain
+in raw CSV for regression and within-process frequency/publish-call elapsed time.
+There is no offset conversion. Historical captures without REALTIME remain readable
+and are explicitly labeled legacy; partial REALTIME records or negative stages fail.
+The eight original stage boundaries, full windows, ID/content gates and rate sweep remain. Rates use `(count - 1) / (last stamp - first stamp)` per stream;
 counts and durations are retained so losses cannot be hidden by that estimator.
 Stage bars use **means of the same matched rows**, whose sum is mean RTT.
 Percentiles do not add. SDK publish-call time overlaps transport and is reported
@@ -97,3 +101,29 @@ python tests/latency/run.py --build-dir build/latency \
 Use a new report directory for each run; build dependencies may be reused at the
 same build path. For a smoke only, use `--seconds 2 --rates 50 1000`. Preserve
 failed reports rather than retrying until green. Run builds serially on shared build machines. No robot connectivity is needed.
+
+## Body31 decode profile (U5)
+
+`decode_profile.py --output <new-directory> --warmup 50 --samples 1000` runs without
+network or publishers. Four generated fixtures cover normal/slot14 NaN and applied
+absent/present. Full DTO, all31 q/dq+metadata/masks, and subset+HIP+echo have separate
+output contracts. Each pair uses identical payload bytes; AB/BA order alternates.
+First use and cached candidate reads are separate. Raw CSV records wall/thread CPU,
+payload SHA and actual order; JSON records exact source/schema/dependencies/environment.
+Only paired first-use differences are compared; signed B-A deltas may be negative.
+No latency threshold is added. A full DTO result may be slower and is retained.
+
+Times are same-process MONOTONIC elapsed durations. Columns structural check/gather/
+buffer wrapping is a fused boundary; optional IMU/applied are N/A when unrequested.
+Byte normalization to identical selected output is included on both sides. Stage
+quantiles cannot be summed; no producer/consumer wait or model inference is included.
+`--profile` defaults off; it adds a separate cProfile/tracemalloc run after all timed
+samples. No per-frame disk output occurs in the timed decode path.
+
+`state_source_probe.py --output <new-directory>` separately verifies actual Aorta
+raw subscriptions in both conversion modes, explicit controller borrowing, repeated/
+reset producer state_id, direct REALTIME receipt and old columns surviving close.
+Its per-frame file handshake is integration evidence, never a speed measurement.
+It uses isolated loopback config and private topics, one synthetic state publisher,
+no control publishers/lease or robot connections. Neither report replaces the
+original 11×60s native Mock gate. Device/aarch64/package acceptance is separate.

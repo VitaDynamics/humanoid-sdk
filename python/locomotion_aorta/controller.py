@@ -249,6 +249,8 @@ class ExternalController:
                         self._latest_body_state = state
         with self._condition:
             self._ensure_open()
+            if self._source_closed:
+                raise StateSourceClosedError("borrowed body state source is closed")
             population = None
             if self._body_info is not None and len(self._body_info.joints) == BODY_SLOTS:
                 population = tuple(j.populated for j in self._body_info.joints)
