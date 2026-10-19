@@ -136,10 +136,15 @@ class StateSourceTest(unittest.TestCase):
             s._stream.emit(b'bad')
         with self.assertRaises(type(eager.exception)):
             state_module.decode_body_state(module('BodyState').BodyState.GetRootAs(b'bad'))
-        with self.assertRaises(StateSourceTimeoutError):
-            s.snapshot(0)
+        with self.assertRaises(type(eager.exception)):
+            s.snapshot(0).body_state()
         s._stream.emit()
-        self.assertEqual(s.snapshot(0).metadata.state_id, 91)
+        good=s.snapshot(0)
+        self.assertEqual(good.metadata.state_id, 91)
+        with self.assertRaises(type(eager.exception)):s._stream.emit(b'bad')
+        received=s.snapshot(0,after_token=good.token)
+        with self.assertRaises(type(eager.exception)):received.body_state()
+        self.assertEqual(good.body_state().state_id,91)
 
     def test_source_close_wakes_unbounded_waiter(self):
         s = self.source()

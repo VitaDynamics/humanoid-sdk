@@ -187,8 +187,12 @@ class BodyStateSource:
             token = FrameToken(self._source_id, self._sequence)
         snapshot = BodyStateSnapshot(payload, decoder, token,
                                      received_monotonic_ns, received_realtime_ns)
+        failure = None
         if self._conversion == "eager":
-            snapshot.body_state()
+            try:
+                snapshot.body_state()
+            except Exception as error:
+                failure = error
         with self._condition:
             if self._closed or (self._latest is not None
                                 and self._latest.token.sequence >= token.sequence):
@@ -198,3 +202,7 @@ class BodyStateSource:
             # Only internal, non-decoding notification bridges run under this lock.
             for listener in tuple(self._listeners):
                 listener(snapshot)
+        if failure is not None:
+            # Publish the received frame identity even when conversion failed:
+            # readers must observe its error rather than an older successful DTO.
+            raise failure

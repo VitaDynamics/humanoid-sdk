@@ -58,3 +58,8 @@ cached as success. No cross-frame storage is reused. IMU absence/null state is r
 duplicate requested locations raise ValueError only when imu_sample() is requested.
 Selected success validates the requested component, not unread IMU/applied regions.
 No NumPy dependency, role/limit interpretation, freshness bypass or policy transform is added.
+
+A malformed frame received by an explicit eager source retains its new frame token.
+Its conversion raises the original codec error in the callback and on later body_state()
+access, so readers cannot silently obtain the previous successful DTO as its replacement.
+The legacy controller/default typed callback path remains unchanged.
