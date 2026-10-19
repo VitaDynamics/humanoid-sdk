@@ -6,6 +6,8 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any, TypeVar
 
+from .state import BodyStateSource, BodyStateSnapshot, StateSourceClosedError
+
 from .transport import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
@@ -66,6 +68,7 @@ class ExternalController:
         node_name: str | None = None,
         client_id: str | None = None,
         _transport: Transport | None = None,
+        state_source: BodyStateSource | None = None,
     ) -> None:
         self.group = _nonempty_text(group, "group")
         self.node_name = _nonempty_text(
@@ -74,6 +77,15 @@ class ExternalController:
         self.client_id = _nonempty_text(
             client_id or f"locomotion-client-{uuid.uuid4()}", "client_id"
         )
+        if state_source is not None:
+            if not isinstance(state_source, BodyStateSource) or state_source.group != self.group:
+                raise ValueError("state_source must be a BodyStateSource in the same group")
+            with state_source._condition:
+                state_source._ensure_open()
+        self._state_source = state_source
+        self._source_snapshot: BodyStateSnapshot | None = None
+        self._source_closed = False
+        self._remove_source_listener = None
         self.transport = (
             _transport
             if _transport is not None
@@ -94,9 +106,12 @@ class ExternalController:
         self._subscriptions: list[Any] = []
 
         try:
-            self._subscriptions.append(
-                self.transport.subscribe(BODY_STATE_TOPIC, self._on_body_state)
-            )
+            if state_source is None:
+                self._subscriptions.append(
+                    self.transport.subscribe(BODY_STATE_TOPIC, self._on_body_state)
+                )
+            else:
+                self._remove_source_listener = state_source._listen(self._on_source_snapshot)
             self._subscriptions.append(
                 self.transport.subscribe(CONTROL_ACK_TOPIC, self._on_ack)
             )
@@ -104,6 +119,8 @@ class ExternalController:
                 self.transport.subscribe(CONTROL_STATUS_TOPIC, self._on_status)
             )
         except BaseException:
+            if self._remove_source_listener is not None:
+                self._remove_source_listener()
             for subscription in self._subscriptions:
                 try:
                     subscription.close()
@@ -122,11 +139,31 @@ class ExternalController:
 
     def wait_body_state(self, timeout: float) -> BodyState:
         deadline = _deadline(timeout)
-        return self._wait_for(
-            lambda: self._latest_body_state,
-            deadline,
-            "timed out waiting for body state",
-        )
+        if self._state_source is None:
+            return self._wait_for(
+                lambda: self._latest_body_state,
+                deadline,
+                "timed out waiting for body state",
+            )
+        skipped = None
+        while True:
+            def current():
+                if self._source_closed:
+                    raise StateSourceClosedError("borrowed body state source is closed")
+                snapshot = self._source_snapshot
+                return snapshot if snapshot is not skipped else None
+            snapshot = self._wait_for(current, deadline, "timed out waiting for body state")
+            # Never hold the controller ACK/status lock across decoding.
+            state = snapshot.body_state()
+            with self._condition:
+                self._ensure_open()
+                if self._source_closed:
+                    raise StateSourceClosedError("borrowed body state source is closed")
+                if state.protocol_version == BODY_PROTOCOL_VERSION:
+                    if self._source_snapshot is snapshot:
+                        self._latest_body_state = state
+                    return state
+            skipped = snapshot
 
     def get_robot_info(self, timeout: float = 5.0) -> GetRobotInfoResponse:
         _deadline(timeout)
@@ -199,6 +236,17 @@ class ExternalController:
             raise
 
     def publish(self, command: BodyCmd) -> None:
+        if self._state_source is not None:
+            with self._condition:
+                self._ensure_open()
+                snapshot = self._source_snapshot
+                if self._source_closed:
+                    raise StateSourceClosedError("borrowed body state source is closed")
+            if snapshot is not None:
+                state = snapshot.body_state()
+                with self._condition:
+                    if self._source_snapshot is snapshot and state.protocol_version == BODY_PROTOCOL_VERSION:
+                        self._latest_body_state = state
         with self._condition:
             self._ensure_open()
             population = None
@@ -289,6 +337,8 @@ class ExternalController:
                 self.transport.publish(CONTROL_REQUEST_TOPIC, cancel)
             except BaseException:
                 pass
+        if self._remove_source_listener is not None:
+            self._remove_source_listener()
         for subscription in self._subscriptions:
             try:
                 subscription.close()
@@ -307,6 +357,17 @@ class ExternalController:
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         del exc_type, exc, traceback
         self.close()
+
+    def _on_source_snapshot(self, snapshot: BodyStateSnapshot | None) -> None:
+        with self._condition:
+            if self._closed:
+                return
+            if snapshot is None:
+                self._source_closed = True
+            elif (self._source_snapshot is None or
+                  snapshot.token.sequence > self._source_snapshot.token.sequence):
+                self._source_snapshot = snapshot
+            self._condition.notify_all()
 
     def _on_body_state(self, lowstate: Any) -> None:
         if not isinstance(lowstate, BodyState) or lowstate.protocol_version != BODY_PROTOCOL_VERSION:
