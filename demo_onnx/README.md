@@ -19,6 +19,7 @@ CPU archive from `ort-archives.json`; CMake verifies its SHA before extraction.
 There are no implicit downloads or dependencies on a robot's `/app` filesystem.
 
 ```sh
+python tools/fetch_ort.py --output /absolute/path/to/official-archive.tgz
 python -m pip install build==1.2.2.post1 scikit-build-core==0.11.6 pybind11==2.13.6 ninja==1.11.1.3
 CMAKE_ARGS='-DORT_ARCHIVE=/absolute/path/to/official-archive.tgz' \
   python -m build --wheel --no-isolation --outdir dist/raw .

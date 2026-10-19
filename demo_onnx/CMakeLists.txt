@@ -14,7 +14,13 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 set(ORT_ARCHIVE "" CACHE FILEPATH "Pinned official ONNX Runtime CPU tarball")
 if(NOT EXISTS "${ORT_ARCHIVE}")
-  message(FATAL_ERROR "Supply -DORT_ARCHIVE=/absolute/path/to/official/tarball")
+  message(FATAL_ERROR
+    "ORT_ARCHIVE is missing. From the SDK root, download and SHA-verify the pinned archive:\n"
+    "  python tools/fetch_ort.py --output /absolute/path/to/onnxruntime.tgz\n"
+    "Then pass its path for either editable installation or wheel construction:\n"
+    "  CMAKE_ARGS='-DORT_ARCHIVE=/absolute/path/to/onnxruntime.tgz' python -m pip install -e .\n"
+    "  CMAKE_ARGS='-DORT_ARCHIVE=/absolute/path/to/onnxruntime.tgz' make build\n"
+    "See README.md Development and offline packaging for build dependencies.")
 endif()
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/ort-archives.json" manifest)
 string(JSON ort_version GET "${manifest}" version)

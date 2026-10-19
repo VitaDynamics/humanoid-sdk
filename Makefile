@@ -2,7 +2,7 @@ PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
 .PHONY: test check check-hil build
 test:
-	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:tests $(PYTHON) -m unittest discover -s tests -v
+	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python:tests $(PYTHON) -m unittest discover -s tests -v
 
 check: test
 	$(PYTHON) -m pip check
@@ -20,7 +20,7 @@ check: test
 # Real public EE binding/capture gate; no robot connection or lease.
 check-hil:
 	$(PYTHON) -c 'import mcap; from locomotion_aorta.brainco_capture import load_bindings; load_bindings()'
-	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:tests $(PYTHON) -m unittest test_brainco_capture -v
+	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python:tests $(PYTHON) -m unittest test_brainco_capture -v
 
 build:
 	$(PYTHON) -m build --wheel --no-isolation --outdir dist/raw

@@ -175,28 +175,58 @@ root is required. Host tests and packaging do not establish device HIL.
 
 ## Development and offline packaging
 
-Use CPython 3.10 and the matching dependency wheels in a separate virtual
-environment. The SDK is no longer built as a pure Python wheel. Its root build
-requires CMake 3.20+, C++17, the pinned build/audit tools and the official ORT
-archive; see [native build instructions](demo_onnx/README.md).
+Install the four pinned runtime dependencies, not the SDK wheel, into a
+separate virtual environment. `make check` sets `PYTHONPATH=python:tests` and
+tests the working tree; a pure Python edit does not require a compiler or an
+editable SDK install.
 
 ```bash
-python -m pip install --no-index --find-links wheelhouse 'locomotion-aorta==0.2.0'
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install --no-index --find-links wheelhouse \
+  aorta-sdk==2026.10.12 aorta-msgs==2026.10.12 vbot-humanoid-msgs==0.1.2 flatbuffers==25.9.23
+python -m pip install mcap==1.3.1
 make check
-# Release tooling takes both audited SDK architecture wheels plus pinned dependencies:
+```
+
+The dependency release supplies the Aorta/message/FlatBuffers wheels; it does
+not contain this checkout's SDK wheel or the optional MCAP test dependencies.
+For a fully offline development environment, obtain MCAP and its dependency
+wheels beforehand and add `--no-index --find-links <test-wheelhouse>` to that
+MCAP installation. Without the HIL test dependencies, capture tests are skipped;
+a complete test result requires them.
+
+Building the SDK wheel or using `pip install -e .` also compiles its native
+backend. Install the build tools and explicitly obtain the official ORT archive
+first; `fetch_ort.py` uses the current host's URL and SHA from
+`demo_onnx/ort-archives.json`. Use a fresh output path or point CMake at an
+already verified archive; the helper preserves an existing file.
+
+```bash
+python -m pip install build==1.2.2.post1 scikit-build-core==0.11.6 pybind11==2.13.6 ninja==1.11.1.3
+python tools/fetch_ort.py --output /absolute/path/to/onnxruntime.tgz
+export CMAKE_ARGS='-DORT_ARCHIVE=/absolute/path/to/onnxruntime.tgz'
+make build
+# Optional editable install; the same archive is required:
+python -m pip install --find-links wheelhouse -e .
+```
+
+Raw wheels in `dist/raw` are build intermediates. Audit each release architecture
+as described in [the build instructions](demo_onnx/README.md), then assemble the
+bundle from both audited SDK wheels and the pinned dependency wheelhouse:
+
+```bash
 python tools/package_release.py --wheelhouse wheelhouse --wheelhouse dist/audited --output dist/offline-bundle
 python tests/offline_install.py dist/offline-bundle
 ```
 
-The dependency wheelhouse contains both Linux Aorta SDK architectures,
-aorta-msgs, vbot-humanoid-msgs and FlatBuffers. The bundle includes both audited
-SDK wheels, with their private native extension and ORT libraries, plus examples,
-source and the public PC configuration template. NumPy and pygame remain
-optional demo dependencies, not core dependencies. The packager verifies pinned
-dependency hashes, requires both SDK architecture filenames, refuses configured
-credentials and existing output directories, and writes `MANIFEST.json` with
-file digests and source state. Local installation and native imports do not
-establish robot connectivity or motion compatibility on either architecture.
+The bundle includes the compiled extension and ORT inside each SDK wheel,
+examples, source and the public PC configuration template. NumPy and pygame
+remain optional demo dependencies. The packager verifies pinned dependency
+hashes, requires both SDK architecture filenames, refuses configured credentials
+and existing output directories, and writes `MANIFEST.json` with file digests
+and source state. Installation does not establish robot connectivity or motion
+compatibility.
 
 The `SDK latency report` check exercises Python SDK ↔ C++ Mock communication
 at 50–1000 Hz for at least 60 seconds per rate. See the
