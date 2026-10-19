@@ -209,7 +209,7 @@ class Model:
                 or sys.platform != 'linux' or platform.machine() not in ('x86_64', 'aarch64')):
             raise RuntimeError('teleop-demo requires CPython 3.10 on Linux x86_64/aarch64 '
                                '(Ubuntu 22.04 or newer)')
-        from locomotion_aorta_demo_onnx import Session  # optional; no SDK core import
+        from locomotion_aorta._onnx import Session  # optional; no SDK core import
         self.session = Session(path, intra_threads=1, inter_threads=1)
         inputs, outputs = self.session.inputs, self.session.outputs
         if len(inputs) != 1 or len(outputs) != 1 or inputs[0].shape != [1,492] or outputs[0].shape != [1,12]:

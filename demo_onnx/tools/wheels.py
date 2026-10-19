@@ -11,6 +11,8 @@ import sys
 import tempfile
 import zipfile
 
+from packaging.requirements import Requirement
+
 ARCHES = {"x86_64": 62, "aarch64": 183}
 
 
@@ -24,14 +26,26 @@ def inspect(path):
         if not path.name.endswith("-cp310-cp310-manylinux_2_35_" + arch + ".whl"):
             raise ValueError("filename and WHEEL tags differ")
         metadata = email.message_from_bytes(wheel.read(info + "/METADATA"))
-        if metadata["Name"] != "locomotion-aorta-demo-onnx" or metadata["Version"] != "0.2.0":
+        if metadata["Name"] != "locomotion-aorta" or metadata["Version"] != "0.2.0":
             raise ValueError("unexpected distribution/version")
-        if metadata["Requires-Python"] != "==3.10.*" or metadata.get_all("Requires-Dist") != ["numpy"]:
-            raise ValueError("unexpected Python/runtime dependencies")
+        core = {"aorta-sdk": "==2026.10.12", "aorta-msgs": "==2026.10.12",
+                "vbot-humanoid-msgs": "==0.1.2", "flatbuffers": "==25.9.23"}
+        requirements = [Requirement(value) for value in metadata.get_all("Requires-Dist", [])]
+        actual = {req.name: str(req.specifier) for req in requirements if req.marker is None}
+        if metadata["Requires-Python"] != "==3.10.*" or actual != core:
+            raise ValueError("unexpected SDK Python/core dependencies")
+        if any(req.name == "locomotion-aorta-demo-onnx" for req in requirements):
+            raise ValueError("SDK must not depend on a separate native distribution")
         licenses = metadata.get_all("License-File", [])
         if len(licenses) != 3 or any(info + "/licenses/" + n not in wheel.namelist() for n in licenses):
             raise ValueError("three declared license files must exist in dist-info")
-        module = next(n for n in wheel.namelist() if "/_native.cpython-310-" in n and n.endswith(".so"))
+        module = next(n for n in wheel.namelist()
+                      if n.startswith("locomotion_aorta/_onnx/_native.cpython-310-") and n.endswith(".so"))
+        for name in ["locomotion_aorta/__init__.py", "locomotion_aorta/_onnx/__init__.py",
+                     "locomotion_aorta/_onnx/.libs/libonnxruntime.so.1",
+                     "locomotion_aorta/_onnx/.libs/libonnxruntime_providers_shared.so"]:
+            if name not in wheel.namelist():
+                raise ValueError("SDK wheel is missing bundled payload: " + name)
         raw = wheel.read(module)
         if raw[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", raw, 18)[0] != ARCHES[arch]:
             raise ValueError("ELF machine does not match the wheel tag")
@@ -82,7 +96,7 @@ def main():
         print(json.dumps(result, indent=2))
         return
     report = dict(result="FAIL", wheels=[], missing_arches=[], errors=[])
-    for path in sorted(args.wheelhouse.glob("locomotion_aorta_demo_onnx-*.whl")):
+    for path in sorted(args.wheelhouse.glob("locomotion_aorta-*.whl")):
         try:
             report["wheels"].append(inspect(path))
         except (ValueError, KeyError, StopIteration, zipfile.BadZipFile, subprocess.CalledProcessError) as error:

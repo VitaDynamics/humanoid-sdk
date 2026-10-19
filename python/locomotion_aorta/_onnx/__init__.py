@@ -1,4 +1,4 @@
-"""Optional demo inference, separate from the locomotion_aorta core package."""
+"""Private demo inference; imported only when a model is constructed."""
 
 from ._native import ORT_VERSION, Session, TensorInfo
 

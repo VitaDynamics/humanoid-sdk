@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.20)
-project(locomotion_aorta_demo_onnx LANGUAGES CXX)
 find_package(Python 3.10 EXACT COMPONENTS Interpreter Development.Module REQUIRED)
 if(CMAKE_CROSSCOMPILING)
   # The robot toolchain provides the target SOABI; FindPython's interpreter
@@ -41,7 +40,7 @@ target_compile_options(_native PRIVATE "$<$<CONFIG:Release>:-O3;-g;-DNDEBUG>")
 target_link_options(_native PRIVATE -Wl,--disable-new-dtags)
 target_link_libraries(_native PRIVATE ort)
 set_target_properties(_native PROPERTIES INSTALL_RPATH "$ORIGIN/.libs")
-set(destination "locomotion_aorta_demo_onnx")
+set(destination "locomotion_aorta/_onnx")
 install(TARGETS _native LIBRARY DESTINATION "${destination}")
 # Real SONAME bytes avoid depending on wheel installers preserving symlinks.
 configure_file("${ort_root}/lib/libonnxruntime.so.${ort_version}"
@@ -51,6 +50,8 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/libonnxruntime.so.1"
   DESTINATION "${destination}/.libs")
 install(FILES "${ort_root}/LICENSE" "${ort_root}/ThirdPartyNotices.txt"
   DESTINATION "${destination}/licenses/onnxruntime")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/licenses/pybind11/LICENSE"
+  DESTINATION "${destination}/licenses/pybind11")
 configure_file(build-info.json.in build-info.json @ONLY)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/build-info.json"
   DESTINATION "${destination}")

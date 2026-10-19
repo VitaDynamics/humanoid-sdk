@@ -3,10 +3,10 @@
   "sdk_version": "0.2.0",
   "aorta_version": "2026.10.12",
   "flatbuffers_version": "25.9.23",
-  "python_requires": ">=3.10",
+  "python_requires": "==3.10.*",
   "platforms": [
-    "linux_x86_64",
-    "linux_aarch64"
+    "manylinux_2_35_x86_64",
+    "manylinux_2_35_aarch64"
   ],
   "external_version": 1,
   "command_slots": 31,

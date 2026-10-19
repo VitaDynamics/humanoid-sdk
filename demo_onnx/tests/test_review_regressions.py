@@ -10,7 +10,7 @@ import unittest
 import numpy as np
 import onnx
 from onnx import TensorProto as T, helper, numpy_helper
-from locomotion_aorta_demo_onnx import Session
+from locomotion_aorta._onnx import Session
 from test_session import write_model
 
 
@@ -62,7 +62,7 @@ class ReviewRegressionTest(unittest.TestCase):
     def test_non_tensor_io_raises_instead_of_crashing_the_process(self):
         script = """import resource, sys
 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-from locomotion_aorta_demo_onnx import Session
+from locomotion_aorta._onnx import Session
 try:
     Session(sys.argv[1], intra_threads=1, inter_threads=1)
 except ValueError as error:
@@ -119,7 +119,7 @@ else:
         (decoy / "libonnxruntime.so.1").write_text("not an ELF library")
         script = """import sys
 import numpy as np
-from locomotion_aorta_demo_onnx import Session
+from locomotion_aorta._onnx import Session
 s = Session(sys.argv[1], intra_threads=1, inter_threads=1)
 assert s.run('obs', 'action', np.zeros((1, 3), np.float32)).tolist() == [[0.5, 1.0, -2.0]]
 """

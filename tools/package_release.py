@@ -38,12 +38,15 @@ def package(wheelhouses: list[Path], output: Path) -> None:
         if any(digest(path) != expected for path in matches):
             raise ValueError(f"SHA-256 mismatch: {name}")
         wheels.append(matches[0])
-    sdk_wheel = ROOT / "dist" / (
-        f"locomotion_aorta-{compatibility['sdk_version']}-py3-none-any.whl"
-    )
-    if not sdk_wheel.is_file():
-        raise ValueError("missing SDK wheel; run make build first")
-    wheels.append(sdk_wheel)
+    for platform in compatibility["platforms"]:
+        name = f"locomotion_aorta-{compatibility['sdk_version']}-cp310-cp310-{platform}.whl"
+        matches = [directory / name for directory in [*wheelhouses, ROOT / "dist"]
+                   if (directory / name).is_file()]
+        if not matches:
+            raise ValueError(f"missing audited SDK wheel: {name}; build and audit both architectures")
+        if any(digest(path) != digest(matches[0]) for path in matches):
+            raise ValueError(f"conflicting SDK wheels: {name}")
+        wheels.append(matches[0])
     link = ROOT / "CLAUDE.md"
     if not link.is_symlink() or str(link.readlink()) != "AGENTS.md":
         raise ValueError("CLAUDE.md must be a relative symlink to AGENTS.md")

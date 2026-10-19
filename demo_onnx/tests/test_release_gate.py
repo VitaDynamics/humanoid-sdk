@@ -17,9 +17,9 @@ spec.loader.exec_module(module)
 class ReleaseGateTest(unittest.TestCase):
     def test_generic_linux_wheel_is_not_a_release_asset(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "locomotion_aorta_demo_onnx-0.2.0-cp310-cp310-linux_x86_64.whl"
+            path = Path(directory) / "locomotion_aorta-0.2.0-cp310-cp310-linux_x86_64.whl"
             with zipfile.ZipFile(path, "w") as wheel:
-                wheel.writestr("locomotion_aorta_demo_onnx-0.2.0.dist-info/WHEEL",
+                wheel.writestr("locomotion_aorta-0.2.0.dist-info/WHEEL",
                                "Wheel-Version: 1.0\nTag: cp310-cp310-linux_x86_64\n")
             with self.assertRaisesRegex(ValueError, "audited cp310"):
                 module.inspect(path)

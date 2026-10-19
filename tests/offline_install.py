@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import platform
 from pathlib import Path
 import subprocess
 import sys
@@ -31,13 +32,15 @@ class OfflineInstallTest(unittest.TestCase):
         self.assertTrue((bundle / "CLAUDE.md").is_symlink())
         self.assertEqual(str((bundle / "CLAUDE.md").readlink()), "AGENTS.md")
         sdk_wheel = bundle / "wheelhouse" / (
-            f"locomotion_aorta-{manifest['sdk_version']}-py3-none-any.whl"
+            f"locomotion_aorta-{manifest['sdk_version']}-cp310-cp310-manylinux_2_35_{platform.machine()}.whl"
         )
         with zipfile.ZipFile(sdk_wheel) as wheel:
-            for path in (bundle / "source/locomotion_aorta").glob("*.py"):
-                self.assertEqual(
-                    wheel.read(f"locomotion_aorta/{path.name}"), path.read_bytes()
-                )
+            for path in (bundle / "source/locomotion_aorta").rglob("*.py"):
+                relative = path.relative_to(bundle / "source")
+                self.assertEqual(wheel.read(relative.as_posix()), path.read_bytes())
+            self.assertIn("locomotion_aorta/_onnx/.libs/libonnxruntime.so.1", wheel.namelist())
+            self.assertTrue(any(name.startswith("locomotion_aorta/_onnx/_native.cpython-310-")
+                                and name.endswith(".so") for name in wheel.namelist()))
         with tempfile.TemporaryDirectory() as temporary:
             venv = Path(temporary) / "venv"
             subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
@@ -50,7 +53,9 @@ class OfflineInstallTest(unittest.TestCase):
             subprocess.run([python, "-I", "-m", "pip", "check"], check=True)
             subprocess.run(
                 [python, "-I", "-c",
-                 "import aorta, flatbuffers, locomotion_aorta; "
+                 "import aorta, flatbuffers, locomotion_aorta, sys; "
+                 "assert not any(n.startswith('locomotion_aorta._onnx') for n in sys.modules); "
+                 "assert 'onnxruntime' not in sys.modules; "
                  "import importlib.metadata as metadata; "
                  "import locomotion_sdk.ControlStatus, lowlevel.BodyCmd, lowlevel.BodyState; "
                  "from locomotion_aorta.transport import _load_aorta_bindings; "

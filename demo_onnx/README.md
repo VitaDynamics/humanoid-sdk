@@ -1,16 +1,16 @@
 # Optional demo ONNX backend
 
-`locomotion-aorta-demo-onnx` supplies CPU model loading and inference through
-pybind11 and Microsoft ORT 1.20.1. The SDK's `teleop-demo` extra uses it with
-pygame. The SDK core does not import it and there is no Python ORT fallback.
+SDK 0.2.0 embeds the pybind11/Microsoft ORT 1.20.1 CPU backend directly in
+its only distribution, `locomotion-aorta`. There is no standalone backend
+package and no pure Python SDK wheel for this release. The private
+`locomotion_aorta._onnx` subtree is imported only when a demo constructs a model;
+SDK core imports do not load it. The `teleop-demo` extra contains NumPy and
+pygame; there is no Python ORT fallback.
 
-The native/demo distribution supports **CPython 3.10, Linux x86_64 and aarch64,
-Ubuntu 22.04 or newer** (glibc 2.35 / GLIBCXX 3.4.29 or newer). The SDK core
-keeps its separate Python support. This is an unreleased 0.2.0 candidate;
-both audited cp310 architecture wheels are required before publishing the extra.
-Environment markers select supported extra dependencies; on unsupported hosts,
-the teleop example reports its requirements before model loading. Pip markers
-skip inapplicable requirements rather than supplying a custom installation error.
+SDK 0.2.0 supports **CPython 3.10, Linux x86_64 and aarch64, Ubuntu 22.04+**
+(glibc 2.35 / GLIBCXX 3.4.29+). Both audited architecture wheels are required
+before release. Version 0.2.1 is planned to restore general platform support
+through platform and pure Python wheels under the same SDK package name.
 
 ## Local build and release audit
 
@@ -21,7 +21,7 @@ There are no implicit downloads or dependencies on a robot's `/app` filesystem.
 ```sh
 python -m pip install build==1.2.2.post1 scikit-build-core==0.11.6 pybind11==2.13.6 ninja==1.11.1.3
 CMAKE_ARGS='-DORT_ARCHIVE=/absolute/path/to/official-archive.tgz' \
-  python -m build --wheel --no-isolation --outdir demo_onnx/dist/raw demo_onnx
+  python -m build --wheel --no-isolation --outdir dist/raw .
 python -m pip install -r demo_onnx/requirements-release.txt
 python demo_onnx/tools/wheels.py repair --wheel <raw-wheel> --arch x86_64 --output <new-audited-dir>
 ```
@@ -44,7 +44,7 @@ headers or relabel an x86 binary. `Python_INCLUDE_DIR` selects target headers;
 the robot toolchain's `PYTHON_SOABI` is applied after FindPython. Actual ARM
 compilation, machine/ABI audit and target execution are separate results.
 
-Place only the two repaired wheels in the release wheelhouse, then run:
+Place only the two repaired SDK wheels in the release wheelhouse, then run:
 
 ```sh
 python demo_onnx/tools/wheels.py check-release --wheelhouse <audited-wheelhouse> --report <new-report.json>
@@ -57,7 +57,7 @@ check. It does not execute foreign binaries or establish device acceptance.
 ## Interface and errors
 
 ```python
-from locomotion_aorta_demo_onnx import Session
+from locomotion_aorta._onnx import Session
 session = Session(model_path, intra_threads=1, inter_threads=1)
 output = session.run(session.inputs[0].name, session.outputs[0].name, float32_array)
 ```
@@ -70,6 +70,7 @@ dtypes are compared by value; nonnative byte order is not implicitly cast.
 Input data is snapshotted under the GIL, Run releases it, and each output owns
 its storage. No policy normalization, clipping, history or transport is here.
 
+The private test interface below is not imported from the SDK root.
 Wrong names, known shape/dtype and non-tensor IO raise ValueError; missing
 keywords or non-array arguments raise TypeError. ORT load/run failures become
 RuntimeError with context. The loaded runtime must report version1.20.1.
@@ -77,7 +78,7 @@ RuntimeError with context. The loaded runtime must report version1.20.1.
 ## Tests and parity
 
 ```sh
-python -m pip install -r demo_onnx/requirements-test.txt
+python -m pip install '<audited-sdk-wheel>[teleop-demo]' -r demo_onnx/requirements-test.txt
 python -m unittest discover -s demo_onnx/tests -v
 ```
 

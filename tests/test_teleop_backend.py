@@ -21,7 +21,7 @@ class TeleopNativeBackendTest(unittest.TestCase):
     def test_uses_native_session_with_original_thread_counts_and_metadata(self):
         expected = session()
         constructor = mock.Mock(return_value=expected)
-        with mock.patch.dict(sys.modules, {"locomotion_aorta_demo_onnx": NS(Session=constructor)}):
+        with mock.patch.dict(sys.modules, {"locomotion_aorta._onnx": NS(Session=constructor)}):
             model = Model("delivered.onnx")
         constructor.assert_called_once_with("delivered.onnx", intra_threads=1, inter_threads=1)
         self.assertIs(model.session, expected)
@@ -33,14 +33,14 @@ class TeleopNativeBackendTest(unittest.TestCase):
             value = session()
             getattr(value, side)[0].shape = shape
             with self.subTest(side=side), mock.patch.dict(sys.modules, {
-                    "locomotion_aorta_demo_onnx": NS(Session=lambda *a, **k: value)}):
+                    "locomotion_aorta._onnx": NS(Session=lambda *a, **k: value)}):
                 with self.assertRaisesRegex(ValueError, "expected one"):
                     Model("delivered.onnx")
         for side in ["inputs", "outputs"]:
             value = session()
             setattr(value, side, [])
             with self.subTest(side=side), mock.patch.dict(sys.modules, {
-                    "locomotion_aorta_demo_onnx": NS(Session=lambda *a, **k: value)}):
+                    "locomotion_aorta._onnx": NS(Session=lambda *a, **k: value)}):
                 with self.assertRaisesRegex(ValueError, "expected one"):
                     Model("delivered.onnx")
 
@@ -49,13 +49,13 @@ class TeleopNativeBackendTest(unittest.TestCase):
             value = session()
             getattr(value, side)[0].dtype = "tensor(double)"
             with self.subTest(side=side), mock.patch.dict(sys.modules, {
-                    "locomotion_aorta_demo_onnx": NS(Session=lambda *a, **k: value)}):
+                    "locomotion_aorta._onnx": NS(Session=lambda *a, **k: value)}):
                 with self.assertRaisesRegex(ValueError, "float32"):
                     Model("delivered.onnx")
 
     def test_native_load_error_is_not_hidden_by_another_backend(self):
         constructor = mock.Mock(side_effect=RuntimeError("native load failure"))
-        with mock.patch.dict(sys.modules, {"locomotion_aorta_demo_onnx": NS(Session=constructor)}):
+        with mock.patch.dict(sys.modules, {"locomotion_aorta._onnx": NS(Session=constructor)}):
             with self.assertRaisesRegex(RuntimeError, "native load failure"):
                 Model("bad.onnx")
         constructor.assert_called_once()
@@ -71,7 +71,7 @@ class TeleopNativeBackendTest(unittest.TestCase):
                 Model("delivered.onnx")
 
     def test_missing_native_dependency_does_not_fall_back(self):
-        with mock.patch.dict(sys.modules, {"locomotion_aorta_demo_onnx": None}):
+        with mock.patch.dict(sys.modules, {"locomotion_aorta._onnx": None}):
             with self.assertRaises(ModuleNotFoundError):
                 Model("delivered.onnx")
 
@@ -79,7 +79,7 @@ class TeleopNativeBackendTest(unittest.TestCase):
         script = """import runpy, sys
 class Block:
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'locomotion_aorta_demo_onnx', 'onnxruntime', 'pygame'}:
+        if fullname == 'locomotion_aorta._onnx' or fullname.startswith('locomotion_aorta._onnx.') or fullname.split('.')[0] in {'onnxruntime', 'pygame'}:
             raise ImportError('optional dependency imported: ' + fullname)
 sys.meta_path.insert(0, Block())
 import locomotion_aorta

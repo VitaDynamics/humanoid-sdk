@@ -13,7 +13,12 @@ pre-release RobotInfo buffers are incompatible with this checkout.
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
-with Python 3.10 or newer.
+with **CPython 3.10**, glibc **2.35+** and GLIBCXX **3.4.29+**
+(Ubuntu 22.04 or newer). SDK 0.2.0 ships one distribution containing both the
+client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
+aarch64 only. There is no pure Python or separate backend wheel for 0.2.0.
+Version 0.2.1 is planned to restore general platform support through separate
+platform and pure Python wheels under the same SDK package name.
 
 Dependencies are pinned to Aorta SDK and messages `2026.10.12` (ABI 13),
 `vbot-humanoid-msgs==0.1.2`, and `flatbuffers==25.9.23`. Obtain the matching
@@ -170,23 +175,28 @@ root is required. Host tests and packaging do not establish device HIL.
 
 ## Development and offline packaging
 
-Install the matching dependency wheels into a separate virtual environment:
+Use CPython 3.10 and the matching dependency wheels in a separate virtual
+environment. The SDK is no longer built as a pure Python wheel. Its root build
+requires CMake 3.20+, C++17, the pinned build/audit tools and the official ORT
+archive; see [native build instructions](demo_onnx/README.md).
 
 ```bash
-python -m pip install --find-links wheelhouse -e . build
+python -m pip install --no-index --find-links wheelhouse 'locomotion-aorta==0.2.0'
 make check
-make build
-python tools/package_release.py --wheelhouse wheelhouse --output dist/offline-bundle
+# Release tooling takes both audited SDK architecture wheels plus pinned dependencies:
+python tools/package_release.py --wheelhouse wheelhouse --wheelhouse dist/audited --output dist/offline-bundle
 python tests/offline_install.py dist/offline-bundle
 ```
 
 The dependency wheelhouse contains both Linux Aorta SDK architectures,
-aorta-msgs, vbot-humanoid-msgs and FlatBuffers. The bundle adds the locomotion
-SDK wheel, examples, source and public PC configuration template. The packager
-verifies dependency hashes, refuses configured credentials and existing output
-directories, and writes `MANIFEST.json` with file digests and source state.
-Local installation and native imports do not establish robot connectivity or
-motion compatibility on either architecture.
+aorta-msgs, vbot-humanoid-msgs and FlatBuffers. The bundle includes both audited
+SDK wheels, with their private native extension and ORT libraries, plus examples,
+source and the public PC configuration template. NumPy and pygame remain
+optional demo dependencies, not core dependencies. The packager verifies pinned
+dependency hashes, requires both SDK architecture filenames, refuses configured
+credentials and existing output directories, and writes `MANIFEST.json` with
+file digests and source state. Local installation and native imports do not
+establish robot connectivity or motion compatibility on either architecture.
 
 The `SDK latency report` check exercises Python SDK ↔ C++ Mock communication
 at 50–1000 Hz for at least 60 seconds per rate. See the
@@ -262,11 +272,11 @@ roster, runs a local action 17 ONNX policy, and uses the same EXTERNAL lease and
 CANCEL exit. Before every live inference it waits up to the existing `--timeout`
 for a strictly increasing BodyState `state_id`; unchanged or older feedback is
 not reused for another inference or leg command, and timeout attempts CANCEL.
-The optional `teleop-demo` extra selects `locomotion-aorta-demo-onnx==0.2.0`,
-a separate native wheel using C++ ONNX Runtime 1.20.1 CPU, plus pygame. The SDK core does not import it; there is no
-Python ONNX Runtime fallback. The native wheel and its dependencies are still
-in preparation and are not included in the core offline bundle. After obtaining
-the matching Linux/Python/architecture wheel and a complete demo wheelhouse:
+The SDK wheel already contains the C++ ONNX Runtime 1.20.1 CPU backend and
+its shared libraries. Only constructing a model imports `locomotion_aorta._onnx`;
+core imports and example `--help` do not load it. There is no Python ONNX
+Runtime fallback. The optional `teleop-demo` extra installs only NumPy and
+pygame from a complete matching demo wheelhouse:
 
 ```bash
 python -m pip install --no-index --find-links demo-wheelhouse 'locomotion-aorta[teleop-demo]==0.2.0'
@@ -277,15 +287,16 @@ The backend intentionally matches the robot's ORT 1.20.1 instead of the
 previous Python ORT 1.23.2. Outputs are not bit-identical to the old extra:
 82 of 120 values differed in the archived comparison. Acceptance uses a
 test-only Python ORT 1.20.1 oracle with exact finite float32 equality.
-This demo supports CPython 3.10 on Linux x86_64/aarch64, Ubuntu 22.04 or newer
-(glibc 2.35 and GLIBCXX 3.4.29 or newer). Both cp310 wheels must be built and
-audited before publishing the extra. The SDK core keeps its existing Python
-support. Extra dependencies have matching environment markers; the example
-reports unsupported Python/architecture explicitly before loading a model.
+SDK 0.2.0, including this demo, supports only CPython 3.10 on Linux
+x86_64/aarch64, Ubuntu 22.04 or newer (glibc 2.35 and GLIBCXX 3.4.29 or newer).
+Both SDK cp310 architecture wheels must be built and audited before release;
+there is no separate native distribution. The wheel ABI/platform tags and
+`Requires-Python` enforce the installation support scope. General platform
+support is planned again for 0.2.1.
 
-No compiler or robot filesystem is needed to consume that wheel. The repository
-checkout contains source-build instructions in `demo_onnx/README.md`; the core
-offline bundle does not include that source package. `--model` is required; no
+No compiler or robot filesystem is needed to consume the SDK wheel. Source
+build instructions are in `demo_onnx/README.md`; the offline bundle already
+contains the compiled backend and ORT inside each SDK wheel. `--model` is required; no
 model is bundled or selected automatically.
 Use `--help` or `--dry-run --body-state-jsonl <capture>` before live use; dry-run
 does not construct SDK transport. The offline validation used a noshoes model;

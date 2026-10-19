@@ -23,4 +23,4 @@ check-hil:
 	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:tests $(PYTHON) -m unittest test_brainco_capture -v
 
 build:
-	$(PYTHON) -m build --wheel
+	$(PYTHON) -m build --wheel --no-isolation --outdir dist/raw

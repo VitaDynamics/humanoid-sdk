@@ -10,7 +10,7 @@ import numpy as np
 import onnx
 from onnx import TensorProto, helper, numpy_helper
 
-from locomotion_aorta_demo_onnx import ORT_VERSION, Session
+from locomotion_aorta._onnx import ORT_VERSION, Session
 
 
 def write_model(path, *, dynamic=False, dtype=TensorProto.FLOAT, two_inputs=False):
@@ -151,7 +151,7 @@ class Block:
             raise ImportError('Python ORT must not be used')
 sys.meta_path.insert(0, Block())
 import numpy as np
-from locomotion_aorta_demo_onnx import Session
+from locomotion_aorta._onnx import Session
 s = Session(sys.argv[1], intra_threads=1, inter_threads=1)
 assert s.run('obs', 'action', np.zeros((1, 3), np.float32)).tolist() == [[0.5, 1.0, -2.0]]
 assert 'onnxruntime' not in sys.modules

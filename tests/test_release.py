@@ -23,6 +23,8 @@ class ReleaseTest(unittest.TestCase):
             "command_slots", "state_slots", "session_mode", "pc_session_profile",
             "wheel_sha256", "dependency_release_tag", "aorta_abi_version", "schema_sha256",
         })
+        self.assertEqual(manifest["python_requires"], "==3.10.*")
+        self.assertEqual(manifest["platforms"], ["manylinux_2_35_x86_64", "manylinux_2_35_aarch64"])
         self.assertEqual(sorted(n.split("-")[0] for n in manifest["wheel_sha256"]),
                          ["aorta_msgs", "aorta_sdk", "aorta_sdk", "flatbuffers", "vbot_humanoid_msgs"])
 
@@ -67,8 +69,9 @@ class ReleaseTest(unittest.TestCase):
                 (root / "wheels" / name).write_bytes(payload)
                 compatibility["wheel_sha256"][name] = hashlib.sha256(payload).hexdigest()
             (root / "compatibility.json").write_text(json.dumps(compatibility))
-            sdk_wheel = root / "dist" / f"locomotion_aorta-{compatibility['sdk_version']}-py3-none-any.whl"
-            sdk_wheel.write_bytes(b"sdk fixture")
+            for platform in compatibility["platforms"]:
+                sdk_wheel = root / "dist" / f"locomotion_aorta-{compatibility['sdk_version']}-cp310-cp310-{platform}.whl"
+                sdk_wheel.write_bytes(platform.encode())
             output = Path(temporary) / "bundle"
             with mock.patch.object(package_release, "ROOT", root), mock.patch.object(
                 package_release.subprocess, "check_output", side_effect=["fixture-head\n", ""]
@@ -87,6 +90,18 @@ class ReleaseTest(unittest.TestCase):
             for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py"):
                 self.assertFalse((output / "examples" / retired).exists())
                 self.assertNotIn("examples/" + retired, manifest["files"])
+            self.assertEqual(sorted(p.name for p in (output / "wheelhouse").glob("locomotion_aorta-*.whl")),
+                             [f"locomotion_aorta-0.2.0-cp310-cp310-{platform}.whl"
+                              for platform in sorted(compatibility["platforms"])])
+            # A single architecture or a pure/raw wheel must not masquerade as the release pair.
+            arm = root / "dist/locomotion_aorta-0.2.0-cp310-cp310-manylinux_2_35_aarch64.whl"
+            arm.unlink()
+            (root / "dist/locomotion_aorta-0.2.0-py3-none-any.whl").write_bytes(b"retired pure wheel")
+            missing = Path(temporary) / "missing-arm"
+            with mock.patch.object(package_release, "ROOT", root):
+                with self.assertRaisesRegex(ValueError, "missing audited SDK wheel"):
+                    package_release.package([root / "wheels"], missing)
+            self.assertFalse(missing.exists())
             self.assertEqual(manifest["pc_session_profile"], "config/pc_session_peer.json5")
             self.assertEqual(manifest["files"]["config/pc_session_peer.json5"],
                              hashlib.sha256(bundled.read_bytes()).hexdigest())

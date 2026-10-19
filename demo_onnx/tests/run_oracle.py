@@ -14,7 +14,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.backend == "native":
-        from locomotion_aorta_demo_onnx import Session, ORT_VERSION
+        from locomotion_aorta._onnx import Session, ORT_VERSION
         session = Session(str(args.model), intra_threads=1, inter_threads=1)
         input_name, output_name = session.inputs[0].name, session.outputs[0].name
         infer = lambda values: session.run(input_name, output_name, values)
