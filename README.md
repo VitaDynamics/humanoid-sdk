@@ -42,11 +42,14 @@ BodyJointState contains three acquisition/ingestion/assembly timestamps,
 q, dq, tau_est and the signed JointError error_code. The tuple position is the
 slot identity; installation, capabilities and limits come from BodyInfo.
 For installed non-MOCK joints, the producer preserves a real nonzero fault
-first, otherwise uses TIMEOUT (20) for missing/stale feedback, UNKNOWN (255)
+first, otherwise uses TIMEOUT (8) for missing/stale feedback, UNKNOWN (255)
 for nonfinite values or ankle FK failure, and NONE (0) otherwise. Uninstalled
 and MOCK slots use NONE; NONE alone does not mean a joint is installed.
-The 27 existing JointError values are unchanged. The SDK preserves received
-codes, including unknown numeric values, without synthesizing another status.
+The 29 JointError values align shared codes with the quadruped contract,
+including TIMEOUT=8 and servo protection codes 41/42; humanoid-only control,
+motor-phase and sensor faults use 15/16/17. The SDK imports this generated
+enum and preserves received codes, including unknown numeric values, without
+synthesizing another status.
 BodyImuSample keeps status and rpy (degrees), and removes temperature,
 valid_fields and duplicate device/host timestamps. BodyCmd, BodyState and
 BodyImuSample have no deprecated placeholders: IDs are renumbered contiguously

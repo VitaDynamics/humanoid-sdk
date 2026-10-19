@@ -80,7 +80,7 @@ def make_state():
     imus = builder.EndVector()
     cols = [tuple(range(31)), tuple(1000 + i for i in range(31)), tuple(2000 + i for i in range(31)),
             tuple(math.nan if i == 14 else i + .125 for i in range(31)),
-            (-.25,) * 31, (-.75,) * 31, tuple(-7 if i == 30 else 0 if i in (0,14,15) else 3 if i == 1 else 20 if i == 2 else 255 if i == 3 else i for i in range(31))]
+            (-.25,) * 31, (-.75,) * 31, tuple(-7 if i == 30 else 0 if i in (0,14,15) else 3 if i == 1 else 8 if i == 2 else 255 if i == 3 else i for i in range(31))]
     m.BodyStateStartJointsVector(builder, 31)
     for values in reversed(tuple(zip(*cols))):
         module('BodyJointState').CreateBodyJointState(builder, *values)
@@ -158,7 +158,7 @@ class BodyCodecTest(unittest.TestCase):
         self.assertEqual(state.joints[0].error_code, 0)
         self.assertEqual(state.joints[30].error_code, -7)
         self.assertEqual([state.joints[i].error_code for i in (1,2,3,14,15)],
-                         [3,20,255,0,0])  # Real fault, timeout, unknown, absent, MOCK.
+                         [3,8,255,0,0])  # Real fault, timeout, unknown, absent, MOCK.
         self.assertEqual(state.joints[0].tau_est, -.75)
         self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us), (0,0,0))
         self.assertEqual([s.location for s in state.imu_states],
@@ -177,7 +177,9 @@ class BodyCodecTest(unittest.TestCase):
 
     def test_joint_error_enum_and_removed_dto_fields_follow_public_bindings(self):
         from locomotion_aorta import JointError, BodyJointState, BodyImuSample
-        self.assertEqual((JointError.NONE, JointError.TIMEOUT, JointError.UNKNOWN), (0, 20, 255))
+        expected = {'NONE': 0, 'OVER_VOLTAGE': 1, 'UNDER_VOLTAGE': 2, 'OVER_CURRENT': 3, 'OVER_TEMPERATURE': 4, 'OVERLOAD': 5, 'ENCODER_FAULT': 6, 'DRIVER_FAULT': 7, 'TIMEOUT': 8, 'ENABLE_REJECTED': 9, 'OVERLOAD_WARNING': 10, 'OVER_TEMP_WARNING': 11, 'JOINT_LIMIT_EXCEEDED': 12, 'STALL': 13, 'ENCODER_NOT_CALIBRATED': 14, 'CONTROL_FAULT': 15, 'MOTOR_PHASE_FAULT': 16, 'SENSOR_FAULT': 17, 'CAN_OPEN': 21, 'CAN_INIT': 22, 'CAN_SEND': 23, 'CAN_RECV': 24, 'INVALID_PARAM': 30, 'NOT_ENABLED': 31, 'ALREADY_ENABLED': 32, 'SERVO_HARDWARE_FAULT': 40, 'SERVO_POSITION_PROTECTION': 41, 'SERVO_THERMAL_INTEGRAL_PROTECTION': 42, 'UNKNOWN': 255}
+        self.assertEqual({name: getattr(JointError, name) for name in expected}, expected)
+        self.assertEqual({name for name in vars(JointError) if name.isupper()}, set(expected))
         self.assertEqual([f.name for f in dataclasses.fields(BodyJointState)],
                          ['ts_acquired_hw_us', 'ts_ingested_us',
                           'ts_assembled_us', 'q', 'dq', 'tau_est', 'error_code'])
@@ -322,12 +324,12 @@ class BodyCodecTest(unittest.TestCase):
         obj.joints[1].q = math.nan
         obj.joints[1].errorCode = 3  # Real over-current takes priority at the producer.
         obj.joints[2].tsIngestedUs = 0
-        obj.joints[2].errorCode = 20
+        obj.joints[2].errorCode = 8
         builder = flatbuffers.Builder(1)
         builder.Finish(obj.Pack(builder))
         state = codec.decode_body_state(module('BodyState').BodyState.GetRootAs(builder.Output()))
         self.assertTrue(math.isnan(state.joints[1].q))
-        self.assertEqual((state.joints[1].error_code, state.joints[2].error_code), (3,20))
+        self.assertEqual((state.joints[1].error_code, state.joints[2].error_code), (3,8))
 
     def test_state_id_is_copied_to_command_without_uint64_truncation(self):
         for state_id in (2**32+7, 2**63+9, 2**64-1):
