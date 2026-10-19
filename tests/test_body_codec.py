@@ -217,7 +217,7 @@ class BodyCodecTest(unittest.TestCase):
             ('BodyJointCmd', ['Q','Dq','Tau','Kp','Kd'], [0,4,8,12,16]),
             ('BodyState', ['JointsLength'], [22]),
             ('BodyImuSample', ['TsSampledUs', 'TsIngestedUs'], [4,8]),
-            ('BodyState', ['AppliedSessionId', 'AppliedSequence', 'TsFirstOutputUs'], [26,28,30]),
+            ('BodyState', ['AppliedSessionId', 'AppliedSequence', 'TsFirstOutputUs'], [24,26,28]),
             ('BodyCmd', ['JointsLength','Action','RootQuat'], [22,24,26]),
         ):
             view = getattr(module(name), name)(); probe = Probe(); view._tab = probe

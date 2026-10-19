@@ -415,7 +415,7 @@ class ActualSdkDtoIntegration(unittest.TestCase):
         b=flatbuffers.Builder(1);b.Finish(_fill_body_cmd(NS(body_cmd_module=command_module),command,b,0))
         view=command_module.BodyCmd.GetRootAs(b.Output())
         self.assertEqual(view.Action(),api.BodyCmdAction.EXTERNAL)
-        self.assertNotEqual(view._tab.Offset(24),0)
+        self.assertNotEqual(view._tab.Offset(22),0)
         self.assertEqual(view.JointsLength(),31)
         self.assertEqual(view.Joints(14).Q(),0.)
         self.assertEqual(view.InputStateId(),typed_state.state_id)
