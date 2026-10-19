@@ -218,11 +218,12 @@ class BodyCodecTest(unittest.TestCase):
             ('BodyState', ['JointsLength'], [22]),
             ('BodyImuSample', ['TsSampledUs', 'TsIngestedUs'], [4,8]),
             ('BodyState', ['AppliedSessionId', 'AppliedSequence', 'TsFirstOutputUs'], [24,26,28]),
-            ('BodyCmd', ['JointsLength','Action','RootQuat'], [22,24,26]),
+            ('BodyCmd', ['JointsLength','Action','RootQuat'], [20,22,24]),
         ):
-            view = getattr(module(name), name)(); probe = Probe(); view._tab = probe
-            for getter in getters: getattr(view, getter)()
-            self.assertEqual(probe.positions, expected)
+            with self.subTest(table=name, getters=getters):
+                view = getattr(module(name), name)(); probe = Probe(); view._tab = probe
+                for getter in getters: getattr(view, getter)()
+                self.assertEqual(probe.positions, expected)
 
     def test_robot_info_preserves_real_body_and_failed_end_effector_in_partial_reply(self):
         # The actual final public object API packs regular tables/vector structs.
