@@ -207,7 +207,7 @@ class FakeController:
         return self.status
 
     def publish(self, command):
-        command = replace(command, session_id=9, sequence=len(self.commands)+1)
+        command = replace(command, session_id=2**63+9, sequence=2**63+1001+len(self.commands))
         self.commands.append(command)
         return command
 
@@ -225,14 +225,18 @@ class TrackingLoopTest(unittest.TestCase):
 
     def run_live(self):
         return example.live(self.model, self.p, self.args, self.rec, self.controller,
-                            monotonic=self.clock.monotonic, sleep=self.clock.sleep)
+                            source=self.controller, monotonic=self.clock.monotonic,
+                            sleep=self.clock.sleep)
 
     def test_bounded_50hz_loop_uses_new_state_and_exits(self):
         result = self.run_live()
         self.assertEqual((result['steps'], self.model.calls), (3, 4))
         self.assertEqual((self.controller.enters, self.controller.exits), (1, 1))
         commands = self.controller.commands
-        self.assertEqual([c.sequence for c in commands], [1, 2, 3])
+        rows = [r for r in self.rec.rows if r['kind'] == 'step' and r['published']]
+        self.assertEqual([(r['session_id'], r['sequence']) for r in rows],
+                         [(c.session_id, c.sequence) for c in commands])
+        self.assertTrue(all(r['session_id'] > 2**63 and r['sequence'] > 2**63 for r in rows))
         self.assertEqual(len(set(c.input_state_id for c in commands)), 3)
         self.assertTrue(all(c.input_state_ts_real_us > 0 for c in commands))
         self.assertEqual(self.rec.rows[-1]['current_action'], 'PASSIVE')
@@ -282,7 +286,13 @@ class TrackingLoopTest(unittest.TestCase):
     def test_stop_before_entry_does_not_request_control(self):
         stop = threading.Event()
         stop.set()
-        example.live(self.model, self.p, self.args, self.rec, self.controller, stop=stop)
+        example.live(self.model, self.p, self.args, self.rec, self.controller,
+                     source=self.controller, stop=stop)
+        self.assertEqual((self.controller.enters, self.controller.exits), (0, 0))
+
+    def test_live_requires_an_explicit_state_source_before_entry(self):
+        with self.assertRaises(TypeError):
+            example.live(self.model, self.p, self.args, self.rec, self.controller)
         self.assertEqual((self.controller.enters, self.controller.exits), (0, 0))
 
     def test_unconfirmed_exit_is_reported_as_failure(self):

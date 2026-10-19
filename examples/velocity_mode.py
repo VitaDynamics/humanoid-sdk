@@ -340,7 +340,7 @@ def parse_args(argv=None):
 def main():
     args = parse_args()
     policy = VelocityModePolicy(args.locomotion_dir)
-    metadata = dict(sdk_release="0.2.0", sdk_base_commit="2cd5b71e2fb9025c2951462edd95eb9278df8241",
+    metadata = dict(sdk_release="0.2.0", sdk_base_commit="335341bc765f0ad46a2b77eec8abcccd2b22756b",
                     sdk_version=version("locomotion-aorta"),
                     sdk_directory=str(Path(locomotion_aorta.__file__).resolve().parent),
                     sdk_files_sha256={name: hashlib.sha256(Path(locomotion_aorta.__file__).with_name(name).read_bytes()).hexdigest()
@@ -356,8 +356,7 @@ def main():
                     S1_source="Python typed decoder entry (includes decoding; excludes pre-dispatch queue)",
                     S5_source="would-publish boundary" if args.shadow else "ExternalController.publish entry",
                     period_s=PERIOD_S, models=[policy.inventory])
-    log = CycleLog(args.log, metadata)
-    transport = controller = directions = None
+    log = transport = controller = directions = None
     entered = False
     try:
         transport = PolicyTransport(group=args.group, shadow=args.shadow)
@@ -372,6 +371,7 @@ def main():
         if response.info is None or response.info.body is None:
             raise RuntimeError(response.error_message or "RobotInfo has no body roster")
         policy.bind_body_info(response.info.body)
+        log = CycleLog(args.log, metadata)
         log.write(dict(record_type="roster", joint_names=policy.order,
                        roster_version=response.info.body.roster_version,
                        populated=[j.populated for j in response.info.body.joints],
@@ -409,7 +409,8 @@ def main():
                     controller.close()
                 elif transport is not None:
                     transport.close()
-                log.close()
+                if log is not None:
+                    log.close()
 
 
 if __name__ == "__main__":

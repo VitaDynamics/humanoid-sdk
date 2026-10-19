@@ -8,7 +8,10 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    raise unittest.SkipTest('install the policy demo extras to run body31 policy tests')
 
 from locomotion_aorta import BodyJointState, BodyState
 from locomotion_aorta._policy_state import ASAMPLE_BODY_JOINT_NAMES, PolicyFeedback, PolicyStateSource
@@ -64,6 +67,7 @@ class PublicPolicyStateTest(unittest.TestCase):
         self.assertEqual(model.infer(np.zeros(p.contract.input_dim,np.float32)).shape, (28,))
         self.assertEqual(model.session.call[:3], ('obs','actions',(1,p.contract.input_dim)))
 
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'install .[velocity-demo] for PyYAML')
     def test_velocity_lazy_native_model_and_public_roster(self):
         from examples.velocity_mode_policy import VelocityModePolicy
         import yaml
@@ -90,6 +94,9 @@ class PublicPolicyStateTest(unittest.TestCase):
             before = dict(zip(p.order,p.decode(np.zeros(28,np.float32))))
             p.bind_body_info(SimpleNamespace(joint_names=tuple(reversed(ASAMPLE_BODY_JOINT_NAMES))))
             self.assertEqual(dict(zip(p.order,p.decode(np.zeros(28,np.float32)))), before)
+            self.assertEqual(p.inventory['body_joint_names'], p.order)
+            self.assertEqual(p.inventory['policy_to_body_slot'], p.policy_to_body)
+            self.assertEqual(p.inventory['fixed_joints'], cfg['humanoid_velocity']['fixed_joints'])
             self.assertEqual(len(p.infer(np.zeros((1,465),np.float32))),28)
         self.assertEqual(calls,[(1,1)])
         self.assertEqual(p.session.call[2:],(np.dtype('float32'),(1,465)))

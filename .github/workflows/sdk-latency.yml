@@ -181,6 +181,7 @@ jobs:
           assert Path(locomotion_aorta.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
           assert not any(name.startswith('locomotion_aorta._onnx') for name in sys.modules)
           PY_CHECK
+          python -c 'import numpy, yaml'  # Velocity coverage must not skip for missing demo dependencies.
           PYTHONPATH=.:tests python -m unittest discover -s tests -v 2>&1 | tee "$RUNNER_TEMP/sdk-tests.log"
           python -m unittest discover -s demo_onnx/tests -v 2>&1 | tee "$RUNNER_TEMP/native-tests.log"
           python tests/latency/state_source_probe.py --output "$RUNNER_TEMP/state-source-results"

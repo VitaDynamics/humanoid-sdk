@@ -1,18 +1,18 @@
 """Metadata-driven Velocity mode policy; no transport or robot operations."""
 
+from __future__ import annotations
+
 from collections import deque
 from pathlib import Path
 import hashlib
-
-import numpy as np
-import yaml
-
 
 PROFILE = "actions/policy_profiles/vt_human_v2_velocity_asample.yaml"
 
 
 class VelocityModePolicy:
     def __init__(self, locomotion_dir: Path) -> None:
+        import yaml
+
         profile_path = locomotion_dir / PROFILE
         self.config = yaml.safe_load(profile_path.read_text())["humanoid_velocity"]
         self.model_path = locomotion_dir / self.config["model_path"]
@@ -68,9 +68,13 @@ class VelocityModePolicy:
         self.driven_slots = set(self.policy_to_body)
         self.driven_slots.update(self.order.index(n) for n in self.config["fixed_joints"] if n in self.order)
         if hasattr(self, "inventory"):
-            self.inventory.update(body_joint_names=self.order, policy_to_body_slot=self.policy_to_body)
+            self.inventory.update(
+                body_joint_names=self.order, policy_to_body_slot=self.policy_to_body,
+                fixed_joints={n: v for n, v in self.config["fixed_joints"].items() if n in self.order})
 
     def _values(self, key: str) -> np.ndarray:
+        import numpy as np
+
         result = np.asarray([float(v) for v in self.metadata[key].split(",")], dtype=np.float64)
         if result.shape != (len(self.names),):
             raise ValueError(f"metadata {key} length differs from joint_names")
@@ -83,10 +87,14 @@ class VelocityModePolicy:
         return result
 
     def reset(self) -> None:
+        import numpy as np
+
         self.history: deque[np.ndarray] = deque(maxlen=self.history_len)
         self.last_action = np.zeros(len(self.names), dtype=np.float32)
 
     def command(self, axes: tuple[float, ...], twist=(0.0, 0.0, 0.0)) -> np.ndarray:
+        import numpy as np
+
         cfg = self.config["command"]
         result = []
         for name in ("vx", "vy", "wz"):
@@ -105,6 +113,8 @@ class VelocityModePolicy:
     def observe(self, q: tuple[float, ...], dq: tuple[float, ...],
                 gyro: tuple[float, ...], quat: tuple[float, ...],
                 command: np.ndarray) -> np.ndarray:
+        import numpy as np
+
         # Same conjugate-quaternion rotation and double arithmetic as
         # VtHumanProjectedGravity; do not renormalize the published quaternion.
         w, x, y, z = map(float, quat)
@@ -143,6 +153,8 @@ class VelocityModePolicy:
         return self.session.run(self.input_name, self.output_name, observation)[0]
 
     def decode(self, raw_action: np.ndarray) -> list[dict]:
+        import numpy as np
+
         self.last_action = np.clip(raw_action, -np.float32(self.metadata["clip_actions"]),
                                    np.float32(self.metadata["clip_actions"])).astype(np.float32)
         raw_q = self.last_action.astype(np.float64) * self.action_scale + self.default_q

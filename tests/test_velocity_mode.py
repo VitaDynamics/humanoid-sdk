@@ -104,6 +104,36 @@ class PolicyTest(unittest.TestCase):
 
 
 class LoggingTest(unittest.TestCase):
+    def test_run_header_uses_the_bound_robot_roster(self):
+        policy = policy_fixture()
+        policy.inventory = dict(body_joint_names=policy.order,
+                                policy_to_body_slot=policy.policy_to_body,
+                                fixed_joints={})
+        names = tuple(reversed(policy.order))
+        body = SimpleNamespace(joint_names=names, roster_version=1,
+                               joints=[SimpleNamespace(populated=True, is_mock=False)]*31)
+        transport, directions = Mock(), Mock()
+        transport.get_robot_info.return_value = SimpleNamespace(info=SimpleNamespace(body=body))
+        transport.observed_status = SimpleNamespace(current_action="PASSIVE",
+            phase=SimpleNamespace(value="IDLE"), generation=0)
+        transport.publishers, directions.node.publishers = {}, []
+        directions.statistics.return_value = {}
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/"run.jsonl"
+            args = example.parse_args(["--shadow", "--locomotion-dir", "/unused", "--log", str(path)])
+            with patch.object(example, "version", return_value="0.2.0"), \
+                 patch.object(example, "parse_args", return_value=args), \
+                 patch.object(example, "VelocityModePolicy", return_value=policy), \
+                 patch.object(example, "PolicyTransport", return_value=transport), \
+                 patch.object(example, "DirectionInput", return_value=directions), \
+                 patch.object(example, "transition_duration", return_value=([], 0.)), \
+                 patch.object(example, "run_cycles"):
+                example.main()
+            header = json.loads(path.read_text().splitlines()[0])
+        self.assertEqual(header["models"][0]["body_joint_names"], list(names))
+        self.assertEqual(header["models"][0]["policy_to_body_slot"], [30, 24])
+        self.assertEqual(header["models"][0]["fixed_joints"], policy.config["fixed_joints"])
+
     def test_cycle_fields_round_trip_and_overhead_has_its_own_record(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "cycles.jsonl"
@@ -408,6 +438,31 @@ class DurationTest(unittest.TestCase):
         controller.close.assert_called_once_with()
         directions.close.assert_called_once_with()
         log.close.assert_called_once_with()
+
+
+class TransitionTest(unittest.TestCase):
+    def test_transition_uses_driven_slots_and_the_existing_profile_formula(self):
+        import yaml
+
+        policy = policy_fixture()
+        policy.default_q[:] = 0.
+        config = {"transition": {"min_duration_s": .2, "max_duration_s": 1.5},
+                  "actions": {"HUMANOID": {"params": {
+                      "transition_small_delta_skip_threshold_q": .1,
+                      "transition_speed_q_per_s": 1.}}}}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root/"config").mkdir()
+            (root/"config/locomotion_foot_humanoid_asample.yaml").write_text(yaml.safe_dump(config))
+            for slot, delta, expected in ((0, .1, 0.), (6, .11, .2),
+                                           (0, .6, .6), (6, 5., 1.5), (29, .8, .8)):
+                with self.subTest(slot=slot, delta=delta):
+                    q = [0.]*31
+                    q[14], q[slot] = 10000., delta
+                    target, duration = example.transition_duration(policy, SimpleNamespace(q=q), root)
+                    self.assertEqual(len(target), 31)
+                    self.assertAlmostEqual(duration, expected)
+        self.assertNotIn(14, policy.driven_slots)
 
 
 if __name__ == "__main__":

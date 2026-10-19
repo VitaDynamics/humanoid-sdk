@@ -182,11 +182,10 @@ def wait_fresh(controller, policy, *, previous_ns, timeout, max_age,
 
 
 def live(model, policy, args, recorder, controller, *,
-         stop=None, source=None, monotonic=time.monotonic, sleep=time.sleep):
+         source, stop=None, monotonic=time.monotonic, sleep=time.sleep):
     from locomotion_aorta import ExternalPhase
     from locomotion_aorta.wbc_tracking_policy import Motion
     stop = stop if stop is not None else threading.Event()
-    source = source if source is not None else controller
     clip = Motion.from_npz(args.motion, policy.contract.names) if args.motion else None
     initial = wait_fresh(source, policy, previous_ns=0, timeout=args.timeout,
                          max_age=args.max_state_age_ms/1000, stop=stop,
@@ -306,7 +305,7 @@ def main():
                   profile=profile, model_contract=json.loads(model.session.metadata[
                       'groot_wbc.tracking_contract.v1']),
                   input_clock='robot Vita host microseconds copied unchanged',
-                  inference_wire_clock='client CLOCK_REALTIME microseconds; cross-host sync not assumed',
+                  inference_wire_clock='ts_client_created_us/ts_client_send_us: client CLOCK_MONOTONIC microseconds; cross-host sync not assumed',
                   local_latency_clock='client CLOCK_MONOTONIC nanoseconds',
                   args={k:str(v) if isinstance(v, Path) else v for k,v in vars(args).items()})
     recorder = Recorder(args.log, header)
