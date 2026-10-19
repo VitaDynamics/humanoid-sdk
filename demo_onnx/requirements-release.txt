@@ -1,0 +1,3 @@
+# Build/audit tools only; not demo runtime dependencies.
+auditwheel==6.2.0
+patchelf==0.17.2.2

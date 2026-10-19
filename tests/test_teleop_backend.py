@@ -60,6 +60,16 @@ class TeleopNativeBackendTest(unittest.TestCase):
                 Model("bad.onnx")
         constructor.assert_called_once()
 
+    def test_unsupported_python_reports_the_supported_demo_environment(self):
+        with mock.patch("sys.version_info", (3, 11)):
+            with self.assertRaisesRegex(RuntimeError, "CPython 3.10"):
+                Model("delivered.onnx")
+
+    def test_unsupported_architecture_reports_the_supported_demo_environment(self):
+        with mock.patch("platform.machine", return_value="s390x"):
+            with self.assertRaisesRegex(RuntimeError, "Linux x86_64/aarch64"):
+                Model("delivered.onnx")
+
     def test_missing_native_dependency_does_not_fall_back(self):
         with mock.patch.dict(sys.modules, {"locomotion_aorta_demo_onnx": None}):
             with self.assertRaises(ModuleNotFoundError):

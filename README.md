@@ -262,9 +262,8 @@ roster, runs a local action 17 ONNX policy, and uses the same EXTERNAL lease and
 CANCEL exit. Before every live inference it waits up to the existing `--timeout`
 for a strictly increasing BodyState `state_id`; unchanged or older feedback is
 not reused for another inference or leg command, and timeout attempts CANCEL.
-The optional `demo-onnx` extra selects `locomotion-aorta-demo-onnx==0.2.0`,
-a separate native wheel using C++ ONNX Runtime 1.20.1 CPU. `teleop-demo` adds
-the same backend and pygame. The SDK core does not import it; there is no
+The optional `teleop-demo` extra selects `locomotion-aorta-demo-onnx==0.2.0`,
+a separate native wheel using C++ ONNX Runtime 1.20.1 CPU, plus pygame. The SDK core does not import it; there is no
 Python ONNX Runtime fallback. The native wheel and its dependencies are still
 in preparation and are not included in the core offline bundle. After obtaining
 the matching Linux/Python/architecture wheel and a complete demo wheelhouse:
@@ -273,6 +272,16 @@ the matching Linux/Python/architecture wheel and a complete demo wheelhouse:
 python -m pip install --no-index --find-links demo-wheelhouse 'locomotion-aorta[teleop-demo]==0.2.0'
 python -m pip check
 ```
+
+The backend intentionally matches the robot's ORT 1.20.1 instead of the
+previous Python ORT 1.23.2. Outputs are not bit-identical to the old extra:
+82 of 120 values differed in the archived comparison. Acceptance uses a
+test-only Python ORT 1.20.1 oracle with exact finite float32 equality.
+This demo supports CPython 3.10 on Linux x86_64/aarch64, Ubuntu 22.04 or newer
+(glibc 2.35 and GLIBCXX 3.4.29 or newer). Both cp310 wheels must be built and
+audited before publishing the extra. The SDK core keeps its existing Python
+support. Extra dependencies have matching environment markers; the example
+reports unsupported Python/architecture explicitly before loading a model.
 
 No compiler or robot filesystem is needed to consume that wheel. The repository
 checkout contains source-build instructions in `demo_onnx/README.md`; the core

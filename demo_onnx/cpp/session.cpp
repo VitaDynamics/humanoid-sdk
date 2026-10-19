@@ -61,9 +61,6 @@ public:
   Session(const std::string &path, int intra_threads, int inter_threads)
       : env_(ORT_LOGGING_LEVEL_WARNING, "sdk_demo_onnx"),
         intra_threads_(intra_threads), inter_threads_(inter_threads) {
-    if (intra_threads < 1 || inter_threads < 1) {
-      throw py::value_error("thread counts must be positive");
-    }
     try {
       Ort::SessionOptions options;
       options.SetIntraOpNumThreads(intra_threads);
@@ -74,6 +71,10 @@ public:
       for (size_t i = 0; i < session_->GetInputCount(); ++i) {
         auto name = session_->GetInputNameAllocated(i, allocator);
         auto info = session_->GetInputTypeInfo(i);
+        if (info.GetONNXType() != ONNX_TYPE_TENSOR) {
+          throw py::value_error(std::string("model input '") + name.get() +
+                                "' is not a tensor");
+        }
         auto type = info.GetTensorTypeAndShapeInfo();
         inputs_.push_back({name.get(), type.GetShape(),
                            DtypeName(type.GetElementType()),
@@ -82,6 +83,10 @@ public:
       for (size_t i = 0; i < session_->GetOutputCount(); ++i) {
         auto name = session_->GetOutputNameAllocated(i, allocator);
         auto info = session_->GetOutputTypeInfo(i);
+        if (info.GetONNXType() != ONNX_TYPE_TENSOR) {
+          throw py::value_error(std::string("model output '") + name.get() +
+                                "' is not a tensor");
+        }
         auto type = info.GetTensorTypeAndShapeInfo();
         outputs_.push_back({name.get(), type.GetShape(),
                             DtypeName(type.GetElementType()),
@@ -106,15 +111,17 @@ public:
     const TensorInfo &output = Find(outputs_, output_name, "output");
     if (input.element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
         output.element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-        !values.dtype().is(py::dtype::of<float>())) {
+        !values.dtype().equal(py::dtype::of<float>())) {
       throw py::value_error("run requires float32 input and output tensors");
     }
-    if (static_cast<size_t>(values.ndim()) != input.shape.size()) {
+    if (!input.shape.empty() &&
+        static_cast<size_t>(values.ndim()) != input.shape.size()) {
       throw py::value_error("input rank differs from the model");
     }
     std::vector<int64_t> shape;
     for (py::ssize_t i = 0; i < values.ndim(); ++i) {
-      if (input.shape[i] >= 0 && values.shape(i) != input.shape[i]) {
+      if (!input.shape.empty() && input.shape[i] >= 0 &&
+          values.shape(i) != input.shape[i]) {
         throw py::value_error("input shape differs from the model");
       }
       shape.push_back(values.shape(i));

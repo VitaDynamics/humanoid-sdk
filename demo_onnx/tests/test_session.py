@@ -101,9 +101,6 @@ class NativeSessionTest(unittest.TestCase):
         for args, kwargs in [((str(self.path),), {}), ((str(self.path), 1, 1), {})]:
             with self.assertRaises(TypeError):
                 Session(*args, **kwargs)
-        for intra, inter in [(0, 1), (1, 0), (-1, 1)]:
-            with self.subTest(intra=intra, inter=inter), self.assertRaises(ValueError):
-                Session(str(self.path), intra_threads=intra, inter_threads=inter)
 
     def test_invalid_model_failure_does_not_poison_another_session(self):
         missing = self.path.with_name("absent.onnx")

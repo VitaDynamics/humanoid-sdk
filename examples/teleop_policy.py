@@ -203,6 +203,12 @@ class JoyCommand:
 
 class Model:
     def __init__(self, path: str):
+        import platform
+        import sys
+        if (sys.version_info[:2] != (3, 10) or sys.implementation.name != 'cpython'
+                or sys.platform != 'linux' or platform.machine() not in ('x86_64', 'aarch64')):
+            raise RuntimeError('teleop-demo requires CPython 3.10 on Linux x86_64/aarch64 '
+                               '(Ubuntu 22.04 or newer)')
         from locomotion_aorta_demo_onnx import Session  # optional; no SDK core import
         self.session = Session(path, intra_threads=1, inter_threads=1)
         inputs, outputs = self.session.inputs, self.session.outputs

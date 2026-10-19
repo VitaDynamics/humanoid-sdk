@@ -1,72 +1,90 @@
 # Optional demo ONNX backend
 
-This package owns CPU model loading and inference for SDK demos. It is separate
-from the `locomotion-aorta` core distribution. SDK extras and demo migration are
-not connected yet. No Python ONNX Runtime is imported or used as a fallback.
+`locomotion-aorta-demo-onnx` supplies CPU model loading and inference through
+pybind11 and Microsoft ORT 1.20.1. The SDK's `teleop-demo` extra uses it with
+pygame. The SDK core does not import it and there is no Python ORT fallback.
 
-## Build a wheel
+The native/demo distribution supports **CPython 3.10, Linux x86_64 and aarch64,
+Ubuntu 22.04 or newer** (glibc 2.35 / GLIBCXX 3.4.29 or newer). The SDK core
+keeps its separate Python support. This is an unreleased 0.2.0 candidate;
+both audited cp310 architecture wheels are required before publishing the extra.
+Environment markers select supported extra dependencies; on unsupported hosts,
+the teleop example reports its requirements before model loading. Pip markers
+skip inapplicable requirements rather than supplying a custom installation error.
 
-Use Python 3.10+ and CMake 3.20+ on Linux x86_64 or aarch64. The package builds
-only the pybind11 wrapper; Microsoft supplies the ORT 1.20.1 CPU runtime.
-Download the matching public archive from `ort-archives.json`, or reuse an
-existing copy. CMake checks its exact SHA before extraction; there is no
-implicit download, dependency on a robot filesystem, or private index.
+## Local build and release audit
+
+Use CMake 3.20+ and a C++17 compiler. Obtain the architecture-matching official
+CPU archive from `ort-archives.json`; CMake verifies its SHA before extraction.
+There are no implicit downloads or dependencies on a robot's `/app` filesystem.
 
 ```sh
-python -m pip install build scikit-build-core==0.10.7 pybind11==2.13.6 ninja==1.11.1.3
+python -m pip install build==1.2.2.post1 scikit-build-core==0.11.6 pybind11==2.13.6 ninja==1.11.1.3
 CMAKE_ARGS='-DORT_ARCHIVE=/absolute/path/to/official-archive.tgz' \
-  python -m build --wheel --no-isolation demo_onnx
-python -m pip install demo_onnx/dist/locomotion_aorta_demo_onnx-*.whl
+  python -m build --wheel --no-isolation --outdir demo_onnx/dist/raw demo_onnx
+python -m pip install -r demo_onnx/requirements-release.txt
+python demo_onnx/tools/wheels.py repair --wheel <raw-wheel> --arch x86_64 --output <new-audited-dir>
 ```
 
-The wheel carries the real ORT SONAME file, provider support library and upstream
-notices. Its extension uses `$ORIGIN/.libs`; consumers do not need `/app` libraries
-or a compiler. `build-info.json` identifies the official archive SHA, target CPU,
-compiler and Python ABI. Platform/glibc compatibility must be audited for the
-actual release wheel. This source does not claim an ARM wheel has been tested.
-The version `0.2.0` is an unreleased candidate, not a published SDK dependency.
+Raw `linux_<arch>` wheels are local build intermediates, not release assets.
+Repair uses auditwheel with the owner-selected `manylinux_2_35_<arch>` policy;
+it validates the binary and metadata instead of renaming a file. Actual symbol
+requirements may be older than the product baseline; the tag never claims an
+older environment than the audited binary supports. Save the raw wheel and audit
+logs. Do not strip. The wrapper compiles with `-O3 -g -DNDEBUG`, without added
+LTO, and links with `--disable-new-dtags` to keep `$ORIGIN/.libs` as DT_RPATH.
+The official ORT libraries and their notices ship with it. PEP639 license-file
+metadata declares all included upstream licenses; no project license is inferred.
 
-## Interface
+For aarch64, pkg uses the robot's existing GCC/sysroot and target CPython3.10
+headers/configuration. Confirm those files and SOABI first; do not use host
+headers or relabel an x86 binary. `Python_INCLUDE_DIR` selects target headers;
+the robot toolchain's `PYTHON_SOABI` is applied after FindPython. Actual ARM
+compilation, machine/ABI audit and target execution are separate results.
+
+Place only the two repaired wheels in the release wheelhouse, then run:
+
+```sh
+python demo_onnx/tools/wheels.py check-release --wheelhouse <audited-wheelhouse> --report <new-report.json>
+```
+
+Missing either architecture, generic Linux tags, incorrect target ABI, missing
+license files, stripped debug symbols or extension RUNPATH fail this release
+check. It does not execute foreign binaries or establish device acceptance.
+
+## Interface and errors
 
 ```python
-from locomotion_aorta_demo_onnx import ORT_VERSION, Session
+from locomotion_aorta_demo_onnx import Session
 session = Session(model_path, intra_threads=1, inter_threads=1)
-metadata = session.metadata  # a copy of custom metadata; no renamed contract keys
-input_info, output_info = session.inputs[0], session.outputs[0]
-output = session.run(input_info.name, output_info.name, float32_array)
+output = session.run(session.inputs[0].name, session.outputs[0].name, float32_array)
 ```
 
-Thread counts are mandatory keyword arguments. Demos must pass their existing
-values (teleop/velocity 1/1; WBC configured intra-op count and inter-op 1).
-Other session options remain ORT defaults. IO descriptions expose `name`,
-`shape` (dynamic dimensions as -1) and `dtype`, e.g. `tensor(float)`.
-`run` supports one selected float32 input and output, preserving the input rank.
-It copies strided or dense input into an owned snapshot before releasing the
-GIL for ORT. Each result is a fresh owning NumPy array; another call cannot
-overwrite it. No policy normalization, clipping, history or transport is here.
+Thread counts are required keywords and passed to ORT unchanged; 0 uses ORT's
+default. Existing demos retain their original values. IO descriptors expose
+name, shape and dtype; metadata is copied. Non-tensor IO raises ValueError.
+Unknown rank is delegated to ORT, not treated as a scalar-only input. Float32
+dtypes are compared by value; nonnative byte order is not implicitly cast.
+Input data is snapshotted under the GIL, Run releases it, and each output owns
+its storage. No policy normalization, clipping, history or transport is here.
 
-Wrong names, tensor shape/dtype or nonpositive thread counts raise `ValueError`;
-missing required keywords or a non-array argument raise `TypeError`. Model-load
-and ORT execution failures raise `RuntimeError` with context. A runtime version
-other than 1.20.1 raises `ImportError`; it is never silently substituted.
+Wrong names, known shape/dtype and non-tensor IO raise ValueError; missing
+keywords or non-array arguments raise TypeError. ORT load/run failures become
+RuntimeError with context. The loaded runtime must report version1.20.1.
 
-## Tests and model parity
+## Tests and parity
 
 ```sh
 python -m pip install -r demo_onnx/requirements-test.txt
 python -m unittest discover -s demo_onnx/tests -v
 ```
 
-Tests create small real ONNX models in temporary directories and execute the
-installed native wheel. They do not skip absent dependencies. The ONNX authoring
-package is test-only. A Python ORT oracle is not a runtime dependency.
-
-Real-model comparison uses the same model SHA, float32 inputs and thread counts
-in separate processes: the test-only Python ORT 1.20.1 oracle versus this
-ORT 1.20.1 backend. Install the oracle in its own environment using
-`demo_onnx/requirements-oracle.txt`; it is not a demo runtime dependency.
-Follow the existing teleop oracle's finite float32 numeric equality (signed
-zeros equal), with no epsilon. The earlier Python ORT 1.23.2 cross-version
-comparison is retained as historical evidence, not an acceptance gate.
-Existing teleop obs/target fixture results alone do not establish inference
-parity or HIL.
+Tests execute real small ONNX models, including non-tensor IO in subprocesses,
+dtype descriptors, unknown rank, zero threads and a hostile LD_LIBRARY_PATH.
+The ONNX authoring package is test-only. The oracle lives in a separate
+environment with `requirements-oracle.txt` (Python ORT1.20.1). Keep the original
+finite float32 numeric exact comparison, signed zeros equal, with no epsilon.
+Teleop intentionally changes from Python ORT1.23.2 to C++ ORT1.20.1 to match the
+robot; the archived cross-version comparison differed in82/120 outputs. That
+historical result is retained, not used as a gate or hidden with a tolerance.
+Host inference and packaging results do not establish ARM execution or HIL.

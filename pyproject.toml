@@ -16,8 +16,10 @@ dependencies = [
 
 [project.optional-dependencies]
 hil = ["mcap==1.3.1"]
-demo-onnx = ["locomotion-aorta-demo-onnx==0.2.0"]
-teleop-demo = ["locomotion-aorta-demo-onnx==0.2.0", "pygame"]
+teleop-demo = [
+    "locomotion-aorta-demo-onnx==0.2.0; python_version == '3.10' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+    "pygame; python_version == '3.10' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+]
 
 [tool.setuptools]
 package-dir = {"" = "python"}
