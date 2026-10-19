@@ -10,8 +10,6 @@ matching robot software and generated bindings. The 0.1.3 dependency wheel is
 a local candidate, not a published asset. `dependency_release_tag` remains
 unset until its release is approved; installation requires the complete
 matching candidate wheelhouse and hashes in [compatibility.json](compatibility.json).
-The table-ID compaction is awaiting regenerated 0.1.3 bindings and manifest
-hashes. Do not install this intermediate source with the earlier candidate.
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
