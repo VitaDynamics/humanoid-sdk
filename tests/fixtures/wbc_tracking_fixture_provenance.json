@@ -1,0 +1,23 @@
+{
+  "observation_golden": {
+    "repository": "VitaDynamics/vita-robot",
+    "revision": "6f674d2497be73ee253748aedf6e403378e17adc",
+    "path": "src/application/locomotion/actions/rl_business_logic/testdata/groot_observation_golden.json",
+    "sha256": "2eb43738773acc86272769b0c978cb225140637911d148698ffce769dc964c86",
+    "note": "C++ observation oracle uses 10 x 20 ms future frames; test overrides only future_dt. Current actor uses 10 x 100 ms."
+  },
+  "model_contract": {
+    "source_model": "actor_g1.onnx",
+    "model_sha256": "f0dfa04684b4f8967623ddbcf8ede8ef3d862d0b403e9e3659e2a519eade6fae",
+    "metadata_key": "groot_wbc.tracking_contract.v1",
+    "sha256": "944add9a65208170bcc69cf89290ed6ed20e47255eb48ee97063d60cbd953152"
+  },
+  "sdk_migration": {
+    "base": "2cd5b71e2fb9025c2951462edd95eb9278df8241",
+    "policy_source": "5eb34b2004778b398ef7283de94037da76c42adf",
+    "body_names_source": "4ffc12f632d3c34da5dbe0342f064d7b21c32edf:src/application/locomotion/humanoid/public_body/body_capability_registry.cpp",
+    "body_protocol": 2,
+    "body_slots": 31,
+    "note": "Historical oracle/model provenance above is unchanged; supplied actors are identified separately in run logs."
+  }
+}

@@ -14,6 +14,8 @@ check: test
 	$(PYTHON) examples/brainco_hand_external.py --help
 	$(PYTHON) examples/brainco_capture.py --help
 	$(PYTHON) examples/gripper_external.py --help
+	$(PYTHON) examples/velocity_mode.py --help
+	$(PYTHON) examples/wbc_tracking_mode.py --help
 	test -L CLAUDE.md
 	test "$$(readlink CLAUDE.md)" = AGENTS.md
 	cmp AGENTS.md CLAUDE.md

@@ -27,6 +27,14 @@ dependency release `v0.1.0-rc.4` contains schema 0.1.2 and cannot supply this
 candidate's complete dependency set; do not substitute that older schema.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
+The SDK also includes **Velocity mode** (`examples/velocity_mode.py`) and
+**WBC tracking mode** (`examples/wbc_tracking_mode.py`). Both use public body31
+and the built-in C++ ONNX backend through EXTERNAL. See
+[Velocity mode](examples/velocity_mode.md) and [WBC tracking mode](examples/wbc_tracking_mode.md)
+for the old-to-new names, optional dependencies and offline entry points.
+These additions await independent package/numerical acceptance; a unit test is
+not robot-motion evidence.
+
 Match the robot's public schema hashes and roster to [compatibility.json](compatibility.json).
 Control requests use protocol 2; ACK/Status remain protocol 1; new body roots use
 protocol 2. BodyCmd action is explicitly encoded using the generated EXTERNAL
@@ -268,7 +276,7 @@ editable SDK install.
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install --no-index --find-links wheelhouse \
-  aorta-sdk==2026.10.12 aorta-msgs==2026.10.12 vbot-humanoid-msgs==0.1.2 flatbuffers==25.9.23
+  aorta-sdk==2026.10.12 aorta-msgs==2026.10.12 vbot-humanoid-msgs==0.1.3 flatbuffers==25.9.23
 python -m pip install mcap==1.3.1
 make check
 ```
