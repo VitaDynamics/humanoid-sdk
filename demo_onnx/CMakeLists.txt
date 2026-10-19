@@ -1,0 +1,46 @@
+cmake_minimum_required(VERSION 3.20)
+project(locomotion_aorta_demo_onnx LANGUAGES CXX)
+find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+find_package(pybind11 CONFIG REQUIRED)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR "Only Linux x86_64 and aarch64 wheels are supported")
+endif()
+set(ORT_ARCHIVE "" CACHE FILEPATH "Pinned official ONNX Runtime CPU tarball")
+if(NOT EXISTS "${ORT_ARCHIVE}")
+  message(FATAL_ERROR "Supply -DORT_ARCHIVE=/absolute/path/to/official/tarball")
+endif()
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/ort-archives.json" manifest)
+string(JSON ort_version GET "${manifest}" version)
+if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|aarch64)$")
+  message(FATAL_ERROR "Unsupported target CPU: ${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+string(JSON expected_sha GET "${manifest}" "${CMAKE_SYSTEM_PROCESSOR}" sha256)
+string(JSON archive_directory GET "${manifest}" "${CMAKE_SYSTEM_PROCESSOR}" directory)
+file(SHA256 "${ORT_ARCHIVE}" actual_sha)
+if(NOT actual_sha STREQUAL expected_sha)
+  message(FATAL_ERROR "ORT archive SHA256 mismatch for ${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+set(vendor "${CMAKE_CURRENT_BINARY_DIR}/vendor")
+file(ARCHIVE_EXTRACT INPUT "${ORT_ARCHIVE}" DESTINATION "${vendor}")
+set(ort_root "${vendor}/${archive_directory}")
+add_library(ort SHARED IMPORTED)
+set_target_properties(ort PROPERTIES
+  IMPORTED_LOCATION "${ort_root}/lib/libonnxruntime.so.${ort_version}"
+  INTERFACE_INCLUDE_DIRECTORIES "${ort_root}/include")
+pybind11_add_module(_native cpp/session.cpp)
+target_compile_features(_native PRIVATE cxx_std_17)
+target_link_libraries(_native PRIVATE ort)
+set_target_properties(_native PROPERTIES INSTALL_RPATH "$ORIGIN/.libs")
+set(destination "locomotion_aorta_demo_onnx")
+install(TARGETS _native LIBRARY DESTINATION "${destination}")
+# Real SONAME bytes avoid depending on wheel installers preserving symlinks.
+configure_file("${ort_root}/lib/libonnxruntime.so.${ort_version}"
+  "${CMAKE_CURRENT_BINARY_DIR}/libonnxruntime.so.1" COPYONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/libonnxruntime.so.1"
+  "${ort_root}/lib/libonnxruntime_providers_shared.so"
+  DESTINATION "${destination}/.libs")
+install(FILES "${ort_root}/LICENSE" "${ort_root}/ThirdPartyNotices.txt"
+  DESTINATION "${destination}/licenses/onnxruntime")
+configure_file(build-info.json.in build-info.json @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/build-info.json"
+  DESTINATION "${destination}")

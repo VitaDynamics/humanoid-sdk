@@ -1,0 +1,9 @@
+{
+  "onnxruntime_version": "@ort_version@",
+  "official_archive_sha256": "@actual_sha@",
+  "target_cpu": "@CMAKE_SYSTEM_PROCESSOR@",
+  "compiler": "@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@",
+  "build_type": "@CMAKE_BUILD_TYPE@",
+  "pybind11_version": "@pybind11_VERSION@",
+  "python_soabi": "@Python_SOABI@"
+}

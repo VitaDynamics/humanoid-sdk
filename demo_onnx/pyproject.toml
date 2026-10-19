@@ -1,0 +1,17 @@
+[build-system]
+requires = ["scikit-build-core==0.10.7", "pybind11==2.13.6", "ninja==1.11.1.3"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "locomotion-aorta-demo-onnx"
+version = "0.2.0"
+description = "Optional CPU ONNX inference backend for humanoid SDK demos"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24,<3"]
+readme = "README.md"
+
+[tool.scikit-build]
+cmake.version = ">=3.20"
+cmake.build-type = "Release"
+wheel.packages = ["python/locomotion_aorta_demo_onnx"]
+build-dir = "build/{wheel_tag}"
