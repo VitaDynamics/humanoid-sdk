@@ -38,3 +38,23 @@ Eager mode converts every received frame; on_demand converts only when requested
 Full DTO conversion retains the original codec, errors, NaN values and metadata.
 No decoding is performed while holding the controller ACK/status condition lock.
 No command encoder, schema, default rate, timeout, or example policy guard is changed.
+
+## Selected columns (U2)
+
+```python
+selection = frame.select(joint_indices=(30, 0, 14), fields=("q", "dq"), imu_location=1)
+columns = selection.columns()
+q = columns.values["q"]  # read-only native float32 memoryview backed by immutable bytes
+imu = selection.imu_sample()  # explicit location, no coordinate transform
+echo = frame.applied_cmd()   # independent source key preserved
+```
+
+Indices and fields preserve the requested order. slot14 is never filtered; NaN and
+populated/is_mock/status/valid_fields/clock columns retain source values. A missing joint
+vector yields empty columns, matching the existing empty DTO tuple; it never yields zeros.
+Each memoryview access gets its own wrapper, so release() cannot invalidate another reader.
+Successful conversion results are cached per frame/request; a failed conversion is not
+cached as success. No cross-frame storage is reused. IMU absence/null state is retained;
+duplicate requested locations raise ValueError only when imu_sample() is requested.
+Selected success validates the requested component, not unread IMU/applied regions.
+No NumPy dependency, role/limit interpretation, freshness bypass or policy transform is added.

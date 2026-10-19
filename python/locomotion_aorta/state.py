@@ -7,11 +7,15 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TYPE_CHECKING
 
 from ._body_codec import _dto, decode_body_state
-from .body_types import BodyState
+from .body_types import BodyState, BodyAppliedCmd
 from ._state_stream import create_state_stream
+
+
+if TYPE_CHECKING:
+    from ._state_view import JointSelection
 
 
 class StateSourceClosedError(RuntimeError):
@@ -82,6 +86,15 @@ class BodyStateSnapshot:
 
     def body_state(self) -> BodyState:
         return self._cached("body_state", lambda: decode_body_state(self._view()))
+
+    def select(self, *, joint_indices: tuple[int, ...], fields: tuple[str, ...],
+               imu_location: int | None = None) -> "JointSelection":
+        from ._state_view import select
+        return select(self, joint_indices=joint_indices, fields=fields, imu_location=imu_location)
+
+    def applied_cmd(self) -> "BodyAppliedCmd | None":
+        from ._state_view import applied_cmd
+        return applied_cmd(self)
 
 
 class BodyStateSource:
