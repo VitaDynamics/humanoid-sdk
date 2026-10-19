@@ -114,5 +114,6 @@ handshake is integration evidence, not a speed benchmark. It uses isolated loopb
 and private topics, one synthetic state publisher, no control publisher or lease.
 It does not replace the original 11×60s gate or establish device/aarch64 acceptance.
 
-The original 11×60s matrix runs before SDK/report unit tests and the additional
-read-only source probe. A later probe/test failure cannot skip that original measurement.
+The original 11×60s matrix retains its required CI job. An independent parallel
+job builds and installs the SDK wheel, runs SDK/native unit tests and the read-only
+source probe. A failure in either job cannot skip the other job.

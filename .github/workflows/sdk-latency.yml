@@ -76,16 +76,6 @@ jobs:
           if r['status'] != 'PASS' or len(r['results']) != 11:
               raise RuntimeError('incomplete full latency report')
           PY
-      - name: Run SDK/report unit tests after the original matrix
-        shell: bash
-        run: |
-          set -euo pipefail
-          PYTHONPATH=python:tests python -m unittest discover -s tests -v
-      - name: Real read-only state source integration
-        shell: bash
-        run: |
-          set -euo pipefail
-          python tests/latency/state_source_probe.py --output "$RUNNER_TEMP/state-source-results"
       - name: Publish summary (including setup/test failures)
         if: ${{ always() }}
         shell: bash
@@ -110,7 +100,6 @@ jobs:
         with:
           name: sdk-latency-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/state-source-results/
             ${{ runner.temp }}/latency-results/
             ${{ runner.temp }}/latency-build.log
             ${{ runner.temp }}/latency-build/build.json
@@ -123,3 +112,90 @@ jobs:
         shell: bash
         run: |
           printf '\n[下载完整报告 ZIP（含 report.html、CSV、JSON）](%s)\n' "$REPORT_URL" >> "$GITHUB_STEP_SUMMARY"
+
+  native-wheel:
+    name: SDK native wheel tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.10"
+      - name: Fetch pinned runtime from this repository's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wheelhouse"
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          manifest = json.loads(pathlib.Path('compatibility.json').read_text())
+          wheelhouse = pathlib.Path(os.environ['RUNNER_TEMP']) / 'wheelhouse'
+          names = [n for n in manifest['wheel_sha256'] if n.endswith(('-linux_x86_64.whl', '-any.whl'))]
+          if sorted(n.split('-')[0] for n in names) != ['aorta_msgs', 'aorta_sdk', 'flatbuffers', 'vbot_humanoid_msgs']:
+              raise RuntimeError('incomplete pinned wheelhouse')
+          command = ['gh', 'release', 'download', manifest['dependency_release_tag'],
+                     '--repo', os.environ['GITHUB_REPOSITORY'],
+                     '--dir', str(wheelhouse)]
+          for name in names:
+              command.extend(['--pattern', name])
+          subprocess.run(command, check=True)
+          for name in names:
+              if hashlib.sha256((wheelhouse / name).read_bytes()).hexdigest() != manifest['wheel_sha256'][name]:
+                  raise RuntimeError(f'checksum mismatch: {name}')
+          PY
+      - name: Install build and test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install build==1.2.2.post1 scikit-build-core==0.11.6 pybind11==2.13.6 ninja==1.11.1.3 \
+            -r demo_onnx/requirements-release.txt -r demo_onnx/requirements-test.txt pygame==2.6.1 mcap==1.3.1
+      - name: Fetch and verify official ORT archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/fetch_ort.py --output "$RUNNER_TEMP/onnxruntime.tgz"
+      - name: Build SDK wheel and repair with public auditwheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          CMAKE_ARGS="-DORT_ARCHIVE=$RUNNER_TEMP/onnxruntime.tgz" \
+            python -m build --wheel --no-isolation --outdir "$RUNNER_TEMP/sdk-raw" . 2>&1 | tee "$RUNNER_TEMP/sdk-build.log"
+          python -m auditwheel repair --only-plat --plat manylinux_2_35_x86_64 \
+            --wheel-dir "$RUNNER_TEMP/sdk-wheel" "$RUNNER_TEMP"/sdk-raw/*.whl 2>&1 | tee "$RUNNER_TEMP/sdk-repair.log"
+      - name: Install and test the actual SDK wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --no-index --find-links "$RUNNER_TEMP/wheelhouse" "$RUNNER_TEMP"/sdk-wheel/*.whl
+          python -m pip check
+          python - <<'PY_CHECK'
+          from pathlib import Path
+          import sys, locomotion_aorta
+          assert Path(locomotion_aorta.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+          assert not any(name.startswith('locomotion_aorta._onnx') for name in sys.modules)
+          PY_CHECK
+          PYTHONPATH=.:tests python -m unittest discover -s tests -v 2>&1 | tee "$RUNNER_TEMP/sdk-tests.log"
+          python -m unittest discover -s demo_onnx/tests -v 2>&1 | tee "$RUNNER_TEMP/native-tests.log"
+          python tests/latency/state_source_probe.py --output "$RUNNER_TEMP/state-source-results"
+      - name: Upload wheel, tests and partial failure evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sdk-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/sdk-raw/
+            ${{ runner.temp }}/sdk-wheel/
+            ${{ runner.temp }}/sdk-build.log
+            ${{ runner.temp }}/sdk-repair.log
+            ${{ runner.temp }}/sdk-tests.log
+            ${{ runner.temp }}/native-tests.log
+            ${{ runner.temp }}/state-source-results/
+          if-no-files-found: error
+          retention-days: 30

@@ -91,14 +91,6 @@ class LatencyReportTest(unittest.TestCase):
         render(self.directory,{'status':'PASS','results':[result]})
         self.assertLess((self.directory/'summary.md').stat().st_size,1_000_000)
 
-    def test_original_ci_matrix_precedes_new_unit_tests_and_source_probe(self):
-        workflow=(Path(__file__).resolve().parents[1]/'.github/workflows/sdk-latency.yml').read_text()
-        matrix=workflow.index('- name: Measure all frequencies')
-        self.assertLess(matrix,workflow.index('- name: Run SDK/report unit tests'))
-        self.assertLess(matrix,workflow.index('- name: Real read-only state source integration'))
-        self.assertIn('--seconds 60',workflow)
-        self.assertIn('--rates 50 100 200 300 400 500 600 700 800 900 1000',workflow)
-
     def test_loss_is_visible_without_nearest_timestamp_pairing(self):
         self.received.pop(1)
         result = self.analyze()
