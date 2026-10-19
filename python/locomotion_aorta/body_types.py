@@ -42,7 +42,7 @@ class BodyJointState:
     q: float = 0.0
     dq: float = 0.0
     tau_est: float = 0.0
-    error_code: int = JointError.NONE
+    error_code: int = JointError.NONE  # uint32, including unlisted high-bit codes
 
 @dataclass(frozen=True, slots=True)
 class BodyImuState:

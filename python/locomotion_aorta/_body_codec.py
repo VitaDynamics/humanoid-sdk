@@ -10,7 +10,7 @@ from .body_types import (
 
 # Layouts and vector slots from the public 0.1.3 / BODY v2 generated accessors.
 _COMMAND = struct.Struct("<" + "fffff" * BODY_SLOTS)
-_JOINT_STATE = struct.Struct("<QQQfffi")
+_JOINT_STATE = struct.Struct("<QQQfffI")
 _MOTOR = struct.Struct("<fffff")
 _STATE_JOINTS_SLOT = 22  # BodyState.joints, id9
 _COMMAND_JOINTS_SLOT = 20  # BodyCmd.joints, id8 after unpublished ID compaction

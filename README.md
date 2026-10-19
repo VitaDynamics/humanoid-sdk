@@ -37,7 +37,7 @@ validity. The logical waist-roll slot can be unpopulated; it is skipped in
 physical validation and output, and never represents a healthy zero sample.
 
 BodyJointState contains three acquisition/ingestion/assembly timestamps,
-q, dq, tau_est and the signed JointError error_code. The tuple position is the
+q, dq, tau_est and the unsigned uint32 JointError error_code. The tuple position is the
 slot identity; installation, capabilities and limits come from BodyInfo.
 For installed non-MOCK joints, the producer preserves a real nonzero fault
 first, otherwise uses TIMEOUT (8) for missing/stale feedback, UNKNOWN (255)
@@ -48,7 +48,11 @@ including TIMEOUT=8 and INVALID_PARAM=30; humanoid-only control, motor-phase
 and sensor faults use 15/16/17. CAN, enable-state and servo-specific extension
 codes are omitted. The SDK imports this generated
 enum and preserves received codes, including unknown numeric values, without
-synthesizing another status.
+synthesizing another status. The full uint32 domain, including unlisted
+injection codes >=2^31, is preserved without sign conversion or remapping.
+Device TIMEOUT and missing/stale feedback intentionally share TIMEOUT (8);
+use the per-joint acquisition/ingestion/assembly timestamps and their clock
+domains to assess feedback freshness.
 BodyImuSample keeps status and rpy (degrees), and removes temperature,
 valid_fields and duplicate device/host timestamps. BodyCmd, BodyState and
 BodyImuSample have no deprecated placeholders: IDs are renumbered contiguously
@@ -66,12 +70,18 @@ BodyCmd has no cmd_id: correlate BODY commands and logs by session_id and
 sequence. ExternalController.publish returns the command with the actual
 assigned session/sequence after its transport publish succeeds.
 BodyState carries applied_session_id, applied_sequence and ts_first_output_us
-instead of a nested 31-joint echo. These identify the command affecting output
-at the state frame's time; all three are zero without an observed applied
-command. The timestamp is robot-host Unix epoch microseconds for the control
-cycle when interpolation alpha>0 first affects output, latched only after a
-successful send. It is not hardware send-completion time. TRACKING currently
-reports zero for this timestamp.
+instead of a nested 31-joint echo. Only EXTERNAL produces nonzero applied
+associations. EXTERNAL session_id and sequence must be nonzero; the robot
+EXTERNAL ingress rejects either zero key. All three fields zero means no
+EXTERNAL command is affecting the applied output.
+The association records the last successful output send/report. TRACKING
+output clears all three only after its first successful send/report; pauses,
+send failures and the interval before that first success retain the previous
+successful EXTERNAL association. It is not cleared by the action name at
+publication time, and this does not add a nonzero-key check to TRACKING input.
+The timestamp is robot-host Unix epoch microseconds for the control cycle
+when interpolation alpha>0 first affects output, latched only after a
+successful send. It is not hardware send-completion time.
 
 Documentation: [Humanoid documentation](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg),
 [SDK guide](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh),

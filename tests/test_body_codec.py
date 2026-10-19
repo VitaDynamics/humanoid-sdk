@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import flatbuffers
 from locomotion_aorta import (
     BodyCmd, BodyJointCmd, BodyCmdAction, BodySampleStatus, BodyImuLocation,
-    BodySlotRole, EndEffectorKind, ServiceStatus,
+    BodySlotRole, EndEffectorKind, ServiceStatus, BodyStateSnapshot,
 )
 from locomotion_aorta import _body_codec as codec
 from locomotion_aorta.transport import _fill_body_cmd
@@ -58,7 +58,7 @@ def encode(command, *, generated=False, initial_size=1, prefix=0):
     return bytes(builder.Output())
 
 
-def make_state():
+def make_state(*, error_codes=None):
     builder = flatbuffers.Builder(1)
     # All IMUs retain clocks/rpy; deliberately use HEAD,TRUNK,HIP order.
     imu_module = module('BodyImuSample')
@@ -80,7 +80,9 @@ def make_state():
     imus = builder.EndVector()
     cols = [tuple(range(31)), tuple(1000 + i for i in range(31)), tuple(2000 + i for i in range(31)),
             tuple(math.nan if i == 14 else i + .125 for i in range(31)),
-            (-.25,) * 31, (-.75,) * 31, tuple(-7 if i == 30 else 0 if i in (0,14,15) else 3 if i == 1 else 8 if i == 2 else 255 if i == 3 else i for i in range(31))]
+            (-.25,) * 31, (-.75,) * 31, tuple(0xfffffff9 if i == 30 else 0 if i in (0,14,15) else 3 if i == 1 else 8 if i == 2 else 255 if i == 3 else i for i in range(31))]
+    if error_codes is not None:
+        cols[-1] = tuple(error_codes)
     m.BodyStateStartJointsVector(builder, 31)
     for values in reversed(tuple(zip(*cols))):
         module('BodyJointState').CreateBodyJointState(builder, *values)
@@ -141,6 +143,16 @@ class BodyCodecTest(unittest.TestCase):
             with self.subTest(count=count), self.assertRaises(ValueError):
                 codec.create_body_cmd(flatbuffers.Builder(1), (BodyJointCmd(),) * count)
 
+    def test_full_uint32_errors_match_generated_accessors_and_lazy_snapshots(self):
+        for code in (0x7fffffff, 0x80000000, 0xffffffff):
+            with self.subTest(error_code=code):
+                data, view = make_state(error_codes=(code,) * 31)
+                expected = tuple(view.Joints(i).ErrorCode() for i in range(31))
+                self.assertEqual(expected, (code,) * 31)
+                snapshot = BodyStateSnapshot(data, module('BodyState').BodyState.GetRootAs, 7, 9)
+                for state in (codec.decode_body_state(view), snapshot.body_state()):
+                    self.assertEqual(tuple(j.error_code for j in state.joints), expected)
+
     def test_state_matches_every_real_accessor_and_keeps_invalid_roll_and_clocks(self):
         data, view = make_state()
         state = codec.decode_body_state(view)
@@ -156,7 +168,7 @@ class BodyCodecTest(unittest.TestCase):
                 else: self.assertEqual(value, expected)
         self.assertEqual(state.joints[14].error_code, 0)  # Installation comes from BodyInfo.
         self.assertEqual(state.joints[0].error_code, 0)
-        self.assertEqual(state.joints[30].error_code, -7)
+        self.assertEqual(state.joints[30].error_code, 0xfffffff9)
         self.assertEqual([state.joints[i].error_code for i in (1,2,3,14,15)],
                          [3,8,255,0,0])  # Real fault, timeout, unknown, absent, MOCK.
         self.assertEqual(state.joints[0].tau_est, -.75)

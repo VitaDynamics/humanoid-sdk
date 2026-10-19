@@ -9,7 +9,7 @@
 - Pin Aorta SDK/messages 2026.10.12 (ABI 13), public vbot-humanoid-msgs 0.1.3
   and FlatBuffers 25.9.23; pin the new schema wheel and actual BFBS hashes.
 - Use BODY protocol 2 for BodyCmd/BodyState. BodyJointState changes from 56 to
-  40 bytes: slot-ordered three timestamps, q/dq/tau_est and int32 JointError.
+  40 bytes: slot-ordered three timestamps, q/dq/tau_est and uint32 JointError; preserve unlisted high-bit codes.
   Keep 20 approved error values, aligning shared codes with quadruped:
   TIMEOUT=8, INVALID_PARAM=30, control/motor-phase/sensor faults=15/16/17.
   Omit CAN, enable-state and servo-specific extension codes.
@@ -22,7 +22,9 @@
   candidates cannot be mixed. Reserve HEAD=2 alongside
   HIP=0/TRUNK=1; the current configured public list remains HIP and TRUNK.
   Replace the nested applied echo with applied_session_id/applied_sequence and
-  control-cycle ts_first_output_us, latched after successful send (TRACKING0).
+  control-cycle ts_first_output_us, latched after successful send. Only
+  EXTERNAL creates nonzero applied keys; successful TRACKING output clears
+  them, while pause/failure retains the previous successful association.
   Remove BodyCmd.cmd_id and use session/sequence in BODY logs. publish returns
   the stamped command. Public state/input-state IDs retain all 64 bits.
   Reject mismatched BODY versions before decoding joints; control/RobotInfo

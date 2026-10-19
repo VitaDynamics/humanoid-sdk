@@ -18,13 +18,13 @@
     "aorta_sdk-2026.10.12-py3-none-linux_aarch64.whl": "c1f7a03e023cbb50b1ec9252393f72f4713392af02e0ace7766461667760c333",
     "aorta_sdk-2026.10.12-py3-none-linux_x86_64.whl": "900d143041a422f9c3f7023aad7334c0ebcc17e0c549e0ed3a0e6f10c02b9afa",
     "flatbuffers-25.9.23-py2.py3-none-any.whl": "255538574d6cb6d0a79a17ec8bc0d30985913b87513a01cce8bcdb6b4c44d0e2",
-    "vbot_humanoid_msgs-0.1.3-py3-none-any.whl": "9ea23001a0a33192eca1de2e8847374eb2a182ad64b31734ae83e1b7cf94f92d"
+    "vbot_humanoid_msgs-0.1.3-py3-none-any.whl": "d1986e685ac82596e71449420c522cca293404dffe77a702fbe287ebf4fcaf66"
   },
   "dependency_release_tag": null,
   "aorta_abi_version": 13,
   "schema_sha256": {
     "body_cmd": "c98a531aad2b43206048753b82d0bacec1ad65d2429536432766975cd211e71c",
-    "body_state": "eb7d56ccc5647ba99df47d56d832afce06afe45b4f8e87a933f08662d3731fa9",
+    "body_state": "9458caeaae850bf4cf671eaad022b66b791a7d7be67d560b8355088ea8406dce",
     "control_ack": "282cb25f8ec719272f37d4e2041a749aa8d32a5022054e3c911e6cba0ff7d1ec",
     "control_request": "4e9009a2487c76e04421761871e6799d98b0b2816217dfe904240afd97eb88cc",
     "control_status": "cc897baf058703077ece4cbdc1f61b7c443905dbe1e24f204451ccf629afebf6",
