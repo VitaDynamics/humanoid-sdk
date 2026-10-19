@@ -10,8 +10,8 @@ from fake_transport import FakeTransport
 from test_body_codec import make_state, module
 from locomotion_aorta import (
     BodyStateSource, FrameToken, StateSourceClosedError, StateSourceTimeoutError,
-    ExternalController, ControllerClosedError, ExternalControlTimeoutError,
-    BODY_STATE_TOPIC, CONTROL_ACK_TOPIC, CONTROL_STATUS_TOPIC, ControlStatus,
+    ExternalController,
+    BODY_STATE_TOPIC,
 )
 from locomotion_aorta import state as state_module
 from locomotion_aorta._state_stream import _StateStream
@@ -200,129 +200,39 @@ class StateSourceTest(unittest.TestCase):
             self.assertFalse(thread.is_alive())
             self.assertEqual(s.snapshot(0).token.sequence, 2)
 
-    def test_injection_omits_second_state_subscription_and_preserves_control_topics(self):
-        s = self.source()
-        s._stream.emit()
-        transport = FakeTransport()
-        c = ExternalController(group='test', state_source=s, _transport=transport)
-        self.addCleanup(c.close)
-        self.assertEqual(set(transport.callbacks), {CONTROL_ACK_TOPIC, CONTROL_STATUS_TOPIC})
-        self.assertEqual(c.wait_body_state(.1).state_id, 91)
-        self.assertEqual(transport.published, [])
-        c.close()
-        self.assertEqual(s.snapshot(0).body_state().state_id, 91)
-        s._stream.close.assert_not_called()
 
-    def test_bad_source_rejected_before_control_transport_creation(self):
-        s = self.source()
-        with mock.patch('locomotion_aorta.controller.create_aorta_transport') as create:
-            for source, group, error in ((s, 'other', ValueError), (object(), 'test', ValueError)):
-                with self.assertRaises(error):
-                    ExternalController(group=group, state_source=source)
-            s.close()
-            with self.assertRaises(StateSourceClosedError):
-                ExternalController(group='test', state_source=s)
-            create.assert_not_called()
 
-    def test_borrowed_source_close_and_controller_close_wake_own_waiters(self):
-        for close_source in (False, True):
-            with self.subTest(close_source=close_source):
-                s = self.source()
-                c = ExternalController(group='test', state_source=s, _transport=FakeTransport())
-                self.addCleanup(c.close)
-                with ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(c.wait_body_state, 10)
-                    (s if close_source else c).close()
-                    with self.assertRaises(StateSourceClosedError if close_source else ControllerClosedError):
-                        future.result(1)
 
-    def test_injected_timeout_remains_external_control_timeout(self):
-        s = self.source()
-        c = ExternalController(group='test', state_source=s, _transport=FakeTransport())
-        self.addCleanup(c.close)
-        with self.assertRaises(ExternalControlTimeoutError):
-            c.wait_body_state(.001)
 
-    def test_slow_decode_does_not_block_status_or_close(self):
-        s = self.source()
-        s._stream.emit()
-        transport = FakeTransport()
-        c = ExternalController(group='test', state_source=s, _transport=transport)
-        self.addCleanup(c.close)
-        entered, release = threading.Event(), threading.Event()
-        original = state_module.decode_body_state
-        def decode(view):
-            entered.set()
-            self.assertTrue(release.wait(2))
-            return original(view)
-        with mock.patch.object(state_module, 'decode_body_state', side_effect=decode), \
-             ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(c.wait_body_state, 1)
-            self.assertTrue(entered.wait(1))
-            status = ControlStatus(status_seq=1, current_action='PASSIVE', phase='IDLE')
-            transport.emit(CONTROL_STATUS_TOPIC, status)
-            self.assertIs(c.status, status)
-            c.close()
-            release.set()
-            with self.assertRaises(ControllerClosedError):
-                future.result(1)
 
-    def test_cached_borrowed_source_close_does_not_return_old_dto(self):
-        s = self.source()
-        s._stream.emit()
-        c = ExternalController(group='test', state_source=s, _transport=FakeTransport())
-        self.addCleanup(c.close)
-        c.wait_body_state(.1)
-        s.close()
-        with self.assertRaises(StateSourceClosedError):
-            c.wait_body_state(.1)
 
-    def test_injected_session_keeps_ack_sequence_population_and_cancel_contract(self):
-        from test_controller import ControllerHarness, make_command
-        from locomotion_aorta import BODY_CMD_TOPIC, CONTROL_REQUEST_TOPIC, ControlOperation, ExternalPhase
-        harness = ControllerHarness()
-        harness.controller.close()
-        harness.transport = FakeTransport()
-        s = self.source(group='default')
-        s._stream.emit()
-        c = ExternalController(client_id='test-client', state_source=s, _transport=harness.transport)
-        harness.controller = c
-        self.addCleanup(c.close)
-        harness.accept_enter()
-        status = c.enter_external(1)
-        self.assertEqual(status.phase, ExternalPhase.RUNNING)
-        # No wait_body_state call: publish still learns populated flags from borrowed source.
-        from dataclasses import replace
-        command = make_command(17)
-        joints = list(command.joints)
-        joints[14] = replace(joints[14], q=math.nan)
-        c.publish(replace(command, joints=tuple(joints)))
-        c.publish(command)
-        commands = [m for topic, m in harness.transport.published if topic == BODY_CMD_TOPIC]
-        self.assertEqual([m.sequence for m in commands], [1, 2])
-        self.assertTrue(all(m.session_id == status.generation for m in commands))
-        c.close()
-        cancels = [m for topic, m in harness.transport.published
-                   if topic == CONTROL_REQUEST_TOPIC and m.operation == ControlOperation.CANCEL]
-        self.assertEqual(len(cancels), 1)
-        self.assertEqual(s.snapshot(0).metadata.state_id, 91)
 
-    def test_source_closed_during_publish_decode_cannot_publish_cached_command(self):
-        from test_controller import ControllerHarness, make_command
-        harness=ControllerHarness();harness.controller.close();harness.transport=FakeTransport()
-        s=self.source(group='default');s._stream.emit()
-        c=ExternalController(client_id='test-client',state_source=s,_transport=harness.transport)
-        harness.controller=c;self.addCleanup(c.close);harness.accept_enter();c.enter_external(1)
-        entered,release=threading.Event(),threading.Event()
-        original=state_module.decode_body_state
-        def decode(view):
-            entered.set();self.assertTrue(release.wait(2));return original(view)
-        with mock.patch.object(state_module,'decode_body_state',side_effect=decode), ThreadPoolExecutor(max_workers=1) as pool:
-            future=pool.submit(c.publish,make_command(17))
-            self.assertTrue(entered.wait(1));s.close();release.set()
-            with self.assertRaises(StateSourceClosedError):future.result(1)
-        from locomotion_aorta import BODY_CMD_TOPIC
-        self.assertFalse(any(t==BODY_CMD_TOPIC for t,_ in harness.transport.published))
+
+    def test_public_source_has_only_whole_frame_access(self):
+        import inspect
+        import locomotion_aorta as sdk
+        s=self.source();s._stream.emit();frame=s.snapshot(0)
+        self.assertFalse(hasattr(frame,'select'))
+        self.assertFalse(hasattr(frame,'applied_cmd'))
+        self.assertFalse(hasattr(sdk,'JointSelection'))
+        self.assertFalse(hasattr(sdk,'JointColumns'))
+        self.assertNotIn('state_source',inspect.signature(ExternalController).parameters)
+
+    def test_replaced_snapshot_releases_without_cyclic_gc(self):
+        import gc,weakref
+        class TrackedSnapshot(state_module.BodyStateSnapshot):
+            __slots__=('__weakref__',)
+        enabled=gc.isenabled();gc.disable()
+        try:
+            frame=TrackedSnapshot(make_state()[0],module('BodyState').BodyState.GetRootAs,
+                                  FrameToken('lifetime',1),1,2)
+            state=frame.body_state();metadata=frame.metadata
+            reference=weakref.ref(frame)
+            del frame
+            self.assertIsNone(reference())
+            self.assertEqual(state.state_id,metadata.state_id)
+        finally:
+            if enabled:gc.enable()
 
     def test_default_controller_still_uses_original_body_subscription(self):
         transport = FakeTransport()

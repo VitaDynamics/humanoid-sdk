@@ -89,6 +89,3 @@ from .state import (
 )
 __all__ += ["BodyStateSource", "BodyStateSnapshot", "BodyStateMetadata", "FrameToken",
             "StateSourceClosedError", "StateSourceTimeoutError"]
-
-from ._state_view import JointSelection, JointColumns
-__all__ += ["JointSelection", "JointColumns"]

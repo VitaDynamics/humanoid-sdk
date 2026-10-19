@@ -37,8 +37,7 @@ def publisher(directory,session):
 
 def run(output):
     from run import config_files,terminate
-    from locomotion_aorta import BodyStateSource, ExternalController
-    from fake_transport import FakeTransport
+    from locomotion_aorta import BodyStateSource
     import locomotion_aorta._state_stream as stream
     output.mkdir(parents=True,exist_ok=False)
     for key in tuple(os.environ):
@@ -55,8 +54,6 @@ def run(output):
         os.environ['ZENOH_SESSION_CONFIG_URI']=str(directory/'python.json')
         stream.BODY_STATE_TOPIC=f'/bench/sdk_state_source/{session}/body_state'
         source=BodyStateSource(group='default',conversion=mode)
-        control=FakeTransport()
-        controller=ExternalController(state_source=source,_transport=control)
         rows=[];child=None
         with (directory/'publisher.log').open('w') as log:
             try:
@@ -67,27 +64,23 @@ def run(output):
                 for seq,state_id in enumerate((91,91,0),1):
                     snapshot=source.snapshot(5,after_token=previous)
                     assert snapshot.body_state().state_id==state_id
-                    assert controller.wait_body_state(1).state_id==state_id
-                    columns=snapshot.select(joint_indices=(30,14,0),fields=('q','dq')).columns()
-                    assert columns.received_realtime_ns==snapshot.received_realtime_ns
                     rows.append(dict(sequence=seq,token_sequence=snapshot.token.sequence,state_id=state_id,
                                      received_realtime_ns=snapshot.received_realtime_ns))
                     previous=snapshot.token
                     (directory/f'ack-{seq}').touch()
                 assert child.wait(timeout=5)==0
-                controller.close();source.close()
-                assert columns.values['q'][0]==30.125
-                assert not control.published
+                source.close()
+                assert snapshot.body_state().joints[30].q==30.125
                 sent=json.loads((directory/'publisher.json').read_text())
                 assert len(sent)==len(rows)==3
                 for a,b in zip(sent,rows):
                     assert b['received_realtime_ns']>=a['publish_realtime_ns']
                 assert [r['token_sequence'] for r in rows]==[1,2,3]
                 results.append(dict(conversion=mode,received=rows,private_state_publishers=1,
-                                    control_publishers=0,control_subscriptions=list(control.callbacks),
+                                    control_publishers=0,
                                     closed_snapshot_valid=True))
             finally:
-                controller.close();source.close()
+                source.close()
                 if child is not None:terminate(child)
     result=dict(status='PASS',results=results,clock='CLOCK_REALTIME direct on both processes',
                 boundary='IPC integration with per-frame file handshake; not timed performance evidence. No lease or robot topic.')

@@ -1,7 +1,9 @@
 # 080 / U0 baseline
 
 Measured source: clean origin/main `b697f8bbdb76b3da4a8625e00aca212b93d5cd31`.
-API v1.1 is approved for U1→U2→U5. No SDK implementation changes in this checkpoint.
+Historical U0 checkpoint; no SDK implementation changes were measured here.
+Current scope is the independent state source documented in 2026-10-19-sdk-state-source.md.
+Earlier field-selection API drafts are withdrawn; no decoder speedup is claimed.
 
 Evidence: `/root/workspace/sdk-decode-w1019-evidence/U0-r2`.
 The independently extracted archive/venv and pinned dependencies are in sibling `U0-r1`.

@@ -7,15 +7,11 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, TYPE_CHECKING
+from typing import Literal
 
 from ._body_codec import _dto, decode_body_state
-from .body_types import BodyState, BodyAppliedCmd
+from .body_types import BodyState
 from ._state_stream import create_state_stream
-
-
-if TYPE_CHECKING:
-    from ._state_view import JointSelection
 
 
 class StateSourceClosedError(RuntimeError):
@@ -87,14 +83,6 @@ class BodyStateSnapshot:
     def body_state(self) -> BodyState:
         return self._cached("body_state", lambda: decode_body_state(self._view()))
 
-    def select(self, *, joint_indices: tuple[int, ...], fields: tuple[str, ...],
-               imu_location: int | None = None) -> "JointSelection":
-        from ._state_view import select
-        return select(self, joint_indices=joint_indices, fields=fields, imu_location=imu_location)
-
-    def applied_cmd(self) -> "BodyAppliedCmd | None":
-        from ._state_view import applied_cmd
-        return applied_cmd(self)
 
 
 class BodyStateSource:
@@ -115,7 +103,6 @@ class BodyStateSource:
         self._sequence = 0
         self._latest: BodyStateSnapshot | None = None
         self._closed = False
-        self._listeners: set[Callable] = set()
         self._stream = create_state_stream(
             node_name=node_name or f"body-state-{self._source_id}", group=group,
             callback=self._receive)
@@ -153,28 +140,12 @@ class BodyStateSource:
             if self._closed:
                 return
             self._closed = True
-            listeners = tuple(self._listeners)
-            self._listeners.clear()
             self._condition.notify_all()
-        for listener in listeners:
-            listener(None)
         self._stream.close()
 
     def _ensure_open(self) -> None:
         if self._closed:
             raise StateSourceClosedError("body state source is closed")
-
-    def _listen(self, listener: Callable) -> Callable[[], None]:
-        # Registration and initial delivery share the receive lock: no missed frame.
-        with self._condition:
-            self._ensure_open()
-            self._listeners.add(listener)
-            if self._latest is not None:
-                listener(self._latest)
-        def remove() -> None:
-            with self._condition:
-                self._listeners.discard(listener)
-        return remove
 
     def _receive(self, payload, decoder) -> None:
         # Both clocks are sampled directly at callback entry, never converted.
@@ -199,9 +170,6 @@ class BodyStateSource:
                 return
             self._latest = snapshot
             self._condition.notify_all()
-            # Only internal, non-decoding notification bridges run under this lock.
-            for listener in tuple(self._listeners):
-                listener(snapshot)
         if failure is not None:
             # Publish the received frame identity even when conversion failed:
             # readers must observe its error rather than an older successful DTO.
