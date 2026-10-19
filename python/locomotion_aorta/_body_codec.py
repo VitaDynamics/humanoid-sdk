@@ -66,6 +66,13 @@ def unpack_body_joints(view: Any) -> tuple[BodyJointState, ...]:
     return () if data is None else tuple(BodyJointState(*v) for v in _JOINT_STATE.iter_unpack(data))
 
 
+def unpack_body_cmd(view: Any, *, slot: int = _BODY_JOINTS_SLOT) -> tuple[BodyJointCmd, ...]:
+    if view is None:
+        return ()
+    data = _vector_field_data(view, slot, _MOTOR.size, 4)
+    return () if data is None else tuple(BodyJointCmd(*v) for v in _MOTOR.iter_unpack(data))
+
+
 def _getter(name: str) -> str:
     return ''.join(part.capitalize() for part in name.split('_'))
 

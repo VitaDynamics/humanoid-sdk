@@ -306,6 +306,8 @@ class PublicBodyCaptureTest(unittest.TestCase):
         from test_body_codec import make_command, encode
         from locomotion_aorta import BodyCmdAction
         row=capture.decode('body_cmd',encode(make_command()),capture.load_bindings())
+        self.assertNotIn('cmd_id', row)
+        self.assertEqual((row['session_id'], row['sequence']), (42, 7))
         self.assertEqual(row['action'],BodyCmdAction.EXTERNAL)
         self.assertEqual(len(row['joints']),31)
         self.assertEqual(row['input_state_id'],123)
