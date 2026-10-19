@@ -3,9 +3,11 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 TOOL = Path(__file__).resolve().parents[1] / "tools/wheels.py"
@@ -23,6 +25,44 @@ class ReleaseGateTest(unittest.TestCase):
                                "Wheel-Version: 1.0\nTag: cp310-cp310-linux_x86_64\n")
             with self.assertRaisesRegex(ValueError, "audited cp310"):
                 module.inspect(path)
+
+    def test_release_requires_exact_current_public_message_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "locomotion_aorta-0.2.0-cp310-cp310-manylinux_2_35_x86_64.whl"
+            info = "locomotion_aorta-0.2.0.dist-info"
+            elf = bytearray(20)
+            elf[:6] = b"\x7fELF\x02\x01"
+            struct.pack_into("<H", elf, 18, 62)
+            for version in ("0.1.3", "0.1.2"):
+                with self.subTest(humanoid_msgs=version):
+                    with zipfile.ZipFile(path, "w") as wheel:
+                        wheel.writestr(info + "/WHEEL",
+                                       "Wheel-Version: 1.0\nTag: cp310-cp310-manylinux_2_35_x86_64\n")
+                        wheel.writestr(info + "/METADATA", (
+                            "Name: locomotion-aorta\nVersion: 0.2.0\nRequires-Python: ==3.10.*\n"
+                            "Requires-Dist: aorta-sdk==2026.10.12\n"
+                            "Requires-Dist: aorta-msgs==2026.10.12\n"
+                            f"Requires-Dist: vbot-humanoid-msgs=={version}\n"
+                            "Requires-Dist: flatbuffers==25.9.23\n"
+                            "License-File: LICENSE\nLicense-File: NOTICE\nLicense-File: ORT_LICENSE\n"))
+                        for name in ("LICENSE", "NOTICE", "ORT_LICENSE"):
+                            wheel.writestr(info + "/licenses/" + name, "fixture")
+                        for name in ("locomotion_aorta/__init__.py",
+                                     "locomotion_aorta/_onnx/__init__.py",
+                                     "locomotion_aorta/_onnx/.libs/libonnxruntime.so.1",
+                                     "locomotion_aorta/_onnx/.libs/libonnxruntime_providers_shared.so"):
+                            wheel.writestr(name, b"")
+                        wheel.writestr("locomotion_aorta/_onnx/_native.cpython-310-x86_64-linux-gnu.so", elf)
+                    with mock.patch.object(module.subprocess, "check_output", side_effect=[
+                        "(RPATH) Library rpath: [$ORIGIN/.libs]", ".debug_info .symtab"
+                    ]) as readelf:
+                        if version == "0.1.3":
+                            self.assertEqual(module.inspect(path)["arch"], "x86_64")
+                            self.assertEqual(readelf.call_count, 2)
+                        else:
+                            with self.assertRaisesRegex(ValueError, "unexpected SDK Python/core dependencies"):
+                                module.inspect(path)
+                            readelf.assert_not_called()
 
     def test_release_cannot_pass_without_both_architectures(self):
         with tempfile.TemporaryDirectory() as directory:

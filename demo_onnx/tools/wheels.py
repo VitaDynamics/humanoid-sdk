@@ -29,7 +29,7 @@ def inspect(path):
         if metadata["Name"] != "locomotion-aorta" or metadata["Version"] != "0.2.0":
             raise ValueError("unexpected distribution/version")
         core = {"aorta-sdk": "==2026.10.12", "aorta-msgs": "==2026.10.12",
-                "vbot-humanoid-msgs": "==0.1.2", "flatbuffers": "==25.9.23"}
+                "vbot-humanoid-msgs": "==0.1.3", "flatbuffers": "==25.9.23"}
         requirements = [Requirement(value) for value in metadata.get_all("Requires-Dist", [])]
         actual = {req.name: str(req.specifier) for req in requirements if req.marker is None}
         if metadata["Requires-Python"] != "==3.10.*" or actual != core:
