@@ -241,6 +241,26 @@ class TrackingLoopTest(unittest.TestCase):
         self.assertTrue(all(c.input_state_ts_real_us > 0 for c in commands))
         self.assertEqual(self.rec.rows[-1]['current_action'], 'PASSIVE')
 
+    def test_publish_timing_is_joined_to_the_actual_returned_key(self):
+        self.controller._last_publish_timing = lambda: dict(
+            session_id=self.controller.commands[-1].session_id,
+            sequence=self.controller.commands[-1].sequence, encode_native_ns=123)
+        self.run_live()
+        for row in [x for x in self.rec.rows if x.get('published')]:
+            self.assertEqual((row['session_id'], row['sequence']),
+                             (row['publish_timing']['session_id'], row['publish_timing']['sequence']))
+            self.assertEqual(row['publish_timing']['encode_native_ns'],123)
+
+    def test_publish_failure_survives_a_diagnostic_write_failure(self):
+        self.controller.publish = lambda _: (_ for _ in ()).throw(RuntimeError('send failed'))
+        original = self.rec.write
+        def write(row):
+            if row.get('published') is False:raise OSError('log full')
+            original(row)
+        self.rec.write = write
+        with self.assertRaisesRegex(RuntimeError,'send failed'):self.run_live()
+        self.assertEqual(self.controller.exits,1)
+
     def test_stale_cache_and_nonadvancing_state_stop(self):
         state = self.controller.wait_body_state(.1)
         self.controller.advance = False

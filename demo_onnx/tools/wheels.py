@@ -16,6 +16,27 @@ from packaging.requirements import Requirement
 ARCHES = {"x86_64": 62, "aarch64": 183}
 
 
+def inspect_body_codec(wheel, arch):
+    suffix = '.cpython-310-' + arch + '-linux-gnu.so'
+    names = [n for n in wheel.namelist()
+             if n.startswith('locomotion_aorta/_body_cmd_native.') and n.endswith('.so')]
+    if len(names) != 1 or not names[0].endswith(suffix):
+        raise ValueError('wheel requires one native BodyCmd codec with the target SOABI')
+    raw = wheel.read(names[0])
+    if (raw[:6] != b'\x7fELF\x02\x01' or len(raw) < 20
+            or struct.unpack_from('<H', raw, 18)[0] != ARCHES[arch]):
+        raise ValueError('BodyCmd codec ELF machine does not match the wheel tag')
+    if 'locomotion_aorta/licenses/flatbuffers/LICENSE' not in wheel.namelist():
+        raise ValueError('BodyCmd codec FlatBuffers license missing')
+    with tempfile.TemporaryDirectory(prefix='codec-wheel-audit-') as directory:
+        elf = Path(directory) / 'codec.so'
+        elf.write_bytes(raw)
+        sections = subprocess.check_output(['readelf', '-S', str(elf)], text=True)
+    if '.debug_info' not in sections or '.symtab' not in sections:
+        raise ValueError('BodyCmd codec must retain debug info and symbols')
+    return names[0]
+
+
 def inspect(path):
     with zipfile.ZipFile(path) as wheel:
         info = next(n.rsplit("/", 1)[0] for n in wheel.namelist() if n.endswith(".dist-info/WHEEL"))
@@ -35,8 +56,8 @@ def inspect(path):
         if metadata["Requires-Python"] != "==3.10.*" or actual != core:
             raise ValueError("unexpected SDK Python/core dependencies")
         licenses = metadata.get_all("License-File", [])
-        if len(licenses) != 3 or any(info + "/licenses/" + n not in wheel.namelist() for n in licenses):
-            raise ValueError("three declared license files must exist in dist-info")
+        if len(licenses) != 4 or any(info + "/licenses/" + n not in wheel.namelist() for n in licenses):
+            raise ValueError("four declared license files must exist in dist-info")
         module = next(n for n in wheel.namelist()
                       if n.startswith("locomotion_aorta/_onnx/_native.cpython-310-") and n.endswith(".so"))
         for name in ["locomotion_aorta/__init__.py", "locomotion_aorta/_onnx/__init__.py",
@@ -58,8 +79,9 @@ def inspect(path):
             raise ValueError("extension must use bundled-library RPATH, not RUNPATH")
         if ".debug_info" not in sections or ".symtab" not in sections:
             raise ValueError("extension must retain debug info and symbols")
+        codec = inspect_body_codec(wheel, arch)
     return dict(path=str(path), arch=arch, tags=tags, license_files=licenses,
-                sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+                body_codec=codec, sha256=hashlib.sha256(path.read_bytes()).hexdigest())
 
 
 def main():

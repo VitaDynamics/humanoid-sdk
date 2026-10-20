@@ -16,6 +16,7 @@ dependencies = [
 
 readme = "README.md"
 license-files = [
+    "demo_onnx/cpp/body_cmd_vendor/LICENSE",
     "demo_onnx/licenses/onnxruntime/LICENSE",
     "demo_onnx/licenses/onnxruntime/ThirdPartyNotices.txt",
     "demo_onnx/licenses/pybind11/LICENSE",

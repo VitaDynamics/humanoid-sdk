@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -69,6 +70,9 @@ class _AortaTransport:
         self._info_clients: dict[int, Any] = {}
         self._info_lock = threading.Lock()
         self._closed = False
+        self._capture_publish_timing = os.environ.get("LOCOMOTION_AORTA_PUBLISH_TIMING") == "1"
+        self._publish_trace = threading.local()
+        self._body_publisher = None
         try:
             realtime = self._bindings.aorta.QoS.realtime_control()
             self.publishers[CONTROL_REQUEST_TOPIC] = (
@@ -105,6 +109,7 @@ class _AortaTransport:
         return subscription
 
     def publish(self, topic: str, message: Any) -> None:
+        self._publish_trace.last = None
         if self._closed:
             raise RuntimeError("Aorta transport is closed")
         publisher = self.publishers.get(topic)
@@ -121,11 +126,16 @@ class _AortaTransport:
             return
         if not isinstance(message, BodyCmd):
             raise TypeError("body command topic requires BodyCmd")
-        publisher.publish_typed(
-            lambda builder, header: _fill_body_cmd(
-                self._bindings, message, builder, header
-            )
-        )
+        from ._native_body_codec import NativeBodyPublisher
+        if self._body_publisher is None:
+            self._body_publisher = NativeBodyPublisher(publisher, self._bindings.body_cmd_schema_meta)
+        trace = {} if self._capture_publish_timing else None
+        self._publish_trace.last = trace
+        self._body_publisher.publish(message, trace)
+
+    def _last_publish_timing(self):
+        trace = getattr(self._publish_trace, "last", None)
+        return dict(trace) if trace is not None else None
 
     def get_robot_info(self, timeout: float) -> GetRobotInfoResponse:
         with self._info_lock:

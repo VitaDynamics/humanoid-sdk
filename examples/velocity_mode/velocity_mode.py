@@ -309,6 +309,9 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
                     raise
                 finally:
                     record["S6"] = realtime_ns()
+                    timing = getattr(controller, '_last_publish_timing', lambda: None)()
+                    if timing is not None:
+                        record['publish_timing'] = timing
             else:
                 record["S5"] = realtime_ns()
                 record["publish_result"] = "shadow_would_publish"

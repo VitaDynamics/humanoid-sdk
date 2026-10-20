@@ -239,7 +239,18 @@ def live(model, policy, args, recorder, controller, *,
                     'reject_count', 'ingress_drop_count')) or status.timeout_hold:
                 raise RuntimeError('EXTERNAL state changed during inference')
             row['before_publish_monotonic_ns'] = time.monotonic_ns()
-            sent = controller.publish(command)
+            try:
+                sent = controller.publish(command)
+            except BaseException:
+                try:
+                    recorder.write(dict(row, published=False,
+                                        publish_timing=getattr(controller, '_last_publish_timing', lambda: None)()))
+                except Exception:
+                    pass  # Preserve the original publish failure if diagnostics also fail.
+                raise
+            timing = getattr(controller, '_last_publish_timing', lambda: None)()
+            if timing is not None:
+                row['publish_timing'] = timing
             row.update(session_id=sent.session_id, sequence=sent.sequence)
             row['after_publish_monotonic_ns'] = time.monotonic_ns()
             row['published'] = True

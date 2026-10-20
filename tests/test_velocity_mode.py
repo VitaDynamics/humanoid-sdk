@@ -308,7 +308,7 @@ class TransportTest(unittest.TestCase):
 
 
 class CycleTest(unittest.TestCase):
-    def run_loop(self, *, live=False, fail=False):
+    def run_loop(self, *, live=False, fail=False, timing=False):
         clock = SimpleNamespace(now=1_700_000_000_000_000_000)
         policy = policy_fixture()
 
@@ -334,6 +334,9 @@ class CycleTest(unittest.TestCase):
             clock.now += round(delay * 1_000_000_000)
 
         controller = SimpleNamespace(publish=publish) if live else None
+        if controller is not None and timing:
+            controller._last_publish_timing = lambda: dict(publish_total_ns=123,
+                outcome='raised' if fail else 'returned')
         with patch.object(example.time, "time_ns", side_effect=lambda: clock.now), \
              patch.object(example.time, "sleep", side_effect=sleep), \
              patch.object(example.time, "monotonic", side_effect=AssertionError("monotonic clock used")), \
@@ -355,6 +358,13 @@ class CycleTest(unittest.TestCase):
             self.assertEqual(row["sequence"], NOT_MEASURED)
             self.assertNotIn("cmd_id", row)
             self.assertEqual(len(row["target_q"]), 31)
+
+    def test_publish_timing_is_logged_on_success_and_failure(self):
+        for fail in [False, True]:
+            records, _ = self.run_loop(live=True, fail=fail, timing=True)
+            for row in records:
+                self.assertEqual(row['publish_timing'], dict(publish_total_ns=123,
+                    outcome='raised' if fail else 'returned'))
 
     def test_live_uses_actual_sequence_and_50_hz_schedule(self):
         records, times = self.run_loop(live=True)

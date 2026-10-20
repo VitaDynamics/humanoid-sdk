@@ -44,8 +44,8 @@ class ReleaseGateTest(unittest.TestCase):
                             "Requires-Dist: aorta-msgs==2026.10.20\n"
                             f"Requires-Dist: vbot-humanoid-msgs=={version}\n"
                             "Requires-Dist: flatbuffers==25.12.19\n"
-                            "License-File: LICENSE\nLicense-File: NOTICE\nLicense-File: ORT_LICENSE\n"))
-                        for name in ("LICENSE", "NOTICE", "ORT_LICENSE"):
+                            "License-File: LICENSE\nLicense-File: NOTICE\nLicense-File: ORT_LICENSE\nLicense-File: FLATBUFFERS_LICENSE\n"))
+                        for name in ("LICENSE", "NOTICE", "ORT_LICENSE", "FLATBUFFERS_LICENSE"):
                             wheel.writestr(info + "/licenses/" + name, "fixture")
                         for name in ("locomotion_aorta/__init__.py",
                                      "locomotion_aorta/_onnx/__init__.py",
@@ -53,16 +53,32 @@ class ReleaseGateTest(unittest.TestCase):
                                      "locomotion_aorta/_onnx/.libs/libonnxruntime_providers_shared.so"):
                             wheel.writestr(name, b"")
                         wheel.writestr("locomotion_aorta/_onnx/_native.cpython-310-x86_64-linux-gnu.so", elf)
+                        wheel.writestr("locomotion_aorta/_body_cmd_native.cpython-310-x86_64-linux-gnu.so", elf)
+                        wheel.writestr("locomotion_aorta/licenses/flatbuffers/LICENSE", "fixture")
                     with mock.patch.object(module.subprocess, "check_output", side_effect=[
-                        "(RPATH) Library rpath: [$ORIGIN/.libs]", ".debug_info .symtab"
+                        "(RPATH) Library rpath: [$ORIGIN/.libs]", ".debug_info .symtab", ".debug_info .symtab"
                     ]) as readelf:
                         if version == "0.1.4":
                             self.assertEqual(module.inspect(path)["arch"], "x86_64")
-                            self.assertEqual(readelf.call_count, 2)
+                            self.assertEqual(readelf.call_count, 3)
                         else:
                             with self.assertRaisesRegex(ValueError, "unexpected SDK Python/core dependencies"):
                                 module.inspect(path)
                             readelf.assert_not_called()
+
+    def test_body_codec_is_required_and_wrong_elf_arch_is_rejected(self):
+        for present in (False, True):
+            with self.subTest(present=present), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'codec.whl'
+                with zipfile.ZipFile(path, 'w') as wheel:
+                    wheel.writestr('locomotion_aorta/licenses/flatbuffers/LICENSE', 'fixture')
+                    if present:
+                        elf = bytearray(20)
+                        elf[:6] = b'\x7fELF\x02\x01'
+                        struct.pack_into('<H', elf, 18, 183)
+                        wheel.writestr('locomotion_aorta/_body_cmd_native.cpython-310-x86_64-linux-gnu.so', elf)
+                with zipfile.ZipFile(path) as wheel, self.assertRaises(ValueError):
+                    module.inspect_body_codec(wheel, 'x86_64')
 
     def test_release_cannot_pass_without_both_architectures(self):
         with tempfile.TemporaryDirectory() as directory:
