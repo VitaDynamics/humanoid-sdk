@@ -21,7 +21,8 @@ class ReleaseTest(unittest.TestCase):
             "manifest_version", "sdk_version", "aorta_version", "flatbuffers_version",
             "humanoid_msgs_version", "python_requires", "platforms", "external_version", "control_request_version",
             "command_slots", "state_slots", "session_mode", "pc_session_profile", "body_protocol_version",
-            "wheel_sha256", "dependency_release_tag", "aorta_abi_version", "schema_sha256",
+            "wheel_sha256", "dependency_release_tag", "dependency_release_repository",
+            "runtime_release_tag", "runtime_release_repository", "aorta_abi_version", "schema_sha256",
         })
         self.assertEqual(manifest["python_requires"], "==3.10.*")
         self.assertEqual(manifest["platforms"], ["manylinux_2_35_x86_64", "manylinux_2_35_aarch64"])

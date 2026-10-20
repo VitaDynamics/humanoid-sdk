@@ -7,9 +7,11 @@ clients, Aorta 2026.10.12 and an independent read-only BodyStateSource.
 This candidate requires public body/EE schema **0.1.3** and BODY protocol 2.
 Its 40-byte BodyJointState layout is incompatible with 0.1.2 (56 bytes); use
 matching robot software and generated bindings. The 0.1.3 dependency wheel is
-a local candidate, not a published asset. `dependency_release_tag` remains
-unset until its release is approved; installation requires the complete
-matching candidate wheelhouse and hashes in [compatibility.json](compatibility.json).
+published in the schema repository's official
+[`humanoid-msgs-0.1.3` Release](https://github.com/VitaDynamics/aorta-schemas-internal/releases/tag/humanoid-msgs-0.1.3).
+Its SHA-256 is `cc21b3198248f91e433d9665d0284de66a7db765e952e2abfb5afcb054ec2a5f`.
+Installation requires the complete matching wheelhouse and hashes in
+[compatibility.json](compatibility.json).
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
@@ -22,9 +24,10 @@ platform and pure Python wheels under the same SDK package name.
 
 Dependencies are pinned to Aorta SDK and messages `2026.10.12` (ABI 13),
 `vbot-humanoid-msgs==0.1.3`, and `flatbuffers==25.9.23`. Verify wheel filenames
-and SHA-256s against [compatibility.json](compatibility.json). The prior
-dependency release `v0.1.0-rc.4` contains schema 0.1.2 and cannot supply this
-candidate's complete dependency set; do not substitute that older schema.
+and SHA-256s against [compatibility.json](compatibility.json). Aorta and
+FlatBuffers come from this SDK repository's `v0.1.0-rc.4` Release; only the
+public humanoid wheel comes from the schema Release above. Do not substitute
+the old 0.1.2 schema asset from `v0.1.0-rc.4`.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
 The SDK also includes **Velocity mode** (`examples/velocity_mode.py`) and
@@ -165,7 +168,7 @@ Use the public EE wheel pinned in [compatibility.json](compatibility.json).
 The distribution is `vbot-humanoid-msgs`; generated imports retain `lowlevel`,
 `locomotion_sdk`, `aorta.services.humanoid_locomotion` and `*_schema_meta`.
 Do not install the full private `vita-msgs` wheel or a temporary HIL wheel.
-The pinned public `0.1.2` wheel provides the new hand roots; the older
+The pinned public `0.1.3` wheel provides the new hand roots; the older
 `0.1.0` public wheel does not.
 
 With connection authorization and the configured peer profile, read both hands:
@@ -281,8 +284,15 @@ python -m pip install mcap==1.3.1
 make check
 ```
 
-The dependency release supplies the Aorta/message/FlatBuffers wheels; it does
-not contain this checkout's SDK wheel or the optional MCAP test dependencies.
+The two dependency Releases supply the Aorta/message/FlatBuffers wheels; they
+do not contain this checkout's SDK wheel or the optional MCAP test dependencies.
+`tools/fetch_dependencies.py --output wheelhouse --arch x86_64` (or `aarch64`)
+downloads exactly the four runtime wheels for that architecture and checks every
+pinned SHA. It requires `gh` authentication: `GH_TOKEN` for the SDK repository
+and `SCHEMA_RELEASE_TOKEN` with read access to the private schema repository.
+CI uses a dedicated `SCHEMA_RELEASE_TOKEN` secret; do not put credentials in
+source or the manifest. Missing release tags or schema credentials, failed
+downloads and checksum mismatches fail explicitly; no validation is skipped.
 For a fully offline development environment, obtain MCAP and its dependency
 wheels beforehand and add `--no-index --find-links <test-wheelhouse>` to that
 MCAP installation. Without the HIL test dependencies, capture tests are skipped;
