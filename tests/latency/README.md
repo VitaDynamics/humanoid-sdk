@@ -31,7 +31,8 @@ process watchdogs only terminate the benchmark's own process groups.
   The five dependency wheels are Aorta SDK 2026.10.20 for both Linux
   architectures, aorta-msgs 2026.10.20, vbot-humanoid-msgs 0.1.4, and
   FlatBuffers 25.12.19. CI uses this repository's `contents: read` token.
-  Tests import `python/locomotion_aorta` from the checkout under test.
+  Each job builds and installs the checkout's SDK wheel before measuring.
+  The client rejects source shadowing and records both SDK and native codec paths.
 - C++ links the installed wheel's `libaorta_core.so` (ABI 13). `aorta_abi.h`
   contains the required public declarations for Aorta 2026.10.20. Size/offset
   assertions and the runtime version check validate compatibility; the expected
@@ -94,10 +95,11 @@ guarantee. A short local smoke is marked `SMOKE_ONLY`, never full `PASS`.
 ## Local reproduction (Linux x86_64)
 
 Install the pinned x86 release wheels in a separate Python 3.10+ environment,
-then, from this repository:
+build and install this checkout's SDK wheel (including its native codec), then,
+from this repository:
 
 ```bash
-PYTHONPATH=python:tests python -m unittest discover -s tests -v
+PYTHONPATH=.:tests python -m unittest discover -s tests -v
 python tests/latency/build_mock.py --build-dir build/latency
 python tests/latency/run.py --build-dir build/latency \
   --output build/latency-report --seconds 60 \
@@ -120,3 +122,8 @@ It does not replace the original 11×60s gate or establish device/aarch64 accept
 The original 11×60s matrix retains its required CI job. An independent parallel
 job builds and installs the SDK wheel, runs SDK/native unit tests and the read-only
 source probe. A failure in either job cannot skip the other job.
+
+The encoding boundaries retain the CSV names `fill_ns` / `filled_ns`. They now
+wrap the actual native encoder, including Python input copying, released-GIL
+FlatBuffers construction and the returned bytes. They no longer instrument the
+retained Python golden encoder. Rates, durations, clocks, joins and gates are unchanged.
