@@ -31,7 +31,6 @@ jobs:
       - name: Fetch and verify pinned official runtime wheels
         env:
           GH_TOKEN: ${{ github.token }}
-          SCHEMA_RELEASE_TOKEN: ${{ secrets.SCHEMA_RELEASE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -113,7 +112,6 @@ jobs:
       - name: Fetch and verify pinned official runtime wheels
         env:
           GH_TOKEN: ${{ github.token }}
-          SCHEMA_RELEASE_TOKEN: ${{ secrets.SCHEMA_RELEASE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail

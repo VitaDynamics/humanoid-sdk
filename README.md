@@ -7,8 +7,10 @@ clients, Aorta 2026.10.12 and an independent read-only BodyStateSource.
 This candidate requires public body/EE schema **0.1.3** and BODY protocol 2.
 Its 40-byte BodyJointState layout is incompatible with 0.1.2 (56 bytes); use
 matching robot software and generated bindings. The 0.1.3 dependency wheel is
-published in the schema repository's official
-[`humanoid-msgs-0.1.3` Release](https://github.com/VitaDynamics/aorta-schemas-internal/releases/tag/humanoid-msgs-0.1.3).
+published in the schema repository's official `humanoid-msgs-0.1.3` Release
+and mirrored, byte for byte, in this SDK repository's
+[`v0.1.0-rc.4` dependency Release](https://github.com/VitaDynamics/humanoid-sdk/releases/tag/v0.1.0-rc.4),
+following the #10 dependency delivery flow.
 Its SHA-256 is `cc21b3198248f91e433d9665d0284de66a7db765e952e2abfb5afcb054ec2a5f`.
 Installation requires the complete matching wheelhouse and hashes in
 [compatibility.json](compatibility.json).
@@ -24,10 +26,9 @@ platform and pure Python wheels under the same SDK package name.
 
 Dependencies are pinned to Aorta SDK and messages `2026.10.12` (ABI 13),
 `vbot-humanoid-msgs==0.1.3`, and `flatbuffers==25.9.23`. Verify wheel filenames
-and SHA-256s against [compatibility.json](compatibility.json). Aorta and
-FlatBuffers come from this SDK repository's `v0.1.0-rc.4` Release; only the
-public humanoid wheel comes from the schema Release above. Do not substitute
-the old 0.1.2 schema asset from `v0.1.0-rc.4`.
+and SHA-256s against [compatibility.json](compatibility.json). All four runtime
+dependencies come from this SDK repository's `v0.1.0-rc.4` Release. Select the
+pinned 0.1.3 wheel; older schema assets remain available for older SDKs.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
 The SDK also includes **Velocity mode** (`examples/velocity_mode.py`) and
@@ -284,15 +285,13 @@ python -m pip install mcap==1.3.1
 make check
 ```
 
-The two dependency Releases supply the Aorta/message/FlatBuffers wheels; they
-do not contain this checkout's SDK wheel or the optional MCAP test dependencies.
+The dependency Release supplies the Aorta/message/FlatBuffers wheels; it does
+not contain this checkout's SDK wheel or the optional MCAP test dependencies.
 `tools/fetch_dependencies.py --output wheelhouse --arch x86_64` (or `aarch64`)
 downloads exactly the four runtime wheels for that architecture and checks every
-pinned SHA. It requires `gh` authentication: `GH_TOKEN` for the SDK repository
-and `SCHEMA_RELEASE_TOKEN` with read access to the private schema repository.
-CI uses a dedicated `SCHEMA_RELEASE_TOKEN` secret; do not put credentials in
-source or the manifest. Missing release tags or schema credentials, failed
-downloads and checksum mismatches fail explicitly; no validation is skipped.
+pinned SHA. Authenticate `gh` for the SDK repository; CI uses its own
+`GITHUB_TOKEN` as `GH_TOKEN`. Missing release tags, failed downloads and checksum
+mismatches fail explicitly; no validation is skipped.
 For a fully offline development environment, obtain MCAP and its dependency
 wheels beforehand and add `--no-index --find-links <test-wheelhouse>` to that
 MCAP installation. Without the HIL test dependencies, capture tests are skipped;
@@ -329,6 +328,34 @@ hashes, requires both SDK architecture filenames, refuses configured credentials
 and existing output directories, and writes `MANIFEST.json` with file digests
 and source state. Installation does not establish robot connectivity or motion
 compatibility.
+
+### Dependency Release convention
+
+Following SDK #10, fixed `aorta_msgs`, architecture-specific `aorta_sdk`,
+`flatbuffers` and `vbot_humanoid_msgs` wheels for CI and offline bundles live
+in **this repository's dependency prerelease**, currently `v0.1.0-rc.4`
+("dependencies for #10"). CI reads it with this repository's `GITHUB_TOKEN`
+as `GH_TOKEN`; it does not read the private schema repository or require a
+cross-repository token.
+
+After publishing a schema `humanoid-msgs-<version>` Release:
+
+1. Download its official `vbot_humanoid_msgs` wheel and `.sha256`; verify the
+   wheel against the sidecar and the Release asset digest. Mirror both files
+   unchanged into the SDK dependency Release, retaining earlier assets.
+2. Download and back up that Release's `SHA256SUMS`. Append two lines in its
+   existing `SHA256  filename` format, one for the wheel and one for the
+   sidecar. Preserve every existing byte and replace only `SHA256SUMS`.
+   Download the mirrored files again and verify their hashes against the
+   schema Release and the appended entries; keep other Release properties.
+3. Pin the exact schema version, official wheel SHA and matching BFBS hashes
+   in `compatibility.json`, with this repository as
+   `dependency_release_repository` and a nonempty `dependency_release_tag`.
+   Synchronize package requirements, release audits, tests and documentation.
+   Run the dependency fetcher and relevant checks before pushing the SDK PR.
+
+Never substitute an older schema or skip a missing asset, empty tag or failed
+checksum. A dependency mirror is not an SDK release or robot validation.
 
 The `SDK latency report` check exercises Python SDK ↔ C++ Mock communication
 at 50–1000 Hz for at least 60 seconds per rate. See the

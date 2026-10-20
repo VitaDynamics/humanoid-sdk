@@ -20,7 +20,7 @@
     "flatbuffers-25.9.23-py2.py3-none-any.whl": "255538574d6cb6d0a79a17ec8bc0d30985913b87513a01cce8bcdb6b4c44d0e2",
     "vbot_humanoid_msgs-0.1.3-py3-none-any.whl": "cc21b3198248f91e433d9665d0284de66a7db765e952e2abfb5afcb054ec2a5f"
   },
-  "dependency_release_tag": "humanoid-msgs-0.1.3",
+  "dependency_release_tag": "v0.1.0-rc.4",
   "aorta_abi_version": 13,
   "schema_sha256": {
     "body_cmd": "c98a531aad2b43206048753b82d0bacec1ad65d2429536432766975cd211e71c",
@@ -44,7 +44,5 @@
   "humanoid_msgs_version": "0.1.3",
   "control_request_version": 2,
   "body_protocol_version": 2,
-  "dependency_release_repository": "VitaDynamics/aorta-schemas-internal",
-  "runtime_release_tag": "v0.1.0-rc.4",
-  "runtime_release_repository": "VitaDynamics/humanoid-sdk"
+  "dependency_release_repository": "VitaDynamics/humanoid-sdk"
 }

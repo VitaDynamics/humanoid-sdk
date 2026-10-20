@@ -8,9 +8,9 @@
   their own topics and do not occupy BodyCmd slots.
 - Pin Aorta SDK/messages 2026.10.12 (ABI 13), public vbot-humanoid-msgs 0.1.3
   and FlatBuffers 25.9.23; pin the official `humanoid-msgs-0.1.3` Release wheel
-  SHA and actual BFBS hashes. Fetch schema and runtime wheels from their
-  respective Releases; fail on missing tags or checksums instead of skipping
-  validation.
+  SHA and actual BFBS hashes. Mirror that wheel in this repository's
+  `v0.1.0-rc.4` dependency Release alongside the pinned runtime wheels, following
+  #10; fail on missing tags or checksum mismatches instead of skipping validation.
 - Use BODY protocol 2 for BodyCmd/BodyState. BodyJointState changes from 56 to
   40 bytes: slot-ordered three timestamps, q/dq/tau_est and uint32 JointError; preserve unlisted high-bit codes.
   Keep 20 approved error values, aligning shared codes with quadruped:
