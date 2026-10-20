@@ -41,8 +41,8 @@ class FetchDependenciesTest(unittest.TestCase):
     def test_official_release_identity(self):
         self.assertEqual(self.manifest["dependency_release_tag"], "v0.1.0-rc.4")
         self.assertEqual(self.manifest["dependency_release_repository"], "VitaDynamics/humanoid-sdk")
-        self.assertEqual(self.manifest["wheel_sha256"]["vbot_humanoid_msgs-0.1.3-py3-none-any.whl"],
-                         "cc21b3198248f91e433d9665d0284de66a7db765e952e2abfb5afcb054ec2a5f")
+        self.assertEqual(self.manifest["wheel_sha256"]["vbot_humanoid_msgs-0.1.4-py3-none-any.whl"],
+                         "31fbd1f710a8e92043cc1d0ec80657fc5f76aad4a47e0926d94d70e415185169")
 
     def test_each_architecture_downloads_four_exact_assets_from_the_sdk_release(self):
         for arch in ("x86_64", "aarch64"):
@@ -74,7 +74,7 @@ class FetchDependenciesTest(unittest.TestCase):
 
     def test_incomplete_wheelhouse_is_rejected_before_download(self):
         manifest = self.fixture()
-        del manifest["wheel_sha256"]["vbot_humanoid_msgs-0.1.3-py3-none-any.whl"]
+        del manifest["wheel_sha256"]["vbot_humanoid_msgs-0.1.4-py3-none-any.whl"]
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "incomplete pinned wheelhouse"):
                 self.fetch(Path(directory), manifest)

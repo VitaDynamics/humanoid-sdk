@@ -6,7 +6,7 @@ Profile: `wbc_tracking_asample.json`; log schema: `vita.wbc_tracking.v1`.
 Robot action 14/HUMANOID_TRACKING and `groot_wbc.tracking_contract.v1` metadata
 are unchanged. This SDK program still requests **EXTERNAL**.
 
-Use a matching SDK 0.2.0 and finalized 0.1.3 bindings with `wbc-tracking-demo`.
+Use a matching SDK 0.2.0 and finalized 0.1.4 bindings with `wbc-tracking-demo`.
 Model construction lazily loads the built-in C++ ORT 1.20.1 Session, with the
 existing `--threads` intra-op setting (default 1) and inter-op=1. There is no
 runtime Python ORT dependency or fallback.

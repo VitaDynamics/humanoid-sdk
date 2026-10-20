@@ -5,7 +5,7 @@
 The SDK name changed; robot action 13/HUMANOID, protocol enums and model metadata
 names did not. This program runs a client policy through **EXTERNAL**, not action 13.
 
-Use a compatible SDK 0.2.0 installation with the finalized 0.1.3 message wheel
+Use a compatible SDK 0.2.0 installation with the finalized 0.1.4 message wheel
 and the `velocity-demo` extra. Inference uses its bundled C++ ORT 1.20.1 backend,
 loaded only when constructing the model. There is no Python ORT fallback.
 Provide the deployment's exported locomotion directory (model, action profile

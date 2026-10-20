@@ -1,4 +1,4 @@
-// Test-only declaration subset of the Aorta 2026.10.12 C API (ABI 13).
+// Test-only declaration subset of the Aorta 2026.10.20 C API (ABI 13).
 // No middleware implementation: link the pinned aorta-sdk wheel's shared
 // library.
 #pragma once

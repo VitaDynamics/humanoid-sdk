@@ -33,17 +33,17 @@ class ReleaseGateTest(unittest.TestCase):
             elf = bytearray(20)
             elf[:6] = b"\x7fELF\x02\x01"
             struct.pack_into("<H", elf, 18, 62)
-            for version in ("0.1.3", "0.1.2"):
+            for version in ("0.1.4", "0.1.3"):
                 with self.subTest(humanoid_msgs=version):
                     with zipfile.ZipFile(path, "w") as wheel:
                         wheel.writestr(info + "/WHEEL",
                                        "Wheel-Version: 1.0\nTag: cp310-cp310-manylinux_2_35_x86_64\n")
                         wheel.writestr(info + "/METADATA", (
                             "Name: locomotion-aorta\nVersion: 0.2.0\nRequires-Python: ==3.10.*\n"
-                            "Requires-Dist: aorta-sdk==2026.10.12\n"
-                            "Requires-Dist: aorta-msgs==2026.10.12\n"
+                            "Requires-Dist: aorta-sdk==2026.10.20\n"
+                            "Requires-Dist: aorta-msgs==2026.10.20\n"
                             f"Requires-Dist: vbot-humanoid-msgs=={version}\n"
-                            "Requires-Dist: flatbuffers==25.9.23\n"
+                            "Requires-Dist: flatbuffers==25.12.19\n"
                             "License-File: LICENSE\nLicense-File: NOTICE\nLicense-File: ORT_LICENSE\n"))
                         for name in ("LICENSE", "NOTICE", "ORT_LICENSE"):
                             wheel.writestr(info + "/licenses/" + name, "fixture")
@@ -56,7 +56,7 @@ class ReleaseGateTest(unittest.TestCase):
                     with mock.patch.object(module.subprocess, "check_output", side_effect=[
                         "(RPATH) Library rpath: [$ORIGIN/.libs]", ".debug_info .symtab"
                     ]) as readelf:
-                        if version == "0.1.3":
+                        if version == "0.1.4":
                             self.assertEqual(module.inspect(path)["arch"], "x86_64")
                             self.assertEqual(readelf.call_count, 2)
                         else:

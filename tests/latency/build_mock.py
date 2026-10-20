@@ -12,8 +12,8 @@ import tarfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
-FB_URL = "https://codeload.github.com/google/flatbuffers/tar.gz/refs/tags/v25.9.23"
-FB_SHA = "9102253214dea6ae10c2ac966ea1ed2155d22202390b532d1dea64935c518ada"
+FB_URL = "https://codeload.github.com/google/flatbuffers/tar.gz/refs/tags/v25.12.19"
+FB_SHA = "f81c3162b1046fe8b84b9a0dbdd383e24fdbcf88583b9cb6028f90d04d90696a"
 
 
 def digest(path):
@@ -29,7 +29,7 @@ def extract_source(archive, directory):
     """Restore compiler inputs from the pinned archive, never trust a reused tree."""
     if digest(archive) != FB_SHA:
         raise RuntimeError("FlatBuffers archive checksum mismatch")
-    source = directory / "flatbuffers-25.9.23"
+    source = directory / "flatbuffers-25.12.19"
     if source.is_symlink():
         raise RuntimeError("FlatBuffers source directory must not be a symlink")
     with tarfile.open(archive) as tar:

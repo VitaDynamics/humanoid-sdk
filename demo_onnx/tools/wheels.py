@@ -28,8 +28,8 @@ def inspect(path):
         metadata = email.message_from_bytes(wheel.read(info + "/METADATA"))
         if metadata["Name"] != "locomotion-aorta" or metadata["Version"] != "0.2.0":
             raise ValueError("unexpected distribution/version")
-        core = {"aorta-sdk": "==2026.10.12", "aorta-msgs": "==2026.10.12",
-                "vbot-humanoid-msgs": "==0.1.3", "flatbuffers": "==25.9.23"}
+        core = {"aorta-sdk": "==2026.10.20", "aorta-msgs": "==2026.10.20",
+                "vbot-humanoid-msgs": "==0.1.4", "flatbuffers": "==25.12.19"}
         requirements = [Requirement(value) for value in metadata.get_all("Requires-Dist", [])]
         actual = {req.name: str(req.specifier) for req in requirements if req.marker is None}
         if metadata["Requires-Python"] != "==3.10.*" or actual != core:

@@ -28,17 +28,17 @@ process watchdogs only terminate the benchmark's own process groups.
 
 - Python wheels come from this repository's `dependency_release_tag` in
   `compatibility.json` (`v0.1.0-rc.4`), verified against exact SHA-256s.
-  The five dependency wheels are Aorta SDK 2026.10.12 for both Linux
-  architectures, aorta-msgs 2026.10.12, vbot-humanoid-msgs 0.1.3, and
-  FlatBuffers 25.9.23. CI uses this repository's `contents: read` token.
+  The five dependency wheels are Aorta SDK 2026.10.20 for both Linux
+  architectures, aorta-msgs 2026.10.20, vbot-humanoid-msgs 0.1.4, and
+  FlatBuffers 25.12.19. CI uses this repository's `contents: read` token.
   Tests import `python/locomotion_aorta` from the checkout under test.
 - C++ links the installed wheel's `libaorta_core.so` (ABI 13). `aorta_abi.h`
-  contains the required public declarations for Aorta 2026.10.12. Size/offset
+  contains the required public declarations for Aorta 2026.10.20. Size/offset
   assertions and the runtime version check validate compatibility; the expected
   ABI comes from the manifest. Updating the Aorta pin requires reviewing this
   subset too.
 - C++ message headers are generated from vbot-humanoid-msgs's actual BFBS,
-  checked against the manifest's schema hashes. FlatBuffers 25.9.23 source is
+  checked against the manifest's schema hashes. FlatBuffers 25.12.19 source is
   SHA256-pinned. CMake/g++ build flatc and the Mock. Reusing a build directory
   restores extracted sources from the verified archive while keeping the
   compiler cache.

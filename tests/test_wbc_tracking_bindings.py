@@ -1,4 +1,4 @@
-"""Public 0.1.3 actual wire tests; no transport construction or robot connection."""
+"""Public 0.1.4 actual wire tests; no transport construction or robot connection."""
 from dataclasses import replace
 import unittest
 

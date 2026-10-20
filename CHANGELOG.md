@@ -6,8 +6,8 @@
   control requests use protocol 2, without automatic protocol downgrade.
 - Provide independent hand and AGX gripper clients and examples. Grippers use
   their own topics and do not occupy BodyCmd slots.
-- Pin Aorta SDK/messages 2026.10.12 (ABI 13), public vbot-humanoid-msgs 0.1.3
-  and FlatBuffers 25.9.23; pin the official `humanoid-msgs-0.1.3` Release wheel
+- Pin Aorta SDK/messages 2026.10.20 (ABI 13), public vbot-humanoid-msgs 0.1.4
+  and FlatBuffers 25.12.19; pin the official `humanoid-msgs-0.1.4` Release wheel
   SHA and actual BFBS hashes. Mirror that wheel in this repository's
   `v0.1.0-rc.4` dependency Release alongside the pinned runtime wheels, following
   #10; fail on missing tags or checksum mismatches instead of skipping validation.
