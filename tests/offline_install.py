@@ -67,9 +67,12 @@ class OfflineInstallTest(unittest.TestCase):
             )
             for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py"):
                 self.assertFalse((bundle / "examples" / retired).exists())
-            for example in ("body_state_subscriber.py", "external_control.py",
-                            "brainco_hand_external.py", "brainco_capture.py", "teleop_policy.py",
-                            "gripper_external.py"):
+            for example in ("body_state_subscriber/body_state_subscriber.py",
+                            "external_control/external_control.py",
+                            "brainco_hand/brainco_hand_external.py",
+                            "brainco_hand/brainco_capture.py",
+                            "teleop_policy/teleop_policy.py",
+                            "gripper/gripper_external.py"):
                 subprocess.run(
                     [python, "-I", str(bundle / "examples" / example), "--help"],
                     check=True,
