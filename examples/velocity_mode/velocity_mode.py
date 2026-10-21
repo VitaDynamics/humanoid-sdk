@@ -23,8 +23,16 @@ try:
     from .velocity_mode_latency import CycleLog, NOT_MEASURED, realtime_ns
     from .velocity_mode_policy import VelocityModePolicy
 except ImportError:
-    from velocity_mode_latency import CycleLog, NOT_MEASURED, realtime_ns
-    from velocity_mode_policy import VelocityModePolicy
+    # Isolated (-I) bundle execution omits the script folder from sys.path.
+    import importlib.util
+    def _sibling(name):
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + ".py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    _latency = _sibling("velocity_mode_latency")
+    CycleLog, NOT_MEASURED, realtime_ns = _latency.CycleLog, _latency.NOT_MEASURED, _latency.realtime_ns
+    VelocityModePolicy = _sibling("velocity_mode_policy").VelocityModePolicy
 
 
 PERIOD_S = 0.02
