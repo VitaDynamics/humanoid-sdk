@@ -377,6 +377,34 @@ class CycleTest(unittest.TestCase):
             self.assertEqual(row["publish_result"], "returned")
             self.assertGreaterEqual(row["S6"], row["S5"])
 
+    def test_policy_is_50hz_with_400hz_latest_state_source(self):
+        from dataclasses import replace
+        base=1_700_000_000_000_000_000
+        clock=SimpleNamespace(now=base)
+        source_ids=[];published=[];inferred=[];records=[]
+        policy=policy_fixture()
+        def latest():
+            # Native keep-last ring: at each pull, return the newest of 400Hz samples.
+            state_id=(clock.now-base)//2_500_000
+            source_ids.append(state_id)
+            state=replace(frame_state(state_id),ts_state_real_us=clock.now//1000)
+            return example.StateFrame(state,(0.,)*31,(0.,)*31,(0.,)*3,(1.,0.,0.,0.),clock.now,clock.now,clock.now)
+        def infer(_):
+            inferred.append(clock.now)
+            return np.zeros(2,dtype=np.float32)
+        policy.infer=infer
+        def publish(command):
+            published.append(clock.now)
+            return replace(command,session_id=7,sequence=len(published))
+        def sleep(delay):clock.now+=round(delay*1e9)
+        with patch.object(example.time,'time_ns',side_effect=lambda:clock.now),patch.object(example.time,'sleep',side_effect=sleep):
+            example.run_cycles(policy,SimpleNamespace(latest=latest),SimpleNamespace(snapshot=lambda:((),(0.,0.,0.))),SimpleNamespace(cycle=records.append),controller=SimpleNamespace(publish=publish),duration=.19,transition=([],0.))
+        self.assertEqual(len(inferred),11)  # t=0..200ms: original grid/bounded-loop semantics.
+        self.assertEqual(len(published),len(inferred))
+        self.assertEqual(len(records),len(inferred))
+        np.testing.assert_array_equal(np.diff(published),[20_000_000]*(len(published)-1))
+        np.testing.assert_array_equal(np.diff(source_ids[1:]),[8]*(len(published)-1))
+
     def test_failed_publish_records_cycle_without_fabricated_identity(self):
         records, _times = self.run_loop(live=True, fail=True)
         self.assertEqual(len(records), 1)

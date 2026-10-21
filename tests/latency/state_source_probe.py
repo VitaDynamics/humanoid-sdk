@@ -66,7 +66,18 @@ def run(output, *, pull=False):
                 stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
             previous=None
             for seq,state_id in enumerate((91,91,0),1):
-                snapshot=source.wait_state(5) if pull else source.snapshot(5,after=previous)
+                if pull:
+                    deadline = time.monotonic()+5
+                    while True:
+                        remaining = deadline-time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError('pull probe did not receive a new snapshot')
+                        snapshot = source.wait_state(remaining)
+                        if snapshot is not previous:
+                            break
+                        time.sleep(.001)
+                else:
+                    snapshot=source.snapshot(5,after=previous)
                 assert snapshot.body_state().state_id==state_id
                 rows.append(dict(sequence=seq,state_id=state_id,
                                  received_monotonic_ns=snapshot.received_monotonic_ns,
@@ -76,18 +87,26 @@ def run(output, *, pull=False):
             assert child.wait(timeout=5)==0
             close_wait = {}
             if pull:
+                assert source.wait_state(0) is snapshot
+                # A source with an existing snapshot returns it immediately.
+                # Exercise close/unblock on a fresh source waiting for its first frame.
+                wait_config=json.loads((directory/'python.json').read_text())
+                wait_config['listen']['endpoints']=['tcp/127.0.0.1:0']
+                (directory/'waiter.json').write_text(json.dumps(wait_config))
+                os.environ['ZENOH_SESSION_CONFIG_URI']=str(directory/'waiter.json')
+                waiting_source = PullStateSource(group='default')
                 entered = threading.Event()
                 def wait_after_publisher():
                     entered.set()
                     try:
-                        source.wait_state(5)
+                        waiting_source.wait_state(5)
                         close_wait['unexpected_frame'] = True
                     except BaseException as error:
                         close_wait['error'] = type(error).__name__
                 waiting = threading.Thread(target=wait_after_publisher)
                 waiting.start()
                 assert entered.wait(5)
-                source.close()
+                waiting_source.close()
                 waiting.join(5)
                 assert not waiting.is_alive() and 'error' in close_wait, close_wait
             source.close()

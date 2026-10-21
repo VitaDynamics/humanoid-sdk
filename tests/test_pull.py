@@ -18,7 +18,7 @@ class Ring:
 
 class PullTest(unittest.TestCase):
     def transport(self):
-        t=PullTransport.__new__(PullTransport);t._closed=False;t._state_lock=threading.Lock();t._status_lock=threading.Lock();t._status=None
+        t=PullTransport.__new__(PullTransport);t._closed=False;t._state_lock=threading.Lock();t._status_lock=threading.Lock();t._status=None;t._latest_state=None
         t._pulls={BODY_STATE_TOPIC:Ring(),CONTROL_STATUS_TOPIC:Ring()};t._callbacks={BODY_STATE_TOPIC:[],CONTROL_STATUS_TOPIC:[]}
         t._bindings=S(control_status_decoder=lambda v:v);t._subscriber_spec=lambda topic:(None,lambda v:v,None)
         return t
@@ -62,15 +62,42 @@ class PullTest(unittest.TestCase):
     def test_timeout_invalid_timeout_and_closed_never_return_old_state(self):
         t=self.transport()
         with self.assertRaises(TimeoutError):t.wait_state(.01)
-        for timeout in (0,-1,True,float('nan')):
+        with self.assertRaises(TimeoutError):t.wait_state(0)
+        for timeout in (-1,True,False,float('nan'),'0',0j):
             with self.assertRaises(ValueError):t.wait_state(timeout)
         t._closed=True
         with self.assertRaises(RuntimeError):t.wait_state(.01)
         with self.assertRaises(RuntimeError):t.poll_control_status()
 
+    def test_latest_pending_replaces_cache_and_empty_ring_keeps_original_receipt(self):
+        t=self.transport()
+        from dataclasses import dataclass
+        @dataclass(frozen=True)
+        class State:
+            state_id:int
+            received_monotonic_ns:int=0
+            received_realtime_ns:int=0
+            pull_context_receive_stamp_ns:int=0
+        ring=t._pulls[BODY_STATE_TOPIC]
+        ring.samples.append(S(payload=11,context=S(receive_stamp_ns=42)))
+        with patch('locomotion_aorta.pull.decode_body_state_arrays',side_effect=lambda value:State(value)) as decode:
+            first=t.wait_state(0)
+            self.assertIs(t.wait_state(0),first)
+            self.assertEqual(decode.call_count,1)
+            ring.samples.append(S(payload=19,context=S(receive_stamp_ns=43)))
+            latest=t.wait_state(.1)
+            self.assertEqual(latest.state_id,19)
+            self.assertIs(t.wait_state(.1),latest)
+            self.assertEqual(decode.call_count,2)
+            self.assertNotEqual(first.state_id,latest.state_id)
+            def close_while_polling():t._closed=True;return None
+            ring.try_recv=close_while_polling
+            with self.assertRaises(RuntimeError):t.wait_state(0)
+
     def test_close_during_recv_unblocks_and_never_returns_frame_after_close(self):
         t=self.transport();entered=threading.Event();closed=threading.Event();errors=[]
         class Blocking:
+            def try_recv(self):return None
             def recv(self,timeout):entered.set();closed.wait(timeout);return None
         t._pulls[BODY_STATE_TOPIC]=Blocking()
         def worker():

@@ -477,3 +477,10 @@ existing on-site authorization and emergency-stop requirements above.
 - [external_control](examples/external_control/README.md)
 - [fixed_stand_pose](examples/fixed_stand_pose/README.md)
 - [body_state_subscriber](examples/body_state_subscriber/README.md)
+
+Pull feedback is a latest-state snapshot, not a policy clock. `wait_state(timeout)`
+waits for a first frame, then polls the depth=1 ring and otherwise returns the
+previous immutable snapshot with unchanged receipt timestamps; timeout=0 does
+not block. Live policy demos retain their configured 50 Hz timer, independently
+of the BodyState publication rate (including 400 Hz). Core context receive stamps
+are dequeue/assembly times, not network-arrival times.

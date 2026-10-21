@@ -26,6 +26,7 @@ class PullTransport(_AortaTransport):
         self._pulls = {}
         self._callbacks = {BODY_STATE_TOPIC: [], CONTROL_STATUS_TOPIC: []}
         self._status = None
+        self._latest_state = None
         self._state_lock = threading.Lock()
         self._status_lock = threading.RLock()
         try:
@@ -67,13 +68,28 @@ class PullTransport(_AortaTransport):
         return self.poll_control_status()
 
     def wait_state(self, timeout=5.0):
-        deadline = _deadline(timeout)
+        """Read the latest frame; wait only if no frame has ever been received.
+
+        depth=1 collapses pending samples to the newest. With no pending sample,
+        return the previous immutable snapshot with its original receipt clocks.
+        timeout=0 is nonblocking. This API does not pace a control/policy loop:
+        callers must maintain their configured rate and check state freshness.
+        Core receive_stamp_ns is dequeue/assembly time, not network arrival.
+        """
+        deadline = (time.monotonic() if isinstance(timeout, (int, float)) and timeout == 0 and not isinstance(timeout, bool)
+                    else _deadline(timeout))
         with self._state_lock:
             self._ensure_open()
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError('waiting for body state')
-            sample = self._pulls[BODY_STATE_TOPIC].recv(remaining)
+            sub = self._pulls[BODY_STATE_TOPIC]
+            sample = sub.try_recv()
+            self._ensure_open()
+            if sample is None:
+                if self._latest_state is not None:
+                    return self._latest_state
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('waiting for first body state')
+                sample = sub.recv(remaining)
             received_wall = time.time_ns()  # S1: Python recv return, before decode.
             received_mono = time.monotonic_ns()
             self._ensure_open()
@@ -83,6 +99,7 @@ class PullTransport(_AortaTransport):
                 received_monotonic_ns=received_mono, received_realtime_ns=received_wall,
                 pull_context_receive_stamp_ns=sample.context.receive_stamp_ns)
             self._ensure_open()
+            self._latest_state = state
             if self._callbacks[BODY_STATE_TOPIC]:
                 dto = state.body_state()
                 for callback in tuple(self._callbacks[BODY_STATE_TOPIC]):

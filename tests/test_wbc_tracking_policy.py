@@ -241,6 +241,28 @@ class TrackingLoopTest(unittest.TestCase):
         self.assertTrue(all(c.input_state_ts_real_us > 0 for c in commands))
         self.assertEqual(self.rec.rows[-1]['current_action'], 'PASSIVE')
 
+    def test_policy_is_50hz_with_400hz_latest_state_source(self):
+        self.args.duration=.19
+        source_ids=[];times=[];start=self.clock.now
+        original_state=self.controller.state
+        def latest(timeout):
+            sample_index=round((self.clock.now-start)*400)
+            source_ids.append(sample_index)
+            return replace(original_state,state_id=sample_index,
+                           ts_state_real_us=original_state.ts_state_real_us+sample_index*2500,
+                           received_monotonic_ns=round(self.clock.now*1e9))
+        self.controller.wait_body_state=latest
+        original_publish=self.controller.publish
+        def publish(command):
+            times.append(self.clock.now)
+            return original_publish(command)
+        self.controller.publish=publish
+        result=self.run_live()
+        self.assertEqual(result['steps'],10)
+        np.testing.assert_allclose(np.diff(times),[.02]*9,rtol=0,atol=1e-12)
+        np.testing.assert_array_equal(np.diff([c.input_state_id for c in self.controller.commands]),[8]*9)
+        self.assertEqual(self.model.calls,11)  # one warmup; ten 50Hz policy evaluations.
+
     def test_publish_timing_is_joined_to_the_actual_returned_key(self):
         self.controller._last_publish_timing = lambda: dict(
             session_id=self.controller.commands[-1].session_id,
