@@ -121,7 +121,7 @@ class LoggingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp)/"run.jsonl"
             args = example.parse_args(["--shadow", "--locomotion-dir", "/unused", "--log", str(path)])
-            with patch.object(example, "version", return_value="0.2.0"), \
+            with patch.object(example, "version", return_value="0.2.1"), \
                  patch.object(example, "parse_args", return_value=args), \
                  patch.object(example, "VelocityModePolicy", return_value=policy), \
                  patch.object(example, "PolicyTransport", return_value=transport), \
@@ -317,6 +317,7 @@ class CycleTest(unittest.TestCase):
             controller._last_publish_timing = lambda: dict(publish_total_ns=123,
                 outcome='raised' if fail else 'returned')
         with patch.object(example.time, "time_ns", side_effect=lambda: clock.now), \
+             patch.object(example.time, "monotonic_ns", side_effect=lambda: clock.now), \
              patch.object(example.time, "sleep", side_effect=sleep), \
              patch.object(example.time, "monotonic", side_effect=AssertionError("monotonic clock used")), \
              patch.object(example.time, "perf_counter_ns", side_effect=AssertionError("perf clock used")):
@@ -353,6 +354,8 @@ class CycleTest(unittest.TestCase):
             self.assertEqual(row["session_id"], 7)
             self.assertEqual(row["publish_result"], "returned")
             self.assertGreaterEqual(row["S6"], row["S5"])
+            self.assertEqual(row['applied_sequence_lag'], NOT_MEASURED)
+            self.assertEqual(row['control_interval_ns'], NOT_MEASURED if i == 0 else 20_000_000)
 
     def test_transition_drains_direction_input_on_every_tick(self):
         from dataclasses import replace
@@ -466,7 +469,7 @@ class DurationTest(unittest.TestCase):
         directions.statistics.return_value = {}
         controller.exit_external.return_value = SimpleNamespace(current_action="PASSIVE",
             phase=SimpleNamespace(value="IDLE"))
-        with patch.object(example, "version", return_value="0.2.0"), \
+        with patch.object(example, "version", return_value="0.2.1"), \
              patch.object(example, "parse_args", return_value=args), \
              patch.object(example, "VelocityModePolicy", return_value=Mock(inventory={}, order=[])), \
              patch.object(example, "PolicyTransport", return_value=transport), \

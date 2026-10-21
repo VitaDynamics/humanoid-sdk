@@ -1,6 +1,9 @@
 # Humanoid SDK
 
-SDK **0.2.0** is in preparation; packaging and release are pending.
+SDK **0.2.1** is in preparation; packaging and release are pending.
+The Joy-enabled release requires public schema 0.1.5. Its actual wheel and hash
+are still pending; the 0.1.4 pin below is the migration baseline, not a final
+0.2.1 installation manifest.
 This version provides public body31/EXTERNAL, independent hand/gripper
 clients, Aorta 2026.10.20 and an independent read-only BodyStateSource.
 
@@ -18,11 +21,9 @@ Installation requires the complete matching wheelhouse and hashes in
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
 with **CPython 3.10**, glibc **2.35+** and GLIBCXX **3.4.29+**
-(Ubuntu 22.04 or newer). SDK 0.2.0 ships one distribution containing both the
+(Ubuntu 22.04 or newer). SDK 0.2.1 ships one distribution containing both the
 client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
-aarch64 only. There is no pure Python or separate backend wheel for 0.2.0.
-Version 0.2.1 is planned to restore general platform support through separate
-platform and pure Python wheels under the same SDK package name.
+aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 
 Dependencies are pinned to Aorta SDK and messages `2026.10.20` (ABI 13),
 `vbot-humanoid-msgs==0.1.4`, and `flatbuffers==25.12.19`. Verify wheel filenames
@@ -128,7 +129,7 @@ bundle root:
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-python -m pip install --no-index --find-links wheelhouse locomotion-aorta==0.2.0
+python -m pip install --no-index --find-links wheelhouse 'locomotion-aorta[state-arrays]==0.2.1'
 python -m pip check
 python -c 'import aorta, flatbuffers, locomotion_aorta; import lowlevel.BodyCmd, lowlevel.BodyState, locomotion_sdk.ControlStatus'
 ```
@@ -452,7 +453,7 @@ Runtime fallback. The optional `teleop-demo` extra installs only NumPy and
 pygame from a complete matching demo wheelhouse:
 
 ```bash
-python -m pip install --no-index --find-links demo-wheelhouse 'locomotion-aorta[teleop-demo]==0.2.0'
+python -m pip install --no-index --find-links demo-wheelhouse 'locomotion-aorta[teleop-demo]==0.2.1'
 python -m pip check
 ```
 

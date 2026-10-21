@@ -5,6 +5,7 @@ import argparse
 from dataclasses import dataclass
 import hashlib
 from importlib.metadata import version
+from locomotion_aorta._demo_feedback import publish_log_fields
 import os
 from pathlib import Path
 import threading
@@ -164,6 +165,7 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
     transition_ns = int(transition_s * 1_000_000_000)
     next_cycle = started
     cycle = 0
+    previous_publish_ns = None
     while duration_ns is None or realtime_ns() - started < duration_ns:
         delay = next_cycle - realtime_ns()
         if delay > 0:
@@ -211,9 +213,13 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
             record["target_q"] = [motor.q for motor in command.joints]
             if controller:
                 record["S5"] = realtime_ns()
+                publish_mono = time.monotonic_ns()
+                record['control_interval_ns'] = (publish_mono-previous_publish_ns
+                    if previous_publish_ns is not None else NOT_MEASURED)
+                previous_publish_ns = publish_mono
                 try:
                     sent = controller.publish(command)
-                    record.update(session_id=sent.session_id, sequence=sent.sequence)
+                    publish_log_fields(record, sent)
                     record["publish_result"] = "returned"
                 except BaseException:
                     record["publish_result"] = "raised"
@@ -261,7 +267,7 @@ def parse_args(argv=None):
 def main():
     args = parse_args()
     policy = VelocityModePolicy(args.locomotion_dir)
-    metadata = dict(sdk_release="0.2.0", sdk_base_commit="335341bc765f0ad46a2b77eec8abcccd2b22756b",
+    metadata = dict(sdk_release="0.2.1", sdk_base_commit="8ef2e015830bc861e293f944f831c1ed05b1136b",
                     sdk_version=version("locomotion-aorta"),
                     sdk_directory=str(Path(locomotion_aorta.__file__).resolve().parent),
                     sdk_files_sha256={name: hashlib.sha256(Path(locomotion_aorta.__file__).with_name(name).read_bytes()).hexdigest()

@@ -240,6 +240,11 @@ class TrackingLoopTest(unittest.TestCase):
         self.assertTrue(all(r['session_id'] > 2**63 and r['sequence'] > 2**63 for r in rows))
         self.assertEqual(len(set(c.input_state_id for c in commands)), 3)
         self.assertTrue(all(c.input_state_ts_real_us > 0 for c in commands))
+        for i, row in enumerate(rows):
+            self.assertTrue(all(isinstance(row[f'S{n}'], int) for n in range(2, 7)))
+            self.assertEqual(row['publish_result'], 'returned')
+            self.assertEqual(row['control_interval_ns'], 'NOT_MEASURED' if i == 0 else 20_000_000)
+            self.assertEqual(row['applied_sequence_lag'], 'NOT_MEASURED')
         self.assertEqual(self.rec.rows[-1]['current_action'], 'PASSIVE')
 
     def test_policy_is_50hz_with_400hz_latest_state_source(self):

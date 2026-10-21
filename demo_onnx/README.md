@@ -1,6 +1,6 @@
 # Optional demo ONNX backend
 
-SDK 0.2.0 embeds the pybind11/Microsoft ORT 1.20.1 CPU backend directly in
+SDK 0.2.1 embeds the pybind11/Microsoft ORT 1.20.1 CPU backend directly in
 its only distribution, `locomotion-aorta`. There is no standalone backend
 package and no pure Python SDK wheel for this release. The inference backend is loaded only when a demo constructs a model;
 SDK core imports do not load it. The `teleop-demo` extra contains NumPy and

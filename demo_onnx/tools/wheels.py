@@ -47,7 +47,7 @@ def inspect(path):
         if not path.name.endswith("-cp310-cp310-manylinux_2_35_" + arch + ".whl"):
             raise ValueError("filename and WHEEL tags differ")
         metadata = email.message_from_bytes(wheel.read(info + "/METADATA"))
-        if metadata["Name"] != "locomotion-aorta" or metadata["Version"] != "0.2.0":
+        if metadata["Name"] != "locomotion-aorta" or metadata["Version"] != "0.2.1":
             raise ValueError("unexpected distribution/version")
         core = {"aorta-sdk": "==2026.10.20", "aorta-msgs": "==2026.10.20",
                 "vbot-humanoid-msgs": "==0.1.4", "flatbuffers": "==25.12.19"}

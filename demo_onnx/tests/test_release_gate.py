@@ -19,17 +19,17 @@ spec.loader.exec_module(module)
 class ReleaseGateTest(unittest.TestCase):
     def test_generic_linux_wheel_is_not_a_release_asset(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "locomotion_aorta-0.2.0-cp310-cp310-linux_x86_64.whl"
+            path = Path(directory) / "locomotion_aorta-0.2.1-cp310-cp310-linux_x86_64.whl"
             with zipfile.ZipFile(path, "w") as wheel:
-                wheel.writestr("locomotion_aorta-0.2.0.dist-info/WHEEL",
+                wheel.writestr("locomotion_aorta-0.2.1.dist-info/WHEEL",
                                "Wheel-Version: 1.0\nTag: cp310-cp310-linux_x86_64\n")
             with self.assertRaisesRegex(ValueError, "audited cp310"):
                 module.inspect(path)
 
     def test_release_requires_exact_current_public_message_version(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "locomotion_aorta-0.2.0-cp310-cp310-manylinux_2_35_x86_64.whl"
-            info = "locomotion_aorta-0.2.0.dist-info"
+            path = Path(directory) / "locomotion_aorta-0.2.1-cp310-cp310-manylinux_2_35_x86_64.whl"
+            info = "locomotion_aorta-0.2.1.dist-info"
             elf = bytearray(20)
             elf[:6] = b"\x7fELF\x02\x01"
             struct.pack_into("<H", elf, 18, 62)
@@ -39,7 +39,7 @@ class ReleaseGateTest(unittest.TestCase):
                         wheel.writestr(info + "/WHEEL",
                                        "Wheel-Version: 1.0\nTag: cp310-cp310-manylinux_2_35_x86_64\n")
                         wheel.writestr(info + "/METADATA", (
-                            "Name: locomotion-aorta\nVersion: 0.2.0\nRequires-Python: ==3.10.*\n"
+                            "Name: locomotion-aorta\nVersion: 0.2.1\nRequires-Python: ==3.10.*\n"
                             "Requires-Dist: aorta-sdk==2026.10.20\n"
                             "Requires-Dist: aorta-msgs==2026.10.20\n"
                             f"Requires-Dist: vbot-humanoid-msgs=={version}\n"

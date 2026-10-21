@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1 (in preparation)
+
+- Add opt-in pull BodyState/ControlStatus snapshots and C++ BodyState NumPy decode
+  and BodyCmd encoding; keep the original callback APIs compatible.
+- Move examples to latest body feedback while keeping each configured control
+  period independent of state publication frequency.
+- Add Aorta Joy draining and button-edge diagnostics, and common policy-cycle
+  timing/applied-sequence logs. Public 0.1.5 packaging/pin is pending.
+
 ## 0.2.0 (in preparation)
 
 - Use the public 31-slot BodyCmd/BodyState interfaces and EXTERNAL control;

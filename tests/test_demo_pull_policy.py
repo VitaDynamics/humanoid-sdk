@@ -2,6 +2,7 @@
 import threading
 import unittest
 from types import SimpleNamespace as NS
+from unittest.mock import Mock
 
 from examples import brainco_hand_external, external_control, gripper_external, teleop_policy
 from locomotion_aorta import BODY_CMD_TOPIC
@@ -17,6 +18,29 @@ class Latest400HzController(RecordingController):
 
 
 class TimedDemoTests(unittest.TestCase):
+    def test_teleop_publish_failure_is_preserved_when_diagnostics_also_fail(self):
+        body, state = fixture()
+        status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
+                    client_id='client', lease_id=4, reject_count=0)
+        def latest(timeout):
+            state.state_id += 1
+            return state
+        controller = NS(
+            get_robot_info=lambda timeout: NS(info=NS(body=body), status=API.ServiceStatus.SUCCESS),
+            wait_state=latest, status=status, enter_external=lambda timeout: status,
+            publish=Mock(side_effect=RuntimeError('send failed')),
+            exit_external=Mock(return_value=NS(current_action='PASSIVE')))
+        recorder = NS(cycle=Mock(side_effect=OSError('log full')))
+        with self.assertRaisesRegex(RuntimeError, 'send failed'):
+            teleop_policy.live(controller, API, teleop_policy.Policy(METADATA, CONTRACT),
+                               NS(infer=lambda obs: [0]*12), lambda: (), threading.Event(),
+                               1, recorder=recorder)
+        controller.exit_external.assert_called_once()
+        row = recorder.cycle.call_args.args[0]
+        self.assertEqual(row['publish_result'], 'raised')
+        self.assertEqual(row['error'], 'RuntimeError: send failed')
+        self.assertEqual(row['session_id'], 'NOT_MEASURED')
+
     def assert_body_timer(self, run):
         clock = FakeClock()
         controller = Latest400HzController(clock)
