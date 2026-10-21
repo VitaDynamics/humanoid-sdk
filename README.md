@@ -496,3 +496,27 @@ previous immutable snapshot with unchanged receipt timestamps; timeout=0 does
 not block. Live policy demos retain their configured 50 Hz timer, independently
 of the BodyState publication rate (including 400 Hz). Core context receive stamps
 are dequeue/assembly times, not network-arrival times.
+
+Velocity stops publishing if BodyState does not advance within the existing
+200 ms live-feedback window. WBC retains `--max-state-age-ms` (default 50 ms):
+pull feedback must pass both local cache age and the producer's
+`ts_state_pub_us` CLOCK_REALTIME publication age. This requires synchronized
+robot/client REALTIME clocks; unknown/future publication stamps are rejected.
+The Core dequeue stamp alone cannot establish arrival age. Policy schedules,
+duration and transitions use monotonic time; late cycles re-anchor one full
+period ahead instead of sending catch-up bursts. Velocity SIGINT/SIGTERM stop
+new targets and run the existing CANCEL/close path.
+
+Pull ControlStatus conversion errors are counted in
+`PullTransport.status_decode_errors` and retain the last valid snapshot;
+transport failures still propagate. `PullController.wait_body_state()` retains
+the callback controller's `ExternalControlTimeoutError` contract. After close,
+wait/publish raise `ControllerClosedError`, while `status` returns its last
+snapshot. Creating a read-only source does not change Aorta logging environment
+variables. Publisher construction validates the native schema/header ABI before
+control ownership can be requested.
+
+EE pull clients serialize ring consumption. A concurrent caller that finds a
+poll in progress uses already cached Info/state instead of waiting behind that
+caller's blocking receive. The existing Info validation and command guards
+still apply; this does not create a callback or polling worker.

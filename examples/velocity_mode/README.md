@@ -60,7 +60,11 @@ is 93 values × 5 history frames; validate the supplied model's actual metadata.
 The asymmetric vx/vy/wz ranges, deadbands, 1s input freshness,
 50Hz schedule and initial transition retain the source profile's values.
 Duration omitted or zero remains unlimited; a positive duration is bounded.
-The original finally/CANCEL/close path remains active for Ctrl-C and errors.
+The original finally/CANCEL/close path remains active for SIGINT, SIGTERM and
+errors. Scheduling, transition progress and duration use monotonic time;
+S0–S6 retain their original REALTIME log clocks. No BodyState advance for the
+existing 200 ms live-feedback window stops new targets. Late cycles wait a
+full period before resuming; they do not publish catch-up bursts.
 
 ## Direction dependency
 
@@ -94,13 +98,23 @@ baseline; adding/removing button indices does not invent edges.
 
 Snapshots are immutable and single-consumer. `received_realtime_ns` is direct
 CLOCK_REALTIME immediately after pull returns, not network arrival time;
-the freshness limit is 1s. `missing_samples_since_read` and
+freshness requires both this receipt and the AortaHeader producer publication
+stamp to be within 1s. Robot/client REALTIME clocks must be synchronized;
+unknown, future or old source stamps produce neutral direction. Draining an
+old backlog cannot refresh its source age. `missing_samples_since_read` and
 `missing_samples_total` count forward gaps in the payload AortaHeader's uint64
 sequence (zero is valid). Duplicates, resets/reordering, wrap and source changes
 are diagnosed separately. Missing header/source identity is unknown, not zero
 loss. `event_history_complete` is false for a known gap or ambiguous interval;
 it does not recover events missing from those frames. `sequence_diagnostics`
 and per-cycle event counts are also included in the velocity log.
+
+Duplicate or older sequences do not overwrite axes, buttons, receipt time or
+the sequence baseline. A same-identity sequence reset must catch up, or use a
+new publisher identity; uint64 contiguous wrap remains valid. Malformed frames
+are skipped and counted by `decode_errors_total` and the `decode_error`
+diagnostic, without refreshing freshness or discarding previously counted
+edges. Transport failures still propagate.
 
 The default ring depth is 256. Size it from the actual peak input rate with at
 least ten 50Hz ticks of headroom: next power of two of

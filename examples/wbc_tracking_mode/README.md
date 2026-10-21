@@ -26,7 +26,7 @@ Profile: `wbc_tracking_asample.json`; log schema: `vita.wbc_tracking.v1`.
 Robot action 14/HUMANOID_TRACKING and `groot_wbc.tracking_contract.v1` metadata
 are unchanged. This SDK program still requests **EXTERNAL**.
 
-Use a matching SDK 0.2.0 and finalized 0.1.4 bindings with `wbc-tracking-demo`.
+Use matching SDK 0.2.1 and finalized 0.1.5 bindings with `wbc-tracking-demo`.
 Model construction lazily loads the built-in C++ ORT 1.20.1 Session, with the
 existing `--threads` intra-op setting (default 1) and inter-op=1. There is no
 runtime Python ORT dependency or fallback.
@@ -54,12 +54,17 @@ mode does not claim a lease or publish commands.
 Live requires `--live --confirm-motion`, an explicitly authorized connection,
 the deployment-owned peer session configuration, and confirmation of support,
 clearance and emergency stop for the trial. It queries actual RobotInfo names,
-uses public BodyStateSource snapshots and requests EXTERNAL. Snapshot reception
+uses public PullStateSource snapshots and requests EXTERNAL. Snapshot reception
 alone is not source-time advancement: the original increasing source-time and
 50ms freshness/compute checks remain. The original ownership/reject/drop checks,
 50Hz schedule without catch-up bursts, stop-before-entry behavior and
 CANCEL/PASSIVE verification remain. Exit to PASSIVE can release loaded limbs.
 An exception is not permission for automatic retry or a service restart.
+For pull feedback, the 50 ms age bound checks both the original local cache
+receipt and `ts_state_pub_us`, the robot's REALTIME publication stamp. Robot and
+client REALTIME clocks must be synchronized; missing/future publication stamps
+are rejected. Core's receive stamp is a dequeue stamp and does not establish
+arrival age. Source-time advancement is still required independently.
 Before requesting EXTERNAL, RobotInfo must contain all model joint names and
 the fixed neck names, with each of those joints marked populated. Startup
 errors list the missing or unpopulated names and do not take ownership.

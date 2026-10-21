@@ -1,11 +1,12 @@
 """Opt-in keep-last feedback: no Python BodyState/ControlStatus RX callbacks."""
-import os
+import struct
 import threading
 import time
 import uuid
 from dataclasses import replace
 
-from .controller import ExternalController, ExternalControlTimeoutError, _deadline, _nonempty_text
+from .controller import (ExternalController, ExternalControlTimeoutError,
+                         ControllerClosedError, _deadline, _nonempty_text)
 from .transport import _AortaTransport, BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC
 from .state_arrays import decode_body_state_arrays
 
@@ -20,12 +21,11 @@ class PullTransport(_AortaTransport):
     def __init__(self, *, node_name, group, publishers=True):
         _nonempty_text(group, 'group')
         _nonempty_text(node_name, 'node_name')
-        if not publishers:
-            os.environ['AORTA_LOG_TOPIC_ENABLED'] = 'false'
         super().__init__(node_name=node_name, group=group, _publishers=publishers)
         self._pulls = {}
         self._callbacks = {BODY_STATE_TOPIC: [], CONTROL_STATUS_TOPIC: []}
         self._status = None
+        self.status_decode_errors = 0
         self._latest_state = None
         self._state_lock = threading.Lock()
         self._status_lock = threading.RLock()
@@ -57,7 +57,13 @@ class PullTransport(_AortaTransport):
             self._ensure_open()
             if sample is not None:
                 _, convert, _ = self._subscriber_spec(CONTROL_STATUS_TOPIC)
-                status = convert(self._bindings.control_status_decoder(sample.payload))
+                try:
+                    status = convert(self._bindings.control_status_decoder(sample.payload))
+                except (ValueError, TypeError, IndexError, AttributeError, struct.error):
+                    # Match typed callbacks: retain the last good snapshot. Do
+                    # not turn one incompatible phase/frame into CANCEL/PASSIVE.
+                    self.status_decode_errors += 1
+                    return self._status
                 self._status = status
                 for callback in tuple(self._callbacks[CONTROL_STATUS_TOPIC]):
                     callback(status)
@@ -108,7 +114,7 @@ class PullTransport(_AortaTransport):
 
     def _ensure_open(self):
         if self._closed:
-            raise RuntimeError('Aorta transport is closed')
+            raise ControllerClosedError('Aorta transport is closed')
 
 
 class _PullRegistration:
@@ -166,17 +172,26 @@ class PullController(ExternalController):
                          _transport=transport, _subscribe_body_state=False)
 
     def wait_state(self, timeout=5.0):
+        with self._condition:
+            self._ensure_open()
         return self.transport.wait_state(timeout)
 
     def wait_body_state(self, timeout=5.0):
-        return self.wait_state(timeout).body_state()
+        try:
+            return self.wait_state(timeout).body_state()
+        except TimeoutError as error:
+            raise ExternalControlTimeoutError(str(error)) from error
 
     @property
     def status(self):
-        self.transport.poll_control_status()
+        # The original status property remains readable after close.
+        if not self._closed:
+            self.transport.poll_control_status()
         return super().status
 
     def publish(self, command):
+        with self._condition:
+            self._ensure_open()
         self.transport.poll_control_status()
         return super().publish(command)
 

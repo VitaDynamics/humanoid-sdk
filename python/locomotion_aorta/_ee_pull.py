@@ -16,7 +16,11 @@ class FeedbackPulls:
     def poll(self, wait_kind=None, timeout=0):
         # One latest sample per topic, not an unbounded drain driven by state Hz.
         # A bounded wait also lets close/other topic events be noticed promptly.
-        with self._lock:
+        # Only one caller drains at a time. A publisher reading cached Info
+        # must never wait behind another caller's bounded blocking recv.
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
             for kind in sorted(self.rings, key=lambda k: k != 'info'):
                 ring, decoder = self.rings[kind]
                 try:
@@ -27,3 +31,5 @@ class FeedbackPulls:
                         self.receive(kind, decoder(sample.payload))
                 except Exception as error:
                     self.failed(error)
+        finally:
+            self._lock.release()

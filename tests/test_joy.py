@@ -15,13 +15,14 @@ from locomotion_aorta import JoyReader, JOY_PULL_DEPTH, JOY_TOPIC
 
 
 def payload(sequence=0, *, axes=(0.25, -0.5), buttons=(0,), publisher="gamepad",
-            header=True):
+            header=True, published_ns=1_000_000_000):
     builder = flatbuffers.Builder(128)
     header_offset = None
     if header:
         node = builder.CreateString(publisher) if publisher is not None else None
         header_wire.AortaHeaderStart(builder)
         header_wire.AortaHeaderAddSequence(builder, sequence)
+        header_wire.AortaHeaderAddPublishStampNs(builder, published_ns)
         if node is not None:
             header_wire.AortaHeaderAddPublisherNode(builder, node)
         header_offset = header_wire.AortaHeaderEnd(builder)
@@ -182,14 +183,15 @@ class JoyReaderTest(unittest.TestCase):
         self.assertEqual(dict(sample.pressed_counts), {0: 1})
         self.assertTrue(sample.event_history_complete)
 
-    def test_reset_or_reorder_rebases_without_uint64_huge_gap(self):
+    def test_reset_or_reorder_does_not_rebase_or_invent_uint64_gap(self):
         self.read(payload(100, buttons=(1,)))
         sample = self.read(payload(0))
         self.assertEqual(sample.missing_samples_total, 0)
         self.assertEqual(sample.sequence_diagnostics["reset_or_reorder"], 1)
         self.assertFalse(sample.released_counts)
         self.assertFalse(sample.event_history_complete)
-        self.assertTrue(self.read(payload(1)).event_history_complete)
+        self.assertEqual(sample.buttons, (1,))
+        self.assertTrue(self.read(payload(101, buttons=(1,))).event_history_complete)
 
     def test_source_change_rebases_buttons_and_does_not_cross_subtract(self):
         self.read(payload(100, buttons=(1,), publisher="a"))
@@ -237,11 +239,12 @@ class JoyReaderTest(unittest.TestCase):
     def test_bad_frame_does_not_partially_commit_or_clear_prior_counts(self):
         self.read(payload(0))
         self.ring.put(payload(1, buttons=(1,)), b"bad")
-        with self.assertRaises(Exception):
-            self.reader.read()
-        sample = self.read()
+        sample = self.reader.read()
         self.assertEqual(dict(sample.pressed_counts), {0: 1})
         self.assertEqual(sample.samples_total, 2)
+        self.assertEqual(sample.decode_errors_total, 1)
+        self.assertEqual(sample.sequence_diagnostics['decode_error'], 1)
+        self.assertFalse(sample.event_history_complete)
 
     def test_snapshots_and_count_maps_are_immutable(self):
         sample = self.read(payload())

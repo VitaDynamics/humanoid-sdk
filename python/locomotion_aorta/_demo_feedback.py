@@ -1,5 +1,31 @@
 """Shared demo views/diagnostics; no transport, policy or automatic publishing."""
 NOT_MEASURED = 'NOT_MEASURED'
+# Existing live-demo lowstate window; policies must not refresh a frozen input.
+LOWSTATE_WINDOW_S = .2
+
+
+def feedback_age_ns(state, monotonic_ns, realtime_ns):
+    """Bound local cache age and, for pull frames, producer publication age.
+
+    Core's pull receipt is dequeue time. ts_state_pub_us is the robot's
+    CLOCK_REALTIME publication stamp; live pull demos require synchronized
+    source/client clocks. It is not compared to a local monotonic clock.
+    """
+    received = state.received_monotonic_ns
+    if not received:
+        raise ValueError('SDK must provide feedback receipt timestamps')
+    age = monotonic_ns-received
+    if age < 0:
+        raise TimeoutError('feedback receipt timestamp is in the future')
+    if hasattr(state, 'pull_context_receive_stamp_ns'):
+        published = state.ts_state_pub_us * 1000
+        if not published:
+            raise ValueError('pull feedback publication timestamp is unknown')
+        source_age = realtime_ns-published
+        if source_age < 0:
+            raise TimeoutError('feedback publication stamp is in the future; check clock synchronization')
+        age = max(age, source_age)
+    return age
 
 
 def joint_columns(state):

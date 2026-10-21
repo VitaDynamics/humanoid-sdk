@@ -22,6 +22,12 @@ def frame_state(state_id):
     return BodyState(state_id, (BodyJointState(),)*31, ts_state_real_us=1000)
 
 
+def running_status():
+    from locomotion_aorta import ControlStatus, ExternalPhase
+    return ControlStatus(status_seq=1, current_action='EXTERNAL', phase=ExternalPhase.RUNNING,
+                         generation=3, client_id='test', lease_id='lease')
+
+
 def policy_fixture():
     policy = VelocityModePolicy.__new__(VelocityModePolicy)
     policy.names = ["left_hip", "right_hip"]
@@ -227,7 +233,7 @@ class DirectionSourceTest(unittest.TestCase):
         received = 1_700_000_000_000_000_000
         axes = (0., 1., 0., 0.)
         with patch.object(example.time, "time_ns", return_value=received):
-            ring.put(payload(0, axes=axes))
+            ring.put(payload(0, axes=axes, published_ns=received))
             self.assertEqual(directions.snapshot(), axes)
         with patch.object(example.time, "time_ns", return_value=received+1_000_000_000):
             self.assertEqual(directions.snapshot(), axes)
@@ -267,7 +273,7 @@ class TransportTest(unittest.TestCase):
              patch("locomotion_aorta.transport._load_aorta_bindings", return_value=bindings):
             transport = example.PolicyTransport(group="default", shadow=True)
             self.assertEqual(transport.publishers, {})
-            self.assertEqual(example.os.environ["AORTA_LOG_TOPIC_ENABLED"], "false")
+            self.assertNotIn("AORTA_LOG_TOPIC_ENABLED", example.os.environ)
             transport.close()
         self.assertEqual(calls, [])
 
@@ -312,7 +318,7 @@ class CycleTest(unittest.TestCase):
         def sleep(delay):
             clock.now += round(delay * 1_000_000_000)
 
-        controller = SimpleNamespace(publish=publish) if live else None
+        controller = SimpleNamespace(publish=publish, status=running_status()) if live else None
         if controller is not None and timing:
             controller._last_publish_timing = lambda: dict(publish_total_ns=123,
                 outcome='raised' if fail else 'returned')
@@ -372,6 +378,7 @@ class CycleTest(unittest.TestCase):
         def sleep(delay):
             clock.now += round(delay*1e9)
         with patch.object(example.time, "time_ns", side_effect=lambda: clock.now), \
+             patch.object(example.time, "monotonic_ns", side_effect=lambda: clock.now), \
              patch.object(example.time, "sleep", side_effect=sleep):
             example.run_cycles(policy, SimpleNamespace(latest=lambda: frame), directions,
                                SimpleNamespace(cycle=records.append), controller=None,
@@ -403,8 +410,8 @@ class CycleTest(unittest.TestCase):
             published.append(clock.now)
             return replace(command,session_id=7,sequence=len(published))
         def sleep(delay):clock.now+=round(delay*1e9)
-        with patch.object(example.time,'time_ns',side_effect=lambda:clock.now),patch.object(example.time,'sleep',side_effect=sleep):
-            example.run_cycles(policy,SimpleNamespace(latest=latest),SimpleNamespace(snapshot=lambda:(),statistics=lambda:{}),SimpleNamespace(cycle=records.append),controller=SimpleNamespace(publish=publish),duration=.19,transition=([],0.))
+        with patch.object(example.time,'time_ns',side_effect=lambda:clock.now),patch.object(example.time,'monotonic_ns',side_effect=lambda:clock.now),patch.object(example.time,'sleep',side_effect=sleep):
+            example.run_cycles(policy,SimpleNamespace(latest=latest),SimpleNamespace(snapshot=lambda:(),statistics=lambda:{}),SimpleNamespace(cycle=records.append),controller=SimpleNamespace(publish=publish,status=running_status()),duration=.19,transition=([],0.))
         self.assertEqual(len(inferred),11)  # t=0..200ms: original grid/bounded-loop semantics.
         self.assertEqual(len(published),len(inferred))
         self.assertEqual(len(records),len(inferred))
@@ -444,13 +451,17 @@ class DurationTest(unittest.TestCase):
         frame = example.StateFrame(frame_state(1), (0.,)*31, (0.,)*31,
                                    (0.,)*3, (1.,0.,0.,0.), 1, 2, 3)
         records = []
+        def latest():
+            from dataclasses import replace
+            return replace(frame, state=frame_state(clock.now))
         def record(row):
             records.append(row)
             if len(records) == 3:
                 raise KeyboardInterrupt
         with patch.object(example.time, "time_ns", side_effect=lambda: clock.now), \
+             patch.object(example.time, "monotonic_ns", side_effect=lambda: clock.now), \
              self.assertRaises(KeyboardInterrupt):
-            example.run_cycles(policy, SimpleNamespace(latest=lambda: frame),
+            example.run_cycles(policy, SimpleNamespace(latest=latest),
                                SimpleNamespace(snapshot=lambda: (), statistics=lambda: {}),
                                SimpleNamespace(cycle=record), controller=None, duration=0,
                                transition=([],0.))

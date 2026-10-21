@@ -5,15 +5,16 @@ import argparse
 from dataclasses import dataclass
 import hashlib
 from importlib.metadata import version
-from locomotion_aorta._demo_feedback import publish_log_fields
+from locomotion_aorta._demo_feedback import publish_log_fields, LOWSTATE_WINDOW_S
 import os
+import signal
 from pathlib import Path
 import threading
 import time
 import uuid
 
 from locomotion_aorta import (
-    PullController as ExternalController, PullTransport, BodyCmd, BodyJointCmd, JoyReader,
+    PullController as ExternalController, PullTransport, BodyCmd, BodyJointCmd, JoyReader, ExternalPhase,
 )
 import locomotion_aorta
 from locomotion_aorta._body_codec import decode_body_state
@@ -156,21 +157,44 @@ def transition_duration(policy, frame, root):
     return target, duration
 
 
-def run_cycles(policy, transport, directions, log, *, controller, duration, transition):
+def require_running(controller, expected=None):
+    status = controller.status
+    if (status is None or status.current_action != 'EXTERNAL'
+            or status.phase != ExternalPhase.RUNNING or getattr(status, 'timeout_hold', False)):
+        raise RuntimeError('EXTERNAL is no longer RUNNING')
+    if expected is not None and any(getattr(status, key, 0) != getattr(expected, key, 0)
+            for key in ('generation', 'client_id', 'lease_id', 'reject_count', 'ingress_drop_count')):
+        raise RuntimeError('EXTERNAL ownership or rejection/drop counters changed')
+    return status
+
+
+def run_cycles(policy, transport, directions, log, *, controller, duration, transition, stop=None):
     initial = transport.latest()
     target, transition_s = transition
     policy.reset()
-    started = realtime_ns()
+    started = time.monotonic_ns()
+    stop = stop if stop is not None else threading.Event()
+    expected = require_running(controller) if controller else None
+    last_state_id, last_advance = initial.state.state_id, started
     duration_ns = int(duration * 1_000_000_000) if duration else None
     transition_ns = int(transition_s * 1_000_000_000)
     next_cycle = started
     cycle = 0
     previous_publish_ns = None
-    while duration_ns is None or realtime_ns() - started < duration_ns:
-        delay = next_cycle - realtime_ns()
+    while not stop.is_set() and (duration_ns is None or time.monotonic_ns() - started < duration_ns):
+        delay = next_cycle - time.monotonic_ns()
         if delay > 0:
             time.sleep(delay / 1_000_000_000)
+        if stop.is_set():
+            break
         frame = transport.latest()
+        now = time.monotonic_ns()
+        if frame.state.state_id > last_state_id:
+            last_state_id, last_advance = frame.state.state_id, now
+        if now-last_advance >= LOWSTATE_WINDOW_S*1e9:
+            raise TimeoutError('BodyState did not advance within the live lowstate window')
+        if controller:
+            require_running(controller, expected)
         cycle += 1
         record = dict(cycle=cycle, state_id=frame.state.state_id,
                       S0=frame.s0, S1=frame.s1, S2=frame.s2,
@@ -191,7 +215,7 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
             # on every 50 Hz tick, without changing the policy's timer.
             axes = directions.snapshot()
             record.update(directions.statistics())
-            elapsed = realtime_ns() - started
+            elapsed = time.monotonic_ns() - started
             if elapsed < transition_ns:
                 record["phase"] = "transition"
                 progress = elapsed / transition_ns
@@ -211,7 +235,12 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
                               input_state_id=frame.state.state_id,
                               input_state_ts_real_us=frame.state.ts_state_real_us)
             record["target_q"] = [motor.q for motor in command.joints]
+            if stop.is_set():
+                break
             if controller:
+                require_running(controller, expected)
+                if time.monotonic_ns()-last_advance >= LOWSTATE_WINDOW_S*1e9:
+                    raise TimeoutError('BodyState did not advance within the live lowstate window')
                 record["S5"] = realtime_ns()
                 publish_mono = time.monotonic_ns()
                 record['control_interval_ns'] = (publish_mono-previous_publish_ns
@@ -238,9 +267,10 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
             raise
         finally:
             log.cycle(record)
-        # Fixed 50 Hz target; an overrun resumes at the current time without
-        # bursts of catch-up commands. No per-segment extra 20 ms delay.
-        next_cycle = max(next_cycle + PERIOD_NS, realtime_ns())
+        # Keep a monotonic 50 Hz timer; after an overrun wait a full period.
+        next_deadline = next_cycle + PERIOD_NS
+        now = time.monotonic_ns()
+        next_cycle = next_deadline if next_deadline > now else now + PERIOD_NS
 
 
 def parse_args(argv=None):
@@ -285,6 +315,9 @@ def main():
                     period_s=PERIOD_S, models=[policy.inventory])
     log = transport = controller = directions = None
     entered = False
+    stop = threading.Event()
+    handlers = {sig: signal.signal(sig, lambda *_args: stop.set())
+                for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
         transport = PolicyTransport(group=args.group, shadow=args.shadow)
         if args.shadow:
@@ -314,7 +347,7 @@ def main():
             entered = True
         transition = transition_duration(policy, transport.latest(), args.locomotion_dir)
         run_cycles(policy, transport, directions, log, controller=controller,
-                   duration=args.duration, transition=transition)
+                   duration=args.duration, transition=transition, stop=stop)
     finally:
         try:
             if entered:
@@ -330,12 +363,18 @@ def main():
                     finally:
                         directions.close()
             finally:
-                if controller is not None:
-                    controller.close()
-                elif transport is not None:
-                    transport.close()
-                if log is not None:
-                    log.close()
+                try:
+                    if controller is not None:
+                        controller.close()
+                    elif transport is not None:
+                        transport.close()
+                finally:
+                    try:
+                        if log is not None:
+                            log.close()
+                    finally:
+                        for sig, handler in handlers.items():
+                            signal.signal(sig, handler)
 
 
 if __name__ == "__main__":

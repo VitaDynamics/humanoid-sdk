@@ -91,6 +91,11 @@ class _AortaTransport:
                     qos=realtime,
                 )
             )
+            # Validate the pinned native/header ABI before ownership can be
+            # acquired, rather than discovering incompatibility on first send.
+            from ._native_body_codec import NativeBodyPublisher
+            self._body_publisher = NativeBodyPublisher(
+                self.publishers[BODY_CMD_TOPIC], self._bindings.body_cmd_schema_meta)
         except BaseException:
             self.node.close()
             raise

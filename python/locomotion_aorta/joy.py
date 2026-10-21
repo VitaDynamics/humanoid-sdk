@@ -1,6 +1,7 @@
 """User-thread Joy reception; drain snapshots before counting button edges."""
 
 from dataclasses import dataclass
+import struct
 import time
 from types import MappingProxyType
 from typing import Mapping
@@ -30,12 +31,17 @@ class JoySnapshot:
     samples_since_read: int
     samples_total: int
     sequence_diagnostics: Mapping[str, int]
+    published_realtime_ns: int | None = None
+    decode_errors_total: int = 0
 
     def is_fresh(self, now_ns: int | None = None) -> bool:
         if self.received_realtime_ns is None:
             return False
-        age = (time.time_ns() if now_ns is None else now_ns) - self.received_realtime_ns
-        return 0 <= age <= JOY_FRESHNESS_NS
+        now = time.time_ns() if now_ns is None else now_ns
+        if not self.published_realtime_ns:
+            return False  # Unknown source age is not fresh joystick input.
+        return all(0 <= now-stamp <= JOY_FRESHNESS_NS for stamp in
+                   (self.received_realtime_ns, self.published_realtime_ns))
 
 
 class JoyReader:
@@ -69,6 +75,8 @@ class JoyReader:
         self._source = None
         self._sequences = {}
         self._received_ns = None
+        self._published_ns = None
+        self._decode_errors_total = 0
         self._samples_total = 0
         self._missing_total = 0
         self._sequence_available = False
@@ -97,14 +105,15 @@ class JoyReader:
         sequence = header.Sequence() if header is not None else None
         raw_source = header.PublisherNode() if header is not None else None
         source = raw_source.decode("utf-8") if raw_source else None
+        published_ns = header.PublishStampNs() if header is not None else None
         previous = self._buttons
         if self._samples_total and source != self._source:
             self._diagnose("source_changed")
             previous = None
 
         # Without publisher identity, interleaved counters cannot be separated.
-        self._sequence_available = sequence is not None and source is not None
-        if not self._sequence_available:
+        sequence_available = sequence is not None and source is not None
+        if not sequence_available:
             self._diagnose("sequence_unavailable")
             self._sequences.clear()
         else:
@@ -113,9 +122,10 @@ class JoyReader:
                 distance = (sequence - prior_sequence) & _SEQUENCE_MASK
                 if distance == 0:
                     self._diagnose("duplicate")
+                    return
                 elif distance >= 1 << 63:
                     self._diagnose("reset_or_reorder")
-                    previous = None
+                    return  # Never roll the baseline/axes/receipt backwards.
                 elif distance > 1:
                     self._missing += distance - 1
                     self._missing_total += distance - 1
@@ -133,14 +143,19 @@ class JoyReader:
                     counts[index] = counts.get(index, 0) + 1
         self._axes, self._buttons, self._source = axes, buttons, source
         self._received_ns = received_ns
+        self._published_ns = published_ns
+        self._sequence_available = sequence_available
         self._samples += 1
         self._samples_total += 1
 
     def read(self) -> JoySnapshot:
-        """Drain in arrival order. Errors preserve unreturned pending counts.
+        """Drain in arrival order; skip and count malformed input frames.
 
         received_realtime_ns is CLOCK_REALTIME immediately after pull returns,
-        not network arrival time. Header gaps report observable missing sequence
+        not network arrival time. Freshness also checks the header's producer
+        REALTIME stamp: source/client clocks must be synchronized. Unknown,
+        future or old source stamps are neutral input, not a fresh backlog.
+        Header gaps report observable missing sequence
         numbers; they neither locate the loss nor recover missed button edges.
         """
         if self._closed:
@@ -150,9 +165,13 @@ class JoyReader:
             if sample is None:
                 break
             received_ns = time.time_ns()
-            self._accept(sample.payload, received_ns)
+            try:
+                self._accept(sample.payload, received_ns)
+            except (ValueError, TypeError, IndexError, AttributeError, struct.error):
+                self._decode_errors_total += 1
+                self._diagnose('decode_error')
         complete = (self._sequence_available and not self._incomplete
-                    if self._samples else self._history_complete)
+                    if self._samples else self._history_complete and not self._incomplete)
         snapshot = JoySnapshot(
             axes=self._axes, buttons=self._buttons if self._buttons is not None else (),
             pressed_counts=MappingProxyType(self._pressed),
@@ -164,6 +183,8 @@ class JoyReader:
             event_history_complete=complete,
             samples_since_read=self._samples, samples_total=self._samples_total,
             sequence_diagnostics=MappingProxyType(self._diagnostics),
+            published_realtime_ns=self._published_ns,
+            decode_errors_total=self._decode_errors_total,
         )
         self._history_complete = complete
         self._reset_pending()

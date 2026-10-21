@@ -5,7 +5,8 @@ Live mode requests EXTERNAL ownership and moves the body. Exit sends CANCEL
 and must confirm PASSIVE, which can let loaded limbs fall. Installation and
 --confirm-motion do not replace authorization for a specific robot and trial.
 """
-from locomotion_aorta._demo_feedback import state_log_fields,publish_log_fields,NOT_MEASURED
+from locomotion_aorta._demo_feedback import (state_log_fields, publish_log_fields,
+                                            feedback_age_ns, NOT_MEASURED)
 import argparse
 import hashlib
 import json
@@ -174,11 +175,9 @@ def wait_fresh(controller, policy, *, previous_ns, timeout, max_age,
             raise TimeoutError('feedback did not advance before the freshness deadline')
         state = controller.wait_state(timeout=remaining)
         if state.stamp_ns > previous_ns:
-            if not state.received_monotonic_ns:
-                raise ValueError('SDK must provide feedback receipt timestamps')
-            age_ns = round(monotonic()*1e9)-state.received_monotonic_ns
+            age_ns = feedback_age_ns(state, round(monotonic()*1e9), time.time_ns())
             if not 0 <= age_ns <= max_age*1e9:
-                raise TimeoutError('feedback callback cache is stale or has a future timestamp')
+                raise TimeoutError('feedback cache/publication is stale or has a future timestamp')
             policy.state(state)
             return state
         sleep(min(.001, remaining))
@@ -310,7 +309,8 @@ def main():
     parser.add_argument('--threads', type=int, default=1)
     parser.add_argument('--group', default='default')
     parser.add_argument('--timeout', type=float, default=5., help='session entry/exit deadline, seconds')
-    parser.add_argument('--max-state-age-ms', type=float, default=50., help='local callback age/new-feedback deadline')
+    parser.add_argument('--max-state-age-ms', type=float, default=50.,
+                        help='cache/publication age and new-feedback deadline; pull requires synchronized REALTIME clocks')
     parser.add_argument('--max-compute-ms', type=float, default=50.)
     parser.add_argument('--log', type=Path, required=True, help='new JSONL evidence file; never overwritten')
     args = parser.parse_args()

@@ -280,7 +280,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
         while not stop.is_set() and (duration == 0 or monotonic()-started < duration):
             status = controller.status
             if status is None or any(getattr(status,key) != getattr(entered,key)
-                                     for key in ('phase','generation','client_id','lease_id','current_action','reject_count')):
+                                     for key in ('phase','generation','client_id','lease_id','current_action','reject_count')) or getattr(status, 'timeout_hold', False):
                 raise RuntimeError('EXTERNAL ownership/status changed')
             # wait_state may return its cache. Reuse --timeout to wait for
             # a strictly newer input; never infer/publish again from that cache.
@@ -295,7 +295,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
                 remaining = state_deadline - monotonic()
                 if remaining <= 0:
                     raise TimeoutError('BodyState did not advance within --timeout')
-                sleep(min(policy.period, remaining))
+                sleep(min(.001, remaining))
             if stop.is_set():
                 break
             last_state_id = state.state_id
@@ -322,7 +322,11 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
                 if stop.is_set():
                     break
                 row['target_q'] = [m.q for m in targets]
-                # Existing controller guards still validate the session/command.
+                # A wait/inference may have crossed into TIMEOUT_HOLD.
+                status = controller.status
+                if status is None or any(getattr(status, key) != getattr(entered, key)
+                        for key in ('phase','generation','client_id','lease_id','current_action','reject_count')) or getattr(status, 'timeout_hold', False):
+                    raise RuntimeError('EXTERNAL state changed during state wait/inference')
                 msg = bodycmd(api,targets,state)
                 row['S5'] = time.time_ns()
                 publish_mono = round(monotonic()*1e9)
@@ -353,7 +357,9 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
                             pass  # Keep the original control failure if logging also fails.
                     else:
                         recorder.cycle(row)
-            deadline = max(deadline+policy.period, monotonic())
+            now = monotonic()
+            next_deadline = deadline+policy.period
+            deadline = next_deadline if next_deadline > now else now+policy.period
             sleep(max(0.0,deadline-monotonic()))
     finally:
         if attempted:

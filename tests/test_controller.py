@@ -156,7 +156,7 @@ class ExternalControllerTest(unittest.TestCase):
             transport_module,
             "_load_aorta_bindings",
             return_value=fake_bindings,
-        ):
+        ), mock.patch('locomotion_aorta._native_body_codec.NativeBodyPublisher'):
             transport = transport_module.create_aorta_transport(
                 node_name="sdk-node", group="robot-domain"
             )
