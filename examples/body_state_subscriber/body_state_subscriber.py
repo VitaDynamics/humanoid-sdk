@@ -4,7 +4,8 @@ import argparse
 from collections.abc import Callable
 from contextlib import closing
 
-from locomotion_aorta import BodyStateSource
+from locomotion_aorta import PullStateSource as BodyStateSource
+from locomotion_aorta._demo_feedback import joint_columns
 
 
 def run_once(
@@ -13,10 +14,10 @@ def run_once(
     timeout: float,
     emit: Callable[[str], None] = print,
 ) -> None:
-    state = source.snapshot(timeout).body_state()
+    state = source.wait_state(timeout)
     emit(f"state_id={state.state_id} ts_state_real_us={state.ts_state_real_us}")
-    for index, motor in enumerate(state.joints):
-        emit(f"joint[{index}] error_code={motor.error_code} q={motor.q:.6f} dq={motor.dq:.6f}")
+    for index, (q,dq,error) in enumerate(zip(*joint_columns(state))):
+        emit(f"joint[{index}] error_code={error} q={q:.6f} dq={dq:.6f}")
 
 
 def main() -> None:

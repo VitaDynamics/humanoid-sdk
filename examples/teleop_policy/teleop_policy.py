@@ -7,16 +7,19 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from dataclasses import dataclass
+import hashlib
 import json
 import math
 from pathlib import Path
 import signal
 import struct
+import sys
 import threading
 import time
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
+from locomotion_aorta._demo_feedback import joint_columns, state_log_fields, publish_log_fields, NOT_MEASURED
 from lowlevel.BodySampleStatus import BodySampleStatus
 from lowlevel.JointError import JointError
 
@@ -104,26 +107,35 @@ class Policy:
 
     def observation(self, state: Any, body: Any, command: Sequence[float], hip: Any) -> tuple[float, ...]:
         indices = self.roster(body)
-        if len(state.joints) != 31:
+        positions, velocities, errors = joint_columns(state)
+        if len(positions) != 31:
             raise ValueError('BodyState must contain the 31 public joints')
-        samples = [sample for sample in state.imu_states if sample.location == hip]
-        if len(samples) != 1 or samples[0].state is None:
-            raise ValueError('BodyState lacks one unambiguous HIP IMU sample')
-        sample = samples[0]
-        # Use the remaining sample-quality field from the generated public contract.
-        if not state.attitude_valid or sample.status != BodySampleStatus.OK:
-            raise ValueError('HIP attitude/gyro feedback is invalid')
-        quat, gyro = tuple(sample.state.quaternion), tuple(sample.state.gyroscope)
+        if hasattr(state, 'imu_values'):
+            samples = [i for i, location in enumerate(state.imu_location) if location == hip]
+            if len(samples) != 1 or not state.imu_state_present[samples[0]]:
+                raise ValueError('BodyState lacks one unambiguous HIP IMU sample')
+            i = samples[0]
+            if not state.attitude_valid or state.imu_status[i] != BodySampleStatus.OK:
+                raise ValueError('HIP attitude/gyro feedback is invalid')
+            quat = tuple(float(v) for v in state.imu_values[i, :4])
+            gyro = tuple(float(v) for v in state.imu_values[i, 4:7])
+        else:
+            samples = [sample for sample in state.imu_states if sample.location == hip]
+            if len(samples) != 1 or samples[0].state is None:
+                raise ValueError('BodyState lacks one unambiguous HIP IMU sample')
+            sample = samples[0]
+            if not state.attitude_valid or sample.status != BodySampleStatus.OK:
+                raise ValueError('HIP attitude/gyro feedback is invalid')
+            quat, gyro = tuple(sample.state.quaternion), tuple(sample.state.gyroscope)
         if len(quat) != 4 or len(gyro) != 3 or len(command) != 4:
             raise ValueError('invalid quaternion/gyro/velocity-height dimensions')
         q, dq = [], []
         for name in self.names:
             i = indices[name]
-            joint = state.joints[i]
-            if joint.error_code != JointError.NONE:
+            if errors[i] != JointError.NONE:
                 raise ValueError(f'policy joint feedback is invalid: {name}')
-            q.append(joint.q)
-            dq.append(joint.dq)
+            q.append(float(positions[i]))
+            dq.append(float(velocities[i]))
         finite(tuple(command) + quat + gyro + tuple(q) + tuple(dq))
         # R^T [0,0,-1], exact MuJoCo-style quaternion rotation from vt_human_obs.h.
         w, x, y, z = quat[0], -quat[1], -quat[2], -quat[3]
@@ -238,7 +250,8 @@ def bodycmd(api: Any, targets: Sequence[MotorTarget], state: Any) -> Any:
 
 def live(controller: Any, api: Any, policy: Policy, model: Any,
          axes: Callable[[], Sequence[float]], stop: threading.Event, timeout: float,
-         sleep: Callable = time.sleep, monotonic: Callable = time.monotonic) -> None:
+         sleep: Callable = time.sleep, monotonic: Callable = time.monotonic,
+         duration: float = 0.0, recorder=None) -> None:
     reply = controller.get_robot_info(timeout=timeout)
     if reply.status not in (api.ServiceStatus.SUCCESS, api.ServiceStatus.PARTIAL_SUCCESS):
         raise RuntimeError(f'get_robot_info failed: status={reply.status!r}; '
@@ -247,7 +260,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
         raise RuntimeError('get_robot_info did not return real body capabilities')
     body = reply.info.body
     policy.roster(body)
-    initial = controller.wait_body_state(timeout=timeout)
+    initial = controller.wait_state(timeout=timeout)
     command = JoyCommand(policy.contract)
     # Validate the real observation before requesting ownership; don't consume history yet.
     policy.observation(initial, body, command.step(()), api.BodyImuLocation.HIP)
@@ -261,20 +274,21 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
         entered = controller.enter_external(timeout=timeout)
         if entered.phase != api.ExternalPhase.RUNNING or entered.current_action != 'EXTERNAL':
             raise RuntimeError('PREPARE/ACK/COMMIT did not reach actual EXTERNAL RUNNING')
-        deadline = monotonic()
-        while not stop.is_set():
+        started = deadline = monotonic()
+        cycles, previous_publish_ns = 0, None
+        while not stop.is_set() and (duration == 0 or monotonic()-started < duration):
             status = controller.status
             if status is None or any(getattr(status,key) != getattr(entered,key)
                                      for key in ('phase','generation','client_id','lease_id','current_action','reject_count')):
                 raise RuntimeError('EXTERNAL ownership/status changed')
-            # wait_body_state may return its cache. Reuse --timeout to wait for
+            # wait_state may return its cache. Reuse --timeout to wait for
             # a strictly newer input; never infer/publish again from that cache.
             state_deadline = monotonic() + timeout
             while not stop.is_set():
                 remaining = state_deadline - monotonic()
                 if remaining <= 0:
                     raise TimeoutError('BodyState did not advance within --timeout')
-                state = controller.wait_body_state(timeout=remaining)
+                state = controller.wait_state(timeout=remaining)
                 if state.state_id > last_state_id:
                     break
                 remaining = state_deadline - monotonic()
@@ -284,12 +298,54 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
             if stop.is_set():
                 break
             last_state_id = state.state_id
-            observation = policy.observation(state,body,command.step(axes()),api.BodyImuLocation.HIP)
-            targets = policy.targets(model.infer(observation),body)
-            if stop.is_set():
-                break
-            # Keep all D2 controller/session/capability/watchdog/command guards in publish.
-            controller.publish(bodycmd(api,targets,state))
+            cycles += 1
+            row = dict(cycle=cycles, state_id=state.state_id,
+                       input_state_id=state.state_id,
+                       input_state_ts_real_us=state.ts_state_real_us,
+                       S2=time.time_ns(), S3=NOT_MEASURED, S4=NOT_MEASURED,
+                       S5=NOT_MEASURED, S6=NOT_MEASURED,
+                       session_id=NOT_MEASURED, sequence=NOT_MEASURED,
+                       publish_result='not_called', **state_log_fields(state))
+            try:
+                observation = policy.observation(state,body,command.step(axes()),api.BodyImuLocation.HIP)
+                row['S3'] = time.time_ns()
+                actions = model.infer(observation)
+                row['S4'] = time.time_ns()
+                targets = policy.targets(actions,body)
+                if stop.is_set():
+                    break
+                row['target_q'] = [m.q for m in targets]
+                # Existing controller guards still validate the session/command.
+                msg = bodycmd(api,targets,state)
+                row['S5'] = time.time_ns()
+                publish_mono = round(monotonic()*1e9)
+                row['control_interval_ns'] = (publish_mono-previous_publish_ns
+                    if previous_publish_ns is not None else NOT_MEASURED)
+                previous_publish_ns = publish_mono
+                try:
+                    sent = controller.publish(msg)
+                    row['publish_result'] = 'returned'
+                    publish_log_fields(row,sent)
+                except BaseException:
+                    row['publish_result'] = 'raised'
+                    raise
+                finally:
+                    row['S6'] = time.time_ns()
+                    timing = getattr(controller,'_last_publish_timing',lambda:None)()
+                    if timing is not None:
+                        row['publish_timing'] = timing
+            except BaseException as error:
+                row['error'] = f'{type(error).__name__}: {error}'
+                raise
+            finally:
+                if recorder is not None:
+                    if sys.exc_info()[0] is not None:
+                        try:
+                            recorder.cycle(row)
+                        except Exception:
+                            pass  # Keep the original control failure if logging also fails.
+                    else:
+                        recorder.cycle(row)
             deadline = max(deadline+policy.period, monotonic())
             sleep(max(0.0,deadline-monotonic()))
     finally:
@@ -316,8 +372,13 @@ def main() -> None:
     parser.add_argument('--group',default='default')
     parser.add_argument('--timeout',type=float,default=5.0,help='existing SDK control/discovery wait timeout in seconds')
     parser.add_argument('--joystick',type=int,default=0)
+    parser.add_argument('--neutral-input',action='store_true',help='explicit neutral axes; retains configured height/training-pose control, not a zero BodyCmd')
+    parser.add_argument('--duration',type=float,default=0.,help='bounded live seconds; 0 keeps the original until-interrupted behavior')
+    parser.add_argument('--log',type=Path,help='new S0-S6/publish/applied diagnostic JSONL, never overwritten')
     parser.add_argument('--confirm-motion',action='store_true',help='existing SDK demo motion acknowledgement; does not replace on-site authorization')
     args = parser.parse_args()
+    if not math.isfinite(args.duration) or args.duration < 0:
+        parser.error('--duration must be finite and nonnegative')
     if args.dry_run and args.body_state_jsonl is None:
         parser.error('--dry-run requires --body-state-jsonl; no transport is opened')
     if not args.dry_run and not args.confirm_motion:
@@ -339,27 +400,47 @@ def main() -> None:
                                   'physical_command_names':list(policy.names)}))
         return
     import locomotion_aorta as api  # D2 public binding; no legacy LowCmd fallback
-    import pygame  # optional demo joystick extra
+    pygame = None
+    if not args.neutral_input:
+        import pygame  # optional joystick input; no PICO dependency
     stop = threading.Event()
     old_handlers = {sig:signal.signal(sig,lambda signum,frame:stop.set())
                     for sig in (signal.SIGINT,signal.SIGTERM)}
     joystick = None
+    log = None
     try:
-        pygame.init()
-        pygame.joystick.init()
-        joystick = pygame.joystick.Joystick(args.joystick)
-        joystick.init()
-        def axes() -> tuple[float,...]:
-            for event in pygame.event.get():
-                if event.type in (pygame.QUIT,pygame.JOYDEVICEREMOVED):
-                    stop.set()
-            return tuple(joystick.get_axis(i) for i in range(joystick.get_numaxes()))
-        with api.ExternalController(group=args.group) as controller:
-            live(controller,api,policy,model,axes,stop,args.timeout)
+        if args.neutral_input:
+            axes = lambda: ()
+        else:
+            pygame.init()
+            pygame.joystick.init()
+            joystick = pygame.joystick.Joystick(args.joystick)
+            joystick.init()
+            def axes() -> tuple[float,...]:
+                for event in pygame.event.get():
+                    if event.type in (pygame.QUIT,pygame.JOYDEVICEREMOVED):
+                        stop.set()
+                return tuple(joystick.get_axis(i) for i in range(joystick.get_numaxes()))
+        if args.log:
+            if __package__:
+                from .velocity_mode_latency import CycleLog
+            else:
+                from velocity_mode_latency import CycleLog
+            log = CycleLog(args.log,dict(
+                demo='teleop_policy', input='neutral_axes' if args.neutral_input else 'pygame_joystick',
+                period_s=policy.period, model=str(Path(args.model).resolve()),
+                model_sha256=hashlib.sha256(Path(args.model).read_bytes()).hexdigest(),
+                clock='CLOCK_REALTIME', source_stamp='S1 SDK recv return; dequeue stamp is not arrival'))
+        with api.PullController(group=args.group) as controller:
+            live(controller,api,policy,model,axes,stop,args.timeout,
+                 duration=args.duration,recorder=log)
     finally:
         if joystick is not None:
             joystick.quit()
-        pygame.quit()
+        if pygame is not None:
+            pygame.quit()
+        if log is not None:
+            log.close()
         for sig,handler in old_handlers.items():
             signal.signal(sig,handler)
 

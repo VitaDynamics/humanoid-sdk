@@ -102,7 +102,7 @@ def binding_schema_hash(kind):
     return hashlib.sha256(module.SCHEMA_BFBS).hexdigest()
 
 
-def decode(kind, payload, bindings):
+def decode(kind, payload, bindings, *, native_body=False):
     if not isinstance(payload, bytes) or not 8 <= len(payload) <= 65536:
         raise ValueError("invalid or oversized FlatBuffer payload")
     view = bindings[kind](payload)
@@ -121,7 +121,11 @@ def decode(kind, payload, bindings):
         # records absence without synthesizing a healthy zero.
         return _json_feedback(asdict(record))
     if kind == "body_state":
-        state = decode_body_state(view)
+        if native_body:
+            from .state_arrays import decode_body_state_arrays
+            state = decode_body_state_arrays(payload).body_state()
+        else:
+            state = decode_body_state(view)
         if len(state.joints) != BODY_SLOTS:
             raise ValueError("requires31-slot BodyState")
         return _json_feedback(asdict(state))
@@ -174,8 +178,8 @@ class TraceWriter:
     def write(self, record):
         self.stream.write(json.dumps(record, allow_nan=False) + "\n")
 
-    def sample(self, kind, payload, timestamp_ns, bindings, **context):
-        record = decode(kind, payload, bindings)
+    def sample(self, kind, payload, timestamp_ns, bindings, *, native_body=False, **context):
+        record = decode(kind, payload, bindings, native_body=native_body)
         self.write({**record, "type": kind, "capture_timestamp_ns": timestamp_ns,
                     "payload_sha256": hashlib.sha256(payload).hexdigest(), **context})
         self.counts[kind] = self.counts.get(kind, 0) + 1
@@ -188,8 +192,13 @@ class TraceWriter:
 
 
 def capture_live(output: Path, metadata, duration_s, *, group="default", capacity=256,
-                 node_factory=None, bindings=None, monotonic=time.monotonic, marker_reader=None):
-    """Bounded, read-only capture. An incomplete file is retained on failure."""
+                 node_factory=None, bindings=None, monotonic=time.monotonic, marker_reader=None,
+                 pull_feedback=False):
+    """Read-only capture; opt-in body/status keep-last rings add at most 128 KiB.
+
+    The callback API is unchanged. Pull retention is depth one and may overwrite
+    intermediate frames; the queue drop count does not measure these overwrites.
+    """
     metadata_checked(metadata)
     if type(duration_s) not in (int, float) or not math.isfinite(duration_s) or not 0 < duration_s <= 86400:
         raise ValueError("duration must be in (0,86400] seconds")
@@ -204,6 +213,7 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
     lock = threading.Lock()
     accepting, dropped = True, 0
     node = None
+    pulls = {}
     failure = None
     def receive(kind, payload, context):
         nonlocal dropped
@@ -220,7 +230,11 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
             except queue.Full:
                 dropped += 1
     with output.open("x", encoding="utf-8") as stream:
-        writer = TraceWriter(stream, {**metadata, "requested_group": group}, "observer_monotonic_ns")
+        writer = TraceWriter(stream, {**metadata, "requested_group": group,
+            "feedback_retention": "keep-last-depth-1" if pull_feedback else "callback-queue",
+            "pull_overwrites": "not_measured" if pull_feedback else "not_applicable",
+            "capture_stamp_semantics": "host dequeue, not arrival" if pull_feedback else "host callback"},
+            "observer_monotonic_ns")
         try:
             node = node_factory("brainco_hil_observer", group)
             # Pinned Core resolves AORTA_GROUP and may ignore the constructor
@@ -228,11 +242,27 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
             if node.group() != group:
                 raise ValueError("effective Aorta group differs from --group; verify AORTA_GROUP/profile")
             for kind, topic in TOPICS.items():
+                if pull_feedback and kind in ("body_state", "control_status"):
+                    pulls[kind] = node.create_subscriber_pull(topic, depth=1,
+                                                              qos=aorta.QoS.sensor_data())
+                    continue
                 node.create_subscriber_typed(bytes, topic,
                     lambda payload, ctx, kind=kind: receive(kind, payload, ctx),
                     qos=aorta.QoS.sensor_data())
             deadline = monotonic() + duration_s
             while monotonic() < deadline:
+                for kind, sub in pulls.items():
+                    sample = sub.try_recv()
+                    if sample is None:
+                        continue
+                    stamp = time.monotonic_ns()
+                    if len(sample.payload) > 65536:
+                        with lock:
+                            dropped += 1
+                        continue
+                    writer.sample(kind, bytes(sample.payload), stamp, bindings,
+                        native_body=kind == "body_state", publisher=sample.context.publisher_node,
+                        transport_sequence=sample.context.sequence)
                 label = marker_reader() if marker_reader else None
                 if label is not None:
                     if not isinstance(label, str) or not 1 <= len(label) <= 512:
@@ -240,7 +270,8 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
                     writer.write({"type": "marker", "label": label,
                                   "capture_timestamp_ns": time.monotonic_ns()})
                 try:
-                    item = pending.get(timeout=min(0.05, max(0, deadline - monotonic())))
+                    item = pending.get(timeout=min(0.001 if pulls else 0.05,
+                                                   max(0, deadline - monotonic())))
                 except queue.Empty:
                     continue
                 kind, payload, stamp, sequence, publisher = item

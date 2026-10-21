@@ -5,6 +5,7 @@ Live mode requests EXTERNAL ownership and moves the body. Exit sends CANCEL
 and must confirm PASSIVE, which can let loaded limbs fall. Installation and
 --confirm-motion do not replace authorization for a specific robot and trial.
 """
+from locomotion_aorta._demo_feedback import state_log_fields,publish_log_fields,NOT_MEASURED
 import argparse
 import hashlib
 import json
@@ -132,6 +133,8 @@ def infer_step(model, policy, session, state, cycle, *, record_time=0):
                ts_first_output_us=state.ts_first_output_us,
                joint_error_codes=(state.error_code.tolist() if hasattr(state, "error_code")
                                   else [j.error_code for j in state.joints]))
+    row.update(state_log_fields(state))
+    row.update(S2=acquired_wall,S3=before_wall,S4=after_wall,S5=NOT_MEASURED,S6=NOT_MEASURED,publish_result='not_called')
     # Capture real input evidence: no inference-input/state-ID placeholders.
     q, dq, quat, gyro = policy.state(state)
     row['state'] = dict(q=q.tolist(), dq=dq.tolist(), quaternion=quat.tolist(), gyro=gyro.tolist())
@@ -169,7 +172,7 @@ def wait_fresh(controller, policy, *, previous_ns, timeout, max_age,
         remaining = deadline-monotonic()
         if remaining <= 0:
             raise TimeoutError('feedback did not advance before the freshness deadline')
-        state = controller.wait_body_state(timeout=remaining)
+        state = controller.wait_state(timeout=remaining)
         if state.stamp_ns > previous_ns:
             if not state.received_monotonic_ns:
                 raise ValueError('SDK must provide feedback receipt timestamps')
@@ -214,6 +217,7 @@ def live(model, policy, args, recorder, controller, *,
         session = ReferenceSession(policy, initial, clip, args.stand_seconds)
         previous_ns = 0
         start = deadline = monotonic()
+        previous_publish_ns = None
         while not stop.is_set() and monotonic()-start < args.duration:
             status = controller.status
             if status is None or any(getattr(status, k) != getattr(entered, k) for k in (
@@ -240,9 +244,15 @@ def live(model, policy, args, recorder, controller, *,
                     'reject_count', 'ingress_drop_count')) or status.timeout_hold:
                 raise RuntimeError('EXTERNAL state changed during inference')
             row['before_publish_monotonic_ns'] = time.monotonic_ns()
+            row['S5'] = time.time_ns()
+            publish_mono = round(monotonic()*1e9)
+            row['control_interval_ns'] = (publish_mono-previous_publish_ns if previous_publish_ns is not None else NOT_MEASURED)
+            previous_publish_ns = publish_mono
             try:
                 sent = controller.publish(command)
             except BaseException:
+                row['S6'] = time.time_ns()
+                row['publish_result'] = 'raised'
                 try:
                     recorder.write(dict(row, published=False,
                                         publish_timing=getattr(controller, '_last_publish_timing', lambda: None)()))
@@ -252,6 +262,9 @@ def live(model, policy, args, recorder, controller, *,
             timing = getattr(controller, '_last_publish_timing', lambda: None)()
             if timing is not None:
                 row['publish_timing'] = timing
+            row['S6'] = time.time_ns()
+            row['publish_result'] = 'returned'
+            publish_log_fields(row,sent,timing)
             row.update(session_id=sent.session_id, sequence=sent.sequence)
             row['after_publish_monotonic_ns'] = time.monotonic_ns()
             row['published'] = True
@@ -328,7 +341,6 @@ def main():
                 raise ValueError('set the deployment-owned PC ZENOH_SESSION_CONFIG_URI before --live')
             from contextlib import closing
             from locomotion_aorta import PullController as ExternalController, PullStateSource as BodyStateSource
-            from locomotion_aorta._policy_state import PolicyStateSource
             print('EXTERNAL requires robot virtual_pd strategy and ankle_virtual_pd_intent=true. '
                   'This program does not change robot configuration. Exit CANCEL confirms PASSIVE.', flush=True)
             stop = threading.Event()

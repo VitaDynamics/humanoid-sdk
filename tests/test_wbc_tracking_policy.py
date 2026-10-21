@@ -201,6 +201,7 @@ class FakeController:
                                  ts_state_real_us=self.state.ts_state_real_us+2000,
                                  received_monotonic_ns=round(self.clock.now*1e9))
         return self.state
+    wait_state = wait_body_state
 
     def enter_external(self, timeout):
         self.enters += 1
@@ -251,7 +252,7 @@ class TrackingLoopTest(unittest.TestCase):
             return replace(original_state,state_id=sample_index,
                            ts_state_real_us=original_state.ts_state_real_us+sample_index*2500,
                            received_monotonic_ns=round(self.clock.now*1e9))
-        self.controller.wait_body_state=latest
+        self.controller.wait_state=latest
         original_publish=self.controller.publish
         def publish(command):
             times.append(self.clock.now)

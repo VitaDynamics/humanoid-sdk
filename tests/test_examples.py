@@ -68,6 +68,7 @@ class RecordingController:
         self.calls.append("wait_body_state")
         self._emit_body_state()
         return self.controller.wait_body_state(timeout)
+    wait_state = wait_body_state
 
     def get_robot_info(self, timeout: float):
         return self.controller.get_robot_info(timeout)
@@ -226,10 +227,10 @@ class ExamplesSmokeTest(unittest.TestCase):
         state = BodyState(state_id=8, ts_state_real_us=0, attitude_valid=True,
                           joints=tuple(sample_motor(q=0.1, dq=0.0, body_index=i,
                                                     populated=i != 14) for i in range(31)))
-        source = SimpleNamespace(snapshot=mock.Mock(return_value=SimpleNamespace(body_state=lambda: state)))
+        source = SimpleNamespace(wait_state=mock.Mock(return_value=state))
         output: list[str] = []
         body_state_subscriber.run_once(source, timeout=0.1, emit=output.append)
-        source.snapshot.assert_called_once_with(0.1)
+        source.wait_state.assert_called_once_with(0.1)
         self.assertEqual(
             output,
             ["state_id=8 ts_state_real_us=0"]

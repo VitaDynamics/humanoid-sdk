@@ -31,7 +31,7 @@ def main():
                 return sys.stdin.readline(514).strip() or None
             return None
         capture_live(args.output, metadata, args.duration_s, group=args.group, capacity=args.queue_capacity,
-                     marker_reader=marker_reader if args.stdin_markers else None)
+                     marker_reader=marker_reader if args.stdin_markers else None, pull_feedback=True)
     else:
         export_mcap(args.input, args.output, metadata,
                     json.loads(args.topic_map.read_text()), json.loads(args.schema_hashes.read_text()))
