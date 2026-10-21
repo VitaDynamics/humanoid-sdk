@@ -57,25 +57,60 @@ in the startup error; EXTERNAL is not entered.
 The model's 28-joint order, history, scaling, clipped-action feedback, target
 limits and ankle feedforward remain unchanged. Current velocity asset metadata
 is 93 values × 5 history frames; validate the supplied model's actual metadata.
-The asymmetric vx/vy/wz ranges, deadbands, twist/joy priority, 1s input freshness,
+The asymmetric vx/vy/wz ranges, deadbands, 1s input freshness,
 50Hz schedule and initial transition retain the source profile's values.
 Duration omitted or zero remains unlimited; a positive duration is bounded.
 The original finally/CANCEL/close path remains active for Ctrl-C and errors.
 
 ## Direction dependency
 
-The default remains `--joy-source aorta`, subscribing to `locomotion/joy`.
-It additionally needs the deployment-matched generated `locomotion.Joy` Python
-binding and a ROS2 environment for the existing `/vel_cmd` subscriber. The
-final public SDK wheel set does **not** include that Joy binding. This is an
-open packaging dependency, not a reason to install the old rc.3 message wheel
-over the new SDK. Until a matching binding is handed off, the default Aorta
-input is **not ready for customer use**. No decoder is hand-written here and
-no automatic input-source fallback occurs.
+SDK 0.2.1 uses only Aorta `locomotion/joy`, through the SDK's `JoyReader`.
+There is no direction-source CLI option, ROS input subscription or velocity
+fallback. Neutral, missing or stale input produces zero direction through the
+existing profile. This requires the matching public humanoid **0.1.5** wheel,
+Aorta 2026.10.20 and FlatBuffers 25.12.19. The dependency pin and installable
+0.2.1 bundle follow generation and integration; the older 0.1.4 public wheel
+has no Joy binding and cannot supply this entry point. Do not mix an older
+message wheel into the SDK to obtain it.
 
-`--joy-source ros2` explicitly uses `/joy` and `/vel_cmd` in that deployment's
-ROS2 environment. It does not bridge topics, publish joystick data, or change
-the profile's axis/range mapping. Selecting it is a user's explicit choice.
+```python
+from locomotion_aorta import JoyReader
+
+with JoyReader(node) as reader:  # reuse the deployment-configured Aorta node
+    sample = reader.read()     # call once per policy tick; drains internally
+    axes = sample.axes if sample.is_fresh() else ()
+    presses = sample.pressed_counts.get(0, 0)
+    releases = sample.released_counts.get(0, 0)
+```
+
+The reader creates one pull subscription and no Python callback/worker thread.
+It reads until the ring is empty on every tick, including the initial
+transition. Axes/buttons come from the final frame; press/release counts compare
+every adjacent frame (zero versus nonzero), including multiple short presses
+within one tick. A successful read consumes the returned increments and keeps
+the last state, receipt time and cumulative gap count. Empty reads return zero
+increments without refreshing the receipt time. First samples establish a
+baseline; adding/removing button indices does not invent edges.
+
+Snapshots are immutable and single-consumer. `received_realtime_ns` is direct
+CLOCK_REALTIME immediately after pull returns, not network arrival time;
+the freshness limit is 1s. `missing_samples_since_read` and
+`missing_samples_total` count forward gaps in the payload AortaHeader's uint64
+sequence (zero is valid). Duplicates, resets/reordering, wrap and source changes
+are diagnosed separately. Missing header/source identity is unknown, not zero
+loss. `event_history_complete` is false for a known gap or ambiguous interval;
+it does not recover events missing from those frames. `sequence_diagnostics`
+and per-cycle event counts are also included in the velocity log.
+
+The default ring depth is 256. Size it from the actual peak input rate with at
+least ten 50Hz ticks of headroom: next power of two of
+`max(256, ceil(peak_hz * 0.2) + 2)`. The 20Hz app-agent refill timer is not an
+upper bound on direct input publication; the actual peak is not measured here.
+Ring overflow silently evicts the oldest frame, and the underlying pull
+`dropped_count()` stays zero. Sequence gaps can reveal missing frames after a
+baseline, but cannot locate the loss or recreate missed presses. The reader
+never caps the number drained per tick or claims lossless delivery during an
+unbounded stall. Close it before closing its node.
 
 ## Records and offline acceptance
 

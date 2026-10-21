@@ -39,6 +39,12 @@ for the old-to-new names, optional dependencies and offline entry points.
 These additions await independent package/numerical acceptance; a unit test is
 not robot-motion evidence.
 
+The 0.2.1 Joy input candidate adds `JoyReader`: drain Aorta input snapshots in
+the policy thread and read the latest axes plus accumulated button edge and
+sequence-gap counts. See [the Joy reader contract](examples/velocity_mode.md#direction-dependency).
+It requires public messages 0.1.5; its generated wheel/pin and final SDK version
+are pending integration, so this source increment is not an installable 0.2.1 release.
+
 Match the robot's public schema hashes and roster to [compatibility.json](compatibility.json).
 Control requests use protocol 2; ACK/Status remain protocol 1; new body roots use
 protocol 2. BodyCmd action is explicitly encoded using the generated EXTERNAL

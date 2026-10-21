@@ -56,13 +56,13 @@ class PolicyTest(unittest.TestCase):
         np.testing.assert_array_equal(self.policy.command((1., 1., 0., -1.)), [0.9, 0., -0.8])
         np.testing.assert_array_equal(self.policy.command((-1., -1., 0., 1.)), [-0.6, 0., 0.8])
 
-    def test_deadband_boundary_and_stick_release_fallback(self):
-        np.testing.assert_array_equal(self.policy.command((), (2., 3., -2.)), [.9, 0., -.8])
+    def test_deadband_boundary_and_missing_input_is_zero(self):
+        np.testing.assert_array_equal(self.policy.command(()), [0., 0., 0.])
         np.testing.assert_array_equal(self.policy.command((0., .049, 0., 0.)), [0., 0., 0.])
         self.assertAlmostEqual(self.policy.command((0., .05, 0., 0.))[0], .045)
 
-    def test_active_joy_has_priority_over_twist(self):
-        np.testing.assert_array_equal(self.policy.command((0., -1., 0., 0.), (.9, 0., .8)), [-.6, 0., 0.])
+    def test_negative_joy_keeps_the_existing_profile_mapping(self):
+        np.testing.assert_array_equal(self.policy.command((0., -1., 0., 0.)), [-.6, 0., 0.])
 
     def observe(self, gyro=(0., 0., 0.)):
         q, dq = [0.] * 31, [0.] * 31
@@ -181,91 +181,68 @@ class LoggingTest(unittest.TestCase):
 
 
 class DirectionSourceTest(unittest.TestCase):
-    joy_type = type("Joy", (), {"GetRootAs": staticmethod(lambda payload: payload)})
-    def test_default_source_is_aorta_for_shadow_and_live(self):
+    def test_only_aorta_input_and_old_options_are_rejected(self):
+        from contextlib import redirect_stderr
+        import io
         for mode in ("--shadow", "--live"):
-            with self.subTest(mode=mode):
-                args = example.parse_args([mode, "--locomotion-dir", "/unused", "--log", "/unused.jsonl"])
-                self.assertEqual(args.joy_source, "aorta")
+            args = [mode, "--locomotion-dir", "/unused", "--log", "/unused.jsonl"]
+            self.assertFalse(hasattr(example.parse_args(args), "joy_source"))
+            for source in ("aorta", "ros2"):
+                with self.subTest(mode=mode, source=source), redirect_stderr(io.StringIO()), \
+                     self.assertRaises(SystemExit) as error:
+                    example.parse_args([*args, "--joy-source", source])
+                self.assertEqual(error.exception.code, 2)
 
-    def test_ros2_remains_an_explicit_option(self):
-        args = example.parse_args(["--shadow", "--locomotion-dir", "/unused", "--log", "/unused.jsonl",
-                                   "--joy-source", "ros2"])
-        self.assertEqual(args.joy_source, "ros2")
+    def fixture(self):
+        from test_joy import PullRing
+        ring = PullRing(256)
+        node = SimpleNamespace(create_subscriber_pull=Mock(return_value=ring))
+        unavailable = {name: None for name in ("rclpy", "sensor_msgs", "geometry_msgs")}
+        with patch.dict(sys.modules, unavailable), patch.object(example.threading, "Thread") as thread:
+            directions = example.DirectionInput(SimpleNamespace(node=node))
+            thread.assert_not_called()
+        self.addCleanup(directions.close)
+        return directions, ring
 
-    def direction_fixture(self, source):
-        ros_topics = []
+    def test_real_joy_reader_routes_axes_and_preserves_event_counts(self):
+        from test_joy import payload
+        directions, ring = self.fixture()
+        with patch.object(example.time, "time_ns", return_value=1_000_000_000):
+            ring.put(payload(0))
+            directions.snapshot()
+            ring.put(payload(1, axes=(0., 1., 0., -1.), buttons=(1,)),
+                     payload(2, axes=(0., 1., 0., -1.), buttons=(0,)))
+            axes = directions.snapshot()
+        np.testing.assert_array_equal(policy_fixture().command(axes), [.9, 0., -.8])
+        stats = directions.statistics()
+        self.assertEqual(stats["joy_messages"], 3)
+        self.assertEqual(stats["joy_pressed_counts"], {0: 1})
+        self.assertEqual(stats["joy_released_counts"], {0: 1})
+        self.assertEqual(stats["last_joy_ns"], 1_000_000_000)
+        json.dumps(stats)
 
-        class Node:
-            def __init__(self, *args, **kwargs):
-                self.publishers = []
-
-            def create_subscription(self, msg_type, topic, callback, qos):
-                ros_topics.append(topic)
-                return Mock()
-
-        ros = SimpleNamespace(init=Mock(), node=SimpleNamespace(Node=Node))
-        sensor = SimpleNamespace(msg=SimpleNamespace(Joy=type("Joy", (), {})))
-        geometry = SimpleNamespace(msg=SimpleNamespace(Twist=type("Twist", (), {})))
-        modules = {"rclpy": ros, "rclpy.node": ros.node,
-                   "sensor_msgs": sensor, "sensor_msgs.msg": sensor.msg,
-                   "geometry_msgs": geometry, "geometry_msgs.msg": geometry.msg,
-                   "locomotion.Joy": SimpleNamespace(Joy=self.joy_type)}
-        transport = SimpleNamespace(
-            node=SimpleNamespace(create_subscriber_typed=Mock()),
-            _bindings=SimpleNamespace(aorta=SimpleNamespace(
-                QoS=SimpleNamespace(realtime_control=lambda: "realtime_control"))))
-        with patch.dict(sys.modules, modules), patch.object(example.threading, "Thread"):
-            directions = example.DirectionInput(transport, source)
-        return directions, transport, ros_topics
-
-    def test_aorta_subscribes_to_onboard_topic_and_decodes_axes(self):
-        Joy = self.joy_type
-
-        args = example.parse_args(["--shadow", "--locomotion-dir", "/unused", "--log", "/unused.jsonl"])
-        directions, transport, ros_topics = self.direction_fixture(args.joy_source)
-        transport.node.create_subscriber_typed.assert_called_once_with(
-            Joy.GetRootAs, "locomotion/joy", directions.on_aorta_joy, qos="realtime_control")
-        self.assertEqual(ros_topics, ["/vel_cmd"])
-        axes = (0., 1., 0., -1.)
-        directions.on_aorta_joy(SimpleNamespace(AxesLength=lambda: len(axes), Axes=axes.__getitem__), None)
-        received_axes, twist = directions.snapshot()
-        self.assertEqual(received_axes, axes)
-        np.testing.assert_array_equal(policy_fixture().command(received_axes, twist), [.9, 0., -.8])
-
-    def test_explicit_ros2_subscribes_without_aorta_joy(self):
-        args = example.parse_args(["--shadow", "--locomotion-dir", "/unused", "--log", "/unused.jsonl",
-                                   "--joy-source", "ros2"])
-        _directions, transport, ros_topics = self.direction_fixture(args.joy_source)
-        transport.node.create_subscriber_typed.assert_not_called()
-        self.assertEqual(ros_topics, ["/joy", "/vel_cmd"])
-
-    def test_realtime_input_freshness_boundary_and_clock_step(self):
-        directions, _transport, _ros_topics = self.direction_fixture("aorta")
+    def test_realtime_freshness_boundary_and_no_stale_fallback(self):
+        from test_joy import payload
+        directions, ring = self.fixture()
         received = 1_700_000_000_000_000_000
         axes = (0., 1., 0., 0.)
-        joy = SimpleNamespace(AxesLength=lambda: len(axes), Axes=axes.__getitem__)
-        twist = SimpleNamespace(linear=SimpleNamespace(x=.2, y=0.), angular=SimpleNamespace(z=.1))
         with patch.object(example.time, "time_ns", return_value=received):
-            directions.on_aorta_joy(joy, None)
-            directions.on_twist(twist)
-        with patch.object(example.time, "time_ns", return_value=received + 1_000_000_000):
-            self.assertEqual(directions.snapshot(), (axes, (.2, 0., .1)))
-        for now in (received + 1_000_000_001, received - 1):
+            ring.put(payload(0, axes=axes))
+            self.assertEqual(directions.snapshot(), axes)
+        with patch.object(example.time, "time_ns", return_value=received+1_000_000_000):
+            self.assertEqual(directions.snapshot(), axes)
+        for now in (received+1_000_000_001, received-1):
             with self.subTest(now=now), patch.object(example.time, "time_ns", return_value=now):
-                self.assertEqual(directions.snapshot(), ((), (0., 0., 0.)))
-        stats = directions.statistics()
-        self.assertEqual(stats["joy_messages"], 1)
-        self.assertEqual(stats["twist_messages"], 1)
-        self.assertEqual(stats["last_joy_ns"], received)
+                self.assertEqual(directions.snapshot(), ())
+        self.assertEqual(directions.statistics()["last_joy_ns"], received)
 
-    def test_ros2_callback_keeps_axes_for_existing_profile_mapping(self):
-        directions, _transport, _ros_topics = self.direction_fixture("ros2")
-        axes = (0., -1., 0., 1.)
-        directions.on_joy(SimpleNamespace(axes=axes))
-        received_axes, twist = directions.snapshot()
-        self.assertEqual(received_axes, axes)
-        np.testing.assert_array_equal(policy_fixture().command(received_axes, twist), [-.6, 0., .8])
+    def test_reader_errors_propagate_and_close_owns_only_subscription(self):
+        directions, ring = self.fixture()
+        ring.queue.append(RuntimeError("disconnected"))
+        with self.assertRaisesRegex(RuntimeError, "disconnected"):
+            directions.snapshot()
+        directions.close()
+        ring.close.assert_called_once_with()
 
 
 class TransportTest(unittest.TestCase):
@@ -322,7 +299,7 @@ class CycleTest(unittest.TestCase):
         frame = example.StateFrame(frame_state(123), (0.,) * 31, (0.,) * 31,
                                    (0.,) * 3, (1., 0., 0., 0.), 100, 101, 102)
         transport = SimpleNamespace(latest=lambda: frame, receipt=None)
-        directions = SimpleNamespace(snapshot=lambda: ((), (0., 0., 0.)))
+        directions = SimpleNamespace(snapshot=lambda: (), statistics=lambda: {})
         records, times = [], []
 
         def publish(command):
@@ -377,6 +354,32 @@ class CycleTest(unittest.TestCase):
             self.assertEqual(row["publish_result"], "returned")
             self.assertGreaterEqual(row["S6"], row["S5"])
 
+    def test_transition_drains_direction_input_on_every_tick(self):
+        from dataclasses import replace
+        policy = policy_fixture()
+        target = policy.decode(np.zeros(2, dtype=np.float32))
+        policy.infer = Mock(side_effect=AssertionError("transition inferred"))
+        base = 1_700_000_000_000_000_000
+        clock = SimpleNamespace(now=base)
+        frame = example.StateFrame(frame_state(1), (0.,)*31, (0.,)*31,
+                                   (0.,)*3, (1.,0.,0.,0.), 1, 2, 3)
+        directions = SimpleNamespace(snapshot=Mock(return_value=()),
+                                     statistics=Mock(return_value={"joy_pressed_counts": {0: 1}}))
+        records = []
+        def sleep(delay):
+            clock.now += round(delay*1e9)
+        with patch.object(example.time, "time_ns", side_effect=lambda: clock.now), \
+             patch.object(example.time, "sleep", side_effect=sleep):
+            example.run_cycles(policy, SimpleNamespace(latest=lambda: frame), directions,
+                               SimpleNamespace(cycle=records.append), controller=None,
+                               duration=.04, transition=(target, 1.))
+        self.assertGreaterEqual(len(records), 2)
+        self.assertEqual(directions.snapshot.call_count, len(records))
+        self.assertEqual(directions.statistics.call_count, len(records))
+        self.assertTrue(all(r["phase"] == "transition" for r in records))
+        self.assertTrue(all(r["joy_pressed_counts"] == {0: 1} for r in records))
+        policy.infer.assert_not_called()
+
     def test_policy_is_50hz_with_400hz_latest_state_source(self):
         from dataclasses import replace
         base=1_700_000_000_000_000_000
@@ -398,7 +401,7 @@ class CycleTest(unittest.TestCase):
             return replace(command,session_id=7,sequence=len(published))
         def sleep(delay):clock.now+=round(delay*1e9)
         with patch.object(example.time,'time_ns',side_effect=lambda:clock.now),patch.object(example.time,'sleep',side_effect=sleep):
-            example.run_cycles(policy,SimpleNamespace(latest=latest),SimpleNamespace(snapshot=lambda:((),(0.,0.,0.))),SimpleNamespace(cycle=records.append),controller=SimpleNamespace(publish=publish),duration=.19,transition=([],0.))
+            example.run_cycles(policy,SimpleNamespace(latest=latest),SimpleNamespace(snapshot=lambda:(),statistics=lambda:{}),SimpleNamespace(cycle=records.append),controller=SimpleNamespace(publish=publish),duration=.19,transition=([],0.))
         self.assertEqual(len(inferred),11)  # t=0..200ms: original grid/bounded-loop semantics.
         self.assertEqual(len(published),len(inferred))
         self.assertEqual(len(records),len(inferred))
@@ -445,7 +448,7 @@ class DurationTest(unittest.TestCase):
         with patch.object(example.time, "time_ns", side_effect=lambda: clock.now), \
              self.assertRaises(KeyboardInterrupt):
             example.run_cycles(policy, SimpleNamespace(latest=lambda: frame),
-                               SimpleNamespace(snapshot=lambda: ((), (0.,0.,0.))),
+                               SimpleNamespace(snapshot=lambda: (), statistics=lambda: {}),
                                SimpleNamespace(cycle=record), controller=None, duration=0,
                                transition=([],0.))
         self.assertEqual(len(records), 3)

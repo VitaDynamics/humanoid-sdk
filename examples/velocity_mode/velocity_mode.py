@@ -38,10 +38,7 @@ except ImportError:
 
 
 PERIOD_S = 0.02
-# RobotStateTimeoutConfig in the source baseline; no new timeout parameter.
-INPUT_FRESHNESS_S = 1.0
 PERIOD_NS = int(PERIOD_S * 1_000_000_000)
-INPUT_FRESHNESS_NS = int(INPUT_FRESHNESS_S * 1_000_000_000)
 
 
 @dataclass(frozen=True)
