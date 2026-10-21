@@ -9,7 +9,7 @@ import struct
 from types import SimpleNamespace as NS
 import unittest
 
-from examples.teleop_policy import Policy
+from examples.teleop_policy.teleop_policy import Policy
 from test_teleop_policy import fixture
 
 

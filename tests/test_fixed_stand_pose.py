@@ -4,10 +4,10 @@ import signal
 import unittest
 
 from body_fixtures import robot_info_reply
-from examples import external_control as body
-from examples.fixed_stand_pose import FixedStandPose
-from examples.gripper_external import run_external
-from examples import gripper_external as gripper_demo
+from examples.external_control import external_control as body
+from examples.fixed_stand_pose.fixed_stand_pose import FixedStandPose
+from examples.gripper.gripper_external import run_external
+from examples.gripper import gripper_external as gripper_demo
 from locomotion_aorta import BODY_CMD_TOPIC
 from test_examples import FakeClock, RecordingController
 from test_gripper_external import FakeGripper
@@ -101,7 +101,7 @@ class ZeroPoseTest(unittest.TestCase):
         commands = self.commands(c)
         self.assertTrue(all(j.q == .2 for i, j in enumerate(commands[0].joints) if i != 14))
         self.assertTrue(all(j.q == 0 for j in commands[-1].joints))
-        self.assertEqual([m.cmd_id for m in commands], list(range(1, len(commands)+1)))
+        self.assertEqual([m.sequence for m in commands], list(range(1, len(commands)+1)))
         for cmd in commands:
             self.assertEqual((cmd.joints[14].q, cmd.joints[14].dq, cmd.joints[14].tau,
                               cmd.joints[14].kp, cmd.joints[14].kd), (0.,)*5)

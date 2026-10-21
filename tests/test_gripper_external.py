@@ -10,7 +10,7 @@ from locomotion_aorta import BODY_CMD_TOPIC
 from test_examples import FakeClock, RecordingController
 from locomotion_aorta.gripper_types import GripperCmd, GripperHostTarget, GripperSample, GripperState
 from test_gripper_client import info
-from examples import gripper_external as demo
+from examples.gripper import gripper_external as demo
 
 
 class FakeGripper:

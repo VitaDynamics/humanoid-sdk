@@ -2,7 +2,7 @@
 import unittest
 import io
 from unittest.mock import patch
-from examples import brainco_hand_external
+from examples.brainco_hand import brainco_hand_external
 
 class HandEntryTest(unittest.TestCase):
     def test_old_slot_spec_is_rejected_before_opening_any_node(self):

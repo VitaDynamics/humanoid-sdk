@@ -288,14 +288,17 @@ class BrainCoCaptureTest(unittest.TestCase):
 
 
 class PublicBodyCaptureTest(unittest.TestCase):
-    def test_current_body_state_keeps_unpopulated_quality_and_null(self):
+    def test_current_body_state_keeps_slot_order_errors_and_nonfinite_null(self):
         from test_body_codec import make_state
         data, _ = make_state()
         row = capture.decode('body_state',data,capture.load_bindings())
         self.assertEqual(len(row['joints']),31)
-        self.assertFalse(row['joints'][14]['populated'])
+        self.assertNotIn('status',row['joints'][14])
+        self.assertNotIn('body_index',row['joints'][14])
         self.assertIsNone(row['joints'][14]['q'])
-        self.assertEqual(row['joints'][14]['valid_fields'],0)
+        self.assertEqual(row['joints'][14]['error_code'],0)
+        self.assertNotIn('valid_fields',row['joints'][14])
+        self.assertNotIn('populated',row['joints'][14])
         self.assertTrue(row['nonfinite_feedback'])
         self.assertEqual(row['ts_state_real_us'],1_234_567)
 
@@ -303,6 +306,8 @@ class PublicBodyCaptureTest(unittest.TestCase):
         from test_body_codec import make_command, encode
         from locomotion_aorta import BodyCmdAction
         row=capture.decode('body_cmd',encode(make_command()),capture.load_bindings())
+        self.assertNotIn('cmd_id', row)
+        self.assertEqual((row['session_id'], row['sequence']), (42, 7))
         self.assertEqual(row['action'],BodyCmdAction.EXTERNAL)
         self.assertEqual(len(row['joints']),31)
         self.assertEqual(row['input_state_id'],123)

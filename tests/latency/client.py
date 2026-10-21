@@ -36,6 +36,7 @@ def main():
 
     def timed_decode(view):
         timing.decode_ns = time.monotonic_ns()
+        timing.decode_realtime_ns = time.time_ns()
         try:
             result = decode(view)
         except Exception as error:
@@ -45,17 +46,21 @@ def main():
                 errors.append(repr(error))
             raise
         timing.decoded_ns = time.monotonic_ns()
+        timing.decoded_realtime_ns = time.time_ns()
         return result
 
     def timed_fill(*argv):
         timing.fill_ns = time.monotonic_ns()
+        timing.fill_realtime_ns = time.time_ns()
         result = fill(*argv)
         timing.filled_ns = time.monotonic_ns()
+        timing.filled_realtime_ns = time.time_ns()
         return result
 
     def timed_publish(publisher, *argv, **kwargs):
         # This is the Python Aorta byte-publish entry, NOT a CAN/TCP send stamp.
         timing.bytes_ns = time.monotonic_ns()
+        timing.bytes_realtime_ns = time.time_ns()
         return publish_bytes(publisher, *argv, **kwargs)
 
     sdk.decode_body_state = timed_decode
@@ -66,19 +71,24 @@ def main():
     def callback(state):
         with lock:
             try:
-                if state.protocol_version != 1 or len(state.joints) != 31 or not 0 < state.state_id <= 65000:
+                if state.protocol_version != 2 or len(state.joints) != 31 or not 0 < state.state_id <= 65000:
                     raise ValueError("invalid state slots/sequence")
                 command = BodyCmd(
-                    cmd_id=state.state_id, protocol_version=1, action=BodyCmdAction.EXTERNAL,
+                    protocol_version=2, action=BodyCmdAction.EXTERNAL,
                     session_id=args.session, sequence=state.state_id,
                     input_state_id=state.state_id, input_state_ts_real_us=state.ts_state_real_us,
-                    joints=tuple(BodyJointCmd(m.q, m.dq, m.tau_est, 1., .5) if m.populated else BodyJointCmd()
-                                    for m in state.joints))
+                    joints=tuple(BodyJointCmd(m.q, m.dq, m.tau_est, 1., .5) if cap.populated else BodyJointCmd()
+                                    for m, cap in zip(state.joints, body.joints)))
                 built_ns = time.monotonic_ns()
+                built_realtime_ns = time.time_ns()
                 transport.publish(sdk.BODY_CMD_TOPIC, command)
                 returned_ns = time.monotonic_ns()
+                returned_realtime_ns = time.time_ns()
                 rows.append((args.session, state.state_id, timing.decode_ns, timing.decoded_ns,
-                             built_ns, timing.fill_ns, timing.filled_ns, timing.bytes_ns, returned_ns))
+                             built_ns, timing.fill_ns, timing.filled_ns, timing.bytes_ns, returned_ns,
+                             timing.decode_realtime_ns, timing.decoded_realtime_ns, built_realtime_ns,
+                             timing.fill_realtime_ns, timing.filled_realtime_ns,
+                             timing.bytes_realtime_ns, returned_realtime_ns))
                 if len(rows) > 65000:
                     raise ValueError("capture limit exceeded")
             except Exception as error:
@@ -113,7 +123,10 @@ def main():
             with (args.directory / "client.csv").open("w") as out:
                 writer = csv.writer(out)
                 writer.writerow(("session", "sequence", "decode_ns", "decoded_ns", "built_ns",
-                                 "fill_ns", "filled_ns", "bytes_ns", "returned_ns"))
+                                 "fill_ns", "filled_ns", "bytes_ns", "returned_ns",
+                                 "decode_realtime_ns", "decoded_realtime_ns", "built_realtime_ns",
+                                 "fill_realtime_ns", "filled_realtime_ns", "bytes_realtime_ns",
+                                 "returned_realtime_ns"))
                 writer.writerows(rows)
             (args.directory / "client.json").write_text(json.dumps({
                 "sdk_source": sdk.__file__, "errors": errors, "callbacks": len(rows)}, indent=2))

@@ -1,0 +1,63 @@
+cmake_minimum_required(VERSION 3.20)
+find_package(Python 3.10 EXACT COMPONENTS Interpreter Development.Module REQUIRED)
+if(CMAKE_CROSSCOMPILING)
+  # The robot toolchain provides the target SOABI; FindPython's interpreter
+  # runs on the build host, while Python_INCLUDE_DIR must select target headers.
+  if(NOT DEFINED PYTHON_SOABI OR NOT Python_INCLUDE_DIR)
+    message(FATAL_ERROR "Cross build requires target PYTHON_SOABI and Python_INCLUDE_DIR")
+  endif()
+  set(Python_SOABI "${PYTHON_SOABI}")
+endif()
+find_package(pybind11 CONFIG REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR "Only Linux x86_64 and aarch64 wheels are supported")
+endif()
+set(ORT_ARCHIVE "" CACHE FILEPATH "Pinned official ONNX Runtime CPU tarball")
+if(NOT EXISTS "${ORT_ARCHIVE}")
+  message(FATAL_ERROR
+    "ORT_ARCHIVE is missing. From the SDK root, download and SHA-verify the pinned archive:\n"
+    "  python tools/fetch_ort.py --output /absolute/path/to/onnxruntime.tgz\n"
+    "Then pass its path for either editable installation or wheel construction:\n"
+    "  CMAKE_ARGS='-DORT_ARCHIVE=/absolute/path/to/onnxruntime.tgz' python -m pip install -e .\n"
+    "  CMAKE_ARGS='-DORT_ARCHIVE=/absolute/path/to/onnxruntime.tgz' make build\n"
+    "See README.md Development and offline packaging for build dependencies.")
+endif()
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/ort-archives.json" manifest)
+string(JSON ort_version GET "${manifest}" version)
+if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|aarch64)$")
+  message(FATAL_ERROR "Unsupported target CPU: ${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+string(JSON expected_sha GET "${manifest}" "${CMAKE_SYSTEM_PROCESSOR}" sha256)
+string(JSON archive_directory GET "${manifest}" "${CMAKE_SYSTEM_PROCESSOR}" directory)
+file(SHA256 "${ORT_ARCHIVE}" actual_sha)
+if(NOT actual_sha STREQUAL expected_sha)
+  message(FATAL_ERROR "ORT archive SHA256 mismatch for ${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+set(vendor "${CMAKE_CURRENT_BINARY_DIR}/vendor")
+file(ARCHIVE_EXTRACT INPUT "${ORT_ARCHIVE}" DESTINATION "${vendor}")
+set(ort_root "${vendor}/${archive_directory}")
+add_library(ort SHARED IMPORTED)
+set_target_properties(ort PROPERTIES
+  IMPORTED_LOCATION "${ort_root}/lib/libonnxruntime.so.${ort_version}"
+  INTERFACE_INCLUDE_DIRECTORIES "${ort_root}/include")
+pybind11_add_module(_native NO_EXTRAS WITH_SOABI cpp/session.cpp)
+target_compile_features(_native PRIVATE cxx_std_17)
+target_compile_options(_native PRIVATE "$<$<CONFIG:Release>:-O3;-g;-DNDEBUG>")
+target_link_options(_native PRIVATE -Wl,--disable-new-dtags)
+target_link_libraries(_native PRIVATE ort)
+set_target_properties(_native PROPERTIES INSTALL_RPATH "$ORIGIN/.libs")
+set(destination "locomotion_aorta/_onnx")
+install(TARGETS _native LIBRARY DESTINATION "${destination}")
+# Real SONAME bytes avoid depending on wheel installers preserving symlinks.
+configure_file("${ort_root}/lib/libonnxruntime.so.${ort_version}"
+  "${CMAKE_CURRENT_BINARY_DIR}/libonnxruntime.so.1" COPYONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/libonnxruntime.so.1"
+  "${ort_root}/lib/libonnxruntime_providers_shared.so"
+  DESTINATION "${destination}/.libs")
+install(FILES "${ort_root}/LICENSE" "${ort_root}/ThirdPartyNotices.txt"
+  DESTINATION "${destination}/licenses/onnxruntime")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/licenses/pybind11/LICENSE"
+  DESTINATION "${destination}/licenses/pybind11")
+configure_file(build-info.json.in build-info.json @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/build-info.json"
+  DESTINATION "${destination}")

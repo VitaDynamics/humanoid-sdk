@@ -30,7 +30,7 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
 
 ## Installation and deployment workflow
 
-1. Inspect the selected target's OS, architecture, Python version (3.10+) and
+1. Inspect the selected target's OS, architecture, Python version (see the README support scope) and
    existing installation. Verify the SDK release manifest against the robot's
    deployed Aorta/schema revision; do not choose wheels solely by date or latest
    tag. Use the architecture-matching Linux `aorta_sdk` wheel and matching
@@ -66,7 +66,7 @@ source; `CLAUDE.md` must remain a relative symlink to `AGENTS.md`.
    the private copy. The already-published v0.1.0-rc.1 bundle lacks this file;
    obtain it from a reviewed compatible SDK revision, not an invented default.
 6. With permission to connect to the target, run the documented bounded
-   `examples/body_state_subscriber.py` check. It must not request control ownership or
+   `examples/body_state_subscriber/body_state_subscriber.py` check. It must not request control ownership or
    publish a motion command. Confirm fresh feedback, expected joint count and
    finite values; report timeout or shutdown warnings rather than hiding them.
 7. Stop at the read-only milestone unless the user requests a motion demo.

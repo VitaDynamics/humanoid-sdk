@@ -15,7 +15,7 @@ from locomotion_aorta import InhibitReason
 # The existing SDK body example remains the authority for its unchanged guards.
 _body_spec = importlib.util.spec_from_file_location(
     'gripper_body_hold_baseline',
-    Path(__file__).with_name('external_control.py'))
+    Path(__file__).resolve().parents[1] / 'external_control/external_control.py')
 body = importlib.util.module_from_spec(_body_spec)
 _body_spec.loader.exec_module(body)
 
@@ -41,7 +41,7 @@ def stop_signals():
             signal.signal(signum, handler)
 
 
-def _observe_zero_dwell(frame, target, *, body, monotonic, emit):
+def _observe_zero_dwell(frame, target, *, body, body_info, monotonic, emit):
     """Record the existing example dwell without a feedback-arrival gate."""
     began = monotonic()
     peak_error = 0.0
@@ -49,9 +49,9 @@ def _observe_zero_dwell(frame, target, *, body, monotonic, emit):
     samples = math.ceil(body.DWELL_S / body.PERIOD_S)
     for sample in range(samples):
         state = frame(target)  # Retains the lifecycle's safety/protocol checks.
-        error = max((abs(j.q - q) for j, q in zip(state.joints, target)
-                     if j.populated), default=0.0)
-        speed = max((abs(j.dq) for j in state.joints if j.populated), default=0.0)
+        error = max((abs(j.q - q) for j, q, cap in zip(state.joints, target, body_info.joints)
+                     if cap.populated), default=0.0)
+        speed = max((abs(j.dq) for j, cap in zip(state.joints, body_info.joints) if cap.populated), default=0.0)
         peak_error = max(peak_error, error)
         peak_speed = max(peak_speed, speed)
         emit(f'ZERO_DWELL observation_only=true sample={sample + 1} '
@@ -77,13 +77,13 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
     plan = None
     if body_pose == 'zero':
         spec = importlib.util.spec_from_file_location(
-            'gripper_fixed_stand_pose', Path(__file__).with_name('fixed_stand_pose.py'))
+            'gripper_fixed_stand_pose', Path(__file__).resolve().parents[1] / 'fixed_stand_pose/fixed_stand_pose.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         plan = module.FixedStandPose(info)  # Reject all bad/missing zero limits before PREPARE.
     initial = body._wait_for_stationary_body_state(
-        controller, timeout=timeout, sleep=sleep, monotonic=monotonic)
-    pose = tuple(j.q if j.populated else 0.0 for j in initial.joints)
+        controller, body_info=info, timeout=timeout, sleep=sleep, monotonic=monotonic)
+    pose = tuple(j.q if cap.populated else 0.0 for j, cap in zip(initial.joints, info.joints))
     if plan is not None:
         plan.measured(initial)
     hold = body._position_command(pose)
@@ -95,7 +95,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
     traces = []
     hold_samples = 0
     hold_peak_abs_error = [0.0] * len(pose)
-    hold_slots = tuple(i for i, joint in enumerate(initial.joints) if joint.populated)
+    hold_slots = tuple(i for i, cap in enumerate(info.joints) if cap.populated)
     try:
         if plan is not None:
             from locomotion_aorta import CONTROL_ACK_TOPIC, CONTROL_STATUS_TOPIC
@@ -109,17 +109,16 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             # Use the latest real sample after the owned RUNNING transition,
             # never the model pose or a pre-entry commanded pose.
             initial = controller.wait_body_state(timeout)
-            body._validate_body_state(initial, require_stationary=False)
+            body._validate_body_state(initial, body_info=info, require_stationary=False)
             pose = plan.measured(initial)
         last_id = initial.state_id
         last_change = monotonic()
         next_publish = monotonic()
-        next_cmd_id = 1
         check_hold = plan is None
         stage = 'hold'
 
         def frame(target=None):
-            nonlocal last_id, last_change, next_publish, next_cmd_id, hold_samples
+            nonlocal last_id, last_change, next_publish, hold_samples
             if not active:
                 raise RuntimeError('EXTERNAL frame callback is no longer active')
             delay = next_publish - monotonic()
@@ -133,7 +132,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
                     or status.reject_count != entered.reject_count):
                 raise RuntimeError(f'body EXTERNAL ownership/phase/reject_count changed: {status!r}')
             state = controller.wait_body_state(timeout)
-            body._validate_body_state(state, require_stationary=False)
+            body._validate_body_state(state, body_info=info, require_stationary=False)
             now = monotonic()
             if state.state_id != last_id:
                 last_id, last_change = state.state_id, now
@@ -153,13 +152,12 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             else:
                 plan.measured(state)
                 q = pose if target is None else target(now) if callable(target) else target
-                command = plan.command(q, state, next_cmd_id)
-            controller.publish(command)
+                command = plan.command(q, state)
+            published = controller.publish(command)
             if plan is not None:
-                emit(f'BODY stage={stage} cmd_id={command.cmd_id} input_state={state.state_id} '
+                emit(f'BODY stage={stage} session_id={published.session_id} sequence={published.sequence} input_state={state.state_id} '
                      f'q_cmd={tuple(j.q for j in command.joints)!r} '
-                     f'control={status!r} applied={state.applied_cmd!r}')
-                next_cmd_id = next_cmd_id % 0xffff + 1
+                     f'control={status!r} applied={state.applied_session_id}/{state.applied_sequence}@{state.ts_first_output_us}')
             next_publish = max(next_publish + body.PERIOD_S, monotonic() + body.PERIOD_S)
             return state
 
@@ -177,7 +175,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             pose = (0.0,) * len(start)
             frame(pose)
             stage = 'settle-zero'
-            _observe_zero_dwell(frame, pose, body=body, monotonic=monotonic, emit=emit)
+            _observe_zero_dwell(frame, pose, body=body, body_info=info, monotonic=monotonic, emit=emit)
             check_hold = True
             stage = 'hold-zero'
             emit('zero endpoint settled check disabled (observation only); '

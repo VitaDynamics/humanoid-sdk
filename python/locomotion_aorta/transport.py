@@ -247,7 +247,7 @@ def _fill_body_cmd(
     module.BodyCmdStart(builder)
     module.BodyCmdAddAortaHeader(builder, header)
     module.BodyCmdAddJoints(builder, joints)
-    for name in ("protocol_version", "session_id", "sequence", "cmd_id", "input_state_id",
+    for name in ("protocol_version", "session_id", "sequence", "input_state_id",
                  "input_state_ts_real_us", "ts_client_created_us", "ts_client_send_us"):
         getter = ''.join(part.capitalize() for part in name.split('_'))
         getattr(module, 'BodyCmdAdd' + getter)(builder, getattr(command, name))

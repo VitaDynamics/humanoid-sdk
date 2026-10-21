@@ -1,34 +1,99 @@
 # Humanoid SDK
 
-This D2 successor uses the released public body/EE schema `0.1.2` from
-S2 daadf8f7449e. Its official CI-built wheel is pinned in the manifest and
-available with its SHA-256 sidecar in dependency release `v0.1.0-rc.4`.
-Its RobotInfo/get_robot_info layout removes the end-effector info-service
-endpoint; use matching generated bindings and robot software. Earlier 6520
-pre-release RobotInfo buffers are incompatible with this checkout.
+SDK **0.2.0** is in preparation; packaging and release are pending.
+This version provides public body31/EXTERNAL, independent hand/gripper
+clients, Aorta 2026.10.20 and an independent read-only BodyStateSource.
+
+This candidate requires public body/EE schema **0.1.4** and BODY protocol 2.
+Its 40-byte BodyJointState layout is incompatible with 0.1.2 (56 bytes); use
+matching robot software and generated bindings. The 0.1.4 dependency wheel is
+published in the schema repository's official `humanoid-msgs-0.1.4` Release
+and mirrored, byte for byte, in this SDK repository's
+[`v0.1.0-rc.4` dependency Release](https://github.com/VitaDynamics/humanoid-sdk/releases/tag/v0.1.0-rc.4),
+following the #10 dependency delivery flow.
+Its SHA-256 is `31fbd1f710a8e92043cc1d0ec80657fc5f76aad4a47e0926d94d70e415185169`.
+Installation requires the complete matching wheelhouse and hashes in
+[compatibility.json](compatibility.json).
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
-with Python 3.10 or newer.
+with **CPython 3.10**, glibc **2.35+** and GLIBCXX **3.4.29+**
+(Ubuntu 22.04 or newer). SDK 0.2.0 ships one distribution containing both the
+client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
+aarch64 only. There is no pure Python or separate backend wheel for 0.2.0.
+Version 0.2.1 is planned to restore general platform support through separate
+platform and pure Python wheels under the same SDK package name.
 
-Dependencies are pinned to Aorta SDK and messages `2026.10.12` (ABI 13),
-`vbot-humanoid-msgs==0.1.2`, and `flatbuffers==25.9.23`. Obtain the matching
-wheels from this repository's [Releases](https://github.com/VitaDynamics/humanoid-sdk/releases),
-using the `dependency_release_tag` in [compatibility.json](compatibility.json)
-(`v0.1.0-rc.4`). Verify wheel filenames and SHA-256s against that manifest;
-do not substitute older wheels if an asset is missing. The public body/EE
-`0.1.2` wheel and sidecar are included in that dependency release; use the
-public wheel rather than a private/HIL wheel.
+Dependencies are pinned to Aorta SDK and messages `2026.10.20` (ABI 13),
+`vbot-humanoid-msgs==0.1.4`, and `flatbuffers==25.12.19`. Verify wheel filenames
+and SHA-256s against [compatibility.json](compatibility.json). All four runtime
+dependencies come from this SDK repository's `v0.1.0-rc.4` Release. Select the
+pinned 0.1.4 wheel; older schema assets remain available for older SDKs.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
+The SDK also includes **Velocity mode** (`examples/velocity_mode/velocity_mode.py`) and
+**WBC tracking mode** (`examples/wbc_tracking_mode/wbc_tracking_mode.py`). Both use public body31
+and the built-in C++ ONNX backend through EXTERNAL. See
+[Velocity mode](examples/velocity_mode/README.md) and [WBC tracking mode](examples/wbc_tracking_mode/README.md)
+for the old-to-new names, optional dependencies and offline entry points.
+These additions await independent package/numerical acceptance; a unit test is
+not robot-motion evidence.
+
 Match the robot's public schema hashes and roster to [compatibility.json](compatibility.json).
 Control requests use protocol 2; ACK/Status remain protocol 1; new body roots use
-protocol 1. BodyCmd action is explicitly encoded using the generated EXTERNAL
+protocol 2. BodyCmd action is explicitly encoded using the generated EXTERNAL
 symbol. Entry remains by action name and lease; the command does not activate
 EXTERNAL. Older robots rejecting v2 receive no automatic downgrade or LowCmd
 fallback. Discovery preserves partial body/hand results and actual field/limit
 validity. The logical waist-roll slot can be unpopulated; it is skipped in
 physical validation and output, and never represents a healthy zero sample.
+
+BodyJointState contains three acquisition/ingestion/assembly timestamps,
+q, dq, tau_est and the unsigned uint32 JointError error_code. The tuple position is the
+slot identity; installation, capabilities and limits come from BodyInfo.
+For installed non-MOCK joints, the producer preserves a real nonzero fault
+first, otherwise uses TIMEOUT (8) for missing/stale feedback, UNKNOWN (255)
+for nonfinite values or ankle FK failure, and NONE (0) otherwise. Uninstalled
+and MOCK slots use NONE; NONE alone does not mean a joint is installed.
+The 20 JointError values align shared codes with the quadruped contract,
+including TIMEOUT=8 and INVALID_PARAM=30; humanoid-only control, motor-phase
+and sensor faults use 15/16/17. CAN, enable-state and servo-specific extension
+codes are omitted. The SDK imports this generated
+enum and preserves received codes, including unknown numeric values, without
+synthesizing another status. The full uint32 domain, including unlisted
+injection codes >=2^31, is preserved without sign conversion or remapping.
+Device TIMEOUT and missing/stale feedback intentionally share TIMEOUT (8);
+use the per-joint acquisition/ingestion/assembly timestamps and their clock
+domains to assess feedback freshness.
+BodyImuSample keeps status and rpy (degrees), and removes temperature,
+valid_fields and duplicate device/host timestamps. BodyCmd, BodyState and
+BodyImuSample have no deprecated placeholders: IDs are renumbered contiguously
+while preserving field order (0..10, 0..12 and 0..6 respectively). There are no
+external consumers of 0.1.3 yet; older unpublished candidates cannot be mixed.
+Both public and internal IMU locations retain HIP=0/TRUNK=1 (chest), adding
+HEAD=2 as a reserved position. The current public list follows the actual
+configured HIP and TRUNK locations. Public state_id and BodyCmd.input_state_id
+remain full uint64 values.
+Command validation uses learned BodyInfo population; until discovery it
+validates all 31 command slots. RobotInfo and independent hand/gripper
+contracts remain unchanged.
+
+BodyCmd has no cmd_id: correlate BODY commands and logs by session_id and
+sequence. ExternalController.publish returns the command with the actual
+assigned session/sequence after its transport publish succeeds.
+BodyState carries applied_session_id, applied_sequence and ts_first_output_us
+instead of a nested 31-joint echo. Only EXTERNAL produces nonzero applied
+associations. EXTERNAL session_id and sequence must be nonzero; the robot
+EXTERNAL ingress rejects either zero key. All three fields zero means no
+EXTERNAL command is affecting the applied output.
+The association records the last successful output send/report. TRACKING
+output clears all three only after its first successful send/report; pauses,
+send failures and the interval before that first success retain the previous
+successful EXTERNAL association. It is not cleared by the action name at
+publication time, and this does not add a nonzero-key check to TRACKING input.
+The timestamp is robot-host Unix epoch microseconds for the control cycle
+when interpolation alpha>0 first affects output, latched only after a
+successful send. It is not hardware send-completion time.
 
 Documentation: [Humanoid documentation](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg),
 [SDK guide](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh),
@@ -38,13 +103,13 @@ and [PC networking and Zenoh configuration](https://vitadynamics.feishu.cn/wiki/
 
 | Main demo | Behavior already implemented |
 |---|---|
-| `examples/gripper_external.py` | One entry for read-only gripper info/state, single-side target/return and dual-side sine; motion shares body zero/hold and one EXTERNAL lifecycle. |
-| `examples/brainco_hand_external.py` | Independent hand info/state/touch and authorized hand motion; `examples/brainco_capture.py` records/exports feedback. |
-| `examples/teleop_policy.py` | PC-local ONNX inference and gamepad input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
+| `examples/gripper/gripper_external.py` | One entry for read-only gripper info/state, single-side target/return and dual-side sine; motion shares body zero/hold and one EXTERNAL lifecycle. |
+| `examples/brainco_hand/brainco_hand_external.py` | Independent hand info/state/touch and authorized hand motion; `examples/brainco_hand/brainco_capture.py` records/exports feedback. |
+| `examples/teleop_policy/teleop_policy.py` | PC-local ONNX inference and gamepad input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
 
-Basic examples remain `examples/external_control.py` for body EXTERNAL,
-`examples/body_state_subscriber.py` for read-only BodyState, and
-`examples/fixed_stand_pose.py` as the robot-profile zero-pose helper.
+Basic examples remain `examples/external_control/external_control.py` for body EXTERNAL,
+`examples/body_state_subscriber/body_state_subscriber.py` for read-only BodyState, and
+`examples/fixed_stand_pose/fixed_stand_pose.py` as the robot-profile zero-pose helper.
 The policy demo is not limited to offline use; installation or `--help`
 does not authorize live motion.
 
@@ -57,7 +122,7 @@ bundle root:
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-python -m pip install --no-index --find-links wheelhouse locomotion-aorta==0.1.0
+python -m pip install --no-index --find-links wheelhouse locomotion-aorta==0.2.0
 python -m pip check
 python -c 'import aorta, flatbuffers, locomotion_aorta; import lowlevel.BodyCmd, lowlevel.BodyState, locomotion_sdk.ControlStatus'
 ```
@@ -75,7 +140,7 @@ test ! -e "$PC_PROFILE" && install -m 600 config/pc_session_peer.json5 "$PC_PROF
 ${EDITOR:-vi} "$PC_PROFILE"
 export ZENOH_SESSION_CONFIG_URI="$PC_PROFILE"
 test -r "$ZENOH_SESSION_CONFIG_URI"
-python examples/body_state_subscriber.py --group default --timeout 5
+python examples/body_state_subscriber/body_state_subscriber.py --group default --timeout 5
 ```
 
 The last command connects to the robot and reads feedback; run it only with
@@ -86,7 +151,7 @@ blocker; do not remove it to connect.
 
 ## Motion example
 
-`examples/external_control.py` requests control and moves 30 installed body joints in the public 31 roster.
+`examples/external_control/external_control.py` requests control and moves 30 installed body joints in the public 31 roster.
 Review its targets and gains for the specific robot, and obtain explicit
 motion authorization, reliable support, an attendant and emergency-stop access.
 Installation and read-only checks do not authorize motion.
@@ -104,13 +169,13 @@ Use the public EE wheel pinned in [compatibility.json](compatibility.json).
 The distribution is `vbot-humanoid-msgs`; generated imports retain `lowlevel`,
 `locomotion_sdk`, `aorta.services.humanoid_locomotion` and `*_schema_meta`.
 Do not install the full private `vita-msgs` wheel or a temporary HIL wheel.
-The pinned public `0.1.2` wheel provides the new hand roots; the older
+The pinned public `0.1.4` wheel provides the new hand roots; the older
 `0.1.0` public wheel does not.
 
 With connection authorization and the configured peer profile, read both hands:
 
 ```bash
-python examples/brainco_hand_external.py --dry-run --side both --group default --timeout 5
+python examples/brainco_hand/brainco_hand_external.py --dry-run --side both --group default --timeout 5
 ```
 
 The default entry is also read-only: no lease, hand command or touch write.
@@ -135,7 +200,7 @@ After separate on-site motion authorization, support, an attendant and an
 emergency stop, a right-hand sequential round can be run with:
 
 ```bash
-python examples/brainco_hand_external.py --side right --group default --timeout 5 --body-gains zero --pattern sequential --confirm-motion
+python examples/brainco_hand/brainco_hand_external.py --side right --group default --timeout 5 --body-gains zero --pattern sequential --confirm-motion
 ```
 
 The default speed is **20 degrees/s**, converted to float32 rad/s and checked
@@ -157,32 +222,140 @@ which must confirm PASSIVE. There is no automatic neutral hand trajectory;
 PASSIVE can let loaded body limbs fall. A killed client does not guarantee
 lease release. Hand session/sequence and body EXTERNAL generation are separate.
 
-`examples/brainco_capture.py` subscribes to independent hand topics plus body
+`examples/brainco_hand/brainco_capture.py` subscribes to independent hand topics plus body
 BodyState/ControlStatus (and historical LowCmd/LowState recordings) and exports MCAP with the optional `hil` extra.
 Missing or nonfinite hand feedback is retained as JSON null, never a synthetic
 zero. Five-stage robot timestamps use Vita host microseconds; zero future stages
 are unmeasured. Public HandState carries these stages; no separate public trace
 root is required. Host tests and packaging do not establish device HIL.
 
-## Development and offline packaging
+## Read-only body state
 
-Install the matching dependency wheels into a separate virtual environment:
+`BodyStateSource` subscribes only to BodyState; it creates no control publisher,
+service client or lease. It is independent of `ExternalController`.
+
+```python
+from locomotion_aorta import BodyStateSource
+
+source = BodyStateSource(group="default")
+try:
+    frame = source.snapshot()  # default timeout: 5 seconds
+    state = frame.body_state()  # decode this frame once, on first access
+    print(state.state_id, frame.received_monotonic_ns, frame.received_realtime_ns)
+    next_frame = source.snapshot(timeout=1.0, after=frame)
+finally:
+    source.close()
+```
+
+`snapshot(timeout=5.0, after=None)` uses a finite positive timeout, as the hand
+and gripper clients do. It returns the latest cached snapshot, or waits for a
+different received object when `after` is given. Repeated or reset producer
+state IDs can therefore still produce another snapshot; callers retain their
+own producer freshness/validity checks. Timeout raises `TimeoutError`, invalid
+timeout raises `ValueError`, and a closed source raises `RuntimeError` and wakes
+waiters. Closing takes precedence over cached frames and does not send CANCEL.
+
+Snapshots own their payload bytes and remain usable after later frames or
+source close. Decode results, including decode errors, are retained per frame;
+errors surface on `body_state()` access, never in the receive callback. Read
+state IDs, robot timestamps and validity directly from the returned `BodyState`.
+The two receipt timestamps are direct SDK-host nanosecond clock reads:
+MONOTONIC for local elapsed time and REALTIME as Unix epoch time. They are not
+converted into one another or into robot/device acquisition clock domains.
+
+The single-frame CLI uses this same read-only source:
 
 ```bash
-python -m pip install --find-links wheelhouse -e . build
+python examples/body_state_subscriber/body_state_subscriber.py --group default --timeout 5
+```
+
+## Development and offline packaging
+
+Install the four pinned runtime dependencies, not the SDK wheel, into a
+separate virtual environment. `make check` sets `PYTHONPATH=python:tests` and
+tests the working tree; a pure Python edit does not require a compiler or an
+editable SDK install.
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install --no-index --find-links wheelhouse \
+  aorta-sdk==2026.10.20 aorta-msgs==2026.10.20 vbot-humanoid-msgs==0.1.4 flatbuffers==25.12.19
+python -m pip install mcap==1.3.1
 make check
+```
+
+The dependency Release supplies the Aorta/message/FlatBuffers wheels; it does
+not contain this checkout's SDK wheel or the optional MCAP test dependencies.
+`tools/fetch_dependencies.py --output wheelhouse --arch x86_64` (or `aarch64`)
+downloads exactly the four runtime wheels for that architecture and checks every
+pinned SHA. Authenticate `gh` for the SDK repository; CI uses its own
+`GITHUB_TOKEN` as `GH_TOKEN`. Missing release tags, failed downloads and checksum
+mismatches fail explicitly; no validation is skipped.
+For a fully offline development environment, obtain MCAP and its dependency
+wheels beforehand and add `--no-index --find-links <test-wheelhouse>` to that
+MCAP installation. Without the HIL test dependencies, capture tests are skipped;
+a complete test result requires them.
+
+Building the SDK wheel or using `pip install -e .` also compiles its native
+backend. Install the build tools and explicitly obtain the official ORT archive
+first; `fetch_ort.py` uses the current host's URL and SHA from
+`demo_onnx/ort-archives.json`. Use a fresh output path or point CMake at an
+already verified archive; the helper preserves an existing file.
+
+```bash
+python -m pip install build==1.2.2.post1 scikit-build-core==0.11.6 pybind11==2.13.6 ninja==1.11.1.3
+python tools/fetch_ort.py --output /absolute/path/to/onnxruntime.tgz
+export CMAKE_ARGS='-DORT_ARCHIVE=/absolute/path/to/onnxruntime.tgz'
 make build
-python tools/package_release.py --wheelhouse wheelhouse --output dist/offline-bundle
+# Optional editable install; the same archive is required:
+python -m pip install --find-links wheelhouse -e .
+```
+
+Raw wheels in `dist/raw` are build intermediates. Audit each release architecture
+as described in [the build instructions](demo_onnx/README.md), then assemble the
+bundle from both audited SDK wheels and the pinned dependency wheelhouse:
+
+```bash
+python tools/package_release.py --wheelhouse wheelhouse --wheelhouse dist/audited --output dist/offline-bundle
 python tests/offline_install.py dist/offline-bundle
 ```
 
-The dependency wheelhouse contains both Linux Aorta SDK architectures,
-aorta-msgs, vbot-humanoid-msgs and FlatBuffers. The bundle adds the locomotion
-SDK wheel, examples, source and public PC configuration template. The packager
-verifies dependency hashes, refuses configured credentials and existing output
-directories, and writes `MANIFEST.json` with file digests and source state.
-Local installation and native imports do not establish robot connectivity or
-motion compatibility on either architecture.
+The bundle includes the compiled extension and ORT inside each SDK wheel,
+examples, source and the public PC configuration template. NumPy and pygame
+remain optional demo dependencies. The packager verifies pinned dependency
+hashes, requires both SDK architecture filenames, refuses configured credentials
+and existing output directories, and writes `MANIFEST.json` with file digests
+and source state. Installation does not establish robot connectivity or motion
+compatibility.
+
+### Dependency Release convention
+
+Following SDK #10, fixed `aorta_msgs`, architecture-specific `aorta_sdk`,
+`flatbuffers` and `vbot_humanoid_msgs` wheels for CI and offline bundles live
+in **this repository's dependency prerelease**, currently `v0.1.0-rc.4`
+("dependencies for #10"). CI reads it with this repository's `GITHUB_TOKEN`
+as `GH_TOKEN`; it does not read the private schema repository or require a
+cross-repository token.
+
+After publishing a schema `humanoid-msgs-<version>` Release:
+
+1. Download its official `vbot_humanoid_msgs` wheel and `.sha256`; verify the
+   wheel against the sidecar and the Release asset digest. Mirror both files
+   unchanged into the SDK dependency Release, retaining earlier assets.
+2. Download and back up that Release's `SHA256SUMS`. Append two lines in its
+   existing `SHA256  filename` format, one for the wheel and one for the
+   sidecar. Preserve every existing byte and replace only `SHA256SUMS`.
+   Download the mirrored files again and verify their hashes against the
+   schema Release and the appended entries; keep other Release properties.
+3. Pin the exact schema version, official wheel SHA and matching BFBS hashes
+   in `compatibility.json`, with this repository as
+   `dependency_release_repository` and a nonempty `dependency_release_tag`.
+   Synchronize package requirements, release audits, tests and documentation.
+   Run the dependency fetcher and relevant checks before pushing the SDK PR.
+
+Never substitute an older schema or skip a missing asset, empty tag or failed
+checksum. A dependency mirror is not an SDK release or robot validation.
 
 The `SDK latency report` check exercises Python SDK ↔ C++ Mock communication
 at 50–1000 Hz for at least 60 seconds per rate. See the
@@ -191,7 +364,7 @@ and reports. It does not establish robot performance or motion acceptance.
 
 ## Independent AGX grippers (in preparation)
 
-The single `examples/gripper_external.py` entry contains the EXTERNAL lifecycle,
+The single `examples/gripper/gripper_external.py` entry contains the EXTERNAL lifecycle,
 body zero/hold, single-side targets/return and optional dual-side sine mode.
 `GripperClient` uses `/sdk/foot_humanoid/gripper/<left|right>/{cmd,state,info}`.
 It shares the same `GripperInfo` DTO with `get_robot_info`; there is no per-side
@@ -199,7 +372,7 @@ info RPC and no gripper slot in the 31-joint BodyCmd. The default example and
 `--dry-run` only subscribe, without ownership or command publication:
 
 ```bash
-python examples/gripper_external.py --side right --dry-run --group default --timeout 5
+python examples/gripper/gripper_external.py --side right --dry-run --group default --timeout 5
 ```
 
 `publish_target(q, dq=0, torque_cmd_nm=None)` uses absolute **total opening in m**
@@ -217,7 +390,7 @@ After explicit on-site authorization, suspension/support, an attendant and an
 emergency stop, choose a target from the actual Info limits and run:
 
 ```bash
-python examples/gripper_external.py --side right --target-m "$TARGET_OPENING_M" --confirm-motion
+python examples/gripper/gripper_external.py --side right --target-m "$TARGET_OPENING_M" --confirm-motion
 ```
 
 The example enters EXTERNAL through the existing body preflight/PREPARE/COMMIT,
@@ -248,20 +421,51 @@ period and 30 s of sine streaming; transitions add to the total runtime.
 share one time phase but do not promise atomic device output or arrival.
 
 ```bash
-python examples/gripper_external.py --side both --pattern sine --body-pose zero --body-gains hold --period-s 10 --duration 30 --confirm-motion
+python examples/gripper/gripper_external.py --side both --pattern sine --body-pose zero --body-gains hold --period-s 10 --duration 30 --confirm-motion
 ```
 
 ## PC policy example (in preparation)
 
-`examples/teleop_policy.py` subscribes to BodyState, discovers the actual body
+`examples/teleop_policy/teleop_policy.py` subscribes to BodyState, discovers the actual body
 roster, runs a local action 17 ONNX policy, and uses the same EXTERNAL lease and
 CANCEL exit. Before every live inference it waits up to the existing `--timeout`
 for a strictly increasing BodyState `state_id`; unchanged or older feedback is
 not reused for another inference or leg command, and timeout attempts CANCEL.
-Install the optional `teleop-demo` extra for ONNX Runtime and gamepad input. `--model` is required; no model is bundled or selected automatically.
+The SDK wheel already contains the C++ ONNX Runtime 1.20.1 CPU backend and
+its shared libraries. Only constructing a model loads the bundled inference backend;
+core imports and example `--help` do not load it. There is no Python ONNX
+Runtime fallback. The optional `teleop-demo` extra installs only NumPy and
+pygame from a complete matching demo wheelhouse:
+
+```bash
+python -m pip install --no-index --find-links demo-wheelhouse 'locomotion-aorta[teleop-demo]==0.2.0'
+python -m pip check
+```
+
+The backend intentionally matches the robot's ORT 1.20.1 instead of the
+previous Python ORT 1.23.2. Outputs are not bit-identical to the old extra:
+82 of 120 values differed in the archived comparison. Acceptance uses a
+test-only Python ORT 1.20.1 oracle with exact finite float32 equality.
+No compiler or robot filesystem is needed to consume the SDK wheel. Source
+build instructions are in `demo_onnx/README.md`; the offline bundle already
+contains the compiled backend and ORT inside each SDK wheel. `--model` is required; no
+model is bundled or selected automatically.
 Use `--help` or `--dry-run --body-state-jsonl <capture>` before live use; dry-run
 does not construct SDK transport. The offline validation used a noshoes model;
 replace it with the delivered shoes model and recheck metadata/profile parity
 when available. The example does not replace the robot's complete action17 FSM,
 VR/upper stream or hardware validation. Live motion remains subject to the
 existing on-site authorization and emergency-stop requirements above.
+
+## Demo 目录
+
+每个目录包含运行说明、前提与退出方式（从仓库/离线包根运行命令）：
+
+- [velocity_mode](examples/velocity_mode/README.md)
+- [wbc_tracking_mode](examples/wbc_tracking_mode/README.md)
+- [teleop_policy](examples/teleop_policy/README.md)
+- [brainco_hand](examples/brainco_hand/README.md)
+- [gripper](examples/gripper/README.md)
+- [external_control](examples/external_control/README.md)
+- [fixed_stand_pose](examples/fixed_stand_pose/README.md)
+- [body_state_subscriber](examples/body_state_subscriber/README.md)

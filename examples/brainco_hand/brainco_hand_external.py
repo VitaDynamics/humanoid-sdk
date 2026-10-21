@@ -14,7 +14,7 @@ from locomotion_aorta import ExternalController, ExternalPhase, HandClient, Hand
 from locomotion_aorta.hand import validate_info
 # Load the existing sibling example even in isolated Python (-I) bundle checks.
 _body_spec = importlib.util.spec_from_file_location(
-    'brainco_body_hold_baseline', Path(__file__).with_name('external_control.py'))
+    'brainco_body_hold_baseline', Path(__file__).resolve().parents[1] / 'external_control/external_control.py')
 body = importlib.util.module_from_spec(_body_spec)
 _body_spec.loader.exec_module(body)
 
@@ -157,10 +157,10 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
         emit(f'{client.side}: hand_type={info.hand_type}, joints={info.joint_names}, '
              f'limits_rad={list(zip(info.q_min, info.q_max))}, speed={speed_deg_s:g} deg/s, '
              f'pattern={pattern}, loop={loop}, fractions={low_frac:g}/{high_frac:g}')
-    body.require_body_info(controller, timeout)
+    body_info = body.require_body_info(controller, timeout)
     start_state = body._wait_for_stationary_body_state(
-        controller, timeout=timeout, sleep=sleep, monotonic=monotonic)
-    start_q = tuple(m.q if m.populated else 0.0 for m in start_state.joints)
+        controller, body_info=body_info, timeout=timeout, sleep=sleep, monotonic=monotonic)
+    start_q = tuple(m.q if cap.populated else 0.0 for m, cap in zip(start_state.joints, body_info.joints))
     hold = body._position_command(start_q)
     if body_gains == 'zero':
         hold = replace(hold, joints=tuple(replace(cmd, kp=0.0, kd=0.0, dq=0.0, tau=0.0)
@@ -193,7 +193,7 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
                     or status.reject_count != entered.reject_count):
                 raise RuntimeError('body EXTERNAL ownership/phase/reject_count changed')
             state = controller.wait_body_state(timeout)
-            body._validate_body_state(state, require_stationary=False)
+            body._validate_body_state(state, body_info=body_info, require_stationary=False)
             now = monotonic()
             if state.state_id != last_body_id:
                 last_body_id, last_body_change = state.state_id, now
@@ -202,7 +202,7 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
             # Retain the current pose using the inherited endpoint tolerance;
             # abort instead of continuing hand movement if the body drifts.
             if any(abs(m.q - q) > body.RETURN_ENDPOINT_POSITION_TOLERANCE_RAD
-                   for m, q in zip(state.joints, start_q) if m.populated):
+                   for m, q, cap in zip(state.joints, start_q, body_info.joints) if cap.populated):
                 raise RuntimeError('body departed from its held pose')
             controller.publish(replace(hold, input_state_id=state.state_id,
                                        input_state_ts_real_us=state.ts_state_real_us))

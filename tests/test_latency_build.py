@@ -20,7 +20,7 @@ class LatencyBuildTest(unittest.TestCase):
         self.directory = Path(self.temp.name)
         self.archive = self.directory / "flatbuffers.tar.gz"
 
-    def archive_with(self, name="flatbuffers-25.9.23/CMakeLists.txt"):
+    def archive_with(self, name="flatbuffers-25.12.19/CMakeLists.txt"):
         with tarfile.open(self.archive, "w:gz") as archive:
             data = b"pinned source\n"
             entry = tarfile.TarInfo(name)
@@ -66,7 +66,7 @@ class LatencyBuildTest(unittest.TestCase):
             self.assertEqual((source / "CMakeLists.txt").read_text(), "pinned source\n")
 
     def test_unexpected_paths_rejected(self):
-        for name in ("../escape", "/absolute", "other/file", "flatbuffers-25.9.23/../escape"):
+        for name in ("../escape", "/absolute", "other/file", "flatbuffers-25.12.19/../escape"):
             with self.subTest(name=name), patch.object(build_mock, "FB_SHA", self.archive_with(name)):
                 with self.assertRaisesRegex(RuntimeError, "unsafe"):
                     build_mock.extract_source(self.archive, self.directory)
@@ -75,7 +75,7 @@ class LatencyBuildTest(unittest.TestCase):
         outside = self.directory / "not-build-inputs"
         outside.mkdir()
         (outside / "keep").write_text("keep")
-        (self.directory / "flatbuffers-25.9.23").symlink_to(outside, target_is_directory=True)
+        (self.directory / "flatbuffers-25.12.19").symlink_to(outside, target_is_directory=True)
         with patch.object(build_mock, "FB_SHA", self.archive_with()):
             with self.assertRaisesRegex(RuntimeError, "symlink"):
                 build_mock.extract_source(self.archive, self.directory)

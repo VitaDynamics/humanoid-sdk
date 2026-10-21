@@ -22,7 +22,7 @@ def load_bindings():
     except (ImportError, OSError, AttributeError) as error:
         raise AortaBindingsUnavailableError(
             'install the pinned vbot-humanoid-msgs public EE wheel from '
-            'compatibility.json with Aorta 2026.10.12; legacy HandTouch bindings cannot be used'
+            'compatibility.json with Aorta 2026.10.20; legacy HandTouch bindings cannot be used'
         ) from error
 
 

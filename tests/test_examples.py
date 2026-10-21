@@ -1,7 +1,11 @@
 from body_fixtures import sample_motor, robot_info_reply
+import math
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
-from examples import external_control, body_state_subscriber
+from examples.external_control import external_control
+from examples.body_state_subscriber import body_state_subscriber
 from locomotion_aorta import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
@@ -74,9 +78,10 @@ class RecordingController:
 
     def publish(self, command):
         self.calls.append("publish")
-        self.controller.publish(command)
+        published = self.controller.publish(command)
         if self.follow_commands:
             self.measured_q = [motor.q for motor in command.joints]
+        return published
 
     def exit_external(self, timeout: float):
         self.calls.append("exit_external")
@@ -218,23 +223,34 @@ class FakeClock:
 
 class ExamplesSmokeTest(unittest.TestCase):
     def test_body_state_example_prints_snapshot_without_entering_external(self):
-        harness = RecordingController(FakeClock())
-        self.addCleanup(harness.close)
+        state = BodyState(state_id=8, ts_state_real_us=0, attitude_valid=True,
+                          joints=tuple(sample_motor(q=0.1, dq=0.0, body_index=i,
+                                                    populated=i != 14) for i in range(31)))
+        source = SimpleNamespace(snapshot=mock.Mock(return_value=SimpleNamespace(body_state=lambda: state)))
         output: list[str] = []
-
-        body_state_subscriber.run_once(
-            harness, timeout=0.1, emit=output.append
-        )
-
-        self.assertEqual(harness.calls, ["wait_body_state"])
+        body_state_subscriber.run_once(source, timeout=0.1, emit=output.append)
+        source.snapshot.assert_called_once_with(0.1)
         self.assertEqual(
             output,
             ["state_id=8 ts_state_real_us=0"]
             + [
-                f"joint[{index}] populated={index != 14} valid_fields={3 if index != 14 else 0} q=0.100000 dq=0.000000"
+                f"joint[{index}] error_code=0 q=0.100000 dq=0.000000"
                 for index in range(31)
             ],
         )
+
+    def test_body_info_masks_absent_slots_and_installed_errors_are_rejected(self):
+        from dataclasses import replace
+        motors = [sample_motor() for _ in range(31)]
+        motors[14] = sample_motor(q=math.nan, dq=math.inf)
+        state = BodyState(1, tuple(motors), attitude_valid=True)
+        info = robot_info_reply().info.body
+        external_control._validate_body_state(state, body_info=info, require_stationary=True)
+        for error in (3, 20, 255):
+            motors[0] = replace(motors[0], error_code=error)
+            with self.subTest(error=error), self.assertRaisesRegex(RuntimeError, f'error_code={error}'):
+                external_control._validate_body_state(replace(state, joints=tuple(motors)),
+                                                      body_info=info, require_stationary=False)
 
     def test_external_example_runs_full_body_round_trip_and_enters_passive(self):
         clock = FakeClock()
@@ -601,7 +617,7 @@ class ExamplesSmokeTest(unittest.TestCase):
 
                 sleep_with_feedback(0)
                 state = external_control._wait_for_stationary_body_state(
-                    harness, timeout=5.0, sleep=sleep_with_feedback,
+                    harness, body_info=robot_info_reply().info.body, timeout=5.0, sleep=sleep_with_feedback,
                     monotonic=clock.monotonic,
                 )
                 self.assertEqual(state.joints[26].dq, 0.0)

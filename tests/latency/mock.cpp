@@ -1,6 +1,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -12,7 +13,7 @@
 #include "aorta_abi.h"
 #include "body_cmd_generated.h"
 
-std::vector<uint8_t> MakeState(uint16_t sequence);
+std::vector<uint8_t> MakeState(uint64_t sequence);
 aorta_service_t StartInfoService(aorta_node_t node, const std::string &endpoint,
                                 const std::string &bfbs, const std::string &hash);
 uint64_t InfoRequests();
@@ -23,11 +24,18 @@ uint64_t Now() {
              Clock::now().time_since_epoch())
       .count();
 }
+uint64_t RealtimeNow() {
+  timespec stamp{};
+  if (clock_gettime(CLOCK_REALTIME, &stamp) != 0)
+    throw std::runtime_error("CLOCK_REALTIME failed");
+  return static_cast<uint64_t>(stamp.tv_sec) * 1000000000ULL + stamp.tv_nsec;
+}
 void Check(int rc) {
   if (rc != 0) throw std::runtime_error("Aorta result=" + std::to_string(rc));
 }
 struct Reply {
-  uint64_t session, sequence, cmd_id, callback_ns, copied_ns;
+  uint64_t session, sequence, callback_ns, copied_ns;
+  uint64_t callback_realtime_ns, copied_realtime_ns;
   bool valid;
 };
 struct Capture {
@@ -41,6 +49,7 @@ void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
   auto &capture = *static_cast<Capture *>(opaque);
   const auto entered = Now();
   try {
+    const auto entered_realtime = RealtimeNow();
     if (!view || view->total_len > 65536)
       throw std::runtime_error("invalid payload");
     std::vector<uint8_t> bytes;
@@ -63,13 +72,14 @@ void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
     for (size_t j = 0; j < copied.size(); ++j) copied[j] = *motors->Get(j);
     Reply row{cmd->session_id(),
               cmd->sequence(),
-              cmd->cmd_id(),
               entered,
               Now(),
+              entered_realtime,
+              RealtimeNow(),
               true};
     row.valid = row.session == capture.session && row.sequence > 0 &&
-                row.sequence <= 65000 && row.cmd_id == row.sequence &&
-                cmd->protocol_version() == 1 && cmd->input_state_id() == row.sequence &&
+                row.sequence <= 65000 &&
+                cmd->protocol_version() == 2 && cmd->input_state_id() == row.sequence &&
                 cmd->input_state_ts_real_us() > 0 &&
                 cmd->action() == lowlevel::BodyCmdAction_EXTERNAL;
     for (size_t j = 0; j < copied.size(); ++j) {
@@ -142,6 +152,7 @@ int main(int argc, char **argv) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     struct Sent {
       uint64_t sequence, publish_ns, return_ns, size;
+      uint64_t publish_realtime_ns, return_realtime_ns;
     };
     std::vector<Sent> sent;
     sent.reserve(65000);
@@ -150,8 +161,10 @@ int main(int argc, char **argv) {
       std::this_thread::sleep_until(next);
       auto bytes = MakeState(seq);
       const auto begin = Now();
+      const auto begin_realtime = RealtimeNow();
       Check(aorta_publisher_publish(publisher, bytes.data(), bytes.size()));
-      sent.push_back({seq, begin, Now(), bytes.size()});
+      sent.push_back(
+          {seq, begin, Now(), bytes.size(), begin_realtime, RealtimeNow()});
       if (begin - sent.front().publish_ns >=
           static_cast<uint64_t>(seconds * 1e9))
         break;
@@ -166,15 +179,17 @@ int main(int argc, char **argv) {
     node = 0;  // callbacks quiesce before Capture storage is released
     std::ofstream sent_file(directory / "sent.csv"),
         received(directory / "received.csv");
-    sent_file << "sequence,publish_ns,return_ns,bytes\n";
+    sent_file << "sequence,publish_ns,return_ns,bytes,publish_realtime_ns,return_realtime_ns\n";
     for (const auto &r : sent)
       sent_file << r.sequence << ',' << r.publish_ns << ',' << r.return_ns
-                << ',' << r.size << '\n';
+                << ',' << r.size << ',' << r.publish_realtime_ns << ','
+                << r.return_realtime_ns << '\n';
     std::lock_guard<std::mutex> lock(capture.mutex);
-    received << "session,sequence,cmd_id,callback_ns,copied_ns,valid\n";
+    received << "session,sequence,callback_ns,copied_ns,valid,callback_realtime_ns,copied_realtime_ns\n";
     for (const auto &r : capture.replies)
-      received << r.session << ',' << r.sequence << ',' << r.cmd_id << ','
-               << r.callback_ns << ',' << r.copied_ns << ',' << r.valid << '\n';
+      received << r.session << ',' << r.sequence << ','
+               << r.callback_ns << ',' << r.copied_ns << ',' << r.valid << ','
+               << r.callback_realtime_ns << ',' << r.copied_realtime_ns << '\n';
     sent_file.close();
     received.close();
     std::ofstream info_receipt(directory / "robot_info.json");

@@ -8,7 +8,7 @@ import threading
 from types import SimpleNamespace as NS
 import unittest
 
-from examples.teleop_policy import JoyCommand, Policy, bodycmd, live, objects
+from examples.teleop_policy.teleop_policy import JoyCommand, Policy, bodycmd, live, objects
 
 
 ROOT = Path(__file__).parent / "fixtures/teleop"
@@ -31,11 +31,11 @@ NAMES = (
 def fixture():
     body = NS(slot_count=31,joint_names=NAMES,
               joints=tuple(NS(populated=n!='waist_roll_joint') for n in NAMES))
-    motors = tuple(NS(body_index=i,populated=n!='waist_roll_joint',valid_fields=0 if n=='waist_roll_joint' else 3,
+    motors = tuple(NS(error_code=0,
                       q=float(i),dq=float(100+i)) for i,n in enumerate(NAMES))
     # TRUNK first and deliberately different, preventing accidental imu_states[0].
-    trunk = NS(location='TRUNK',state=NS(quaternion=(0,1,0,0),gyroscope=(9,9,9)),valid_fields=3)
-    hip = NS(location='HIP',state=NS(quaternion=(1,0,0,0),gyroscope=(1,2,3)),valid_fields=3)
+    trunk = NS(location='TRUNK',state=NS(quaternion=(0,1,0,0),gyroscope=(9,9,9)),status=1)
+    hip = NS(location='HIP',state=NS(quaternion=(1,0,0,0),gyroscope=(1,2,3)),status=1)
     state = NS(joints=motors,imu_states=(trunk,hip),attitude_valid=True,
                state_id=987654321,ts_state_real_us=1792000000123456)
     return body,state
@@ -86,14 +86,14 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(obs[4:7],(1,2,3))
 
     def test_invalid_hip_does_not_fall_back_to_trunk(self):
-        self.state.imu_states[1].valid_fields=1
+        self.state.imu_states[1].status=2
         with self.assertRaises(ValueError):
             self.policy.observation(self.state,self.body,(0,0,0,.75),'HIP')
 
     def test_missing_joint_or_nan_rejected_but_roll_not_read(self):
         self.state.joints[14].q=float('nan')
         self.policy.observation(self.state,self.body,(0,0,0,.75),'HIP')
-        self.state.joints[20].valid_fields=0
+        self.state.joints[20].error_code=20
         with self.assertRaises(ValueError):
             self.policy.observation(self.state,self.body,(0,0,0,.75),'HIP')
 
@@ -125,7 +125,7 @@ class ObservationTests(unittest.TestCase):
         with self.assertRaises(ValueError):Policy(dict(METADATA,frame_dim='66'),CONTRACT)
 
     def test_bodycmd_explicit_action_and_actual_input_causality(self):
-        cmd=bodycmd(API,self.policy.targets([0]*12,self.body),self.state,7)
+        cmd=bodycmd(API,self.policy.targets([0]*12,self.body),self.state,)
         self.assertEqual(cmd.action,'EXTERNAL_SYMBOLIC')
         self.assertEqual(cmd.input_state_id,987654321)
         self.assertEqual(cmd.input_state_ts_real_us,1792000000123456)
@@ -187,7 +187,7 @@ class LifecycleTests(unittest.TestCase):
             if mode in ('sigint','sigterm','entry_error','wait_error'):self.assertNotIn('publish',events)
         return events
 
-    def published_command_ids(self, frame_count):
+    def published_state_ids(self, frame_count):
         import locomotion_aorta as api
         from locomotion_aorta.controller import _validate_command
         body, state = fixture()
@@ -211,7 +211,7 @@ class LifecycleTests(unittest.TestCase):
                 # of the uint16 boundary, without transport or a real model.
                 if len(commands) in (0, 65534, 65535, 65536):
                     _validate_command(command)
-                commands.append(command.cmd_id)
+                commands.append(command.input_state_id)
                 if len(commands) == frame_count:
                     stop.set()
             def exit_external(self, timeout):
@@ -236,11 +236,13 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(events, ['enter', 'cancel'])
         return commands
 
-    def test_live_first_command_id_is_one_and_passes_controller_guard(self):
-        self.assertEqual(self.published_command_ids(1), [1])
+    def test_live_first_command_uses_fresh_input_identity_without_cmd_id(self):
+        self.assertEqual(self.published_state_ids(1), [987654323])
 
-    def test_live_command_id_wraps_to_one_without_zero(self):
-        self.assertEqual(self.published_command_ids(65537), list(range(1, 65536)) + [1, 2])
+    def test_live_input_identity_does_not_wrap_at_uint16(self):
+        ids = self.published_state_ids(65537)
+        self.assertEqual(len(set(ids)), 65537)
+        self.assertTrue(all(b-a == 1 for a, b in zip(ids, ids[1:])))
 
     def fresh_state_case(self, ids, *, stop_during_wait=False):
         from test_examples import FakeClock
@@ -399,23 +401,21 @@ class ActualSdkDtoIntegration(unittest.TestCase):
                            for i,j in enumerate(body.joints))
         typed_body = api.BodyInfo(0,31,body.joint_names,capability,
                                  tuple(api.BodyMotorIdentity('synthetic',i+1,j.populated) for i,j in enumerate(capability)))
-        motors = tuple(api.BodyJointState(m.body_index,m.populated,False,
-                         api.BodySampleStatus.OK if m.populated else api.BodySampleStatus.UNCONFIGURED,
-                         m.valid_fields,q=m.q,dq=m.dq) for m in state.joints)
+        motors = tuple(api.BodyJointState(q=m.q,dq=m.dq) for m in state.joints)
         imus = tuple(api.BodyImuSample(getattr(api.BodyImuLocation,m.location),
                          api.BodyImuState(m.state.quaternion,m.state.gyroscope,(0.,0.,9.81),(0.,0.,0.)),
-                         api.BodySampleStatus.OK,m.valid_fields) for m in state.imu_states)
+                         m.status) for m in state.imu_states)
         typed_state = api.BodyState(state.state_id,motors,ts_state_real_us=state.ts_state_real_us,
                                    attitude_valid=True,imu_states=imus)
         policy = Policy(METADATA,CONTRACT)
         observation = policy.observation(typed_state,typed_body,(0.,0.,0.,.85),api.BodyImuLocation.HIP)
         self.assertEqual(len(observation),492)
         targets = policy.targets((0.,)*12,typed_body)
-        command = bodycmd(api,targets,typed_state,17)
+        command = bodycmd(api,targets,typed_state,)
         b=flatbuffers.Builder(1);b.Finish(_fill_body_cmd(NS(body_cmd_module=command_module),command,b,0))
         view=command_module.BodyCmd.GetRootAs(b.Output())
         self.assertEqual(view.Action(),api.BodyCmdAction.EXTERNAL)
-        self.assertNotEqual(view._tab.Offset(24),0)
+        self.assertNotEqual(view._tab.Offset(22),0)
         self.assertEqual(view.JointsLength(),31)
         self.assertEqual(view.Joints(14).Q(),0.)
         self.assertEqual(view.InputStateId(),typed_state.state_id)

@@ -3,17 +3,17 @@ import struct
 from dataclasses import fields
 from typing import Any
 from .body_types import (
-    BODY_SLOTS, BodyJointState, BodyImuState, BodyImuSample, BodyAppliedCmd,
+    BODY_SLOTS, BODY_PROTOCOL_VERSION, BodyJointState, BodyImuState, BodyImuSample,
     BodyState, BodyJointCmd, BodyJointCapability, BodyMotorIdentity, BodyInfo,
     EndEffectorCapability, RobotInfo, GetRobotInfoResponse,
 )
 
-# Layouts and vector slots from the actual final S2 generated accessors.
+# Layouts and vector slots from the public 0.1.3 / BODY v2 generated accessors.
 _COMMAND = struct.Struct("<" + "fffff" * BODY_SLOTS)
-_JOINT_STATE = struct.Struct("<H??BxHQQQfffffI")
+_JOINT_STATE = struct.Struct("<QQQfffI")
 _MOTOR = struct.Struct("<fffff")
-_BODY_JOINTS_SLOT = 22  # BodyState.joints / BodyCmd.joints, id9
-_APPLIED_JOINTS_SLOT = 14  # BodyAppliedCmd.joints, id5
+_STATE_JOINTS_SLOT = 22  # BodyState.joints, id9
+_COMMAND_JOINTS_SLOT = 20  # BodyCmd.joints, id8 after unpublished ID compaction
 
 
 def create_body_cmd(builder: Any, joints: tuple[BodyJointCmd, ...]) -> int:
@@ -63,11 +63,11 @@ def _vector_field_data(view: Any, slot: int, stride: int, alignment: int) -> mem
 
 
 def unpack_body_joints(view: Any) -> tuple[BodyJointState, ...]:
-    data = _vector_field_data(view, _BODY_JOINTS_SLOT, _JOINT_STATE.size, 8)
+    data = _vector_field_data(view, _STATE_JOINTS_SLOT, _JOINT_STATE.size, 8)
     return () if data is None else tuple(BodyJointState(*v) for v in _JOINT_STATE.iter_unpack(data))
 
 
-def unpack_body_cmd(view: Any, *, slot: int = _BODY_JOINTS_SLOT) -> tuple[BodyJointCmd, ...]:
+def unpack_body_cmd(view: Any, *, slot: int = _COMMAND_JOINTS_SLOT) -> tuple[BodyJointCmd, ...]:
     if view is None:
         return ()
     data = _vector_field_data(view, slot, _MOTOR.size, 4)
@@ -88,6 +88,9 @@ def _text(value: bytes | str | None) -> str:
 
 
 def decode_body_state(view: Any) -> BodyState:
+    # Check the existing BODY revision before interpreting a fixed-stride struct.
+    if view.ProtocolVersion() != BODY_PROTOCOL_VERSION:
+        raise ValueError("incompatible BodyState protocol_version; expected BODY 2")
     imus = []
     for i in range(view.ImuStatesLength()):
         sample = view.ImuStates(i)
@@ -97,12 +100,8 @@ def decode_body_state(view: Any) -> BodyState:
                         for j in range(getattr(state, _getter(name) + 'Length')()))
             for name in ('quaternion', 'gyroscope', 'accelerometer', 'rpy')})
         imus.append(_dto(sample, BodyImuSample, state=imu))
-    applied = view.AppliedCmd()
-    echo = None
-    if applied is not None:
-        echo = _dto(applied, BodyAppliedCmd, joints=unpack_body_cmd(applied, slot=_APPLIED_JOINTS_SLOT))
     return _dto(view, BodyState, joints=unpack_body_joints(view),
-                imu_states=tuple(imus), applied_cmd=echo)
+                imu_states=tuple(imus))
 
 
 def decode_robot_info(view: Any) -> RobotInfo:

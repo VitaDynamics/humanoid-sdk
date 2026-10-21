@@ -20,9 +20,12 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(set(manifest), {
             "manifest_version", "sdk_version", "aorta_version", "flatbuffers_version",
             "humanoid_msgs_version", "python_requires", "platforms", "external_version", "control_request_version",
-            "command_slots", "state_slots", "session_mode", "pc_session_profile",
-            "wheel_sha256", "dependency_release_tag", "aorta_abi_version", "schema_sha256",
+            "command_slots", "state_slots", "session_mode", "pc_session_profile", "body_protocol_version",
+            "wheel_sha256", "dependency_release_tag", "dependency_release_repository",
+            "aorta_abi_version", "schema_sha256",
         })
+        self.assertEqual(manifest["python_requires"], "==3.10.*")
+        self.assertEqual(manifest["platforms"], ["manylinux_2_35_x86_64", "manylinux_2_35_aarch64"])
         self.assertEqual(sorted(n.split("-")[0] for n in manifest["wheel_sha256"]),
                          ["aorta_msgs", "aorta_sdk", "aorta_sdk", "flatbuffers", "vbot_humanoid_msgs"])
 
@@ -52,11 +55,34 @@ class ReleaseTest(unittest.TestCase):
             (root / "CLAUDE.md").symlink_to("AGENTS.md")
             for name in ("examples", "python/locomotion_aorta", "config", "dist", "wheels"):
                 (root / name).mkdir(parents=True)
-            examples = ("brainco_hand_external.py", "brainco_capture.py", "gripper_external.py",
-                        "external_control.py", "body_state_subscriber.py", "teleop_policy.py",
-                        "fixed_stand_pose.py", "fixed_stand_profile.json", "action17_contract.json")
+            examples = (
+                'body_state_subscriber/README.md',
+                'body_state_subscriber/body_state_subscriber.py',
+                'brainco_hand/README.md',
+                'brainco_hand/brainco_capture.py',
+                'brainco_hand/brainco_hand_external.py',
+                'external_control/README.md',
+                'external_control/external_control.py',
+                'fixed_stand_pose/README.md',
+                'fixed_stand_pose/fixed_stand_pose.py',
+                'fixed_stand_pose/fixed_stand_profile.json',
+                'gripper/README.md',
+                'gripper/gripper_external.py',
+                'teleop_policy/README.md',
+                'teleop_policy/action17_contract.json',
+                'teleop_policy/teleop_policy.py',
+                'velocity_mode/README.md',
+                'velocity_mode/velocity_mode.py',
+                'velocity_mode/velocity_mode_latency.py',
+                'velocity_mode/velocity_mode_policy.py',
+                'wbc_tracking_mode/README.md',
+                'wbc_tracking_mode/wbc_tracking_asample.json',
+                'wbc_tracking_mode/wbc_tracking_mode.py',
+            )
             for name in examples:
-                shutil.copyfile(ROOT / "examples" / name, root / "examples" / name)
+                target = root / "examples" / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / "examples" / name, target)
             source = ROOT / "config/pc_session_peer.json5"
             if source.exists():
                 shutil.copyfile(source, root / "config/pc_session_peer.json5")
@@ -67,7 +93,9 @@ class ReleaseTest(unittest.TestCase):
                 (root / "wheels" / name).write_bytes(payload)
                 compatibility["wheel_sha256"][name] = hashlib.sha256(payload).hexdigest()
             (root / "compatibility.json").write_text(json.dumps(compatibility))
-            (root / "dist/locomotion_aorta-0.1.0-py3-none-any.whl").write_bytes(b"sdk fixture")
+            for platform in compatibility["platforms"]:
+                sdk_wheel = root / "dist" / f"locomotion_aorta-{compatibility['sdk_version']}-cp310-cp310-{platform}.whl"
+                sdk_wheel.write_bytes(platform.encode())
             output = Path(temporary) / "bundle"
             with mock.patch.object(package_release, "ROOT", root), mock.patch.object(
                 package_release.subprocess, "check_output", side_effect=["fixture-head\n", ""]
@@ -86,6 +114,18 @@ class ReleaseTest(unittest.TestCase):
             for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py"):
                 self.assertFalse((output / "examples" / retired).exists())
                 self.assertNotIn("examples/" + retired, manifest["files"])
+            self.assertEqual(sorted(p.name for p in (output / "wheelhouse").glob("locomotion_aorta-*.whl")),
+                             [f"locomotion_aorta-0.2.0-cp310-cp310-{platform}.whl"
+                              for platform in sorted(compatibility["platforms"])])
+            # A single architecture or a pure/raw wheel must not masquerade as the release pair.
+            arm = root / "dist/locomotion_aorta-0.2.0-cp310-cp310-manylinux_2_35_aarch64.whl"
+            arm.unlink()
+            (root / "dist/locomotion_aorta-0.2.0-py3-none-any.whl").write_bytes(b"retired pure wheel")
+            missing = Path(temporary) / "missing-arm"
+            with mock.patch.object(package_release, "ROOT", root):
+                with self.assertRaisesRegex(ValueError, "missing audited SDK wheel"):
+                    package_release.package([root / "wheels"], missing)
+            self.assertFalse(missing.exists())
             self.assertEqual(manifest["pc_session_profile"], "config/pc_session_peer.json5")
             self.assertEqual(manifest["files"]["config/pc_session_peer.json5"],
                              hashlib.sha256(bundled.read_bytes()).hexdigest())

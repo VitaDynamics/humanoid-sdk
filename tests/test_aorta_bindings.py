@@ -42,10 +42,10 @@ class AortaBindingContractTest(unittest.TestCase):
             "lowlevel.BodyState": (
                 "ProtocolVersion", "RosterVersion", "StateId", "TsStateRealUs",
                 "TsStatePubUs", "TsConsumedUs", "AttitudeValid", "ImuStates",
-                "Joints", "AppliedCmd",
+                "Joints", "AppliedSessionId", "AppliedSequence", "TsFirstOutputUs",
             ),
             "lowlevel.BodyCmd": (
-                "Joints", "CmdId", "ProtocolVersion", "SessionId", "Sequence",
+                "Joints", "ProtocolVersion", "SessionId", "Sequence",
                 "InputStateId", "InputStateTsRealUs", "Action", "RootQuat",
             ),
             "locomotion_sdk.ControlRequest": (
@@ -133,9 +133,8 @@ class AortaBindingContractTest(unittest.TestCase):
         self.assertEqual(request_view.RequestedLeaseMs(), 0)
 
         command = BodyCmd(
-            cmd_id=17,
             joints=tuple(BodyJointCmd(q=0.25, kp=30.0, kd=1.5) for _ in range(31)),
-            protocol_version=1,
+            protocol_version=2,
             session_id=42,
             sequence=3,
         )
@@ -143,10 +142,10 @@ class AortaBindingContractTest(unittest.TestCase):
         root = transport_module._fill_body_cmd(bindings, command, builder, 0)
         builder.Finish(root)
         command_view = bindings.body_cmd_module.BodyCmd.GetRootAs(builder.Output())
-        self.assertEqual(command_view.CmdId(), 17)
+        self.assertFalse(hasattr(command_view, 'CmdId'))
         self.assertEqual(command_view.JointsLength(), 31)
         self.assertAlmostEqual(command_view.Joints(0).Q(), 0.25)
-        self.assertEqual(command_view.ProtocolVersion(), 1)
+        self.assertEqual(command_view.ProtocolVersion(), 2)
         self.assertEqual(command_view.SessionId(), 42)
         self.assertEqual(command_view.Sequence(), 3)
 
@@ -174,6 +173,7 @@ class AortaBindingContractTest(unittest.TestCase):
         import lowlevel.BodyState as module
         builder = flatbuffers.Builder(128)
         module.BodyStateStart(builder)
+        module.BodyStateAddProtocolVersion(builder, 2)
         module.BodyStateAddTsStateRealUs(builder, 1_234_567)
         builder.Finish(module.BodyStateEnd(builder))
         state = transport_module.decode_body_state(module.BodyState.GetRootAs(builder.Output()))

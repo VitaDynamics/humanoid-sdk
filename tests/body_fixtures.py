@@ -1,13 +1,11 @@
 """Synthetic typed fixtures; no claim of robot capability discovery."""
 from locomotion_aorta import (
-    BodyJointState, BodySampleStatus, BodyInfo, BodyJointCapability, BodySlotRole,
+    BodyJointState, BodyInfo, BodyJointCapability, BodySlotRole,
     BodyMotorIdentity, RobotInfo, GetRobotInfoResponse, ServiceStatus,
 )
 
 def sample_motor(*, q=0.0, dq=0.0, body_index=0, populated=True):
-    return BodyJointState(body_index, populated, False,
-                          BodySampleStatus.OK if populated else BodySampleStatus.UNCONFIGURED,
-                          3 if populated else 0, q=q, dq=dq)
+    return BodyJointState(q=q, dq=dq)
 
 def robot_info_reply():
     joints = tuple(BodyJointCapability(i, BodySlotRole.ACTIVE, False, i != 14,

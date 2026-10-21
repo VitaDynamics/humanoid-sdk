@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from .gripper_types import GripperInfo
 from lowlevel.BodyCmdAction import BodyCmdAction
 from lowlevel.BodySampleStatus import BodySampleStatus
+from lowlevel.JointError import JointError
 from lowlevel.BodyImuLocation import BodyImuLocation
 from lowlevel.BodySlotRole import BodySlotRole
 from lowlevel.EndEffectorKind import EndEffectorKind
@@ -10,7 +11,7 @@ from aorta.services.common.ServiceStatus import ServiceStatus
 from .hand_types import HandInfo
 
 BODY_SLOTS = 31
-BODY_PROTOCOL_VERSION = 1
+BODY_PROTOCOL_VERSION = 2
 
 @dataclass(frozen=True, slots=True)
 class BodyJointCmd:
@@ -22,7 +23,6 @@ class BodyJointCmd:
 
 @dataclass(frozen=True, slots=True)
 class BodyCmd:
-    cmd_id: int
     joints: tuple[BodyJointCmd, ...]
     action: int = BodyCmdAction.EXTERNAL
     protocol_version: int = BODY_PROTOCOL_VERSION
@@ -36,20 +36,13 @@ class BodyCmd:
 
 @dataclass(frozen=True, slots=True)
 class BodyJointState:
-    body_index: int
-    populated: bool
-    is_mock: bool
-    status: int
-    valid_fields: int
     ts_acquired_hw_us: int = 0
     ts_ingested_us: int = 0
     ts_assembled_us: int = 0
     q: float = 0.0
     dq: float = 0.0
-    ddq: float = 0.0
     tau_est: float = 0.0
-    temperature_deg_c: float = 0.0
-    lost: int = 0
+    error_code: int = JointError.NONE  # uint32, including unlisted high-bit codes
 
 @dataclass(frozen=True, slots=True)
 class BodyImuState:
@@ -63,27 +56,14 @@ class BodyImuSample:
     location: int
     state: BodyImuState | None
     status: int
-    valid_fields: int
     ts_sampled_us: int = 0
     ts_acquired_hw_us: int = 0
     ts_ingested_us: int = 0
     ts_assembled_us: int = 0
-    temperature_deg_c: float = 0.0
-    device_timestamp_ms: int = 0
-    host_timestamp_us: int = 0
-
-@dataclass(frozen=True, slots=True)
-class BodyAppliedCmd:
-    action: int = BodyCmdAction.UNKNOWN
-    session_id: int = 0
-    sequence: int = 0
-    cmd_id: int = 0
-    ts_first_output_us: int = 0
-    joints: tuple[BodyJointCmd, ...] = ()
-    source_key_valid: bool = False
 
 @dataclass(frozen=True, slots=True)
 class BodyState:
+    """uint64 state/correlation IDs; first-output stamp is a control-cycle time."""
     state_id: int
     joints: tuple[BodyJointState, ...]
     protocol_version: int = BODY_PROTOCOL_VERSION
@@ -93,7 +73,9 @@ class BodyState:
     ts_consumed_us: int = 0
     attitude_valid: bool = False
     imu_states: tuple[BodyImuSample, ...] = ()
-    applied_cmd: BodyAppliedCmd | None = None
+    applied_session_id: int = 0
+    applied_sequence: int = 0
+    ts_first_output_us: int = 0
 
 @dataclass(frozen=True, slots=True)
 class BodyJointCapability:

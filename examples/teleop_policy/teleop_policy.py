@@ -17,6 +17,9 @@ import time
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
+from lowlevel.BodySampleStatus import BodySampleStatus
+from lowlevel.JointError import JointError
+
 
 def f32(value: float) -> float:
     return struct.unpack('f', struct.pack('f', value))[0]
@@ -107,8 +110,8 @@ class Policy:
         if len(samples) != 1 or samples[0].state is None:
             raise ValueError('BodyState lacks one unambiguous HIP IMU sample')
         sample = samples[0]
-        # 016 validity bits: quaternion=bit0, gyroscope=bit1; no invented timeout.
-        if not state.attitude_valid or sample.valid_fields & 3 != 3:
+        # Use the remaining sample-quality field from the generated public contract.
+        if not state.attitude_valid or sample.status != BodySampleStatus.OK:
             raise ValueError('HIP attitude/gyro feedback is invalid')
         quat, gyro = tuple(sample.state.quaternion), tuple(sample.state.gyroscope)
         if len(quat) != 4 or len(gyro) != 3 or len(command) != 4:
@@ -117,7 +120,7 @@ class Policy:
         for name in self.names:
             i = indices[name]
             joint = state.joints[i]
-            if joint.body_index != i or not joint.populated or joint.valid_fields & 3 != 3:
+            if joint.error_code != JointError.NONE:
                 raise ValueError(f'policy joint feedback is invalid: {name}')
             q.append(joint.q)
             dq.append(joint.dq)
@@ -203,29 +206,31 @@ class JoyCommand:
 
 class Model:
     def __init__(self, path: str):
-        import onnxruntime as ort  # optional demo dependency, no SDK core import
-        options = ort.SessionOptions()
-        options.intra_op_num_threads = 1
-        options.inter_op_num_threads = 1
-        self.session = ort.InferenceSession(path, sess_options=options, providers=['CPUExecutionProvider'])
-        inputs, outputs = self.session.get_inputs(), self.session.get_outputs()
+        import platform
+        import sys
+        if (sys.version_info[:2] != (3, 10) or sys.implementation.name != 'cpython'
+                or sys.platform != 'linux' or platform.machine() not in ('x86_64', 'aarch64')):
+            raise RuntimeError('teleop-demo requires CPython 3.10 on Linux x86_64/aarch64 '
+                               '(Ubuntu 22.04 or newer)')
+        from locomotion_aorta._onnx import Session  # optional; no SDK core import
+        self.session = Session(path, intra_threads=1, inter_threads=1)
+        inputs, outputs = self.session.inputs, self.session.outputs
         if len(inputs) != 1 or len(outputs) != 1 or inputs[0].shape != [1,492] or outputs[0].shape != [1,12]:
             raise ValueError('expected one [1,492] float input and one [1,12] output')
-        if inputs[0].type != 'tensor(float)' or outputs[0].type != 'tensor(float)':
+        if inputs[0].dtype != 'tensor(float)' or outputs[0].dtype != 'tensor(float)':
             raise ValueError('expected float32 tensors')
         self.input_name, self.output_name = inputs[0].name, outputs[0].name
-        self.metadata = self.session.get_modelmeta().custom_metadata_map
+        self.metadata = self.session.metadata
 
     def infer(self, observation: Sequence[float]) -> tuple[float, ...]:
         import numpy as np
         values = np.asarray(observation, dtype=np.float32).reshape(1,492)
-        result = self.session.run([self.output_name], {self.input_name:values})[0]
+        result = self.session.run(self.input_name, self.output_name, values)
         return tuple(float(x) for x in result[0])
 
 
-def bodycmd(api: Any, targets: Sequence[MotorTarget], state: Any, cmd_id: int) -> Any:
-    return api.BodyCmd(cmd_id=cmd_id,
-                      joints=tuple(api.BodyJointCmd(q=m.q,dq=m.dq,tau=m.tau,kp=m.kp,kd=m.kd) for m in targets),
+def bodycmd(api: Any, targets: Sequence[MotorTarget], state: Any) -> Any:
+    return api.BodyCmd(joints=tuple(api.BodyJointCmd(q=m.q,dq=m.dq,tau=m.tau,kp=m.kp,kd=m.kd) for m in targets),
                       action=api.BodyCmdAction.EXTERNAL,
                       input_state_id=state.state_id,
                       input_state_ts_real_us=state.ts_state_real_us)
@@ -257,7 +262,6 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
         if entered.phase != api.ExternalPhase.RUNNING or entered.current_action != 'EXTERNAL':
             raise RuntimeError('PREPARE/ACK/COMMIT did not reach actual EXTERNAL RUNNING')
         deadline = monotonic()
-        cmd_id = 1
         while not stop.is_set():
             status = controller.status
             if status is None or any(getattr(status,key) != getattr(entered,key)
@@ -285,8 +289,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
             if stop.is_set():
                 break
             # Keep all D2 controller/session/capability/watchdog/command guards in publish.
-            controller.publish(bodycmd(api,targets,state,cmd_id))
-            cmd_id = cmd_id % 0xffff + 1
+            controller.publish(bodycmd(api,targets,state))
             deadline = max(deadline+policy.period, monotonic())
             sleep(max(0.0,deadline-monotonic()))
     finally:

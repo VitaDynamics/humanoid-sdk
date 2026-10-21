@@ -65,14 +65,14 @@ __all__ += [
 from .body_types import (
     BODY_SLOTS, BODY_PROTOCOL_VERSION, BodyJointCmd, BodyCmd, BodyCmdAction,
     BodyState, BodyJointState, BodyImuState, BodyImuSample, BodyImuLocation,
-    BodySampleStatus, BodyAppliedCmd, BodySlotRole, BodyJointCapability,
+    BodySampleStatus, JointError, BodySlotRole, BodyJointCapability,
     BodyMotorIdentity, BodyInfo, RobotInfo, EndEffectorKind, EndEffectorCapability,
     GripperInfo, GetRobotInfoResponse, ServiceStatus,
 )
 __all__ += [
     "BODY_SLOTS", "BODY_PROTOCOL_VERSION", "BodyJointCmd", "BodyCmd", "BodyCmdAction",
     "BodyState", "BodyJointState", "BodyImuState", "BodyImuSample", "BodyImuLocation",
-    "BodySampleStatus", "BodyAppliedCmd", "BodySlotRole", "BodyJointCapability",
+    "BodySampleStatus", "JointError", "BodySlotRole", "BodyJointCapability",
     "BodyMotorIdentity", "BodyInfo", "RobotInfo", "EndEffectorKind", "EndEffectorCapability",
     "GripperInfo", "GetRobotInfoResponse", "ServiceStatus",
 ]
@@ -82,3 +82,6 @@ from .gripper_types import GripperCmd, GripperState, GripperSample, GripperHostT
 
 __all__ += ["GRIPPER_TOPIC_PREFIX", "GripperClient", "GripperCmd", "GripperState",
             "GripperSample", "GripperHostTarget", "GripperLimitSource", "GripperType"]
+
+from .state import BodyStateSource, BodyStateSnapshot
+__all__ += ["BodyStateSource", "BodyStateSnapshot"]

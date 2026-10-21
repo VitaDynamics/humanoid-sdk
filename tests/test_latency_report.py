@@ -22,7 +22,7 @@ class LatencyReportTest(unittest.TestCase):
             self.client.append(dict(session=123, sequence=seq, decode_ns=begin + 100,
                 decoded_ns=begin + 200, built_ns=begin + 300, fill_ns=begin + 400,
                 filled_ns=begin + 500, bytes_ns=begin + 600, returned_ns=begin + 650))
-            self.received.append(dict(session=123, sequence=seq, cmd_id=seq,
+            self.received.append(dict(session=123, sequence=seq,
                 callback_ns=begin + 700, copied_ns=begin + 800, valid=1))
 
     def analyze(self):
@@ -40,6 +40,73 @@ class LatencyReportTest(unittest.TestCase):
         self.assertAlmostEqual(sum(s["mean_ms"] for s in result["stages"]), result["rtt"]["mean_ms"])
         self.assertEqual(result["mock_send_hz"], 1)
         self.assertEqual(result["missing_reply"], 0)
+
+    def add_realtime(self):
+        for rows in (self.sent,self.client,self.received):
+            for row in rows:
+                for key,value in tuple(row.items()):
+                    if key.endswith('_ns'):row[key.replace('_ns','_realtime_ns')]=value+1_700_000_000_000_000_000
+
+    def test_realtime_used_across_processes_even_when_monotonic_offsets_differ(self):
+        self.add_realtime()
+        for row in self.received:
+            row['callback_ns']+=999_000_000
+            row['copied_ns']+=999_000_000
+        result=self.analyze()
+        self.assertEqual(result['clock'],'CLOCK_REALTIME')
+        self.assertAlmostEqual(result['rtt']['mean_ms'],.0008)
+        self.assertAlmostEqual(sum(s['mean_ms'] for s in result['stages']),.0008)
+
+    def test_realtime_columns_do_not_disable_monotonic_stage_checks(self):
+        self.add_realtime()
+        cases = [(self.client[0], 'decode_ns', self.sent[0]['publish_ns'] - 1,
+                  'publish_ns/decode_ns'),
+                 (self.received[0], 'callback_ns', self.client[0]['bytes_ns'] - 1,
+                  'bytes_ns/callback_ns'),
+                 (self.received[0], 'copied_ns', self.received[0]['callback_ns'] - 1,
+                  'callback_ns/copied_ns')]
+        for row, key, value, segment in cases:
+            with self.subTest(segment=segment):
+                previous = row[key]
+                row[key] = value
+                with self.assertRaisesRegex(ValueError, 'non-monotonic stage ' + segment):
+                    self.analyze()
+                row[key] = previous
+        self.assertEqual(self.analyze()['clock'], 'CLOCK_REALTIME')
+
+    def test_missing_realtime_never_silently_falls_back_or_mixes_clocks(self):
+        self.add_realtime()
+        for row in self.client:del row['decode_realtime_ns']
+        with self.assertRaisesRegex(ValueError,'incomplete REALTIME'):self.analyze()
+
+    def test_realtime_clock_step_is_counted_without_failing_or_clipping(self):
+        self.add_realtime()
+        self.received[0]['callback_realtime_ns']=1
+        result=self.analyze()
+        self.assertEqual(result['negative_realtime_stage_samples'],1)
+        self.assertEqual(result['stages'][6]['negative_samples'],1)
+        self.assertLess(result['stages'][6]['mean_ms'],0)
+        self.assertEqual(result['rtt']['n'],3)
+        render(self.directory,{'status':'PASS','results':[result]})
+        for name in ('summary.md','report.html'):
+            text=(self.directory/name).read_text()
+            self.assertIn('REALTIME 负分段 1',text)
+            self.assertIn('负样本数',text)
+            self.assertIn('PASS',text)
+        self.assertNotIn('width:-',(self.directory/'report.html').read_text())
+
+    def test_negative_realtime_rtt_and_local_order_are_anomalies_only(self):
+        self.add_realtime()
+        for row in self.received:
+            row['callback_realtime_ns']=10
+            row['copied_realtime_ns']=5
+        result=self.analyze()
+        self.assertEqual(result['negative_realtime_rtt_samples'],3)
+        self.assertEqual(result['negative_realtime_stage_samples'],6)
+        self.assertEqual(result['realtime_order_anomalies']['mock'],3)
+        self.assertLess(result['rtt']['mean_ms'],0)
+        render(self.directory,{'status':'PASS','results':[result]})
+        self.assertLess((self.directory/'summary.md').stat().st_size,1_000_000)
 
     def test_loss_is_visible_without_nearest_timestamp_pairing(self):
         self.received.pop(1)
