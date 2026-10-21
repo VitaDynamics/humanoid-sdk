@@ -282,7 +282,7 @@ void BindBodyState(py::module_& module) {
              py::arg("table_offset") = 0, py::arg("measure") = false);
   auto types = py::module_::import("locomotion_aorta.body_types");
   module.attr("BODY_STATE_SCHEMA_SHA256") =
-      "9458caeaae850bf4cf671eaad022b66b791a7d7be67d560b8355088ea8406dce";
+      "514af044787e6f29789e77359503d9f2d87f29513e4b44bcecdeeabaf1151c2e";
   module.def(
       "decode_state",
       [state = types.attr("BodyState"), joint = types.attr("BodyJointState"),

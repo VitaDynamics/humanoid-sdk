@@ -9,8 +9,8 @@
 // Ensure the included flatbuffers.h is the same version as when this file was
 // generated, otherwise it may not be compatible.
 static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
-              FLATBUFFERS_VERSION_MINOR == 9 &&
-              FLATBUFFERS_VERSION_REVISION == 23,
+              FLATBUFFERS_VERSION_MINOR == 12 &&
+              FLATBUFFERS_VERSION_REVISION == 19,
              "Non-compatible flatbuffers version included");
 
 namespace aorta {
@@ -407,7 +407,8 @@ struct AortaHeader FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t sequence() const {
     return GetField<uint64_t>(VT_SEQUENCE, 0);
   }
-  bool Verify(::flatbuffers::Verifier &verifier) const {
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint64_t>(verifier, VT_PUBLISH_STAMP_NS, 8) &&
            VerifyOffset(verifier, VT_PUBLISHER_NODE) &&
@@ -503,7 +504,8 @@ struct BodyImuSample FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   lowlevel::BodySampleStatus status() const {
     return static_cast<lowlevel::BodySampleStatus>(GetField<uint8_t>(VT_STATUS, 0));
   }
-  bool Verify(::flatbuffers::Verifier &verifier) const {
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint64_t>(verifier, VT_TS_SAMPLED_US, 8) &&
            VerifyField<uint64_t>(verifier, VT_TS_ACQUIRED_HW_US, 8) &&
@@ -628,7 +630,8 @@ struct BodyState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t ts_first_output_us() const {
     return GetField<uint64_t>(VT_TS_FIRST_OUTPUT_US, 0);
   }
-  bool Verify(::flatbuffers::Verifier &verifier) const {
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_AORTA_HEADER) &&
            verifier.VerifyTable(aorta_header()) &&
@@ -789,14 +792,16 @@ inline const lowlevel::BodyState *GetSizePrefixedBodyState(const void *buf) {
   return ::flatbuffers::GetSizePrefixedRoot<lowlevel::BodyState>(buf);
 }
 
+template <bool B = false>
 inline bool VerifyBodyStateBuffer(
-    ::flatbuffers::Verifier &verifier) {
-  return verifier.VerifyBuffer<lowlevel::BodyState>(nullptr);
+    ::flatbuffers::VerifierTemplate<B> &verifier) {
+  return verifier.template VerifyBuffer<lowlevel::BodyState>(nullptr);
 }
 
+template <bool B = false>
 inline bool VerifySizePrefixedBodyStateBuffer(
-    ::flatbuffers::Verifier &verifier) {
-  return verifier.VerifySizePrefixedBuffer<lowlevel::BodyState>(nullptr);
+    ::flatbuffers::VerifierTemplate<B> &verifier) {
+  return verifier.template VerifySizePrefixedBuffer<lowlevel::BodyState>(nullptr);
 }
 
 inline void FinishBodyStateBuffer(

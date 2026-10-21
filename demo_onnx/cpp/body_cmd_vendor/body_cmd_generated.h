@@ -9,8 +9,8 @@
 // Ensure the included flatbuffers.h is the same version as when this file was
 // generated, otherwise it may not be compatible.
 static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
-              FLATBUFFERS_VERSION_MINOR == 9 &&
-              FLATBUFFERS_VERSION_REVISION == 23,
+              FLATBUFFERS_VERSION_MINOR == 12 &&
+              FLATBUFFERS_VERSION_REVISION == 19,
              "Non-compatible flatbuffers version included");
 
 namespace aorta {
@@ -154,7 +154,8 @@ struct AortaHeader FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t sequence() const {
     return GetField<uint64_t>(VT_SEQUENCE, 0);
   }
-  bool Verify(::flatbuffers::Verifier &verifier) const {
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint64_t>(verifier, VT_PUBLISH_STAMP_NS, 8) &&
            VerifyOffset(verifier, VT_PUBLISHER_NODE) &&
@@ -266,7 +267,8 @@ struct BodyCmd FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const lowlevel::RootQuatWxyz *root_quat() const {
     return GetStruct<const lowlevel::RootQuatWxyz *>(VT_ROOT_QUAT);
   }
-  bool Verify(::flatbuffers::Verifier &verifier) const {
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_AORTA_HEADER) &&
            verifier.VerifyTable(aorta_header()) &&
@@ -408,14 +410,16 @@ inline const lowlevel::BodyCmd *GetSizePrefixedBodyCmd(const void *buf) {
   return ::flatbuffers::GetSizePrefixedRoot<lowlevel::BodyCmd>(buf);
 }
 
+template <bool B = false>
 inline bool VerifyBodyCmdBuffer(
-    ::flatbuffers::Verifier &verifier) {
-  return verifier.VerifyBuffer<lowlevel::BodyCmd>(nullptr);
+    ::flatbuffers::VerifierTemplate<B> &verifier) {
+  return verifier.template VerifyBuffer<lowlevel::BodyCmd>(nullptr);
 }
 
+template <bool B = false>
 inline bool VerifySizePrefixedBodyCmdBuffer(
-    ::flatbuffers::Verifier &verifier) {
-  return verifier.VerifySizePrefixedBuffer<lowlevel::BodyCmd>(nullptr);
+    ::flatbuffers::VerifierTemplate<B> &verifier) {
+  return verifier.template VerifySizePrefixedBuffer<lowlevel::BodyCmd>(nullptr);
 }
 
 inline void FinishBodyCmdBuffer(

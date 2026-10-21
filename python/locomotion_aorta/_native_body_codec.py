@@ -28,7 +28,7 @@ class NativeBodyPublisher:
                 or hashlib.sha256(schema_meta.SCHEMA_BFBS).hexdigest()
                 != _body_cmd_native.BODY_SCHEMA_SHA256):
             raise RuntimeError('native BodyCmd encoder requires the pinned BODY2 schema')
-        # Aorta 2026.10.12 has public publish_bytes but no public header-reserve
+        # Aorta 2026.10.20 has public publish_bytes but no public header-reserve
         # API. Keep its counter, Core clock and captured node policy exactly.
         for name in ('_seq_lock', '_sequence', '_lib', '_node_name', '_include_node', '_closed'):
             if not hasattr(publisher, name):
