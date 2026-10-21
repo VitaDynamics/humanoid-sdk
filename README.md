@@ -1,22 +1,13 @@
 # Humanoid SDK
 
 SDK **0.2.1** is in preparation; packaging and release are pending.
-The Joy-enabled release requires public schema 0.1.5. Its actual wheel and hash
-are still pending; the 0.1.4 pin below is the migration baseline, not a final
-0.2.1 installation manifest.
-This version provides public body31/EXTERNAL, independent hand/gripper
-clients, Aorta 2026.10.20 and an independent read-only BodyStateSource.
-
-This candidate requires public body/EE schema **0.1.4** and BODY protocol 2.
-Its 40-byte BodyJointState layout is incompatible with 0.1.2 (56 bytes); use
-matching robot software and generated bindings. The 0.1.4 dependency wheel is
-published in the schema repository's official `humanoid-msgs-0.1.4` Release
-and mirrored, byte for byte, in this SDK repository's
-[`v0.1.0-rc.4` dependency Release](https://github.com/VitaDynamics/humanoid-sdk/releases/tag/v0.1.0-rc.4),
-following the #10 dependency delivery flow.
-Its SHA-256 is `31fbd1f710a8e92043cc1d0ec80657fc5f76aad4a47e0926d94d70e415185169`.
-Installation requires the complete matching wheelhouse and hashes in
-[compatibility.json](compatibility.json).
+This candidate pins the generated public body/EE/Joy schema **0.1.5** and BODY
+protocol 2. The actual generated wheel SHA-256 is
+`371a06baefebaa4ceff88dd430784ea47c960e372fe4abe1e3be2c31c1f79646`.
+It preserves the prior 17 BFBS contracts and adds Joy as the eighteenth root.
+Schema generation is complete; SDK packaging, full acceptance and release
+publication are pending. Use only the complete wheelhouse and hashes in
+[compatibility.json](compatibility.json), with matching robot software.
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
@@ -26,10 +17,10 @@ client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
 aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 
 Dependencies are pinned to Aorta SDK and messages `2026.10.20` (ABI 13),
-`vbot-humanoid-msgs==0.1.4`, and `flatbuffers==25.12.19`. Verify wheel filenames
-and SHA-256s against [compatibility.json](compatibility.json). All four runtime
-dependencies come from this SDK repository's `v0.1.0-rc.4` Release. Select the
-pinned 0.1.4 wheel; older schema assets remain available for older SDKs.
+`vbot-humanoid-msgs==0.1.5`, and `flatbuffers==25.12.19`. Verify wheel filenames
+and SHA-256s against [compatibility.json](compatibility.json). The runtime dependency delivery follows the `v0.1.0-rc.4` Release flow.
+The new generated 0.1.5 wheel must be present with the pinned SHA before
+installation; generation does not imply release publication.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
 The SDK also includes **Velocity mode** (`examples/velocity_mode/velocity_mode.py`) and
@@ -176,7 +167,7 @@ Use the public EE wheel pinned in [compatibility.json](compatibility.json).
 The distribution is `vbot-humanoid-msgs`; generated imports retain `lowlevel`,
 `locomotion_sdk`, `aorta.services.humanoid_locomotion` and `*_schema_meta`.
 Do not install the full private `vita-msgs` wheel or a temporary HIL wheel.
-The pinned public `0.1.4` wheel provides the new hand roots; the older
+The pinned public `0.1.5` wheel provides the new hand roots; the older
 `0.1.0` public wheel does not.
 
 With connection authorization and the configured peer profile, read both hands:
@@ -295,7 +286,7 @@ editable SDK install.
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install --no-index --find-links wheelhouse \
-  aorta-sdk==2026.10.20 aorta-msgs==2026.10.20 vbot-humanoid-msgs==0.1.4 flatbuffers==25.12.19
+  aorta-sdk==2026.10.20 aorta-msgs==2026.10.20 vbot-humanoid-msgs==0.1.5 flatbuffers==25.12.19
 python -m pip install mcap==1.3.1
 make check
 ```

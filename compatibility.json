@@ -18,7 +18,7 @@
     "aorta_sdk-2026.10.20-py3-none-linux_aarch64.whl": "559f8c22871fda131e6d706fa9dd5edc4b07fa3297cf42f51a844318bf9ff7ba",
     "aorta_sdk-2026.10.20-py3-none-linux_x86_64.whl": "e0909b322f20b78a2b043a9605b5f495f8555039480999273fb4e6ad0eb1c5f0",
     "flatbuffers-25.12.19-py2.py3-none-any.whl": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
-    "vbot_humanoid_msgs-0.1.4-py3-none-any.whl": "31fbd1f710a8e92043cc1d0ec80657fc5f76aad4a47e0926d94d70e415185169"
+    "vbot_humanoid_msgs-0.1.5-py3-none-any.whl": "371a06baefebaa4ceff88dd430784ea47c960e372fe4abe1e3be2c31c1f79646"
   },
   "dependency_release_tag": "v0.1.0-rc.4",
   "aorta_abi_version": 13,
@@ -38,10 +38,11 @@
     "hand_state": "84cdfcb9b9078030901d4ec7279f1d9f98d5c6fe607cef7bbd6944daae0d8e13",
     "hand_touch": "16a4a441e41832570a601adfa12703bec0ba7ddcb8ef993f630e59acd21d31db",
     "humanoid_low_state": "327a9db17f299ebcdcc2cf249d358dd3f69fe32b7af6a80c10ba4ac0da631f24",
+    "joy": "7a94e11f6a4cfd10e881ee126b99813421161513a67ba195bac03f54d2652e66",
     "low_cmd": "b048ce7f06a560a671565deca3480dd68fc6f16ee60d6c65e99b7dbce8857485",
     "robot_info": "8ad71e50797b8a26d59ccbf9bab481d2dfef62d2443b3b5b26e9130364b0b8f5"
   },
-  "humanoid_msgs_version": "0.1.4",
+  "humanoid_msgs_version": "0.1.5",
   "control_request_version": 2,
   "body_protocol_version": 2,
   "dependency_release_repository": "VitaDynamics/humanoid-sdk"

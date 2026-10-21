@@ -33,7 +33,7 @@ class ReleaseGateTest(unittest.TestCase):
             elf = bytearray(20)
             elf[:6] = b"\x7fELF\x02\x01"
             struct.pack_into("<H", elf, 18, 62)
-            for version in ("0.1.4", "0.1.3"):
+            for version in ("0.1.5", "0.1.4"):
                 with self.subTest(humanoid_msgs=version):
                     with zipfile.ZipFile(path, "w") as wheel:
                         wheel.writestr(info + "/WHEEL",
@@ -58,7 +58,7 @@ class ReleaseGateTest(unittest.TestCase):
                     with mock.patch.object(module.subprocess, "check_output", side_effect=[
                         "(RPATH) Library rpath: [$ORIGIN/.libs]", ".debug_info .symtab", ".debug_info .symtab"
                     ]) as readelf:
-                        if version == "0.1.4":
+                        if version == "0.1.5":
                             self.assertEqual(module.inspect(path)["arch"], "x86_64")
                             self.assertEqual(readelf.call_count, 3)
                         else:

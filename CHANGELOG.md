@@ -7,7 +7,8 @@
 - Move examples to latest body feedback while keeping each configured control
   period independent of state publication frequency.
 - Add Aorta Joy draining and button-edge diagnostics, and common policy-cycle
-  timing/applied-sequence logs. Public 0.1.5 packaging/pin is pending.
+  timing/applied-sequence logs. Pin the actual generated public 0.1.5 wheel
+  and all 18 BFBS hashes; prior 17 contracts remain unchanged.
 
 ## 0.2.0 (in preparation)
 
