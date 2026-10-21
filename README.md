@@ -231,6 +231,14 @@ root is required. Host tests and packaging do not establish device HIL.
 
 ## Read-only body state
 
+The opt-in `PullStateSource` and `PullController` provide `wait_state(timeout)`
+and ControlStatus snapshots using Aorta keep-last rings. Install the
+`state-arrays` extra for native NumPy feedback. The arrays own their storage;
+joint clocks retain uint64, errors uint32, and positions/velocities/torques
+float32. `imu_state_present` distinguishes an absent sample from numeric zeros.
+The original callback API remains available. Pull depth 1 intentionally skips
+older queued samples; its drop counter is not a packet-loss measurement.
+
 `BodyStateSource` subscribes only to BodyState; it creates no control publisher,
 service client or lease. It is independent of `ExternalController`.
 

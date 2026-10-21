@@ -81,6 +81,7 @@ class PolicyPreflightTest(unittest.TestCase):
         model.session = SimpleNamespace(metadata={CONTRACT_KEY:
             (ROOT/'tests/fixtures/actor_g1_contract.json').read_text()})
         source = Mock()
+        source.wait_body_state = client.wait_body_state
         with tempfile.TemporaryDirectory() as temp:
             model_path, log_path = Path(temp)/'model.onnx', Path(temp)/'wbc.jsonl'
             model_path.write_bytes(b'explicit unit model; inference mocked')
@@ -90,9 +91,8 @@ class PolicyPreflightTest(unittest.TestCase):
             with patch.object(sys, 'argv', argv), \
                  patch.dict('os.environ', {'ZENOH_SESSION_CONFIG_URI': 'unit-only-no-transport'}), \
                  patch('locomotion_aorta.wbc_tracking_policy.Model', return_value=model), \
-                 patch('locomotion_aorta.ExternalController', return_value=nullcontext(client)), \
-                 patch('locomotion_aorta.BodyStateSource', return_value=source), \
-                 patch('locomotion_aorta._policy_state.PolicyStateSource', return_value=client), \
+                 patch('locomotion_aorta.PullController', return_value=nullcontext(client)), \
+                 patch('locomotion_aorta.PullStateSource', return_value=source), \
                  patch.object(example, 'live', partial(example.live,
                     monotonic=clock.monotonic, sleep=clock.sleep)):
                 if expected_missing:

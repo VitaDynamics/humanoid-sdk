@@ -283,9 +283,11 @@ class TransportTest(unittest.TestCase):
             def close(self):
                 pass
 
-        bindings = SimpleNamespace(aorta=SimpleNamespace(Node=Node))
+        Node.create_subscriber_pull = lambda self, *a, **k: SimpleNamespace(close=lambda: None)
+        qos = SimpleNamespace(sensor_data=lambda: 'sensor', state_update=lambda: 'state')
+        bindings = SimpleNamespace(aorta=SimpleNamespace(Node=Node, QoS=qos))
         with patch.dict(example.os.environ, {}, clear=True), \
-             patch.object(example, "_load_aorta_bindings", return_value=bindings):
+             patch("locomotion_aorta.transport._load_aorta_bindings", return_value=bindings):
             transport = example.PolicyTransport(group="default", shadow=True)
             self.assertEqual(transport.publishers, {})
             self.assertEqual(example.os.environ["AORTA_LOG_TOPIC_ENABLED"], "false")

@@ -62,7 +62,7 @@ class _AortaBindings:
 
 
 class _AortaTransport:
-    def __init__(self, *, node_name: str, group: str) -> None:
+    def __init__(self, *, node_name: str, group: str, _publishers: bool = True) -> None:
         self._bindings = _load_aorta_bindings()
         self.node = self._bindings.aorta.Node(node_name, group)
         self.publishers: dict[str, Any] = {}
@@ -73,6 +73,8 @@ class _AortaTransport:
         self._capture_publish_timing = os.environ.get("LOCOMOTION_AORTA_PUBLISH_TIMING") == "1"
         self._publish_trace = threading.local()
         self._body_publisher = None
+        if not _publishers:
+            return
         try:
             realtime = self._bindings.aorta.QoS.realtime_control()
             self.publishers[CONTROL_REQUEST_TOPIC] = (

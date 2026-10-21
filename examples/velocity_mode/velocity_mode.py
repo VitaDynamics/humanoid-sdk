@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 
-from locomotion_aorta import ExternalController, BodyCmd, BodyJointCmd
+from locomotion_aorta import PullController as ExternalController, PullTransport, BodyCmd, BodyJointCmd
 import locomotion_aorta
 from locomotion_aorta._body_codec import decode_body_state
 from locomotion_aorta.transport import (
@@ -52,92 +52,62 @@ class StateFrame:
     s0: int | str
     s1: int
     s2: int
+    pull_context_receive_stamp_ns: int = 0
 
 
-def decode_state(view, s1: int) -> StateFrame:
+def decode_state(view, s1: int, pull_context_receive_stamp_ns=0) -> StateFrame:
     state = decode_body_state(view)
     hip = next(imu for imu in state.imu_states if imu.location == 0)
     q, dq = tuple(m.q for m in state.joints), tuple(m.dq for m in state.joints)
     return StateFrame(state, q, dq, hip.state.gyroscope, hip.state.quaternion,
                       state.ts_state_pub_us * 1000 if state.ts_state_pub_us else NOT_MEASURED,
-                      s1, realtime_ns())
+                      s1, realtime_ns(), pull_context_receive_stamp_ns)
 
 
-class PolicyTransport(_AortaTransport):
-    """Reuse SDK body codecs/session protocol; shadow constructs no publishers."""
+class PolicyTransport(PullTransport):
+    """Use SDK wait_state/native NumPy feedback; shadow constructs no publishers."""
 
     def __init__(self, *, group: str, shadow: bool) -> None:
         self.condition = threading.Condition()
         self.frame = None
         self.observed_status = None
-        self.decode_error = None
-        if shadow:
-            # Native Aorta otherwise creates its own /log publisher, even
-            # when the Python transport never asks for a publisher.
-            os.environ["AORTA_LOG_TOPIC_ENABLED"] = "false"
-            self._bindings = _load_aorta_bindings()
-            self.node = self._bindings.aorta.Node(f"velocity_mode-shadow-{uuid.uuid4()}", group)
-            self.publishers = {}
-            self.subscriptions = []
-            self._closed = False
-            self._info_clients = {}
-            self._info_lock = threading.Lock()
-        else:
-            super().__init__(node_name=f"velocity_mode-live-{uuid.uuid4()}", group=group)
+        self._pull_timeout = 5.0
+        super().__init__(node_name=f"velocity_mode-{'shadow' if shadow else 'live'}-{uuid.uuid4()}",
+                         group=group, publishers=not shadow)
 
-    def subscribe(self, topic, callback):
-        if topic != BODY_STATE_TOPIC:
-            return super().subscribe(topic, callback)
-
-        def decoder(payload):
-            # Callback entry before FlatBuffers root lookup or materialization.
-            s1 = realtime_ns()
-            return self._bindings.body_state_decoder(payload), s1
-
-        def received(decoded, context):
-            view, s1 = decoded
-            try:
-                frame = decode_state(view, s1)
-            except Exception as error:
-                with self.condition:
-                    self.decode_error = error
-                    self.condition.notify_all()
-                return
-            with self.condition:
-                self.frame = frame
-                self.condition.notify_all()
-            callback(frame.state)
-
-        sub = self.node.create_subscriber_typed(
-            decoder, topic, received, qos=self._bindings.aorta.QoS.sensor_data()
-        )
-        self.subscriptions.append(sub)
-        return sub
+    def _recv_frame(self, timeout):
+        state = self.wait_state(timeout)
+        hip = next(i for i, location in enumerate(state.imu_location) if location == 0)
+        if not state.imu_state_present[hip]:
+            raise ValueError('HIP IMU state is absent')
+        values = state.imu_values[hip]
+        frame = StateFrame(state, state.q, state.dq, values[4:7], values[:4],
+            state.ts_state_pub_us * 1000 if state.ts_state_pub_us else NOT_MEASURED,
+            state.received_realtime_ns, realtime_ns(), state.pull_context_receive_stamp_ns)
+        self.frame = frame
+        return frame
 
     def record_status(self, status):
-        with self.condition:
-            self.observed_status = status
-            self.condition.notify_all()
+        self.observed_status = status
 
     def wait_ready(self, timeout: float) -> StateFrame:
-        with self.condition:
-            ready = self.condition.wait_for(
-                lambda: self.decode_error is not None or
-                (self.frame is not None and self.observed_status is not None), timeout
-            )
-            if self.decode_error is not None:
-                raise self.decode_error
-            if not ready:
-                raise TimeoutError("waiting for body state and ControlStatus")
-            if self.observed_status.current_action == "EXTERNAL":
-                raise RuntimeError("an EXTERNAL session is already active")
-            return self.frame
+        if self.observed_status is not None and self.observed_status.current_action == "EXTERNAL":
+            raise RuntimeError("an EXTERNAL session is already active")
+        self._pull_timeout = timeout
+        deadline = time.monotonic() + timeout
+        self._recv_frame(max(0, deadline - time.monotonic()))
+        self.poll_control_status(max(0, deadline - time.monotonic()))
+        if self.observed_status is None:
+            raise TimeoutError("waiting for body state and ControlStatus")
+        if self.observed_status.current_action == "EXTERNAL":
+            raise RuntimeError("an EXTERNAL session is already active")
+        return self.frame
 
     def latest(self) -> StateFrame:
-        with self.condition:
-            if self.decode_error is not None:
-                raise self.decode_error
-            return self.frame
+        self.poll_control_status()
+        frame = self._recv_frame(self._pull_timeout)
+        self.poll_control_status()
+        return frame
 
 
 class DirectionInput:
@@ -275,7 +245,10 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
                       applied_session_id=frame.state.applied_session_id,
                       applied_sequence=frame.state.applied_sequence,
                       ts_first_output_us=frame.state.ts_first_output_us,
-                      joint_error_codes=[j.error_code for j in frame.state.joints])
+                      joint_error_codes=(frame.state.error_code.tolist() if hasattr(frame.state, "error_code")
+                                         else [j.error_code for j in frame.state.joints]))
+        if getattr(frame, 'pull_context_receive_stamp_ns', 0):
+            record['pull_context_receive_stamp_ns'] = frame.pull_context_receive_stamp_ns
         try:
             elapsed = realtime_ns() - started
             if elapsed < transition_ns:
@@ -364,7 +337,7 @@ def main():
                     external_pd=args.external_pd, load_description=args.load_description,
                     mode="shadow" if args.shadow else "live", joy_source=args.joy_source,
                     duration_s=args.duration,
-                    S1_source="Python typed decoder entry (includes decoding; excludes pre-dispatch queue)",
+                    S1_source="Python pull recv return, before root lookup and decode",
                     S5_source="would-publish boundary" if args.shadow else "ExternalController.publish entry",
                     period_s=PERIOD_S, models=[policy.inventory])
     log = transport = controller = directions = None
@@ -372,7 +345,6 @@ def main():
     try:
         transport = PolicyTransport(group=args.group, shadow=args.shadow)
         if args.shadow:
-            transport.subscribe(BODY_STATE_TOPIC, lambda state: None)
             transport.subscribe(CONTROL_STATUS_TOPIC, transport.record_status)
         else:
             controller = ExternalController(group=args.group, _transport=transport)

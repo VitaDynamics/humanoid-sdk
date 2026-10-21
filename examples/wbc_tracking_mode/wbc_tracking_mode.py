@@ -130,7 +130,8 @@ def infer_step(model, policy, session, state, cycle, *, record_time=0):
                applied_session_id=state.applied_session_id,
                applied_sequence=state.applied_sequence,
                ts_first_output_us=state.ts_first_output_us,
-               joint_error_codes=[j.error_code for j in state.joints])
+               joint_error_codes=(state.error_code.tolist() if hasattr(state, "error_code")
+                                  else [j.error_code for j in state.joints]))
     # Capture real input evidence: no inference-input/state-ID placeholders.
     q, dq, quat, gyro = policy.state(state)
     row['state'] = dict(q=q.tolist(), dq=dq.tolist(), quaternion=quat.tolist(), gyro=gyro.tolist())
@@ -326,7 +327,7 @@ def main():
             if not os.environ.get('ZENOH_SESSION_CONFIG_URI'):
                 raise ValueError('set the deployment-owned PC ZENOH_SESSION_CONFIG_URI before --live')
             from contextlib import closing
-            from locomotion_aorta import ExternalController, BodyStateSource
+            from locomotion_aorta import PullController as ExternalController, PullStateSource as BodyStateSource
             from locomotion_aorta._policy_state import PolicyStateSource
             print('EXTERNAL requires robot virtual_pd strategy and ankle_virtual_pd_intent=true. '
                   'This program does not change robot configuration. Exit CANCEL confirms PASSIVE.', flush=True)
@@ -343,7 +344,7 @@ def main():
                                         populated=[j.populated for j in response.info.body.joints],
                                         is_mock=[j.is_mock for j in response.info.body.joints]))
                     summary = live(model, policy, args, recorder, controller, stop=stop,
-                                   source=PolicyStateSource(source))
+                                   source=source)
             finally:
                 for sig, handler in previous.items():
                     signal.signal(sig, handler)

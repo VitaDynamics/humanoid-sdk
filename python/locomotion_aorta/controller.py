@@ -67,6 +67,7 @@ class ExternalController:
         node_name: str | None = None,
         client_id: str | None = None,
         _transport: Transport | None = None,
+        _subscribe_body_state: bool = True,
     ) -> None:
         self.group = _nonempty_text(group, "group")
         self.node_name = _nonempty_text(
@@ -97,9 +98,10 @@ class ExternalController:
         self._subscriptions: list[Any] = []
 
         try:
-            self._subscriptions.append(
-                self.transport.subscribe(BODY_STATE_TOPIC, self._on_body_state)
-            )
+            if _subscribe_body_state:
+                self._subscriptions.append(
+                    self.transport.subscribe(BODY_STATE_TOPIC, self._on_body_state)
+                )
             self._subscriptions.append(
                 self.transport.subscribe(CONTROL_ACK_TOPIC, self._on_ack)
             )
