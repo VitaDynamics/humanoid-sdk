@@ -8,7 +8,8 @@ import sys
 import unittest
 from unittest.mock import Mock, patch
 
-from examples import teleop_policy as teleop, velocity_mode as velocity
+from examples.teleop_policy import teleop_policy as teleop
+from examples.velocity_mode import velocity_mode as velocity
 from test_joy import PullRing, payload
 from test_teleop_policy import CONTRACT
 
@@ -53,7 +54,7 @@ class TeleopJoyTest(unittest.TestCase):
 
     def test_contract_and_packaging_keep_deployed_command_and_no_hid_dependency(self):
         root = Path(__file__).resolve().parents[1]
-        contract = json.loads((root/'examples/action17_contract.json').read_text())
+        contract = json.loads((root/'examples/teleop_policy/action17_contract.json').read_text())
         self.assertEqual(contract['command'], CONTRACT['command'])
         text = (root/'pyproject.toml').read_text()
         self.assertNotIn('pygame', text)

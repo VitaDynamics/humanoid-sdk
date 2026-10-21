@@ -3,7 +3,7 @@
 对应机器人 action 14/HUMANOID_TRACKING 的模型合同，在 SDK 内推理并以 **EXTERNAL** 输出31槽命令；不触发机器人内部 action 14。模型由使用者提供，需匹配 metadata；直播需要有效 RobotInfo/反馈与现场确认。
 
 ```bash
-python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[wbc-tracking-demo]==0.2.0'
+python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[wbc-tracking-demo]==0.2.1'
 python examples/wbc_tracking_mode/wbc_tracking_mode.py --help
 python examples/wbc_tracking_mode/wbc_tracking_mode.py --model /path/to/actor_g1.onnx --dry-run --steps 100 --log /new/path/wbc-offline.jsonl
 ```
@@ -54,7 +54,7 @@ mode does not claim a lease or publish commands.
 Live requires `--live --confirm-motion`, an explicitly authorized connection,
 the deployment-owned peer session configuration, and confirmation of support,
 clearance and emergency stop for the trial. It queries actual RobotInfo names,
-uses public PullStateSource snapshots and requests EXTERNAL. Snapshot reception
+uses public PullStateSource snapshots and requests EXTERNAL. Pull snapshot reception
 alone is not source-time advancement: the original increasing source-time and
 50ms freshness/compute checks remain. The original ownership/reject/drop checks,
 50Hz schedule without catch-up bursts, stop-before-entry behavior and

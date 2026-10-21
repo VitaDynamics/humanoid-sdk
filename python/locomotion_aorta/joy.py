@@ -50,7 +50,7 @@ class JoyReader:
     read() drains to empty, returns the latest axes/buttons and consumes only
     the returned edge/gap increments. No callback or Python worker is created.
     First samples establish a baseline; missing events cannot be reconstructed.
-    Close this reader before its node. See examples/velocity_mode.md for the
+    Close this reader before its node. See examples/velocity_mode/README.md for the
     finite-ring, source-identity and dequeue-timestamp boundaries.
     """
 

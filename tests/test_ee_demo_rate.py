@@ -2,7 +2,8 @@
 from dataclasses import replace
 import unittest
 
-from examples import brainco_hand_external as hand_demo, gripper_external as gripper_demo
+from examples.brainco_hand import brainco_hand_external as hand_demo
+from examples.gripper import gripper_external as gripper_demo
 from test_brainco_hand_external import FakeHand
 from test_gripper_external import FakeGripper
 from test_demo_pull_policy import Latest400HzController

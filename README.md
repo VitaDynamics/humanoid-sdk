@@ -33,7 +33,7 @@ not robot-motion evidence.
 
 The 0.2.1 Joy input candidate adds `JoyReader`: drain Aorta input snapshots in
 the policy thread and read the latest axes plus accumulated button edge and
-sequence-gap counts. See [the Joy reader contract](examples/velocity_mode.md#direction-dependency).
+sequence-gap counts. See [the Joy reader contract](examples/velocity_mode/README.md#direction-dependency).
 It requires public messages 0.1.5; its generated wheel/pin and final SDK version
 are pending integration, so this source increment is not an installable 0.2.1 release.
 
@@ -477,7 +477,7 @@ existing on-site authorization and emergency-stop requirements above.
 - [body_state_subscriber](examples/body_state_subscriber/README.md)
 
 Teleop input and the deployed action 17 mapping are documented in
-[examples/teleop_policy.md](examples/teleop_policy.md). Live input comes from
+[examples/teleop_policy/README.md](examples/teleop_policy/README.md). Live input comes from
 the robot's Aorta Joy publisher, using the same JoyReader as velocity mode.
 
 Hand and gripper examples select `pull_feedback=True` on their clients. State,

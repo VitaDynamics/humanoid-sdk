@@ -162,10 +162,10 @@ class FeedbackAgeTest(unittest.TestCase):
     def test_fresh_dequeue_does_not_hide_old_publication(self):
         state = self.state(99_900_000)
         self.assertEqual(feedback_age_ns(state, 10_000_000_000, 100_000_000_000), 100_000_000)
-        from examples.wbc_tracking_mode import wait_fresh
+        from examples.wbc_tracking_mode.wbc_tracking_mode import wait_fresh
         state.stamp_ns = 2
         policy = S(state=Mock())
-        with patch('examples.wbc_tracking_mode.time.time_ns', return_value=100_000_000_000):
+        with patch('examples.wbc_tracking_mode.wbc_tracking_mode.time.time_ns', return_value=100_000_000_000):
             with self.assertRaisesRegex(TimeoutError, 'stale'):
                 wait_fresh(S(wait_state=lambda timeout: state), policy, previous_ns=1,
                            timeout=.1, max_age=.05, stop=threading.Event(), monotonic=lambda: 10.)
@@ -329,7 +329,7 @@ class VelocityReviewTest(unittest.TestCase):
 class TeleopReviewTest(unittest.TestCase):
     def run_loop(self, *, hold_after_wait=False):
         import test_teleop_policy as fixtures
-        from examples.teleop_policy import live
+        from examples.teleop_policy.teleop_policy import live
         clock, stop = S(now=10.), threading.Event()
         body, state = fixtures.fixture()
         for joint in state.joints:

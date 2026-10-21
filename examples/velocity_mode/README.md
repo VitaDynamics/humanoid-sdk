@@ -3,12 +3,12 @@
 参考机器人 action 13/HUMANOID 的模型与 profile，在 SDK 中本地推理后请求 **EXTERNAL**；不是给机器人发送 action 13。`--shadow` 只读控制面，`--live` 会控制本体。需要完整公共31槽配置、已就绪反馈、匹配模型和部署 locomotion 目录。
 
 ```bash
-python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[velocity-demo]==0.2.0'
+python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[velocity-demo]==0.2.1'
 python examples/velocity_mode/velocity_mode.py --help
 python examples/velocity_mode/velocity_mode.py --shadow --locomotion-dir /path/to/locomotion --log /new/path/velocity-shadow.jsonl --duration 60
 ```
 
-`--log` 使用新路径；`--duration 0`/省略为不限时。0.2.0 默认 Aorta 方向输入依赖尚未交付的匹配 Joy 绑定，不能靠安装错误消息版本补齐；选择 ROS2 输入也需部署匹配的 ROS2 环境。下文保留实际方向依赖与 S0–S6 时钟说明；日志中的推理耗时、实际 session/sequence、applied 键不等于硬件动作完成。
+`--log` 使用新路径；`--duration 0`/省略为不限时。0.2.1 使用 public0.1.5 的 Aorta `locomotion/joy` 与 JoyReader，依赖固定的 Aorta2026.10.20/FlatBuffers25.12.19；没有ROS2、pygame或固定中立输入回退。下文保留实际方向依赖与 S0–S6 时钟说明；日志中的推理耗时、实际 session/sequence、applied 键不等于硬件动作完成。
 
 ## 环境与安全
 
@@ -25,7 +25,7 @@ python examples/velocity_mode/velocity_mode.py --shadow --locomotion-dir /path/t
 The SDK name changed; robot action 13/HUMANOID, protocol enums and model metadata
 names did not. This program runs a client policy through **EXTERNAL**, not action 13.
 
-Use a compatible SDK 0.2.0 installation with the finalized 0.1.4 message wheel
+Use a compatible SDK 0.2.1 installation with the finalized 0.1.5 message wheel
 and the `velocity-demo` extra. Inference uses its bundled C++ ORT 1.20.1 backend,
 loaded only when constructing the model. There is no Python ORT fallback.
 Provide the deployment's exported locomotion directory (model, action profile
@@ -128,10 +128,10 @@ unbounded stall. Close it before closing its node.
 
 ## Records and offline acceptance
 
-S0 is BodyState.ts_state_pub_us; S1 is the Python decoder-entry timestamp and
-S2 the completed materialization timestamp. S3–S6 retain their original
+S0 is BodyState.ts_state_pub_us; S1 is the SDK pull receipt/dequeue boundary and
+S2 the completed NumPy frame materialization timestamp. S3–S6 retain their original
 observation/inference/publish-call boundaries. These are CLOCK_REALTIME ns;
-S1 is not a native receive timestamp. Reusing a state retains its original
+S1 and pull_context_receive_stamp_ns are not network-arrival timestamps. Reusing a state retains its original
 S0/S1/S2. SDK-owned client created/send timestamps use the SDK's own clock.
 Do not subtract robot and client clocks without independent synchronization.
 

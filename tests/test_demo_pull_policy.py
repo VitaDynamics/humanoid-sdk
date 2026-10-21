@@ -4,7 +4,10 @@ import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import Mock
 
-from examples import brainco_hand_external, external_control, gripper_external, teleop_policy
+from examples.brainco_hand import brainco_hand_external
+from examples.external_control import external_control
+from examples.gripper import gripper_external
+from examples.teleop_policy import teleop_policy
 from locomotion_aorta import BODY_CMD_TOPIC
 from test_brainco_hand_external import FakeHand
 from test_examples import FakeClock, RecordingController
