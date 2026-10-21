@@ -169,7 +169,7 @@ class BrainCoCaptureTest(unittest.TestCase):
         self.assertEqual(rows[-1]["dropped_messages"], 2)
         self.assertEqual(rows[-1]["transport_loss"], "not_measured")
 
-    def test_pull_body_status_have_no_python_rx_callbacks_and_keep_capture_scope(self):
+    def test_pull_all_topics_have_no_python_rx_callbacks_and_keep_capture_scope(self):
         from test_body_codec import make_state
         payload, _ = make_state()
         node = self.fake_node()
@@ -187,11 +187,11 @@ class BrainCoCaptureTest(unittest.TestCase):
         capture.capture_live(output, metadata(), .04, node_factory=lambda *a: node,
                              monotonic=Clock(), pull_feedback=True)
         self.assertTrue(node.closed)
-        self.assertEqual(set(pulls), {capture.TOPICS[k] for k in ('body_state', 'control_status')})
+        self.assertEqual(set(pulls), set(capture.TOPICS.values()))
         self.assertFalse(set(pulls).intersection(node.subscriptions))
         self.assertEqual(set(pulls) | set(node.subscriptions), set(capture.TOPICS.values()))
         rows = read_rows(output)
-        self.assertEqual(rows[0]['feedback_retention'], 'keep-last-depth-1')
+        self.assertEqual(rows[0]['feedback_retention'], 'keep-last-depth-1-all-topics')
         self.assertEqual(rows[0]['pull_overwrites'], 'not_measured')
         body = next(row for row in rows if row['type'] == 'body_state')
         expected = capture.decode('body_state', payload, capture.load_bindings())

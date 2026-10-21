@@ -377,11 +377,11 @@ def main(argv=None):
     sides = ('left', 'right') if args.side == 'both' else (args.side,)
     with ExitStack() as stack:
         if readonly:
-            clients = [stack.enter_context(HandClient(side, group=args.group, read_only=True)) for side in sides]
+            clients = [stack.enter_context(HandClient(side, group=args.group, read_only=True, pull_feedback=True)) for side in sides]
             observe(clients, timeout=args.timeout)
         else:
             controller = stack.enter_context(ExternalController(group=args.group))
-            clients = [stack.enter_context(HandClient(side, group=args.group, node=controller.transport.node))
+            clients = [stack.enter_context(HandClient(side, group=args.group, node=controller.transport.node, pull_feedback=True))
                        for side in sides]
             if args.touch != 'keep':
                 for client in clients:

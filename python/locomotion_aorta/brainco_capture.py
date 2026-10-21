@@ -194,7 +194,7 @@ class TraceWriter:
 def capture_live(output: Path, metadata, duration_s, *, group="default", capacity=256,
                  node_factory=None, bindings=None, monotonic=time.monotonic, marker_reader=None,
                  pull_feedback=False):
-    """Read-only capture; opt-in body/status keep-last rings add at most 128 KiB.
+    """Read-only capture; opt-in keep-last rings retain one sample per topic.
 
     The callback API is unchanged. Pull retention is depth one and may overwrite
     intermediate frames; the queue drop count does not measure these overwrites.
@@ -231,7 +231,7 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
                 dropped += 1
     with output.open("x", encoding="utf-8") as stream:
         writer = TraceWriter(stream, {**metadata, "requested_group": group,
-            "feedback_retention": "keep-last-depth-1" if pull_feedback else "callback-queue",
+            "feedback_retention": "keep-last-depth-1-all-topics" if pull_feedback else "callback-queue",
             "pull_overwrites": "not_measured" if pull_feedback else "not_applicable",
             "capture_stamp_semantics": "host dequeue, not arrival" if pull_feedback else "host callback"},
             "observer_monotonic_ns")
@@ -242,7 +242,7 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
             if node.group() != group:
                 raise ValueError("effective Aorta group differs from --group; verify AORTA_GROUP/profile")
             for kind, topic in TOPICS.items():
-                if pull_feedback and kind in ("body_state", "control_status"):
+                if pull_feedback:
                     pulls[kind] = node.create_subscriber_pull(topic, depth=1,
                                                               qos=aorta.QoS.sensor_data())
                     continue

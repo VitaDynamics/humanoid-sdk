@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
+from contextlib import closing
 from dataclasses import dataclass
 import hashlib
 import json
@@ -251,7 +252,7 @@ def bodycmd(api: Any, targets: Sequence[MotorTarget], state: Any) -> Any:
 def live(controller: Any, api: Any, policy: Policy, model: Any,
          axes: Callable[[], Sequence[float]], stop: threading.Event, timeout: float,
          sleep: Callable = time.sleep, monotonic: Callable = time.monotonic,
-         duration: float = 0.0, recorder=None) -> None:
+         duration: float = 0.0, recorder=None, input_statistics=None) -> None:
     reply = controller.get_robot_info(timeout=timeout)
     if reply.status not in (api.ServiceStatus.SUCCESS, api.ServiceStatus.PARTIAL_SUCCESS):
         raise RuntimeError(f'get_robot_info failed: status={reply.status!r}; '
@@ -307,7 +308,13 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
                        session_id=NOT_MEASURED, sequence=NOT_MEASURED,
                        publish_result='not_called', **state_log_fields(state))
             try:
-                observation = policy.observation(state,body,command.step(axes()),api.BodyImuLocation.HIP)
+                joy_axes = axes()
+                row['joy_axes_used'] = list(joy_axes)
+                if input_statistics is not None:
+                    row.update(input_statistics())
+                velocity_height = command.step(joy_axes)
+                row['velocity_height_command'] = list(velocity_height)
+                observation = policy.observation(state,body,velocity_height,api.BodyImuLocation.HIP)
                 row['S3'] = time.time_ns()
                 actions = model.infer(observation)
                 row['S4'] = time.time_ns()
@@ -371,8 +378,6 @@ def main() -> None:
     parser.add_argument('--body-state-jsonl',type=Path,help='offline capture: first line body info, then BodyState records with axes')
     parser.add_argument('--group',default='default')
     parser.add_argument('--timeout',type=float,default=5.0,help='existing SDK control/discovery wait timeout in seconds')
-    parser.add_argument('--joystick',type=int,default=0)
-    parser.add_argument('--neutral-input',action='store_true',help='explicit neutral axes; retains configured height/training-pose control, not a zero BodyCmd')
     parser.add_argument('--duration',type=float,default=0.,help='bounded live seconds; 0 keeps the original until-interrupted behavior')
     parser.add_argument('--log',type=Path,help='new S0-S6/publish/applied diagnostic JSONL, never overwritten')
     parser.add_argument('--confirm-motion',action='store_true',help='existing SDK demo motion acknowledgement; does not replace on-site authorization')
@@ -400,45 +405,30 @@ def main() -> None:
                                   'physical_command_names':list(policy.names)}))
         return
     import locomotion_aorta as api  # D2 public binding; no legacy LowCmd fallback
-    pygame = None
-    if not args.neutral_input:
-        import pygame  # optional joystick input; no PICO dependency
+    if __package__:
+        from .velocity_mode import DirectionInput
+    else:
+        from velocity_mode import DirectionInput
     stop = threading.Event()
     old_handlers = {sig:signal.signal(sig,lambda signum,frame:stop.set())
                     for sig in (signal.SIGINT,signal.SIGTERM)}
-    joystick = None
     log = None
     try:
-        if args.neutral_input:
-            axes = lambda: ()
-        else:
-            pygame.init()
-            pygame.joystick.init()
-            joystick = pygame.joystick.Joystick(args.joystick)
-            joystick.init()
-            def axes() -> tuple[float,...]:
-                for event in pygame.event.get():
-                    if event.type in (pygame.QUIT,pygame.JOYDEVICEREMOVED):
-                        stop.set()
-                return tuple(joystick.get_axis(i) for i in range(joystick.get_numaxes()))
         if args.log:
             if __package__:
                 from .velocity_mode_latency import CycleLog
             else:
                 from velocity_mode_latency import CycleLog
             log = CycleLog(args.log,dict(
-                demo='teleop_policy', input='neutral_axes' if args.neutral_input else 'pygame_joystick',
+                demo='teleop_policy', input='aorta locomotion/joy via JoyReader',
                 period_s=policy.period, model=str(Path(args.model).resolve()),
                 model_sha256=hashlib.sha256(Path(args.model).read_bytes()).hexdigest(),
                 clock='CLOCK_REALTIME', source_stamp='S1 SDK recv return; dequeue stamp is not arrival'))
         with api.PullController(group=args.group) as controller:
-            live(controller,api,policy,model,axes,stop,args.timeout,
-                 duration=args.duration,recorder=log)
+            with closing(DirectionInput(controller.transport)) as directions:
+                live(controller,api,policy,model,directions.snapshot,stop,args.timeout,
+                     duration=args.duration,recorder=log,input_statistics=directions.statistics)
     finally:
-        if joystick is not None:
-            joystick.quit()
-        if pygame is not None:
-            pygame.quit()
         if log is not None:
             log.close()
         for sig,handler in old_handlers.items():

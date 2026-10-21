@@ -4,6 +4,7 @@ import math
 import threading
 import time
 import uuid
+from ._ee_pull import FeedbackPulls
 
 
 GRIPPER_TOPIC_PREFIX = '/sdk/foot_humanoid/gripper'
@@ -37,7 +38,7 @@ class GripperClientLifecycle:
 
     def __init__(self, side, *, node, bindings, decode_info, decode_state, group='default',
                  read_only=False, on_info=None, on_state=None,
-                 owns_node=False, _session_id=None):
+                 owns_node=False, _session_id=None, pull_feedback=False):
         if side not in ('left', 'right'):
             raise ValueError('side must be left or right')
         self.side = side
@@ -58,12 +59,16 @@ class GripperClientLifecycle:
         self._error = None
         self._closed = False
         self._sequence = 0
+        self._pulls = FeedbackPulls(node, self._receive, self._feedback_error) if pull_feedback else None
         try:
             if self.node.group() != group:
                 raise ValueError('effective Aorta group differs')
             for kind, name in (('state', 'GripperState'), ('info', 'GripperInfo')):
                 decoder = getattr(getattr(bindings, name), name).GetRootAs
                 qos = bindings.aorta.QoS.state_update()
+                if self._pulls is not None:
+                    self._subscriptions.append(self._pulls.add(kind, decoder, self.topic+'/'+kind, qos))
+                    continue
                 self._subscriptions.append(self.node.create_subscriber_typed(
                     decoder, self.topic + '/' + kind,
                     lambda view, context, kind=kind: self._receive(kind, view), qos=qos))
@@ -99,9 +104,18 @@ class GripperClientLifecycle:
                 self._condition.notify_all()
 
     def _get(self, kind):
+        if self._pulls is not None:
+            with self._condition:
+                self._ensure_open()
+            self._pulls.poll()
         with self._condition:
             self._ensure_open()
             return self._latest[kind]
+
+    def _feedback_error(self, error):
+        with self._condition:
+            self._error = error
+            self._condition.notify_all()
 
     @property
     def state(self):
@@ -117,8 +131,12 @@ class GripperClientLifecycle:
         if after_state_id is not None:
             _uint64(after_state_id, 'after_state_id')
         deadline = time.monotonic() + timeout
-        with self._condition:
-            while True:
+        while True:
+            if self._pulls is not None:
+                with self._condition:
+                    self._ensure_open()
+                self._pulls.poll()
+            with self._condition:
                 self._ensure_open()
                 value = self._latest[kind]
                 if (value is not None
@@ -128,7 +146,10 @@ class GripperClientLifecycle:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError('timed out waiting for gripper ' + kind)
-                self._condition.wait(remaining)
+                if self._pulls is None:
+                    self._condition.wait(remaining)
+            if self._pulls is not None:
+                self._pulls.poll(kind, remaining)
 
     def wait_info(self, timeout=5.0, *, after_info=None):
         """Use event identity for later periodic info, not its acquisition stamp."""

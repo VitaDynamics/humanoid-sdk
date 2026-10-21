@@ -112,7 +112,7 @@ and [PC networking and Zenoh configuration](https://vitadynamics.feishu.cn/wiki/
 |---|---|
 | `examples/gripper/gripper_external.py` | One entry for read-only gripper info/state, single-side target/return and dual-side sine; motion shares body zero/hold and one EXTERNAL lifecycle. |
 | `examples/brainco_hand/brainco_hand_external.py` | Independent hand info/state/touch and authorized hand motion; `examples/brainco_hand/brainco_capture.py` records/exports feedback. |
-| `examples/teleop_policy/teleop_policy.py` | PC-local ONNX inference and gamepad input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
+| `examples/teleop_policy/teleop_policy.py` | PC-local ONNX inference and Aorta Joy input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
 
 Basic examples remain `examples/external_control/external_control.py` for body EXTERNAL,
 `examples/body_state_subscriber/body_state_subscriber.py` for read-only BodyState, and
@@ -337,7 +337,7 @@ python tests/offline_install.py dist/offline-bundle
 ```
 
 The bundle includes the compiled extension and ORT inside each SDK wheel,
-examples, source and the public PC configuration template. NumPy and pygame
+examples, source and the public PC configuration template. NumPy
 remain optional demo dependencies. The packager verifies pinned dependency
 hashes, requires both SDK architecture filenames, refuses configured credentials
 and existing output directories, and writes `MANIFEST.json` with file digests
@@ -442,15 +442,15 @@ python examples/gripper/gripper_external.py --side both --pattern sine --body-po
 ## PC policy example (in preparation)
 
 `examples/teleop_policy/teleop_policy.py` subscribes to BodyState, discovers the actual body
-roster, runs a local action 17 ONNX policy, and uses the same EXTERNAL lease and
+roster, drains Aorta `locomotion/joy` through the same JoyReader as velocity,
+runs a local action 17 ONNX policy, and uses the same EXTERNAL lease and
 CANCEL exit. Before every live inference it waits up to the existing `--timeout`
 for a strictly increasing BodyState `state_id`; unchanged or older feedback is
 not reused for another inference or leg command, and timeout attempts CANCEL.
 The SDK wheel already contains the C++ ONNX Runtime 1.20.1 CPU backend and
 its shared libraries. Only constructing a model loads the bundled inference backend;
 core imports and example `--help` do not load it. There is no Python ONNX
-Runtime fallback. The optional `teleop-demo` extra installs only NumPy and
-pygame from a complete matching demo wheelhouse:
+Runtime fallback. The optional `teleop-demo` extra installs only NumPy from a complete matching demo wheelhouse:
 
 ```bash
 python -m pip install --no-index --find-links demo-wheelhouse 'locomotion-aorta[teleop-demo]==0.2.1'
@@ -484,6 +484,20 @@ existing on-site authorization and emergency-stop requirements above.
 - [external_control](examples/external_control/README.md)
 - [fixed_stand_pose](examples/fixed_stand_pose/README.md)
 - [body_state_subscriber](examples/body_state_subscriber/README.md)
+
+Teleop input and the deployed action 17 mapping are documented in
+[examples/teleop_policy.md](examples/teleop_policy.md). Live input comes from
+the robot's Aorta Joy publisher, using the same JoyReader as velocity mode.
+
+Hand and gripper examples select `pull_feedback=True` on their clients. State,
+info and touch are decoded on the polling caller; no Python receive worker is
+created. The optional user callbacks then run on that caller. The default
+client mode remains compatible with existing asynchronous callback users.
+Each pull client has one polling consumer and retains only the latest sample
+per topic. Independent EE payloads still use the generated Python codecs;
+BodyState/BodyCmd use the native codecs. `brainco_capture live` also pulls
+command topics, and reports ring overwrites as not measured rather than
+claiming a lossless trace.
 
 Pull feedback is a latest-state snapshot, not a policy clock. `wait_state(timeout)`
 waits for a first frame, then polls the depth=1 ring and otherwise returns the

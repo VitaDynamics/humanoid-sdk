@@ -580,12 +580,12 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None):
         sides = ('left', 'right') if args.side == 'both' else (args.side,)
         if readonly:
             for side in sides:
-                client = stack.enter_context(_client_factory(side, group=args.group, read_only=True))
+                client = stack.enter_context(_client_factory(side, group=args.group, read_only=True, pull_feedback=True))
                 observe(client, timeout=args.timeout)
         else:
             controller = stack.enter_context(_controller_factory(group=args.group))
             clients = [stack.enter_context(_client_factory(side, group=args.group,
-                                                          node=controller.transport.node)) for side in sides]
+                                                          node=controller.transport.node, pull_feedback=True)) for side in sides]
             try:
                 if args.pattern == 'sine':
                     run_sine(controller, clients, low=args.sine_min_m, high=args.sine_max_m,

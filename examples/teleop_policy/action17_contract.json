@@ -155,5 +155,14 @@
   "inference_frequency_hz": 50,
   "imu_location": "HIP",
   "source_ref": "e07e8d844bdae8888886bb9ea0b53d59eb748084",
-  "frequency_source": "src/application/locomotion/humanoid/config/locomotion_foot_humanoid_asample.yaml:HUMANOID_TELEOP"
+  "frequency_source": "src/application/locomotion/humanoid/config/locomotion_foot_humanoid_asample.yaml:HUMANOID_TELEOP",
+  "joy_contract_source": {
+    "robot_source_commit": "a0ecd6e208a092e7eb55aa6bf96336e5f40c133e",
+    "profile_path": "/app/locomotion/actions/policy_profiles/vt_human_v2_teleop_asample.yaml",
+    "profile_sha256": "3cddb4ccc678c6a26ec242659fbfcb9631a43af2863ad61afe48f1a7b47b2227",
+    "copy_joy_command": "src/application/locomotion/humanoid/io/humanoid_aorta_command_ingress.cpp:51",
+    "read_joy_command": "src/application/locomotion/humanoid/actions/rl_business_logic/humanoid_business_logic.cpp:5398",
+    "sdk_input": "locomotion/joy only; no Twist fallback",
+    "freshness_ns": 1000000000
+  }
 }

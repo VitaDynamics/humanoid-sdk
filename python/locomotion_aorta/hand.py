@@ -7,6 +7,7 @@ import uuid
 
 from . import _hand_codec as codec
 from .hand_types import HandCmd, HandInfo, HandJointCmd, HandSide, HandState, HandTouch
+from ._ee_pull import FeedbackPulls
 
 
 HAND_TOPIC_PREFIX = '/sdk/foot_humanoid/hand'
@@ -28,7 +29,8 @@ def validate_info(info):
 
 class HandClient:
     def __init__(self, side, *, group='default', node=None, read_only=False,
-                 on_state=None, on_touch=None, on_info=None, _bindings=None, _session_id=None):
+                 on_state=None, on_touch=None, on_info=None, _bindings=None, _session_id=None,
+                 pull_feedback=False):
         if side not in ('left', 'right'):
             raise ValueError('side must be left or right; hardware side numbers are not accepted')
         self.side = side
@@ -53,6 +55,7 @@ class HandClient:
         self._publisher = None
         self._subscriptions = []
         self._clients = {}
+        self._pulls = FeedbackPulls(self.node, self._receive, self._feedback_error) if pull_feedback else None
         try:
             if self.node.group() != group:
                 raise ValueError('effective Aorta group differs; set AORTA_GROUP to --group')
@@ -60,6 +63,9 @@ class HandClient:
                 decoder = getattr(getattr(self._bindings, cls), cls).GetRootAs
                 qos = (self._bindings.aorta.QoS.state_update() if kind == 'info'
                        else self._bindings.aorta.QoS.sensor_data())
+                if self._pulls is not None:
+                    self._subscriptions.append(self._pulls.add(kind, decoder, self.topic+'/'+kind, qos))
+                    continue
                 self._subscriptions.append(self.node.create_subscriber_typed(
                     decoder, self.topic + '/' + kind,
                     lambda view, ctx, kind=kind: self._receive(kind, view), qos=qos))
@@ -105,9 +111,18 @@ class HandClient:
                 self._condition.notify_all()
 
     def _get(self, kind):
+        if self._pulls is not None:
+            with self._condition:
+                self._ensure_open()
+            self._pulls.poll()
         with self._condition:
             self._ensure_open()
             return self._latest[kind]
+
+    def _feedback_error(self, error):
+        with self._condition:
+            self._error = error
+            self._condition.notify_all()
 
     @property
     def state(self):
@@ -125,8 +140,12 @@ class HandClient:
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError('timeout must be finite and positive')
         deadline = time.monotonic() + timeout
-        with self._condition:
-            while True:
+        while True:
+            if self._pulls is not None:
+                with self._condition:
+                    self._ensure_open()
+                self._pulls.poll()
+            with self._condition:
                 self._ensure_open()
                 value = self._latest[kind]
                 if (value is not None
@@ -136,7 +155,10 @@ class HandClient:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError('timed out waiting for hand ' + kind)
-                self._condition.wait(remaining)
+                if self._pulls is None:
+                    self._condition.wait(remaining)
+            if self._pulls is not None:
+                self._pulls.poll(kind, remaining)
 
     def wait_state(self, timeout: float = 5.0, *, after_state_id: int | None = None) -> HandState:
         return self._wait('state', timeout, after_state_id)
