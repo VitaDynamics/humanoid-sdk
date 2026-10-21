@@ -21,11 +21,23 @@ class IsolationTests(unittest.TestCase):
         self.assertFalse(c["transport"]["shared_memory"]["enabled"])
 
     def test_client_only_connects_to_assigned_loopback_peer(self):
-        c = json.loads(run.session_config(24002, 24001))
+        c = json.loads(run.session_config(0, 24001))
+        self.assertEqual(c["listen"]["endpoints"], ["tcp/127.0.0.1:0"])
         self.assertEqual(c["connect"]["endpoints"], ["tcp/127.0.0.1:24001"])
 
+    def test_client_auxiliary_peer_stays_explicit_loopback(self):
+        c = json.loads(run.session_config(0, [24001, 24003]))
+        self.assertEqual(c["listen"]["endpoints"], ["tcp/127.0.0.1:0"])
+        self.assertEqual(c["connect"]["endpoints"], ["tcp/127.0.0.1:24001", "tcp/127.0.0.1:24003"])
+
+    def test_ephemeral_port_is_only_valid_for_listening(self):
+        with self.assertRaises(ValueError):
+            run.session_config(24001, 0)
+        with self.assertRaises(ValueError):
+            run.session_config(0, [24001, 0])
+
     def test_invalid_ports_rejected(self):
-        for port in [True, 0, 1023, 65536, "192.168.1.1", 12.5]:
+        for port in [True, -1, 1023, 65536, "192.168.1.1", 12.5]:
             with self.subTest(port=port), self.assertRaises(ValueError):
                 run.session_config(port)
 

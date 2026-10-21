@@ -32,9 +32,10 @@ def digest(path):
 
 def session_config(port, connect_port=None):
     connections = connect_port if isinstance(connect_port, list) else ([] if connect_port is None else [connect_port])
-    for value in (port, *connections):
-        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or not 1024 <= value <= 65535):
-            raise ValueError("loopback port must be an integer in1024..65535")
+    for index, value in enumerate((port, *connections)):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or
+                                  not (1024 <= value <= 65535 or (index == 0 and value == 0))):
+            raise ValueError("loopback port must be in1024..65535; only listen may use zero")
     config = {"mode": "peer", "scouting": {"multicast": {"enabled": False}, "gossip": {"enabled": False}},
               "transport": {"shared_memory": {"enabled": False}, "unicast": {"compression": {"enabled": False}}},
               "listen": {"endpoints": [f"tcp/127.0.0.1:{port}"]},
@@ -237,9 +238,7 @@ def run(args):
         args.client_command = [sys.executable, str(Path(__file__).resolve()), "--mode", "production-topics",
                                "--build-dir", str(build), "--output", str(output), "--seconds", str(args.seconds), "--client-worker"]
         args.client_log = output / "self-test-client.jsonl"
-    server_port, client_port = port(), port()
-    while client_port == server_port:
-        client_port = port()
+    server_port = port()
     profiles = {"mock": output / "mock-session.json", "client": output / "client-session.json"}
     auxiliary = validate_auxiliary(json.loads(args.auxiliary_fixture.read_text())) if args.auxiliary_fixture else None
     if auxiliary:
@@ -247,12 +246,14 @@ def run(args):
     aux_port = None
     if auxiliary:
         aux_port = port()
-        while aux_port in (server_port, client_port):
+        while aux_port == server_port:
             aux_port = port()
         profiles["auxiliary"] = output / "auxiliary-session.json"
         profiles["auxiliary"].write_text(session_config(aux_port))
     profiles["mock"].write_text(session_config(server_port))
-    profiles["client"].write_text(session_config(client_port, [server_port, aux_port] if aux_port else server_port))
+    # Each Node opens its own session; a fixed client listener collides in a
+    # multi-Node process. Both Nodes connect to the same assigned Mock peer.
+    profiles["client"].write_text(session_config(0, [server_port, aux_port] if aux_port else server_port))
     initial = [0.0] * 31 if not args.initial_q else json.loads(args.initial_q.read_text())
     if not isinstance(initial, list) or len(initial) != 31 or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or abs(v) > 10 for v in initial):
         raise ValueError("initial-q must be a31 element finite JSON list in synthetic range")

@@ -67,10 +67,34 @@ This starts only the synthetic source/services. No client, control request or
 BodyCmd is automatically created. `client-environment.json` gives `SDK_GROUP`,
 `AORTA_GROUP` and the private `ZENOH_SESSION_CONFIG_URI`. The default group is
 unique `mock-sdkmain-*`; `default` and other production names are rejected.
-Both sides are peers, multicast/gossip/SHM disabled, all endpoints assigned
-`127.0.0.1` ports. The C++ endpoint also checks its exact canonical profile and
+Both sides are peers, multicast/gossip/SHM disabled, all endpoints stay on
+`127.0.0.1`. The Mock listens on its assigned port; clients actively connect
+to that peer and listen on `tcp/127.0.0.1:0`. Each client Node therefore gets
+its own temporary listener, including two Nodes inside one customer process.
+The C++ endpoint also checks its exact canonical profile and
 transport environment before constructing any node. No robot session/profile
 is read or altered.
+
+For an explicit same-process state/command Node communication fixture:
+
+```bash
+python tools/production_topic_mock/run.py --mode production-topics \
+  --build-dir /tmp/new-production-mock-build \
+  --output /tmp/new-multinode-positive --seconds 10 --allow-client \
+  --client-command /path/to/sdk-venv/bin/python -B \
+  tools/production_topic_mock/multinode_fixture.py \
+  --output /tmp/new-multinode-positive
+```
+
+Both Nodes must receive real synthetic BodyState; the command Node also reads
+typed RobotInfo. No EXTERNAL request or BodyCmd is sent. To reproduce the old
+fixed-listener failure, repeat with a **different output directory** and append
+`--legacy-fixed-listener` to the fixture's client argv. That explicit negative
+control changes only its new capture's client profile and expects the second
+Node to fail with `INTERNAL(-5)` / `Address already in use`. It preserves the
+original generated profile as `client-session.generated.json`. An unrelated
+error or unexpected success fails the fixture. Neither result is a latency,
+customer-inference or device acceptance result.
 
 For pkg's explicit real-Aorta protocol/timer smoke, use the fixture client:
 
@@ -150,11 +174,14 @@ latency report therefore has no measured control loop.
 sdkmain additionally compares the Node's effective group with its own YAML
 configuration. Environment variables alone cannot satisfy that guard when
 the YAML still says `default`. Make another copy of the reviewed opt021 root,
-preserving symlinks and file modes. In
+preserving artifact bytes, modes and the client's model-root containment
+requirements. Outside model symlinks can fail those original checks; use a
+reviewed copy or same-filesystem read-only hardlink layout rather than bypass
+the checks. In
 `src/deployment/vita_s100_aorta_30dof/config/vita02a_s100.yaml`, change **only**
 `robot.aorta_group` to a newly generated, validated Mock group. Keep every
 other configuration value, customer joystick path/thread/mapping/button,
-model, calibration and all15 SDK SHA guards unchanged. Reuse that exact group
+model, calibration and all SDK/native SHA guards unchanged. Reuse that exact group
 with the runner's `--group`; do not reuse a group with an abandoned client.
 
 For example, with `MOCK_ROOT` set to that new copy and `MOCK_GROUP` to its YAML
@@ -333,3 +360,36 @@ it is a message-binding check, not real transport or hardware evidence.
 These pure-Python tests do not establish C++ compilation, real-Aorta handshake,
 400→50 Hz behaviour,500 Hz quantization, ARM execution or device/HIL. Those
 checks belong in the fixed-input pkg request and separately authorized runs.
+
+## Safety guarantees and limits
+
+These are properties of the supplied Mock and reviewed clients which retain
+its assigned configuration. They are not an OS sandbox or authorization to
+connect to a robot. Existing safeguards and their verification are listed
+below; this change adds no admission threshold or new production safety check.
+
+| Existing guarantee | Implementation | Verification and boundary |
+|---|---|---|
+| Mock uses Aorta and synthetic output, with no CAN/IPCF driver calls or service/slot operations. | `build.py:168-181`, `protocol.cpp:146`, `mock.cpp:372-410` | Build/protocol artifacts and source inspection; no physical-bus or syscall-isolation claim. Arbitrary client code is outside this guarantee. |
+| Explicit production-topic mode; clients require opt-in and direct shell launchers are refused. | `run.py:96-116` | `IsolationTests.test_production_mode_must_be_explicit`, `test_client_requires_explicit_option`, `test_customer_shell_is_not_a_safe_client_entry`, `test_help_has_no_sdk_import_or_process_execution`. |
+| Private `mock-sdkmain-*` group, random default and the pinned32-byte limit; default/production names refused. | `group_contract.py:19-33`, `aorta_contract.h`, `mock.cpp:243-268` | `IsolationTests.test_default_and_unsafe_groups_rejected` and the five `test_group_contract` boundary cases. C++ also validates before Node creation. |
+| Loopback peers only; no router, multicast, gossip or shared memory; inherited Aorta/Zenoh overrides replaced only in children. | `run.py:33-54`, `mock.cpp:234-268` | `IsolationTests.test_mock_profile_has_no_router_or_discovery`, `test_client_only_connects_to_assigned_loopback_peer`, `test_group_alias_and_uri_only_change_child`; explicit real multi-Node fixture. C++ requires its exact runner-generated server profile. |
+| Architecture, binary, core and generated-schema identities checked before launch. | `run.py:57-77`, `mock.cpp:337-338` | `BuildIdentityTests.test_generated_schema_tampering_is_rejected_before_launch`, `test_core_and_binary_identity_are_required`. This checks identity, not artifact trust from an unknown supplier. |
+| Bounded capture/rates/duration; previous captures are not overwritten. | `run.py:96-109,234-235`, `mock.cpp:81,326-336`, `__init__.py:auxiliary_capture_budget` | `IsolationTests.test_capture_capacity_includes_cancel_grace`, `test_nonfinite_and_unbounded_rates_rejected`, `ReportReviewTest` capacity cases. These are resource bounds, not a latency/loss SLA. |
+| Synthetic ownership, command validation and watchdogs remain active. | `protocol.cpp:214-307`, `mock.cpp:ReceiveRequest/ReceiveCommand` | Native `protocol-checks`/`callback-checks`; no new C++ changes here. They do not implement real robot safety admission, contact dynamics, firmware limits or emergency stop. |
+| Cleanup targets only runner-created process groups; cooperative CANCEL gets a grace period. | `run.py:86-93,290-340`, `mock.cpp:270-286,486-487` | Native callback cleanup checks and the explicit local IPC fixtures; Python fixture cleanup assertions in `test_mock_multinode_fixture.py`. Forced failure of every descendant-process case is not covered. |
+| Missing stages, parse/endpoint/capture errors and unmatched commands remain visible. | `report.py:analyze`, `mock.cpp:523-538` | `ReportReviewTest` in `test_review.py` and `ReportTests` in `test_production_topic_mock.py`; inspect raw captures as well as the summary. Synthetic applied timestamps are not motor completion. |
+
+The Mock cannot make arbitrary client code safe. A reviewed entry must preserve
+the effective group/profile and avoid a second real session, a nested shell
+launcher or direct hardware API. Its cleanup cannot stop a deliberately
+detached child. It does not prove a physical robot is supported, healthy or
+safe to move, and it does not automatically operate services or an emergency
+stop. SDK/client/native guards stay in force; a fixture is not a reason to
+weaken them.
+
+Both IMUs currently require normalized WXYZ input and are published as `OK`
+(`run.py:119-127`, `mock.cpp:350-364`, `state.cpp:28-38`). An unconfigured,
+all-zero TRUNK is **not modeled** by this version. No sensor status, timestamps
+or hardware validity should be inferred from its synthetic IMUs. Extending
+that behavior requires a separate decision and C++/ARM validation.
