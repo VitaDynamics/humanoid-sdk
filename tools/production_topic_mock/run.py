@@ -14,11 +14,11 @@ import time
 
 try:
     from .report import write_report
-    from . import validate_auxiliary, run_auxiliary
+    from . import validate_auxiliary, run_auxiliary, auxiliary_capture_budget
     from .group_contract import new_group, validate_group
 except ImportError:
     from report import write_report
-    from __init__ import validate_auxiliary, run_auxiliary
+    from __init__ import validate_auxiliary, run_auxiliary, auxiliary_capture_budget
     from group_contract import new_group, validate_group
 
 
@@ -145,8 +145,8 @@ def validate_worker_environment(output):
         raise ValueError("refusing to overwrite auxiliary capture")
 
 
-def self_test_client(output, seconds):
-    """Protocol/timer fixture, not sdkmain inference or a hardware demo."""
+def validate_client_environment(output):
+    """Validate the runner-assigned, private client group and peer profile."""
     output = Path(output).resolve()
     group = validate_group(os.environ.get("AORTA_GROUP"))
     if os.environ.get("SDK_GROUP") != group or os.environ.get("ZENOH_SESSION_CONFIG_URI") != str(output / "client-session.json"):
@@ -164,6 +164,13 @@ def self_test_client(output, seconds):
     allowed = {"AORTA_GROUP", "AORTA_LOG_TOPIC_ENABLED", "ZENOH_SESSION_CONFIG_URI"}
     if any(k.startswith(("AORTA_", "ZENOH_")) and k not in allowed for k in os.environ):
         raise ValueError("unexpected self-test transport override")
+    return group
+
+
+def self_test_client(output, seconds):
+    """Protocol/timer fixture, not sdkmain inference or a hardware demo."""
+    output = Path(output).resolve()
+    group = validate_client_environment(output)
     from locomotion_aorta import PullController, BodyCmd, BodyJointCmd
     stop = False
     def stop_handler(_number, _frame):
@@ -174,7 +181,9 @@ def self_test_client(output, seconds):
     capture = []
     entered = False
     try:
-        controller = PullController(group=group)
+        # Exercise the SDK's default argument. Core's effective group is the
+        # runner's AORTA_GROUP, not the SDK's default group="default" value.
+        controller = PullController()
         if controller.transport.node.group() != group:
             raise ValueError("effective self-test group differs")
         reply = controller.get_robot_info(timeout=5)
@@ -185,7 +194,6 @@ def self_test_client(output, seconds):
         entered = True
         deadline = time.monotonic() + seconds
         next_tick = time.monotonic_ns()
-        last_snapshot, decode_done = None, 0
         while not stop and time.monotonic() < deadline:
             now = time.monotonic_ns()
             if now < next_tick:
@@ -193,9 +201,6 @@ def self_test_client(output, seconds):
             cycle_start = time.monotonic_ns()
             next_tick += ((max(cycle_start, next_tick) - next_tick) // 20000000 + 1) * 20000000
             state = controller.wait_state(0)
-            if state is not last_snapshot:
-                decode_done = time.time_ns()
-                last_snapshot = state
             command = BodyCmd(joints=tuple(BodyJointCmd() if i == 14 else BodyJointCmd(q=float(state.q[i]), kp=1., kd=.5) for i in range(31)),
                               input_state_id=state.state_id, input_state_ts_real_us=state.ts_state_real_us)
             started = time.time_ns()
@@ -206,7 +211,6 @@ def self_test_client(output, seconds):
                             "input_state_ts_real_us": sent.input_state_ts_real_us,
                             "cycle_start_monotonic_ns": cycle_start,
                             "timing_wall_ns": {"state_received_wall_ns": state.received_realtime_ns,
-                                               "state_decode_finished_wall_ns": decode_done,
                                                "sdk_publish_started_wall_ns": started, "sdk_returned_wall_ns": returned},
                             "scope": "no model/inference/real robot; S3/S4 not measured"})
     finally:
@@ -240,10 +244,7 @@ def run(args):
     profiles = {"mock": output / "mock-session.json", "client": output / "client-session.json"}
     auxiliary = validate_auxiliary(json.loads(args.auxiliary_fixture.read_text())) if args.auxiliary_fixture else None
     if auxiliary:
-        total_rate = sum(cfg["state_hz"] + cfg["info_hz"] + (cfg["touch_hz"] if cfg["kind"] == "brainco" else 0)
-                         for side, cfg in auxiliary.items() if side != "joy")
-        if total_rate * args.seconds + len(auxiliary.get("joy", [])) >= 1000000:
-            raise ValueError("auxiliary fixture exceeds the fixed capture capacity")
+        auxiliary_capture_budget(auxiliary, args.seconds)
     aux_port = None
     if auxiliary:
         aux_port = port()

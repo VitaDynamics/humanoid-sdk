@@ -43,10 +43,13 @@ python tools/production_topic_mock/build.py \
   --run-protocol-checks
 ```
 
-Targets: `production-topic-mock` and `protocol-checks`. The build manifest
+Targets: `production-topic-mock`, `protocol-checks` and `callback-checks`. The build manifest
 records source/core/compiler/BFBS/binary identities. Native protocol checks
 cover ownership, idempotency, rejection, timeout, latest-wins application and
-CANCEL. For an ARM cross-build add `--target-arch aarch64 --cxx <compiler>
+CANCEL. Callback checks inject ACK/reply/cleanup errors without creating a
+Node; their expected negative cases print named diagnostics. They also test
+missing/overlong client IDs, malformed messages and transactional ACK failure.
+For an ARM cross-build add `--target-arch aarch64 --cxx <compiler>
 --aorta-core <official-ARM-wheel-core>`; compile checks but do not pass
 `--run-protocol-checks` on x86. ARM install/build is not ARM execution.
 
@@ -80,7 +83,7 @@ python tools/production_topic_mock/run.py --mode production-topics \
 It performs RobotInfo/PREPARE/COMMIT, a fixed50 Hz zero-motion SDK stream and
 CANCEL, entirely in the private Mock session. It records actual client tick
 starts and publication/receipt/applied identities. This exercises the tool and
-SDK; it does not run sdkmain, a policy model or a real robot. S3/S4 stay
+SDK; it does not run sdkmain, a policy model or a real robot. S2/S3/S4 stay
 NOT_MEASURED. The measured400/50 Hz observations are data, not an invented SLA.
 
 To start a **reviewed direct client** in the runner, opt in explicitly:
@@ -121,14 +124,60 @@ shell launchers but cannot detect every possible nested launcher. Before any
 authorized device client run, verify its effective group/peer configuration;
 never infer isolation from SSH or a shell variable alone.
 
-For sdkmain, select its **copy**, retain its existing venv/model guards, and
-pass the existing Python operator entry directly as reviewed client argv.
-The wrapper maps `SDK_GROUP` to the actual Core `AORTA_GROUP`; the old Core
-ignores the Node constructor's explicit `group`. No customer business code or
-shell is edited. All its normal model/identity/neutral-input/START guards
-remain in force. It still needs an appropriate controller input. Swapping to
-SDK0.2.1 additionally requires the separately reviewed client adaptation and
-updated strict SDK source pins; this Mock does not bypass them.
+### SDK group fixture and sdkmain configuration copy
+
+The pinned Aorta2026.10.20 Core selects the effective group from `AORTA_GROUP`,
+ignoring the Node constructor's group argument. The SDK does not read
+`SDK_GROUP`; this runner sets both variables in its children. Test this
+precedence with the real, installed SDK, including its default argument and
+an explicitly different constructor argument:
+
+```bash
+python tools/production_topic_mock/run.py --mode production-topics \
+  --build-dir /tmp/new-production-mock-build \
+  --output /tmp/new-sdk-group-fixture --seconds 15 --allow-client \
+  --client-command /path/to/sdk-venv/bin/python -B \
+  tools/production_topic_mock/sdk_group_fixture.py \
+  --output /tmp/new-sdk-group-fixture
+```
+
+`sdk-group-fixture.json` records the effective group, typed RobotInfo and real
+BodyState for both cases. It sends no control requests or BodyCmd; the generic
+latency report therefore has no measured control loop.
+
+sdkmain additionally compares the Node's effective group with its own YAML
+configuration. Environment variables alone cannot satisfy that guard when
+the YAML still says `default`. Make another copy of the reviewed opt021 root,
+preserving symlinks and file modes. In
+`src/deployment/vita_s100_aorta_30dof/config/vita02a_s100.yaml`, change **only**
+`robot.aorta_group` to a newly generated, validated Mock group. Keep every
+other configuration value, customer joystick path/thread/mapping/button,
+model, calibration and all15 SDK SHA guards unchanged. Reuse that exact group
+with the runner's `--group`; do not reuse a group with an abandoned client.
+
+For example, with `MOCK_ROOT` set to that new copy and `MOCK_GROUP` to its YAML
+value, the direct client argv is:
+
+```bash
+python tools/production_topic_mock/run.py --mode production-topics \
+  --build-dir /tmp/new-production-mock-build \
+  --output /tmp/new-sdkmain-capture --group "$MOCK_GROUP" \
+  --seconds 60 --allow-client \
+  --initial-q /path/to/approved-31-slot-initial-q.json \
+  --initial-imu /path/to/approved-hip-trunk-wxyz.json \
+  --client-command /path/to/matching-sdkmain-venv/bin/python -B \
+  "$MOCK_ROOT/scripts/onboard_operator.py" suspended-test \
+  --root "$MOCK_ROOT" --controller wifi --motion-group P1 \
+  --key-file /path/to/existing-private-xbox.key
+```
+
+Set the existing, reviewed Python module/native-library environment before
+starting the runner. Its client inherits the runner-assigned `AORTA_GROUP`
+and private `ZENOH_SESSION_CONFIG_URI` without a shell launcher. The operator's
+existing explicit authorization check, model/native pins, identity,
+neutral-input and manual START guards remain in force. A matching SDK wheel
+and the separately reviewed opt021 client adaptation are prerequisites.
+The Mock neither generates controller input for sdkmain nor bypasses a guard.
 
 The unchanged customer ARM model/preprocessing/Pico libraries cannot run on
 x86 through environment variables. An x86 protocol/client fixture measures
@@ -150,7 +199,8 @@ RX workers. It supports:
   including distinct short press/release frames. Script timing is relative to
   a matched Joy subscriber. The measured publication times are recorded.
 
-Fixture top-level keys are `left`, `right`, `joy`. Each EE entry requires
+Fixture top-level keys are `left`, `right`, `joy` and optional
+`command_record_budget`. Each EE entry requires
 `kind` (`brainco` or `gripper`), explicit `state_hz`, `info_hz`, a complete
 public `info` DTO field mapping (omit side/ts fields), and, for brainco,
 explicit `touch_hz`. Use the actual configuration/Info geometry and rates for
@@ -193,6 +243,26 @@ or a mismatched pin fails explicitly; it never falls back to ROS2 or a private
 wire format. Python auxiliary-generation jitter is source jitter, not a test
 of a native EE backend. This is not hardware verification.
 
+The1,000,000-record auxiliary capture capacity covers publication and received
+command records together. Before startup the runner reserves the bounded
+publication/Info/touch/Joy count and a command-record budget (the remaining
+capacity by default, or the explicit nonnegative `command_record_budget`).
+Accepted and rejected commands both consume that budget. Exceeding it stops
+the auxiliary endpoint and marks the report incomplete without overwriting
+earlier records. This is a capture limit, not an assumed hardware command rate.
+
+Running control ownership intentionally has no automatic lease expiry, as in
+the current robot bridge: a finite requested duration is not a revocation
+timer. An abandoned client's TIMEOUT_HOLD still owns the session; use its
+cooperative CANCEL or end that isolated Mock and start a new group. The Mock's
+COMMIT activates immediately and does not emulate the robot's preparing or
+transitioning dwell, admission or hardware activation. Those entry-timeout
+and transition races remain outside this fixture's coverage. A same-owner
+CANCEL with no acquired lease is rejected while armed until prepare timeout.
+Local port selection still has a bind/close race; fail and preserve a capture
+if a port is taken. Python Joy dispatch may compress overdue short taps;
+recorded publication timing is authoritative.
+
 ## Report and evidence boundaries
 
 `states.csv`, `received.csv`, `applied.csv`, `control.csv`, optional
@@ -213,6 +283,24 @@ applied echo delay and sequence lag. Client cycle-start rate is not inferred
 from arrival rate. The source window includes startup/warmup: report actual
 window/counts, never assume60 s of active control.
 
+`received_ns` is the callback-entry timestamp after transport dispatch, not a
+wire-arrival timestamp. `accepted_ns` follows decode, mutex wait and admission.
+G is the first eligible absolute REALTIME synthetic grid tick after admission;
+`actual_dispatch_ns` separately records when the loop executed that tick.
+`synthetic_tick_dispatch_delay` exposes its scheduling delay. On timeout hold
+or CANCEL, the tool clears applied identities/timestamps while holding the
+last synthetic joint positions.
+
+The report includes callback parse errors and client identities that were
+sent but never recorded as received, separately from received rejections.
+Without a client trace, sent/lost counts are NOT_MEASURED. Callback exceptions
+retain their text in `mock.log`. Parse/endpoint/cleanup errors, rejections,
+capture overflow, missing client identities or clock anomalies mark the
+measurement incomplete. Raw anomalous timestamps and unaffected metrics are
+retained in JSON; they do not turn a failed run into a PASS. A signal with
+active or unknown control ownership is incomplete; even a clean idle shutdown
+does not prove the entire requested measurement window completed.
+
 With the client's actual REALTIME trace, add S1/S2/S3/S4/S5/S6. S3 requires
 observation-complete/inference-start; whole-policy entry cannot substitute.
 Missing or zero points are NOT_MEASURED. Pull receipt is dequeue/assembly time,
@@ -228,6 +316,7 @@ Local source-only tests:
 
 ```bash
 python -m unittest discover -s tests -p 'test_production_topic_mock*.py' -v
+python -m unittest tools.production_topic_mock.test_group_contract tools.production_topic_mock.test_review -v
 ```
 
 An additional offline check with real installed public generated EE bindings:

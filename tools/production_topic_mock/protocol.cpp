@@ -18,9 +18,9 @@ Request DecodeRequest(const std::vector<uint8_t>& bytes) {
     throw std::runtime_error("invalid ControlRequest FlatBuffer");
   const auto* r = locomotion_sdk::GetControlRequest(bytes.data());
   auto str = [](const flatbuffers::String* s) {
-    if (!s || s->size() > 256)
-      throw std::runtime_error("invalid control identity");
-    return s->str();
+    // Structural errors belong to the verifier. Identity errors must reach
+    // RequestControl's1002 reply, including absent/overlong identifiers.
+    return s ? s->str() : std::string{};
   };
   return {r->protocol_version(),
           static_cast<int>(r->operation()),
@@ -137,8 +137,11 @@ std::vector<uint8_t> EncodeInfo() {
     info.body->joint_names.push_back(names[j]);
     info.body->joints.emplace_back(j, lowlevel::BodySlotRole_ACTIVE, false,
                                    present, present ? 31 : 0, present ? 31 : 0,
-                                   -10.f, 10.f, -50.f, 50.f, -100.f, 100.f, 0.f,
-                                   600.f, 0.f, 60.f);
+                                   kJointLimits.q_min, kJointLimits.q_max,
+                                   kJointLimits.dq_min, kJointLimits.dq_max,
+                                   kJointLimits.tau_min, kJointLimits.tau_max,
+                                   kJointLimits.kp_min, kJointLimits.kp_max,
+                                   kJointLimits.kd_min, kJointLimits.kd_max);
     auto identity = std::make_unique<lowlevel::BodyMotorIdentityT>();
     identity->bus = "SYNTHETIC_NO_CAN";
     identity->node_id = j + 1;
@@ -170,6 +173,14 @@ std::vector<uint8_t> EncodeInfo() {
 }  // namespace production_mock
 #else
 namespace production_mock {
+uint64_t NextApplyTick(uint64_t accepted_wall_ns, uint64_t period_ns) {
+  if (!period_ns) throw std::invalid_argument("nonzero apply period required");
+  const auto remainder = accepted_wall_ns % period_ns;
+  const auto delta = remainder ? period_ns - remainder : 0;
+  if (accepted_wall_ns > std::numeric_limits<uint64_t>::max() - delta)
+    throw std::overflow_error("synthetic apply tick overflow");
+  return accepted_wall_ns + delta;
+}
 Protocol::Protocol(uint64_t seed, uint64_t stream_timeout,
                    uint64_t prepare_timeout, int reject_operation)
     : generation_(seed),
@@ -193,6 +204,12 @@ void Protocol::Clear() {
   status_.reject_count = rejects;
   has_pending_ = false;
   prepared_ns_ = 0;
+  InvalidateApplied();
+}
+void Protocol::InvalidateApplied() {
+  // Hold the last synthetic positions, while invalidating evidence of a
+  // current command. Cancelling does not teleport the simulated joints.
+  output_.session = output_.sequence = output_.first_output_us = 0;
 }
 void Protocol::Watchdog(uint64_t now) {
   if (status_.phase == 2 && now - prepared_ns_ >= prepare_timeout_ns_) Clear();
@@ -201,6 +218,7 @@ void Protocol::Watchdog(uint64_t now) {
     status_.phase = 5;
     ++status_.status_seq;
     has_pending_ = false;
+    InvalidateApplied();
   }
 }
 Ack Protocol::RequestControl(const Request& r, uint64_t now) {
@@ -264,9 +282,12 @@ bool Protocol::Accept(const Command& cmd, uint64_t now) {
     if (j == 14) continue;
     valid = std::isfinite(cmd.q[j]) && std::isfinite(cmd.dq[j]) &&
             std::isfinite(cmd.tau[j]) && std::isfinite(cmd.kp[j]) &&
-            std::isfinite(cmd.kd[j]) && std::abs(cmd.q[j]) <= 10 &&
-            cmd.kp[j] >= 0 && cmd.kp[j] <= 600 && cmd.kd[j] >= 0 &&
-            cmd.kd[j] <= 60;
+            std::isfinite(cmd.kd[j]) &&
+            cmd.q[j] >= kJointLimits.q_min && cmd.q[j] <= kJointLimits.q_max &&
+            cmd.dq[j] >= kJointLimits.dq_min && cmd.dq[j] <= kJointLimits.dq_max &&
+            cmd.tau[j] >= kJointLimits.tau_min && cmd.tau[j] <= kJointLimits.tau_max &&
+            cmd.kp[j] >= kJointLimits.kp_min && cmd.kp[j] <= kJointLimits.kp_max &&
+            cmd.kd[j] >= kJointLimits.kd_min && cmd.kd[j] <= kJointLimits.kd_max;
   }
   if (!valid) {
     ++status_.reject_count;

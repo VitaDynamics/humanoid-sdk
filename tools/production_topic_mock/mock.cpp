@@ -11,6 +11,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 #include "aorta_abi.h"
 #include "aorta_contract.h"
@@ -84,7 +85,7 @@ struct Received {
   bool valid;
 };
 struct Applied {
-  uint64_t session, sequence, wall_ns;
+  uint64_t session, sequence, wall_ns, dispatch_ns;
 };
 struct Sent {
   uint64_t state_id, published_ns, returned_ns, real_us, session, sequence,
@@ -94,6 +95,7 @@ struct ControlRow {
   pm::Request request;
   pm::Ack ack;
   uint64_t wall_ns;
+  bool ack_sent;
 };
 struct Context {
   std::mutex mutex;
@@ -104,9 +106,15 @@ struct Context {
   std::vector<ControlRow> controls;
   uint64_t parse_errors = 0, info_requests = 0, info_errors = 0;
   uint64_t ack_sequence = 0;
+  uint64_t apply_period_ns = 0, pending_tick_ns = 0;
   std::atomic<bool> failed{false};
+  std::atomic<bool> endpoint_failed{false};
   Context(uint64_t seed, uint64_t timeout, uint64_t prepare, int reject)
-      : protocol(seed, timeout, prepare, reject) {}
+      : protocol(seed, timeout, prepare, reject) {
+    received.reserve(kRows);
+    applied.reserve(kRows);
+    controls.reserve(kRows);
+  }
 };
 void ReceiveCommand(const aorta_bytes_view_t* view,
                     const aorta_schema_hash_view_t*, const aorta_msg_context_t*,
@@ -144,12 +152,19 @@ void ReceiveCommand(const aorta_bytes_view_t* view,
       return;
     }
     const bool valid = ctx.protocol.Accept(cmd, Mono());
+    const auto accepted = Wall();
+    if (valid) ctx.pending_tick_ns = pm::NextApplyTick(accepted, ctx.apply_period_ns);
     ctx.received.push_back({cmd.session, cmd.sequence, cmd.input_state_id,
                             cmd.input_state_real_us, cmd.client_created_us,
-                            cmd.client_send_us, received, Wall(), valid});
+                            cmd.client_send_us, received, accepted, valid});
+  } catch (const std::exception& e) {
+    std::lock_guard<std::mutex> lock(ctx.mutex);
+    ++ctx.parse_errors;
+    std::cerr << "ReceiveCommand: " << e.what() << '\n';
   } catch (...) {
     std::lock_guard<std::mutex> lock(ctx.mutex);
     ++ctx.parse_errors;
+    std::cerr << "ReceiveCommand: unknown exception\n";
   }
 }
 void ReceiveRequest(const aorta_bytes_view_t* view,
@@ -163,20 +178,32 @@ void ReceiveRequest(const aorta_bytes_view_t* view,
       ctx.failed = true;
       return;
     }
-    const auto reply = ctx.protocol.RequestControl(request, Mono());
+    // Commit the proposed state only after its ACK was published.
+    auto proposed = ctx.protocol;
+    const auto reply = proposed.RequestControl(request, Mono());
     const auto wall = Wall();
     const auto bytes = pm::EncodeAck(reply, wall, ++ctx.ack_sequence);
-    Check(aorta_publisher_publish(ctx.ack, bytes.data(), bytes.size()),
-          "aorta_publisher_publish(/sdk/foot_humanoid/control/ack)");
-    ctx.controls.push_back({request, reply, wall});
+    const bool sent = Checked(aorta_publisher_publish(ctx.ack, bytes.data(), bytes.size()),
+                              "aorta_publisher_publish(/sdk/foot_humanoid/control/ack)");
+    if (sent)
+      ctx.protocol = std::move(proposed);
+    else
+      ctx.endpoint_failed = true;
+    ctx.controls.push_back({request, reply, wall, sent});
+  } catch (const std::exception& e) {
+    std::lock_guard<std::mutex> lock(ctx.mutex);
+    ++ctx.parse_errors;
+    std::cerr << "ReceiveRequest: " << e.what() << '\n';
   } catch (...) {
     std::lock_guard<std::mutex> lock(ctx.mutex);
     ++ctx.parse_errors;
+    std::cerr << "ReceiveRequest: unknown exception\n";
   }
 }
 void ReplyInfo(const aorta_bytes_view_t* view, aorta_service_request_t request,
                void* opaque) noexcept {
   auto& ctx = *static_cast<Context*>(opaque);
+  bool reply_consumed = false;
   try {
     if (!pm::ValidInfoRequest(Copy(view)))
       throw std::runtime_error("invalid info request");
@@ -184,13 +211,22 @@ void ReplyInfo(const aorta_bytes_view_t* view, aorta_service_request_t request,
     aorta_owned_bytes_slice_t slice{bytes.data(), bytes.size(), nullptr,
                                     nullptr};
     aorta_owned_bytes_view_t owned{&slice, 1, bytes.size()};
-    Check(aorta_service_request_reply(request, &owned),
-          "aorta_service_request_reply(get_robot_info)");
+    // This FFI call consumes the request on both success and failure.
+    reply_consumed = true;
+    const bool replied = Checked(aorta_service_request_reply(request, &owned),
+                                  "aorta_service_request_reply(get_robot_info)");
     std::lock_guard<std::mutex> lock(ctx.mutex);
-    ++ctx.info_requests;
+    if (replied)
+      ++ctx.info_requests;
+    else {
+      ++ctx.info_errors;
+      ctx.endpoint_failed = true;
+    }
   } catch (const std::exception& e) {
-    Checked(aorta_service_request_reply_error(request, e.what()),
-            "aorta_service_request_reply_error(get_robot_info)");
+    std::cerr << "ReplyInfo: " << e.what() << '\n';
+    if (!reply_consumed && !Checked(aorta_service_request_reply_error(request, e.what()),
+                                      "aorta_service_request_reply_error(get_robot_info)"))
+      ctx.endpoint_failed = true;
     std::lock_guard<std::mutex> lock(ctx.mutex);
     ++ctx.info_errors;
   }
@@ -210,7 +246,7 @@ void CheckEnvironment(const std::filesystem::path& directory,
   const char* effective = std::getenv("AORTA_GROUP");
   const char* uri = std::getenv("ZENOH_SESSION_CONFIG_URI");
   const char* logging = std::getenv("AORTA_LOG_TOPIC_ENABLED");
-  if (group.rfind("mock-sdkmain-", 0) != 0 ||
+  if (group.rfind(pm::aorta_contract::GROUP_PREFIX, 0) != 0 ||
       group.find_first_not_of(
           "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") !=
           std::string::npos ||
@@ -236,14 +272,21 @@ struct Resources {
   aorta_service_t service = 0;
   std::vector<aorta_sub_t> subscribers;
   std::vector<aorta_pub_t> publishers;
-  ~Resources() {
+  bool Close() {
+    bool ok = true;
     for (auto sub : subscribers)
-      Checked(aorta_subscriber_free(sub), "aorta_subscriber_free");
-    if (service) Checked(aorta_service_free(service), "aorta_service_free");
+      ok = Checked(aorta_subscriber_free(sub), "aorta_subscriber_free") && ok;
+    subscribers.clear();
+    if (service) ok = Checked(aorta_service_free(service), "aorta_service_free") && ok;
+    service = 0;
     for (auto pub : publishers)
-      Checked(aorta_publisher_free(pub), "aorta_publisher_free");
-    if (node) Checked(aorta_node_free(node), "aorta_node_free");
+      ok = Checked(aorta_publisher_free(pub), "aorta_publisher_free") && ok;
+    publishers.clear();
+    if (node) ok = Checked(aorta_node_free(node), "aorta_node_free") && ok;
+    node = 0;
+    return ok;
   }
+  ~Resources() { Close(); }
 };
 aorta_pub_t Publisher(Resources& r, const std::filesystem::path& schemas,
                       const std::string& key, const char* topic,
@@ -294,6 +337,7 @@ int main(int argc, char** argv) {
     if (aorta_abi_version() != AORTA_EXPECTED_ABI)
       throw std::runtime_error("Aorta ABI mismatch");
     Context context(Wall(), stream_ms * 1000000, prepare_ms * 1000000, reject);
+    context.apply_period_ns = static_cast<uint64_t>(1e9 / apply_hz);
     std::ifstream initial(directory / "initial-q.txt");
     std::array<float, pm::kSlots> q{};
     for (auto& v : q)
@@ -382,17 +426,19 @@ int main(int argc, char** argv) {
       const uint64_t state_period = static_cast<uint64_t>(1e9 / hz);
       const uint64_t apply_period = static_cast<uint64_t>(1e9 / apply_hz);
       sent.reserve(static_cast<size_t>(hz * seconds + 1));
-      while (!stopped && !context.failed && Mono() < finish) {
+      while (!stopped && !context.failed && !context.endpoint_failed && Mono() < finish) {
         const auto now = Mono();
         if (now >= next_apply) {
           std::lock_guard<std::mutex> lock(context.mutex);
           const auto wall = Wall();
-          if (context.protocol.Tick(Mono(), wall / 1000)) {
+          const auto tick = context.pending_tick_ns;
+          if (tick && wall >= tick && context.protocol.Tick(Mono(), tick / 1000)) {
             const auto& out = context.protocol.output();
             if (context.applied.size() >= kRows)
               context.failed = true;
             else
-              context.applied.push_back({out.session, out.sequence, wall});
+              context.applied.push_back({out.session, out.sequence, tick, wall});
+            context.pending_tick_ns = 0;
           }
           Advance(next_apply, apply_period, now);
         }
@@ -437,14 +483,8 @@ int main(int argc, char** argv) {
       endpoint_rc = 2;
       std::cerr << e.what() << '\n';
     }
-    // Free subscriber/RPC handles first, so every captured callback is
-    // complete.
-    for (auto sub : resources.subscribers)
-      if (!Checked(aorta_subscriber_free(sub), "aorta_subscriber_free")) endpoint_rc = 2;
-    resources.subscribers.clear();
-    if (resources.service && !Checked(aorta_service_free(resources.service), "aorta_service_free"))
-      endpoint_rc = 2;
-    resources.service = 0;
+    // Drain callbacks and close every resource before deciding the verdict.
+    if (!resources.Close() || context.endpoint_failed) endpoint_rc = 2;
     std::ofstream states(directory / "states.csv"),
         received(directory / "received.csv");
     std::ofstream applied(directory / "applied.csv"),
@@ -463,17 +503,17 @@ int main(int argc, char** argv) {
                << r.state_real_us << ',' << r.created_us << ',' << r.send_us
                << ',' << r.received_ns << ',' << r.accepted_ns << ',' << r.valid
                << '\n';
-    applied << "session_id,sequence,first_output_ns\n";
+    applied << "session_id,sequence,first_output_ns,actual_dispatch_ns\n";
     for (const auto& r : context.applied)
-      applied << r.session << ',' << r.sequence << ',' << r.wall_ns << '\n';
+      applied << r.session << ',' << r.sequence << ',' << r.wall_ns << ',' << r.dispatch_ns << '\n';
     controls << "request_id,client_id,operation,lease_id,accepted,error_code,"
-                "reason,wall_ns\n";
+                "reason,wall_ns,ack_sent\n";
     for (const auto& r : context.controls)
       controls << Quoted(r.request.request_id) << ','
                << Quoted(r.request.client_id) << ',' << r.request.operation
                << ',' << Quoted(r.ack.lease_id) << ',' << r.ack.accepted << ','
                << r.ack.error << ',' << Quoted(r.ack.reason) << ',' << r.wall_ns
-               << '\n';
+               << ',' << r.ack_sent << '\n';
     states.flush();
     received.flush();
     applied.flush();
@@ -489,6 +529,8 @@ int main(int argc, char** argv) {
            << ",\"info_errors\":" << context.info_errors
            << ",\"overwritten_before_apply\":" << context.protocol.overwritten()
            << ",\"duration_ns\":" << Mono() - start
+           << ",\"apply_period_ns\":" << context.apply_period_ns
+           << ",\"control_phase_at_stop\":" << context.protocol.status().phase
            << ",\"stopped_by_signal\":" << (stopped ? "true" : "false")
            << "}\n";
     result.flush();

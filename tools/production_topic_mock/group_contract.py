@@ -9,7 +9,11 @@ _declaration = re.search(r"MAX_GROUP_LEN\s*=\s*(\d+)\s*;",
 if _declaration is None:
     raise RuntimeError("missing pinned Aorta MAX_GROUP_LEN declaration")
 MAX_GROUP_LEN = int(_declaration[1])
-GROUP_PREFIX = "mock-sdkmain-"
+_prefix = re.search(r'GROUP_PREFIX\[\]\s*=\s*"([^"]+)"',
+                    Path(__file__).with_name("aorta_contract.h").read_text())
+if _prefix is None:
+    raise RuntimeError("missing pinned Mock group prefix declaration")
+GROUP_PREFIX = _prefix[1]
 
 
 def validate_group(group):

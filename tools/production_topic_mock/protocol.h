@@ -8,6 +8,15 @@
 
 namespace production_mock {
 constexpr size_t kSlots = 31;
+struct JointLimits {
+  float q_min, q_max, dq_min, dq_max, tau_min, tau_max;
+  float kp_min, kp_max, kd_min, kd_max;
+};
+// Synthetic capabilities, shared by RobotInfo and admission. Real robots
+// supply their per-joint firmware limits through this same public contract.
+inline constexpr JointLimits kJointLimits{-10.f, 10.f, -50.f, 50.f, -100.f,
+                                           100.f, 0.f, 600.f, 0.f, 60.f};
+uint64_t NextApplyTick(uint64_t accepted_wall_ns, uint64_t period_ns);
 struct Request {
   uint32_t version = 0;
   int operation = 0;
@@ -53,6 +62,7 @@ class Protocol {
 
  private:
   Ack Reply(const Request&, int error, const std::string& reason) const;
+  void InvalidateApplied();
   void Clear();
   Status status_;
   Output output_;

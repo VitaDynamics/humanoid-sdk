@@ -31,6 +31,8 @@ int main() {
     aorta_contract::ValidateGroupLength(std::string(aorta_contract::MAX_GROUP_LEN+1, 'a'));
   } catch (const std::invalid_argument&) { overlong_rejected=true; }
   assert(overlong_rejected);
+  assert(NextApplyTick(2000001,2000000)==4000000);
+  assert(NextApplyTick(4000000,2000000)==4000000);
   Protocol p(10,100,50);
   Request r{2,1,"req","client","","EXTERNAL"};
   for (const uint32_t version : {uint32_t{2}, uint32_t{0x80000002},
@@ -71,8 +73,10 @@ int main() {
   assert(p.Accept(cmd,1022)); cmd.sequence=3; assert(p.Accept(cmd,1023));
   assert(p.overwritten()==1); assert(p.Tick(1024,2002)); assert(p.output().sequence==3);
   p.Watchdog(1123); assert(p.status().phase==5);
+  assert(p.output().session==0 && p.output().sequence==0 && p.output().first_output_us==0);
   cmd.sequence=4; assert(p.Accept(cmd,1124) && p.status().phase==4);
   r.operation=3; assert(p.RequestControl(r,1125).accepted); assert(p.status().phase==0);
+  assert(p.output().session==0 && p.output().sequence==0 && p.output().first_output_us==0);
   assert(!p.Tick(1126,2003)); assert(!p.Accept(cmd,1127));
   assert(p.RequestControl(r,1128).accepted);
   r.operation=1; r.lease_id=""; r.version=1; assert(p.RequestControl(r,1130).error==1001);
@@ -82,6 +86,19 @@ int main() {
   Protocol rejected(20,100,50,1); assert(!rejected.RequestControl(r,1200).accepted);
   Protocol exhausted(std::numeric_limits<uint64_t>::max(),100,50);
   assert(exhausted.RequestControl(r,1200).error==1009);
+  Protocol limits(50,1000,1000);
+  Request lr{2,1,"limits","client","","EXTERNAL"};
+  auto la=limits.RequestControl(lr,1000); assert(la.accepted);
+  lr.operation=2; lr.lease_id=la.lease_id; assert(limits.RequestControl(lr,1001).accepted);
+  Command lc; lc.session=limits.status().generation; lc.sequence=1; lc.input_state_real_us=1;
+  lc.dq[0]=kJointLimits.dq_max; lc.tau[0]=kJointLimits.tau_min;
+  assert(limits.Accept(lc,1002));
+  ++lc.sequence; lc.dq[0]=kJointLimits.dq_min; lc.tau[0]=kJointLimits.tau_max;
+  assert(limits.Accept(lc,1003));
+  ++lc.sequence; lc.dq[0]=kJointLimits.dq_max+1; assert(!limits.Accept(lc,1004));
+  lc.dq[0]=kJointLimits.dq_min-1; assert(!limits.Accept(lc,1005));
+  lc.dq[0]=0; lc.tau[0]=kJointLimits.tau_max+1; assert(!limits.Accept(lc,1006));
+  lc.tau[0]=kJointLimits.tau_min-1; assert(!limits.Accept(lc,1007));
 }
 '''
 
@@ -166,10 +183,33 @@ def build(args):
     checks.write_text(PROTOCOL_CHECKS)
     run([*flags, checks, directory / "protocol.o", directory / "request.o",
          "-o", directory / "protocol-checks"])
+    # Generated request fixtures cover callback admission/ACK transaction
+    # failures without starting transport or depending on private wire layouts.
+    import flatbuffers
+    request_type = importlib.import_module("locomotion_sdk.ControlRequest").ControlRequestT
+    fixtures = []
+    for name, identity in (("valid", "client"), ("missing", None), ("long", "x" * 257)):
+        request = request_type()
+        request.protocolVersion, request.operation = 2, 1
+        request.requestId, request.clientId, request.actionName = "req", identity, "EXTERNAL"
+        builder = flatbuffers.Builder(1024)
+        builder.Finish(request.Pack(builder))
+        path = generated / ("callback-" + name + ".bin")
+        path.write_bytes(builder.Output())
+        fixtures.append(path)
+    request = importlib.import_module("aorta.services.humanoid_locomotion.GetRobotInfoRequest").GetRobotInfoRequestT()
+    builder = flatbuffers.Builder(128)
+    builder.Finish(request.Pack(builder))
+    path = generated / "callback-info.bin"
+    path.write_bytes(builder.Output())
+    fixtures.append(path)
+    run([*flags, HERE / "callback_checks.cpp", *objects[1:], core,
+         "-Wl,-rpath," + str(directory), "-o", directory / "callback-checks"])
     if args.run_protocol_checks:
         if args.target_arch != platform.machine():
             raise ValueError("never execute cross-built ARM checks on the build host")
         run([directory / "protocol-checks"])
+        run([directory / "callback-checks", *fixtures])
     result = {"mode": "production-topics", "target_arch": args.target_arch, "versions": versions,
               "schemas": schema_hashes, "aorta_abi": manifest["aorta_abi_version"],
               "flatbuffers_archive_sha256": original.FB_SHA, "compiler": subprocess.check_output([args.cxx, "--version"], text=True).splitlines()[0],
@@ -178,6 +218,8 @@ def build(args):
               "binary_sha256": digest(binary), "core_path": str(core), "core_sha256": digest(core),
               "protocol_checks_sha256": digest(directory / "protocol-checks"),
               "protocol_checks_executed": args.run_protocol_checks,
+              "callback_checks_sha256": digest(directory / "callback-checks"),
+              "callback_checks_executed": args.run_protocol_checks,
               "generated_sha256": {str(p.relative_to(directory)): digest(p) for p in sorted(generated.iterdir()) if p.is_file()},
               "aorta_ipc_or_device_validation": False}
     (directory / "build.json").write_text(json.dumps(result, indent=2) + "\n")

@@ -8,10 +8,42 @@ from pathlib import Path
 import struct
 import time
 
+MAX_AUXILIARY_RECORDS = 1000000
+
+
+def auxiliary_capture_budget(spec, seconds):
+    publications = len(spec.get("joy", []))
+    for side in ("left", "right"):
+        if side in spec:
+            cfg = spec[side]
+            roles = ("state", "info", *(["touch"] if cfg["kind"] == "brainco" else []))
+            publications += sum(math.ceil(seconds * cfg[role + "_hz"]) + 1 for role in roles)
+    commands = spec.get("command_record_budget", MAX_AUXILIARY_RECORDS - publications)
+    if type(commands) is not int or commands < 0 or publications + commands > MAX_AUXILIARY_RECORDS:
+        raise ValueError("auxiliary publication/Joy/command budget exceeds capture capacity")
+    return {"max_records": MAX_AUXILIARY_RECORDS,
+            "publication_bound": publications, "command_bound": commands}
+
+
+class CaptureLog(list):
+    """Reserve publication/Joy capacity separately from unknown command traffic."""
+    def __init__(self, budget):
+        super().__init__()
+        self.budget, self.command_records, self.error = budget, 0, None
+
+    def append(self, record):
+        command = record["kind"] == "command"
+        if len(self) >= self.budget["max_records"] or (
+                command and self.command_records >= self.budget["command_bound"]):
+            self.error = "auxiliary capture/command budget exhausted; no silent overwrite"
+            raise RuntimeError(self.error)
+        super().append(record)
+        self.command_records += command
+
 
 def validate_auxiliary(spec):
     """Require explicit rates/Info fixtures; no invented real-device frequency."""
-    if not isinstance(spec, dict) or set(spec) - {"left", "right", "joy"}:
+    if not isinstance(spec, dict) or set(spec) - {"left", "right", "joy", "command_record_budget"}:
         raise ValueError("auxiliary fixture supports only left/right/joy")
     for side in ("left", "right"):
         if side not in spec:
@@ -49,6 +81,8 @@ def validate_auxiliary(spec):
             raise ValueError("Joy buttons must be integer levels0/1")
     if len(spec.get("joy", [])) > 100000:
         raise ValueError("Joy fixture too large")
+    if "command_record_budget" in spec and (type(spec["command_record_budget"]) is not int or spec["command_record_budget"] < 0):
+        raise ValueError("command_record_budget must be a nonnegative integer")
     return spec
 
 
@@ -105,7 +139,8 @@ def run_auxiliary(output, fixture, seconds):
     if node.group() != group:
         node.close()
         raise RuntimeError("effective auxiliary group differs")
-    streams, endpoints, log = [], [], []
+    streams, endpoints = [], []
+    log = CaptureLog(auxiliary_capture_budget(spec, seconds))
     dropped = 0
     start = time.monotonic()
     stopped = False
@@ -211,8 +246,6 @@ def run_auxiliary(output, fixture, seconds):
                         endpoint["rejected"] += 1
                         log.append({"kind": "command", "side": endpoint["side"], "received_us": received,
                                     "accepted": False, "error": str(exc)})
-                    if len(log) >= 1000000:
-                        raise RuntimeError("auxiliary capture full; no silent overwrite")
             for stream in streams:
                 if now < stream["next"]:
                     continue
@@ -274,8 +307,6 @@ def run_auxiliary(output, fixture, seconds):
                 joy[0].publish_bytes(pack_object(obj, joy_index, wall))
                 log.append({"kind": "joy", "sequence": joy_index, "wall_ns": wall, "at_ms_requested": frame["at_ms"]})
                 joy_index += 1
-            if len(log) >= 1000000:
-                raise RuntimeError("auxiliary capture full; no silent overwrite")
             time.sleep(.0005)
     finally:
         for sig, handler in old_handlers.items():
@@ -285,4 +316,5 @@ def run_auxiliary(output, fixture, seconds):
         node.close()
         (output / "auxiliary.json").write_text(json.dumps({"synthetic": True, "records": log,
             "requested": spec, "pull_dropped_count": dropped,
+            "capture_budget": log.budget, "capture_error": log.error,
             "limits": ["no CAN/device ACK/physical touch", "no set_touch RPC", "Python generator timing is measured source jitter, not native EE timing", "ring overflow cannot reconstruct unobserved commands"]}, indent=2) + "\n")

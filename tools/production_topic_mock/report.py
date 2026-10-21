@@ -45,12 +45,34 @@ def frequency(records, key):
     return (len(times) - 1) * 1e9 / (times[-1] - times[0])
 
 
+def measured_stats(values, label, anomalies):
+    good = []
+    for i, value in enumerate(values):
+        if not math.isfinite(value) or value < 0:
+            anomalies.append({"measurement": label, "index": i, "value_ms": value})
+        else:
+            good.append(value)
+    return stats(good)
+
+
+def measured_frequency(records, key, label, anomalies):
+    try:
+        return frequency(records, key)
+    except ValueError as exc:
+        anomalies.append({"measurement": label, "reason": str(exc),
+                          "raw_timestamps_ns": [r[key] for r in records]})
+        return None
+
+
 def analyze(directory, client_log=None):
     directory = Path(directory)
     sent_rows = rows(directory / "states.csv")
     received_rows = rows(directory / "received.csv")
     applied_rows = rows(directory / "applied.csv")
     sent = index(sent_rows, ("state_id",))
+    # Rejected retransmissions can repeat a received identity. Accepted
+    # identities and client-cycle identities must still remain unique.
+    received_keys = {(r["session_id"], r["sequence"]) for r in received_rows}
     valid_rows = [r for r in received_rows if r["valid"] == 1]
     accepted = index(valid_rows, ("session_id", "sequence"))
     applied = index(applied_rows, ("session_id", "sequence"))
@@ -112,7 +134,8 @@ def analyze(directory, client_log=None):
     missing = sorted(accepted.keys() - applied.keys())
     metadata = json.loads((directory / "mock-result.json").read_text())
     measured = bool(accepted) and bool(sent) and bool(applied)
-    complete = measured and not clock_errors and not unmatched and not metadata.get("capture_overflow") and not metadata.get("info_errors") and not metadata.get("endpoint_rc")
+    client_not_received = sorted(client.keys() - received_keys)
+    client_rejected = sorted((client.keys() & received_keys) - accepted.keys())
     sequence_lag = [r["sequence"] - sent[(r["input_state_id"],)]["applied_sequence"] for r in valid_rows
                     if (r["input_state_id"],) in sent and sent[(r["input_state_id"],)]["applied_session_id"] == r["session_id"]
                     and 0 < sent[(r["input_state_id"],)]["applied_sequence"] <= r["sequence"]]
@@ -122,8 +145,6 @@ def analyze(directory, client_log=None):
         if k in applied:
             first_echo.setdefault(k, r["publish_ns"])
     echo_delay = [(stamp - applied[k]["first_output_ns"]) / 1e6 for k, stamp in first_echo.items()]
-    if any(v < 0 for v in echo_delay):
-        raise ValueError("state echo precedes synthetic output")
     cycles = [r for r in client.values() if r.get("cycle_start_monotonic_ns", 0) > 0]
     cycle_intervals = [(b["cycle_start_monotonic_ns"] - a["cycle_start_monotonic_ns"]) / 1e6 for a, b in zip(cycles, cycles[1:])]
     auxiliary = None
@@ -133,30 +154,55 @@ def analyze(directory, client_log=None):
         for r in raw["records"]:
             if r["kind"] == "publish":
                 streams.setdefault(r["side"] + "/" + r["role"], []).append(r)
-        auxiliary = {"synthetic": True, "streams": {k: {"n": len(v), "hz": frequency(v, "wall_ns")} for k, v in streams.items()},
+        auxiliary = {"synthetic": True, "streams": {k: {"n": len(v), "hz": measured_frequency(v, "wall_ns", "aux/" + k, clock_errors)} for k, v in streams.items()},
                      "commands_observed": sum(r["kind"] == "command" for r in raw["records"]),
                      "commands_rejected": sum(r["kind"] == "command" and not r["accepted"] for r in raw["records"]),
                      "sequence_gaps_observed": sum(r.get("sequence_gap") or 0 for r in raw["records"]),
                      "joy_frames_published": sum(r["kind"] == "joy" for r in raw["records"]),
+                     "capture_budget": raw.get("capture_budget"),
+                     "capture_error": raw.get("capture_error"),
                      "limits": raw["limits"]}
-    return {"status": "MEASURED_SYNTHETIC_ONLY" if complete else "INCOMPLETE_OR_CLOCK_ANOMALY",
+    dispatch_delay = [(r["actual_dispatch_ns"] - r["first_output_ns"]) / 1e6
+                      for r in applied_rows if "actual_dispatch_ns" in r]
+    result = {"status": "INCOMPLETE_OR_CLOCK_ANOMALY",
             "clock": "same-host CLOCK_REALTIME ns; no offsets or cross-clock conversion",
             "counts": {"states": len(sent), "commands_received": len(received_rows), "commands_accepted": len(accepted),
                        "commands_rejected": len(received_rows) - len(valid_rows), "commands_applied": len(applied),
-                       "applied_echo_observed": len(echo_keys), "accepted_not_applied": len(missing)},
+                       "applied_echo_observed": len(echo_keys), "accepted_not_applied": len(missing),
+                       "client_sent": len(client) if client_log else None,
+                       "client_not_received": len(client_not_received) if client_log else None,
+                       "client_received_rejected": len(client_rejected) if client_log else None,
+                       "parse_errors": metadata.get("parse_errors", 0)},
+            "client_trace": "PROVIDED" if client_log else "NOT_MEASURED",
+            "client_not_received": [list(k) for k in client_not_received],
+            "client_received_rejected": [list(k) for k in client_rejected],
             "accepted_not_applied": [list(k) for k in missing], "unmatched_input_states": unmatched,
             "clock_anomalies": clock_errors, "segments": {k: stats(v) for k, v in durations.items()},
-            "mock_state_hz": frequency(sent_rows, "publish_ns"), "accepted_command_hz": frequency(valid_rows, "received_ns"),
-            "command_arrival_interval": stats(intervals), "joined": joined, "mock": metadata,
-            "client_cycle_hz": frequency(cycles, "cycle_start_monotonic_ns"), "client_cycle_start_interval": stats(cycle_intervals),
-            "applied_echo_delay": stats(echo_delay),
+            "mock_state_hz": measured_frequency(sent_rows, "publish_ns", "state_publication", clock_errors),
+            "accepted_command_hz": measured_frequency(valid_rows, "received_ns", "command_arrival", clock_errors),
+            "command_arrival_interval": measured_stats(intervals, "command_arrival_interval", clock_errors), "joined": joined, "mock": metadata,
+            "client_cycle_hz": measured_frequency(cycles, "cycle_start_monotonic_ns", "client_cycle", clock_errors),
+            "client_cycle_start_interval": measured_stats(cycle_intervals, "client_cycle_interval", clock_errors),
+            "applied_echo_delay": measured_stats(echo_delay, "applied_echo_delay", clock_errors),
+            "synthetic_tick_dispatch_delay": measured_stats(dispatch_delay, "synthetic_tick_dispatch_delay", clock_errors),
             "applied_sequence_lag": {"n": len(sequence_lag), "unit": "commands", "values": sequence_lag,
                                      "max": max(sequence_lag) if sequence_lag else None},
             "auxiliary": auxiliary,
             "frequency_policy": "Report observed rates/counts/intervals; no new pass threshold. Arrival intervals are not client tick-start intervals.",
             "unmeasured": ["real_locomotion", "CAN", "hardware_output", "client_tick_starts_without_client_trace"],
-            "G_semantics": "first configurable synthetic apply tick; never real robot/motor output",
+            "G_semantics": "first eligible CLOCK_REALTIME synthetic grid tick after admission; actual dispatch is recorded separately, never real robot/motor output",
             "overlap": "publish-call and native substage durations overlap transport; do not add percentiles"}
+    complete = (measured and not clock_errors and not unmatched and not client_not_received
+                and len(received_rows) == len(valid_rows)
+                and not metadata.get("capture_overflow") and not metadata.get("parse_errors")
+                and not metadata.get("info_errors") and not metadata.get("endpoint_rc")
+                and not (metadata.get("stopped_by_signal") and metadata.get("control_phase_at_stop") != 0)
+                and not (auxiliary and (auxiliary["capture_error"] or auxiliary["commands_rejected"])))
+    result["status"] = "MEASURED_SYNTHETIC_ONLY" if complete else "INCOMPLETE_OR_CLOCK_ANOMALY"
+    result["stop_observation"] = {"stopped_by_signal": metadata.get("stopped_by_signal"),
+                                  "control_phase_at_stop": metadata.get("control_phase_at_stop"),
+                                  "semantics": "a signal with active/unknown ownership is incomplete; idle shutdown still does not prove a full source window"}
+    return result
 
 
 def write_report(directory, client_log=None):
