@@ -68,8 +68,9 @@ BodyCmd is automatically created. `client-environment.json` gives `SDK_GROUP`,
 `AORTA_GROUP` and the private `ZENOH_SESSION_CONFIG_URI`. The default group is
 unique `mock-sdkmain-*`; `default` and other production names are rejected.
 Both sides are peers, multicast/gossip/SHM disabled, all endpoints stay on
-`127.0.0.1`. The Mock listens on its assigned port; clients actively connect
-to that peer and listen on `tcp/127.0.0.1:0`. Each client Node therefore gets
+`127.0.0.1`. The Mock and optional EE/Joy auxiliary listen on their assigned
+fixed ports. Clients actively connect only to those peers and listen on
+`tcp/127.0.0.1:0`. Each client Node therefore gets
 its own temporary listener, including two Nodes inside one customer process.
 The C++ endpoint also checks its exact canonical profile and
 transport environment before constructing any node. No robot session/profile
@@ -91,7 +92,9 @@ typed RobotInfo. No EXTERNAL request or BodyCmd is sent. To reproduce the old
 fixed-listener failure, repeat with a **different output directory** and append
 `--legacy-fixed-listener` to the fixture's client argv. That explicit negative
 control changes only its new capture's client profile and expects the second
-Node to fail with `INTERNAL(-5)` / `Address already in use`. It preserves the
+Node to fail with `InternalError` containing `Address already in use`; the
+numeric error code is recorded as a diagnostic, not used to identify the
+failure. It preserves the
 original generated profile as `client-session.generated.json`. An unrelated
 error or unexpected success fails the fixture. Neither result is a latency,
 customer-inference or device acceptance result.
@@ -126,7 +129,7 @@ cancels or stops a real robot process. Preserve the first failed capture; do
 not retry it into a PASS. A source-only run has missing client stages and must
 not be described as a control-loop performance PASS.
 
-The default group retains the `mock-sdkmain-` prefix and a112-bit random
+The default group retains the `mock-sdkmain-` prefix and a 112-bit random
 URL-safe suffix. The complete name fits Aorta2026.10.20's32 UTF-8 byte limit.
 Both prechecks use the pinned `MAX_GROUP_LEN` declaration in
 `aorta_contract.h`; custom names over the limit report actual and maximum
@@ -341,10 +344,14 @@ rejections and accepted-but-unapplied commands are retained. Percentiles are
 independent and cannot be added. No new latency/loss/rate acceptance threshold
 is introduced.
 
-Local source-only tests:
+`make check` discovers tests under `tests/`, including real runner profile
+generation and `validate_client_environment` checks with external processes
+stubbed. These exercise the production functions, not real socket/Node I/O.
+`tools/production_topic_mock/test_review.py` and `test_group_contract.py` are
+outside that discovery root and must be run separately:
 
 ```bash
-python -m unittest discover -s tests -p 'test_production_topic_mock*.py' -v
+make check
 python -m unittest tools.production_topic_mock.test_group_contract tools.production_topic_mock.test_review -v
 ```
 
@@ -372,7 +379,7 @@ below; this change adds no admission threshold or new production safety check.
 |---|---|---|
 | Mock uses Aorta and synthetic output, with no CAN/IPCF driver calls or service/slot operations. | `build.py:168-181`, `protocol.cpp:146`, `mock.cpp:372-410` | Build/protocol artifacts and source inspection; no physical-bus or syscall-isolation claim. Arbitrary client code is outside this guarantee. |
 | Explicit production-topic mode; clients require opt-in and direct shell launchers are refused. | `run.py:96-116` | `IsolationTests.test_production_mode_must_be_explicit`, `test_client_requires_explicit_option`, `test_customer_shell_is_not_a_safe_client_entry`, `test_help_has_no_sdk_import_or_process_execution`. |
-| Private `mock-sdkmain-*` group, random default and the pinned32-byte limit; default/production names refused. | `group_contract.py:19-33`, `aorta_contract.h`, `mock.cpp:243-268` | `IsolationTests.test_default_and_unsafe_groups_rejected` and the five `test_group_contract` boundary cases. C++ also validates before Node creation. |
+| Private `mock-sdkmain-*` group, random default and the pinned 32-byte limit; default/production names refused. | `group_contract.py:19-33`, `aorta_contract.h`, `mock.cpp:243-268` | `IsolationTests.test_default_and_unsafe_groups_rejected` and the five `test_group_contract` boundary cases. C++ also validates before Node creation. |
 | Loopback peers only; no router, multicast, gossip or shared memory; inherited Aorta/Zenoh overrides replaced only in children. | `run.py:33-54`, `mock.cpp:234-268` | `IsolationTests.test_mock_profile_has_no_router_or_discovery`, `test_client_only_connects_to_assigned_loopback_peer`, `test_group_alias_and_uri_only_change_child`; explicit real multi-Node fixture. C++ requires its exact runner-generated server profile. |
 | Architecture, binary, core and generated-schema identities checked before launch. | `run.py:57-77`, `mock.cpp:337-338` | `BuildIdentityTests.test_generated_schema_tampering_is_rejected_before_launch`, `test_core_and_binary_identity_are_required`. This checks identity, not artifact trust from an unknown supplier. |
 | Bounded capture/rates/duration; previous captures are not overwritten. | `run.py:96-109,234-235`, `mock.cpp:81,326-336`, `__init__.py:auxiliary_capture_budget` | `IsolationTests.test_capture_capacity_includes_cancel_grace`, `test_nonfinite_and_unbounded_rates_rejected`, `ReportReviewTest` capacity cases. These are resource bounds, not a latency/loss SLA. |

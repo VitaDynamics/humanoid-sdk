@@ -39,7 +39,7 @@ def run(output, *, legacy_fixed_listener=False):
             try:
                 command = PullController(group=group, node_name="mock-multinode-command")
             except InternalError as exc:
-                if not legacy_fixed_listener or exc.code != -5 or "Address already in use" not in str(exc):
+                if not legacy_fixed_listener or "Address already in use" not in str(exc):
                     raise
                 result["expected_listener_failure"] = {"code": int(exc.code), "error": str(exc)}
                 result["status"] = "PASS_EXPECTED_OLD_FIXED_LISTENER_FAILURE"

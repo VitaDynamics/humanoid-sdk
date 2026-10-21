@@ -2,12 +2,74 @@
 import argparse
 import csv
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
 from tools.production_topic_mock import report, run
+
+
+class GeneratedProfileTests(unittest.TestCase):
+    """Exercise the real runner/config validators; stub only external I/O."""
+
+    def generate(self, *, auxiliary=False):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        output = root / "capture"
+        argv = ["--mode", "production-topics", "--build-dir", str(root / "build"),
+                "--output", str(output), "--group", "mock-sdkmain-generated",
+                "--allow-client"]
+        if auxiliary:
+            fixture = root / "auxiliary.json"
+            fixture.write_text(json.dumps({"joy": [{"at_ms": 0, "axes": [], "buttons": []}]}))
+            argv += ["--auxiliary-fixture", str(fixture)]
+        argv += ["--client-command", "python", "never-executed.py"]
+        process = mock.Mock(returncode=0)
+        process.poll.return_value = process.wait.return_value = 0
+        manifest = {"core_path": str(root / "core.so")}
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(run, "verify_build", return_value=manifest), \
+             mock.patch.object(run, "port", side_effect=[24001, 24003]), \
+             mock.patch.object(run.subprocess, "Popen", return_value=process) as launch, \
+             mock.patch.object(run, "write_report", return_value={"status": "NOT_MEASURED_UNIT_FIXTURE"}):
+            self.assertEqual(run.run(run.parser().parse_args(argv)), 0)
+        client_env = next(call.kwargs["env"] for call in launch.call_args_list
+                          if call.args[0] == ["python", "never-executed.py"])
+        return output, client_env
+
+    def test_run_generates_exact_ephemeral_client_listener(self):
+        for auxiliary in (False, True):
+            with self.subTest(auxiliary=auxiliary):
+                output, _ = self.generate(auxiliary=auxiliary)
+                config = json.loads((output / "client-session.json").read_text())
+                self.assertEqual(config["listen"]["endpoints"], ["tcp/127.0.0.1:0"])
+                expected = ["tcp/127.0.0.1:24001"] + (["tcp/127.0.0.1:24003"] if auxiliary else [])
+                self.assertEqual(config["connect"]["endpoints"], expected)
+
+    def test_real_client_validator_accepts_run_generated_profile(self):
+        for auxiliary in (False, True):
+            with self.subTest(auxiliary=auxiliary):
+                output, env = self.generate(auxiliary=auxiliary)
+                with mock.patch.dict(os.environ, env, clear=True):
+                    self.assertEqual(run.validate_client_environment(output), "mock-sdkmain-generated")
+
+    def test_real_client_validator_rejects_fixed_listener(self):
+        output, env = self.generate()
+        (output / "client-session.json").write_text(run.session_config(24002, 24001))
+        with mock.patch.dict(os.environ, env, clear=True), self.assertRaisesRegex(ValueError, "peer profile"):
+            run.validate_client_environment(output)
+
+    def test_real_auxiliary_validator_still_requires_fixed_listener(self):
+        output, client_env = self.generate(auxiliary=True)
+        env = run.child_environment({}, client_env["AORTA_GROUP"], output / "auxiliary-session.json")
+        with mock.patch.dict(os.environ, env, clear=True):
+            run.validate_worker_environment(output)
+            (output / "auxiliary-session.json").write_text(run.session_config(0))
+            with self.assertRaisesRegex(ValueError, "auxiliary profile"):
+                run.validate_worker_environment(output)
 
 
 class IsolationTests(unittest.TestCase):

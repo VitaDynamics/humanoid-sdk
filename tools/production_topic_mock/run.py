@@ -35,7 +35,7 @@ def session_config(port, connect_port=None):
     for index, value in enumerate((port, *connections)):
         if value is not None and (isinstance(value, bool) or not isinstance(value, int) or
                                   not (1024 <= value <= 65535 or (index == 0 and value == 0))):
-            raise ValueError("loopback port must be in1024..65535; only listen may use zero")
+            raise ValueError("loopback port must be in 1024..65535; only listen may use zero")
     config = {"mode": "peer", "scouting": {"multicast": {"enabled": False}, "gossip": {"enabled": False}},
               "transport": {"shared_memory": {"enabled": False}, "unicast": {"compression": {"enabled": False}}},
               "listen": {"endpoints": [f"tcp/127.0.0.1:{port}"]},
@@ -140,7 +140,9 @@ def validate_worker_environment(output):
     raw = (output / "auxiliary-session.json").read_text()
     c = json.loads(raw)
     endpoint = c["listen"]["endpoints"][0]
-    if not endpoint.startswith("tcp/127.0.0.1:") or raw != session_config(int(endpoint.rsplit(":", 1)[1])):
+    if (not endpoint.startswith("tcp/127.0.0.1:") or
+            int(endpoint.rsplit(":", 1)[1]) == 0 or
+            raw != session_config(int(endpoint.rsplit(":", 1)[1]))):
         raise ValueError("auxiliary profile is not canonical loopback-only")
     if (output / "auxiliary.json").exists():
         raise ValueError("refusing to overwrite auxiliary capture")
@@ -156,11 +158,9 @@ def validate_client_environment(output):
     if request["group"] != group:
         raise ValueError("self-test request group differs")
     profile = (output / "client-session.json").read_text()
-    cfg = json.loads(profile)
     ports = [json.loads((output / name).read_text())["listen"]["endpoints"][0].rsplit(":", 1)[1]
              for name in ("mock-session.json", "auxiliary-session.json") if (output / name).exists()]
-    listen = cfg["listen"]["endpoints"][0]
-    if not listen.startswith("tcp/127.0.0.1:") or profile != session_config(int(listen.rsplit(":", 1)[1]), [int(p) for p in ports]):
+    if profile != session_config(0, [int(p) for p in ports]):
         raise ValueError("self-test peer profile is not assigned loopback-only")
     allowed = {"AORTA_GROUP", "AORTA_LOG_TOPIC_ENABLED", "ZENOH_SESSION_CONFIG_URI"}
     if any(k.startswith(("AORTA_", "ZENOH_")) and k not in allowed for k in os.environ):

@@ -43,7 +43,7 @@ class MultiNodeFixtureTests(unittest.TestCase):
             raise InternalError("Address already in use")
         output, closed, result = self.fixture(old, negative=True)
         self.assertEqual(result["status"], "PASS_EXPECTED_OLD_FIXED_LISTENER_FAILURE")
-        self.assertEqual(result["expected_listener_failure"]["code"], -5)
+        self.assertIn("Address already in use", result["expected_listener_failure"]["error"])
         self.assertEqual(closed, ["state"])
         self.assertEqual(json.loads((output / "client-session.generated.json").read_text())["listen"]["endpoints"], ["tcp/127.0.0.1:0"])
         self.assertEqual(json.loads((output / "client-session.json").read_text())["listen"]["endpoints"], ["tcp/127.0.0.1:24002"])
