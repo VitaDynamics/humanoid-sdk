@@ -237,10 +237,8 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
             "observer_monotonic_ns")
         try:
             node = node_factory("brainco_hil_observer", group)
-            # Pinned Core resolves AORTA_GROUP and may ignore the constructor
-            # argument. Refuse silently observing another group.
-            if node.group() != group:
-                raise ValueError("effective Aorta group differs from --group; verify AORTA_GROUP/profile")
+            from ._group import require_node_group
+            require_node_group(node, group)
             for kind, topic in TOPICS.items():
                 if pull_feedback:
                     pulls[kind] = node.create_subscriber_pull(topic, depth=1,

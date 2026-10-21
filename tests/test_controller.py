@@ -120,10 +120,13 @@ class ExternalControllerTest(unittest.TestCase):
         class FakeNode:
             def __init__(self, name, group) -> None:
                 self.name = name
-                self.group = group
+                self._group = group
                 self.publisher_calls = []
                 self.subscriber_calls = []
                 self.close_count = 0
+
+            def group(self):
+                return self._group
 
             def create_publisher_typed(self, schema_meta, topic, *, qos):
                 publisher = FakePublisher()
@@ -161,7 +164,7 @@ class ExternalControllerTest(unittest.TestCase):
                 node_name="sdk-node", group="robot-domain"
             )
 
-        self.assertEqual((transport.node.name, transport.node.group), ("sdk-node", "robot-domain"))
+        self.assertEqual((transport.node.name, transport.node.group()), ("sdk-node", "robot-domain"))
         self.assertEqual(
             [
                 (schema, topic, qos)

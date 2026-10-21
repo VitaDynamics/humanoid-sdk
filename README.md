@@ -147,6 +147,19 @@ a router, but the robot-facing address, listener, namespace and authentication
 must all match the deployment. Missing authentication is an installation
 blocker; do not remove it to connect.
 
+### Effective Aorta group
+
+Pinned Aorta 2026.10.20 Core selects its group from `AORTA_GROUP` (unset means
+`default`), even when a different group is passed to `Node`. Before creating
+nodes, set `AORTA_GROUP` to the same value as the SDK `group=` / demo `--group`.
+The SDK checks `Node.group()` before creating publishers/subscribers and rejects
+a mismatch, reporting requested/effective values and the `AORTA_GROUP` setting.
+It does not change the process environment. `SDK_GROUP` is only a demo/runner
+convention; setting it alone does not configure Core. The production-topic
+Mock runner sets both variables in its isolated children; clients must pass
+that same group explicitly. This group check does not validate peer routing,
+namespace, credentials or permission to move a robot.
+
 ## Motion example
 
 `examples/external_control/external_control.py` requests control and moves 30 installed body joints in the public 31 roster.

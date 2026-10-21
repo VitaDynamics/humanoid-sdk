@@ -128,9 +128,10 @@ never infer isolation from SSH or a shell variable alone.
 
 The pinned Aorta2026.10.20 Core selects the effective group from `AORTA_GROUP`,
 ignoring the Node constructor's group argument. The SDK does not read
-`SDK_GROUP`; this runner sets both variables in its children. Test this
-precedence with the real, installed SDK, including its default argument and
-an explicitly different constructor argument:
+`SDK_GROUP`; this runner sets both variables in its children. The SDK checks
+the requested group against that effective group before creating endpoints.
+Clients must pass the runner's group explicitly. Test a matching argument and
+rejection of the default/different arguments with the real, installed SDK:
 
 ```bash
 python tools/production_topic_mock/run.py --mode production-topics \
@@ -142,7 +143,8 @@ python tools/production_topic_mock/run.py --mode production-topics \
 ```
 
 `sdk-group-fixture.json` records the effective group, typed RobotInfo and real
-BodyState for both cases. It sends no control requests or BodyCmd; the generic
+BodyState for the matching case, and expected rejection errors for the two
+mismatched cases. It sends no control requests or BodyCmd; the generic
 latency report therefore has no measured control loop.
 
 sdkmain additionally compares the Node's effective group with its own YAML

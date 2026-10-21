@@ -205,7 +205,7 @@ class StateSourceTest(unittest.TestCase):
         self.assertIn(BODY_STATE_TOPIC, transport.callbacks)
 
     def test_state_only_adapter_needs_no_publisher_or_client_factory(self):
-        node = SimpleNamespace(create_subscriber=mock.Mock(return_value=object()), close=mock.Mock())
+        node = SimpleNamespace(group=lambda:'test', create_subscriber=mock.Mock(return_value=object()), close=mock.Mock())
         aorta = SimpleNamespace(Node=mock.Mock(return_value=node),
                                 QoS=SimpleNamespace(sensor_data=lambda: 'sensor'))
         decoder = module('BodyState')

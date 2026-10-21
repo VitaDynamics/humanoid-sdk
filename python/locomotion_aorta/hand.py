@@ -57,8 +57,8 @@ class HandClient:
         self._clients = {}
         self._pulls = FeedbackPulls(self.node, self._receive, self._feedback_error) if pull_feedback else None
         try:
-            if self.node.group() != group:
-                raise ValueError('effective Aorta group differs; set AORTA_GROUP to --group')
+            from ._group import require_node_group
+            require_node_group(self.node, group)
             for kind, cls in (('state', 'HandState'), ('touch', 'HandTouch'), ('info', 'HandInfo')):
                 decoder = getattr(getattr(self._bindings, cls), cls).GetRootAs
                 qos = (self._bindings.aorta.QoS.state_update() if kind == 'info'

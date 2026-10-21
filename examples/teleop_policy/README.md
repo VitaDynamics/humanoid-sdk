@@ -8,7 +8,25 @@ python examples/teleop_policy/teleop_policy.py --help
 python examples/teleop_policy/teleop_policy.py --model /path/to/action17.onnx --dry-run --body-state-jsonl /path/to/body-state.jsonl
 ```
 
-离线JSONL首行为 BodyInfo，后续为BodyState和axes，实际格式见根README；离线不连接/不发布。直播命令为上面脚本加 `--model`、匹配 `--group`、`--confirm-motion`（不带dry-run）；先确认现场条件再执行。`action17_contract.json` 随目录提供，`--contract` 可显式指定匹配合同。`--duration 0`保持直到中断，正值限时；可用 `--log /new/path/teleop.jsonl` 记录S0–S6、publish与applied诊断。固定50Hz与状态频率无关；停收/过期、TIMEOUT_HOLD或所有权变化按既有检查退出。
+离线JSONL格式见下面的包装说明；离线不连接/不发布。直播命令为上面脚本加 `--model`、匹配 `--group`、`--confirm-motion`（不带dry-run）；先确认现场条件再执行。`action17_contract.json` 随目录提供，`--contract` 可显式指定匹配合同。`--duration 0`保持直到中断，正值限时；可用 `--log /new/path/teleop.jsonl` 记录S0–S6、publish与applied诊断。固定50Hz与状态频率无关；停收/过期、TIMEOUT_HOLD或所有权变化按既有检查退出。
+
+## 离线 JSONL 包装
+
+`main()` 读取首行的 `body`，后续每行读取 `state` 和 `axes`；递归转为属性对象后
+送入同一个 Policy。不能直接把裸 BodyInfo 或原始 BodyState JSON 逐行传给此入口。
+`joints[].error_code` 必须等于 `JointError.NONE`，策略会拒绝其他错误码。
+
+| 行 | 必需结构与策略读取字段 |
+|---|---|
+| 首行 | `{"body": ...}`；body 含 `slot_count: 31`、31个唯一 `joint_names`、31个 `joints` 能力条目（含 `populated`）。名字集合必须是模型30个关节加占位 `waist_roll_joint`；策略驱动关节必须已安装。 |
+| 后续行 | `{"state": ..., "axes": [...]}`；state 含 `state_id`、31个 `joints`（每项 `q`、`dq`、`error_code`）、`attitude_valid` 与 `imu_states`。axes按下面action17轴映射解释。 |
+| HIP样本 | 离线路径传入符号 `'HIP'` 查找 `imu_states[].location`，因此该条目的 location 必须是字符串 `"HIP"`，不是线上枚举数字；需唯一、`status: 1`、state非空，state含长度4的 `quaternion` 与长度3的 `gyroscope`，并有 `attitude_valid: true`。 |
+
+首行与帧的包装键分别是 `body`、`state`/`axes`；不要外加 get_robot_info 响应层。
+保留真实关节顺序与数值，按实际模型元数据和合同提供完整31槽；不要为了生成示例输入
+伪造缺失关节或反馈。此入口不会自动把 MCAP、ROS lowstate 或别的采集 JSONL 转为
+上述包装，也不会把数字 IMU location 转成符号。采集/导出层需先完成这些转换；
+输出仅是离线推理结果，不是实时控制或硬件验收。
 
 ## 环境与安全
 

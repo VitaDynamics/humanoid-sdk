@@ -61,8 +61,8 @@ class GripperClientLifecycle:
         self._sequence = 0
         self._pulls = FeedbackPulls(node, self._receive, self._feedback_error) if pull_feedback else None
         try:
-            if self.node.group() != group:
-                raise ValueError('effective Aorta group differs')
+            from ._group import require_node_group
+            require_node_group(self.node, group)
             for kind, name in (('state', 'GripperState'), ('info', 'GripperInfo')):
                 decoder = getattr(getattr(bindings, name), name).GetRootAs
                 qos = bindings.aorta.QoS.state_update()

@@ -73,9 +73,11 @@ class _AortaTransport:
         self._capture_publish_timing = os.environ.get("LOCOMOTION_AORTA_PUBLISH_TIMING") == "1"
         self._publish_trace = threading.local()
         self._body_publisher = None
-        if not _publishers:
-            return
         try:
+            from ._group import require_node_group
+            require_node_group(self.node, group)
+            if not _publishers:
+                return
             realtime = self._bindings.aorta.QoS.realtime_control()
             self.publishers[CONTROL_REQUEST_TOPIC] = (
                 self.node.create_publisher_typed(

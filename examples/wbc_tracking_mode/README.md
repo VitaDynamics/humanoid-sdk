@@ -8,7 +8,19 @@ python examples/wbc_tracking_mode/wbc_tracking_mode.py --help
 python examples/wbc_tracking_mode/wbc_tracking_mode.py --model /path/to/actor_g1.onnx --dry-run --steps 100 --log /new/path/wbc-offline.jsonl
 ```
 
-`--dry-run` 合成反馈，不连接机器人；`--replay-mcap` 使用匹配BFBS的公共 BodyState；`--live --confirm-motion` 才进入控制。`--motion` 为可选命名关节 NPZ，省略时保持平衡站姿参考；`--duration` 限定直播时间。日志 `vita.wbc_tracking.v1` 含推理/观测及实际 session/sequence、transition_duration；不把 applied 时间当设备 ACK。
+`--dry-run` 合成反馈，不连接机器人；`--replay-mcap` 使用匹配BFBS的公共 BodyState；`--live --confirm-motion` 才进入控制。`--motion` 为可选命名关节 NPZ，省略时保持平衡站姿参考；`--duration` 限定直播时间。日志 `vita.wbc_tracking.v1` 含推理/观测及实际 session/sequence；没有 `transition_duration` 字段，不把 applied 时间当设备 ACK。
+
+## 0.2.1 已知问题与后续
+
+WBC 当前不会根据驱动关节的 `error_code` 拒绝策略输入。若关节 TIMEOUT/故障后仍有
+有限的缓存 q/dq，且整帧时间持续推进并通过已有新鲜度检查，这些数值仍可能进入策略；
+日志记录错误码不代表输入已通过关节健康检查。不要把此 demo 用作故障关节的安全过滤器。
+0.2.1保留此已知问题，现有 WBC 控制逻辑不变。
+
+hum-230 本轮复测仍有约5.0%的周期超时，瓶颈为观测构造与推理；这是现场配置下的
+观测，不是性能保证。日志缩减至约5.4 KB/步、丢弃0并没有消除计算瓶颈。
+现有计算/新鲜度截止条件保持不变，0.2.1不再继续优化。WBC demo保留到0.2.1，
+计划在0.2.2删除；本分支尚未执行删除。
 
 ## 日志容量与完整观测
 

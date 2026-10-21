@@ -96,7 +96,7 @@ class PullReviewTest(unittest.TestCase):
 
     def test_native_abi_failure_happens_during_construction_and_closes_node(self):
         from locomotion_aorta.transport import _AortaTransport
-        node = S(create_publisher_typed=Mock(return_value=object()), close=Mock())
+        node = S(group=lambda:'fake', create_publisher_typed=Mock(return_value=object()), close=Mock())
         bindings = S(aorta=S(Node=Mock(return_value=node),
                             QoS=S(realtime_control=lambda: None)),
                      control_request_schema_meta=object(), body_cmd_schema_meta=object())

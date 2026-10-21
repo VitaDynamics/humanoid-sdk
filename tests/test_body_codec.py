@@ -383,6 +383,7 @@ class BodyCodecTest(unittest.TestCase):
         class Node:
             calls = []
             def __init__(self, *a): pass
+            def group(self): return 'default'
             def create_publisher_typed(self, *a, **kw): return object()
             def create_client_typed(self, *a, **kw): self.calls.append((a,kw)); return client
             def close(self): pass

@@ -411,20 +411,14 @@ def main() -> None:
                                   'physical_command_names':list(policy.names)}))
         return
     import locomotion_aorta as api  # D2 public binding; no legacy LowCmd fallback
-    if __package__:
-        from .velocity_mode import DirectionInput
-    else:
-        from velocity_mode import DirectionInput
+    from locomotion_aorta._demo_input import DirectionInput
     stop = threading.Event()
     old_handlers = {sig:signal.signal(sig,lambda signum,frame:stop.set())
                     for sig in (signal.SIGINT,signal.SIGTERM)}
     log = None
     try:
         if args.log:
-            if __package__:
-                from .velocity_mode_latency import CycleLog
-            else:
-                from velocity_mode_latency import CycleLog
+            from locomotion_aorta._demo_latency import CycleLog
             log = CycleLog(args.log,dict(
                 demo='teleop_policy', input='aorta locomotion/joy via JoyReader',
                 period_s=policy.period, model=str(Path(args.model).resolve()),

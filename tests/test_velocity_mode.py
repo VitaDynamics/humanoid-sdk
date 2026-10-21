@@ -259,6 +259,9 @@ class TransportTest(unittest.TestCase):
             def __init__(self, *args):
                 pass
 
+            def group(self):
+                return 'default'
+
             def create_publisher_typed(self, *args, **kwargs):
                 calls.append(args)
                 raise AssertionError("shadow constructed a publisher")

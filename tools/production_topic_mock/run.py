@@ -181,9 +181,8 @@ def self_test_client(output, seconds):
     capture = []
     entered = False
     try:
-        # Exercise the SDK's default argument. Core's effective group is the
-        # runner's AORTA_GROUP, not the SDK's default group="default" value.
-        controller = PullController()
+        # SDK checks its requested group against Core's effective AORTA_GROUP.
+        controller = PullController(group=group)
         if controller.transport.node.group() != group:
             raise ValueError("effective self-test group differs")
         reply = controller.get_robot_info(timeout=5)

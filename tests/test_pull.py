@@ -27,6 +27,7 @@ class PullTest(unittest.TestCase):
         calls=[]
         class Node:
             def __init__(self,*a):self.closed=False
+            def group(self):return 'default'
             def create_publisher_typed(self,*a,**k):raise AssertionError('publisher')
             def create_subscriber_typed(self,*a,**k):raise AssertionError('callback')
             def create_subscriber_pull(self,topic,**kw):calls.append((topic,kw));return Ring()
