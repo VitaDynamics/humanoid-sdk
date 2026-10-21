@@ -13,12 +13,14 @@
 #include <thread>
 
 #include "aorta_abi.h"
+#include "aorta_contract.h"
 #include "body_cmd_generated.h"
 #include "protocol.h"
 
 extern "C" {
 aorta_result_t aorta_subscriber_free(aorta_sub_t);
 aorta_result_t aorta_publisher_free(aorta_pub_t);
+const char* aorta_last_error();
 }
 extern char** environ;
 namespace pm = production_mock;
@@ -36,8 +38,17 @@ uint64_t Wall() {
              std::chrono::system_clock::now().time_since_epoch())
       .count();
 }
-void Check(int rc) {
-  if (rc) throw std::runtime_error("Aorta error " + std::to_string(rc));
+bool Checked(int rc, const std::string& call) {
+  if (!rc) return true;
+  // The last-error pointer is thread-local and the next FFI call (including
+  // cleanup) may replace it. Copy it before doing anything else with Aorta.
+  const char* raw = aorta_last_error();
+  const std::string error = raw ? raw : "";
+  std::cerr << call << " rc=" << rc << " last_error=" << error << '\n';
+  return false;
+}
+void Check(int rc, const std::string& call) {
+  if (!Checked(rc, call)) throw std::runtime_error("Aorta endpoint failed; see named call above");
 }
 std::vector<uint8_t> Read(const std::filesystem::path& path) {
   std::ifstream f(path, std::ios::binary);
@@ -155,7 +166,8 @@ void ReceiveRequest(const aorta_bytes_view_t* view,
     const auto reply = ctx.protocol.RequestControl(request, Mono());
     const auto wall = Wall();
     const auto bytes = pm::EncodeAck(reply, wall, ++ctx.ack_sequence);
-    Check(aorta_publisher_publish(ctx.ack, bytes.data(), bytes.size()));
+    Check(aorta_publisher_publish(ctx.ack, bytes.data(), bytes.size()),
+          "aorta_publisher_publish(/sdk/foot_humanoid/control/ack)");
     ctx.controls.push_back({request, reply, wall});
   } catch (...) {
     std::lock_guard<std::mutex> lock(ctx.mutex);
@@ -172,11 +184,13 @@ void ReplyInfo(const aorta_bytes_view_t* view, aorta_service_request_t request,
     aorta_owned_bytes_slice_t slice{bytes.data(), bytes.size(), nullptr,
                                     nullptr};
     aorta_owned_bytes_view_t owned{&slice, 1, bytes.size()};
-    Check(aorta_service_request_reply(request, &owned));
+    Check(aorta_service_request_reply(request, &owned),
+          "aorta_service_request_reply(get_robot_info)");
     std::lock_guard<std::mutex> lock(ctx.mutex);
     ++ctx.info_requests;
   } catch (const std::exception& e) {
-    aorta_service_request_reply_error(request, e.what());
+    Checked(aorta_service_request_reply_error(request, e.what()),
+            "aorta_service_request_reply_error(get_robot_info)");
     std::lock_guard<std::mutex> lock(ctx.mutex);
     ++ctx.info_errors;
   }
@@ -192,10 +206,11 @@ std::string ExpectedConfig(int port) {
 }
 void CheckEnvironment(const std::filesystem::path& directory,
                       const std::string& group, int port) {
+  pm::aorta_contract::ValidateGroupLength(group);
   const char* effective = std::getenv("AORTA_GROUP");
   const char* uri = std::getenv("ZENOH_SESSION_CONFIG_URI");
   const char* logging = std::getenv("AORTA_LOG_TOPIC_ENABLED");
-  if (group.rfind("mock-sdkmain-", 0) != 0 || group.size() > 80 ||
+  if (group.rfind("mock-sdkmain-", 0) != 0 ||
       group.find_first_not_of(
           "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") !=
           std::string::npos ||
@@ -222,10 +237,12 @@ struct Resources {
   std::vector<aorta_sub_t> subscribers;
   std::vector<aorta_pub_t> publishers;
   ~Resources() {
-    for (auto sub : subscribers) aorta_subscriber_free(sub);
-    if (service) aorta_service_free(service);
-    for (auto pub : publishers) aorta_publisher_free(pub);
-    if (node) aorta_node_free(node);
+    for (auto sub : subscribers)
+      Checked(aorta_subscriber_free(sub), "aorta_subscriber_free");
+    if (service) Checked(aorta_service_free(service), "aorta_service_free");
+    for (auto pub : publishers)
+      Checked(aorta_publisher_free(pub), "aorta_publisher_free");
+    if (node) Checked(aorta_node_free(node), "aorta_node_free");
   }
 };
 aorta_pub_t Publisher(Resources& r, const std::filesystem::path& schemas,
@@ -239,7 +256,8 @@ aorta_pub_t Publisher(Resources& r, const std::filesystem::path& schemas,
   options.schema_root_type = root;
   const auto qos = aorta_qos_preset(preset);
   aorta_pub_t pub = 0;
-  Check(aorta_publisher_new(r.node, topic, &qos, &options, &pub));
+  Check(aorta_publisher_new(r.node, topic, &qos, &options, &pub),
+        std::string("aorta_publisher_new(") + topic + ")");
   r.publishers.push_back(pub);
   return pub;
 }
@@ -308,7 +326,7 @@ int main(int argc, char** argv) {
     int endpoint_rc = 0;
     try {
       Check(aorta_node_new("production_topic_mock", group.c_str(),
-                           &resources.node));
+                           &resources.node), "aorta_node_new(production_topic_mock)");
       const auto schemas =
           std::filesystem::absolute(argv[0]).parent_path() / "generated";
       auto state_pub = Publisher(
@@ -328,11 +346,13 @@ int main(int argc, char** argv) {
       aorta_sub_t commands = 0, requests = 0;
       Check(aorta_subscriber_new(resources.node, "/sdk/foot_humanoid/body_cmd",
                                  &command_qos, nullptr, ReceiveCommand,
-                                 &context, &commands));
+                                 &context, &commands),
+            "aorta_subscriber_new(/sdk/foot_humanoid/body_cmd)");
       resources.subscribers.push_back(commands);
       Check(aorta_subscriber_new(
           resources.node, "/sdk/foot_humanoid/control/request", &request_qos,
-          nullptr, ReceiveRequest, &context, &requests));
+          nullptr, ReceiveRequest, &context, &requests),
+          "aorta_subscriber_new(/sdk/foot_humanoid/control/request)");
       resources.subscribers.push_back(requests);
       const auto info_bfbs = Read(schemas / "get_robot_info.bfbs");
       const auto hash_bytes = Read(schemas / "get_robot_info.sha256");
@@ -351,7 +371,8 @@ int main(int argc, char** argv) {
       options.response_root_type_len = response_root.size();
       Check(aorta_service_new_with_options(
           resources.node, "/sdk/foot_humanoid/get_robot_info", &options,
-          ReplyInfo, &context, &resources.service));
+          ReplyInfo, &context, &resources.service),
+          "aorta_service_new_with_options(/sdk/foot_humanoid/get_robot_info)");
       std::signal(SIGINT, Stop);
       std::signal(SIGTERM, Stop);
       const auto finish = start + static_cast<uint64_t>(seconds * 1e9);
@@ -385,7 +406,8 @@ int main(int argc, char** argv) {
           auto bytes = pm::EncodeState(++state_id, output, real_us);
           const auto wall = Wall();
           pm::StampState(bytes, wall);
-          Check(aorta_publisher_publish(state_pub, bytes.data(), bytes.size()));
+          Check(aorta_publisher_publish(state_pub, bytes.data(), bytes.size()),
+                "aorta_publisher_publish(/sdk/foot_humanoid/body_state)");
           if (sent.size() >= kRows)
             context.failed = true;
           else
@@ -403,7 +425,8 @@ int main(int argc, char** argv) {
           const auto bytes =
               pm::EncodeStatus(status, Mono(), Wall(), ++status_publication);
           Check(
-              aorta_publisher_publish(status_pub, bytes.data(), bytes.size()));
+              aorta_publisher_publish(status_pub, bytes.data(), bytes.size()),
+              "aorta_publisher_publish(/sdk/foot_humanoid/control/status)");
           Advance(next_status, 20000000, now);
         }
         std::this_thread::sleep_until(
@@ -417,9 +440,9 @@ int main(int argc, char** argv) {
     // Free subscriber/RPC handles first, so every captured callback is
     // complete.
     for (auto sub : resources.subscribers)
-      if (aorta_subscriber_free(sub) != 0) endpoint_rc = 2;
+      if (!Checked(aorta_subscriber_free(sub), "aorta_subscriber_free")) endpoint_rc = 2;
     resources.subscribers.clear();
-    if (resources.service && aorta_service_free(resources.service) != 0)
+    if (resources.service && !Checked(aorta_service_free(resources.service), "aorta_service_free"))
       endpoint_rc = 2;
     resources.service = 0;
     std::ofstream states(directory / "states.csv"),

@@ -99,6 +99,18 @@ cancels or stops a real robot process. Preserve the first failed capture; do
 not retry it into a PASS. A source-only run has missing client stages and must
 not be described as a control-loop performance PASS.
 
+The default group retains the `mock-sdkmain-` prefix and a112-bit random
+URL-safe suffix. The complete name fits Aorta2026.10.20's32 UTF-8 byte limit.
+Both prechecks use the pinned `MAX_GROUP_LEN` declaration in
+`aorta_contract.h`; custom names over the limit report actual and maximum
+length before creating a Node. Failed C calls log their function/endpoint,
+return code and immediately copied thread-local `aorta_last_error`, including
+resource cleanup. Run the additional offline boundary checks with:
+
+```bash
+python -m unittest tools.production_topic_mock.test_group_contract -v
+```
+
 **Misconnection boundary:** arbitrary client code is not sandboxed. A client
 that resets transport environment, opens a second session or calls another
 control API can escape a configured session. Use only reviewed entries that

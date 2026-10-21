@@ -14,6 +14,7 @@ HERE = Path(__file__).resolve().parent
 SCHEMAS = ("body_state", "body_cmd", "get_robot_info", "control_request", "control_ack", "control_status")
 PROTOCOL_CHECKS = r'''
 #include "protocol.h"
+#include "aorta_contract.h"
 #include "control_request_generated.h"
 #include <cassert>
 #include <limits>
@@ -24,6 +25,12 @@ static_assert(std::is_same_v<decltype(Request::version),
                             decltype(std::declval<const locomotion_sdk::ControlRequest&>()
                                          .protocol_version())>);
 int main() {
+  aorta_contract::ValidateGroupLength(std::string(aorta_contract::MAX_GROUP_LEN, 'a'));
+  bool overlong_rejected=false;
+  try {
+    aorta_contract::ValidateGroupLength(std::string(aorta_contract::MAX_GROUP_LEN+1, 'a'));
+  } catch (const std::invalid_argument&) { overlong_rejected=true; }
+  assert(overlong_rejected);
   Protocol p(10,100,50);
   Request r{2,1,"req","client","","EXTERNAL"};
   for (const uint32_t version : {uint32_t{2}, uint32_t{0x80000002},

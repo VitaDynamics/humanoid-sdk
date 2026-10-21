@@ -11,14 +11,15 @@ import socket
 import subprocess
 import sys
 import time
-import uuid
 
 try:
     from .report import write_report
     from . import validate_auxiliary, run_auxiliary
+    from .group_contract import new_group, validate_group
 except ImportError:
     from report import write_report
     from __init__ import validate_auxiliary, run_auxiliary
+    from group_contract import new_group, validate_group
 
 
 def digest(path):
@@ -39,12 +40,6 @@ def session_config(port, connect_port=None):
               "listen": {"endpoints": [f"tcp/127.0.0.1:{port}"]},
               "connect": {"endpoints": [f"tcp/127.0.0.1:{value}" for value in connections]}}
     return json.dumps(config, separators=(",", ":"))
-
-
-def validate_group(group):
-    if not isinstance(group, str) or not group.startswith("mock-sdkmain-") or len(group) > 80 or any(not (c.isascii() and (c.isalnum() or c in "-_")) for c in group):
-        raise ValueError("group must be a unique mock-sdkmain-* name; default/production groups are forbidden")
-    return group
 
 
 def child_environment(parent, group, uri):
@@ -234,7 +229,7 @@ def run(args):
     manifest = verify_build(build)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    group = validate_group(args.group or os.environ.get("SDK_GROUP") or "mock-sdkmain-" + uuid.uuid4().hex)
+    group = validate_group(args.group or os.environ.get("SDK_GROUP") or new_group())
     if args.self_test_client:
         args.client_command = [sys.executable, str(Path(__file__).resolve()), "--mode", "production-topics",
                                "--build-dir", str(build), "--output", str(output), "--seconds", str(args.seconds), "--client-worker"]
