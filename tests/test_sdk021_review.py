@@ -1,5 +1,6 @@
 """Review regressions with fake clocks/rings: no Node, ownership or hardware IO."""
 from dataclasses import replace
+import importlib.util
 import os
 import signal
 import threading
@@ -221,6 +222,8 @@ class EEConcurrencyTest(unittest.TestCase):
             fixture.doCleanups()
 
 
+@unittest.skipIf(any(importlib.util.find_spec(name) is None for name in ('numpy', 'yaml')),
+                 'test_velocity_mode optional NumPy/PyYAML dependencies unavailable')
 class VelocityReviewTest(unittest.TestCase):
     def run_loop(self, *, frozen=False, compute_ns=0, duration=.12,
                  change_status=False, wall_step=False):
