@@ -23,5 +23,9 @@
   "generated_source": "RES013 reindex final actual BFBS->CPP plain body_cmd output",
   "body_cmd_bfbs_sha256": "c98a531aad2b43206048753b82d0bacec1ad65d2429536432766975cd211e71c",
   "body_cmd_generated_h_sha256": "7e9823efe22f0c0f61fe0211b25b4ba33f312cd4e83ecebba11e11cd9f3dfeb0",
-  "license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  "license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+  "body_state_bfbs_sha256": "9458caeaae850bf4cf671eaad022b66b791a7d7be67d560b8355088ea8406dce",
+  "body_state_generated_h_sha256": "0de76e6d43d53619f809394be08a1befafcafc3520ea158ac7d23054330f6bf6",
+  "body_state_generated_source": "REQ177-R3 actual-flatc25.9.23 --cpp --gen-all over pinned actual body_state.bfbs; plain header matches existing BodyCmd common types, no object-API ODR divergence",
+  "body_state_flatc_sha256": "1f8e5c5405615be65e4303c8f5e4e8c2837142aeef26b61a1ef37491fe1d599f"
 }

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "body_cmd_vendor/body_cmd_generated.h"
+#include "body_state_decoder.h"
 
 namespace py = pybind11;
 namespace {
@@ -160,6 +161,7 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
 }  // namespace
 
 PYBIND11_MODULE(_body_cmd_native, module) {
+  BindBodyState(module);
   module.attr("BODY_SCHEMA_SHA256") =
       "c98a531aad2b43206048753b82d0bacec1ad65d2429536432766975cd211e71c";
   module.def("encode", &Encode, py::arg("command"), py::arg("publish_stamp_ns"),

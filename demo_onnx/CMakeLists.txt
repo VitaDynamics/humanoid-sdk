@@ -40,7 +40,8 @@ add_library(ort SHARED IMPORTED)
 set_target_properties(ort PROPERTIES
   IMPORTED_LOCATION "${ort_root}/lib/libonnxruntime.so.${ort_version}"
   INTERFACE_INCLUDE_DIRECTORIES "${ort_root}/include")
-pybind11_add_module(_body_cmd_native NO_EXTRAS WITH_SOABI cpp/body_cmd_encoder.cpp)
+pybind11_add_module(_body_cmd_native NO_EXTRAS WITH_SOABI
+  cpp/body_cmd_encoder.cpp cpp/body_state_decoder.cpp)
 target_include_directories(_body_cmd_native PRIVATE cpp/body_cmd_vendor)
 target_compile_features(_body_cmd_native PRIVATE cxx_std_17)
 target_compile_options(_body_cmd_native PRIVATE "$<$<CONFIG:Release>:-O3;-g;-DNDEBUG>")

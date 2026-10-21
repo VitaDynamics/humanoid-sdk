@@ -2,6 +2,23 @@
 import ctypes
 import hashlib
 import time
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def _state_decoder():
+    from . import _body_cmd_native
+    import body_state_schema_meta as meta
+    if (meta.SCHEMA_HASH_HEX != _body_cmd_native.BODY_STATE_SCHEMA_SHA256
+            or hashlib.sha256(meta.SCHEMA_BFBS).hexdigest()
+            != _body_cmd_native.BODY_STATE_SCHEMA_SHA256):
+        raise RuntimeError('native BodyState decoder requires the pinned BODY2 schema')
+    return _body_cmd_native.decode_state
+
+
+def decode_body_state_native(view, *, measure=False):
+    state, timing = _state_decoder()(view._tab.Bytes, view._tab.Pos, measure)
+    return (state, timing) if measure else state
 
 
 class NativeBodyPublisher:

@@ -185,7 +185,12 @@ class BodyCodecTest(unittest.TestCase):
         # Only protocol_version is safe to read from the incompatible v1 frame.
         for version in (0, 1, 3):
             with self.subTest(version=version), self.assertRaisesRegex(ValueError, 'protocol_version'):
-                codec.decode_body_state(SimpleNamespace(ProtocolVersion=lambda: version))
+                builder = flatbuffers.Builder(1)
+                m = module('BodyState')
+                m.BodyStateStart(builder)
+                m.BodyStateAddProtocolVersion(builder, version)
+                builder.Finish(m.BodyStateEnd(builder))
+                codec.decode_body_state(m.BodyState.GetRootAs(builder.Output()))
 
     def test_joint_error_enum_and_removed_dto_fields_follow_public_bindings(self):
         from locomotion_aorta import JointError, BodyJointState, BodyImuSample
