@@ -11,7 +11,9 @@ import threading
 import time
 import uuid
 
-from locomotion_aorta import PullController as ExternalController, PullTransport, BodyCmd, BodyJointCmd
+from locomotion_aorta import (
+    PullController as ExternalController, PullTransport, BodyCmd, BodyJointCmd, JoyReader,
+)
 import locomotion_aorta
 from locomotion_aorta._body_codec import decode_body_state
 from locomotion_aorta.transport import (
@@ -111,97 +113,33 @@ class PolicyTransport(PullTransport):
 
 
 class DirectionInput:
-    def __init__(self, transport, source):
-        import rclpy
-        from rclpy.node import Node
-        from sensor_msgs.msg import Joy
-        from geometry_msgs.msg import Twist
+    """Profile adapter; JoyReader owns draining, edge counts and receipt time."""
 
-        if source == "aorta":
-            try:
-                from locomotion.Joy import Joy as AortaJoy
-            except ImportError as error:
-                raise RuntimeError("Aorta direction input requires deployment-matched locomotion.Joy bindings; "
-                                   "the public SDK wheel set does not include them. "
-                                   "Select --joy-source ros2 only when explicitly intended.") from error
-
-        class NoPublisher:
-            def publish(self, _message):
-                pass
-
-        class SubscriberNode(Node):
-            def create_publisher(self, msg_type, topic, qos_profile, **kwargs):
-                # rclpy Node otherwise creates /parameter_events implicitly.
-                if topic == "/parameter_events":
-                    return NoPublisher()
-                raise RuntimeError(f"subscriber node cannot publish {topic}")
-
-        self.rclpy = rclpy
-        self.lock = threading.Lock()
-        self.axes = ()
-        self.twist = (0.0, 0.0, 0.0)
-        self.joy_time = self.twist_time = None
-        self.joy_messages = self.twist_messages = 0
-        self.error = None
-        rclpy.init(args=[])
-        self.node = SubscriberNode(f"velocity_mode_direction_{uuid.uuid4().hex}",
-                                   enable_rosout=False, start_parameter_services=False)
-        if source == "ros2":
-            self.joy_sub = self.node.create_subscription(Joy, "/joy", self.on_joy, 10)
-        else:
-            self.joy_sub = transport.node.create_subscriber_typed(
-                AortaJoy.GetRootAs, "locomotion/joy", self.on_aorta_joy,
-                qos=transport._bindings.aorta.QoS.realtime_control()
-            )
-        self.twist_sub = self.node.create_subscription(Twist, "/vel_cmd", self.on_twist, 10)
-        self.thread = threading.Thread(target=self.spin, daemon=True)
-        self.thread.start()
-
-    def spin(self):
-        try:
-            self.rclpy.spin(self.node)
-        except Exception as error:
-            if self.rclpy.ok():
-                self.error = error
-
-    def on_joy(self, message):
-        with self.lock:
-            self.axes = tuple(message.axes)
-            self.joy_time = realtime_ns()
-            self.joy_messages += 1
-
-    def on_aorta_joy(self, message, context):
-        with self.lock:
-            self.axes = tuple(message.Axes(i) for i in range(message.AxesLength()))
-            self.joy_time = realtime_ns()
-            self.joy_messages += 1
-
-    def on_twist(self, message):
-        with self.lock:
-            self.twist = (message.linear.x, message.linear.y, message.angular.z)
-            self.twist_time = realtime_ns()
-            self.twist_messages += 1
+    def __init__(self, transport):
+        self.reader = JoyReader(transport.node)
+        self.last = None
 
     def snapshot(self):
-        if self.error is not None:
-            raise self.error
-        with self.lock:
-            now = realtime_ns()
-            return (self.axes if self.joy_time is not None and
-                    0 <= now - self.joy_time <= INPUT_FRESHNESS_NS else (),
-                    self.twist if self.twist_time is not None and
-                    0 <= now - self.twist_time <= INPUT_FRESHNESS_NS else (0.0, 0.0, 0.0))
+        self.last = self.reader.read()
+        return self.last.axes if self.last.is_fresh(realtime_ns()) else ()
 
     def statistics(self):
-        with self.lock:
-            return dict(joy_messages=self.joy_messages, twist_messages=self.twist_messages,
-                        last_joy_ns=self.joy_time, last_twist_ns=self.twist_time,
-                        last_joy_axes=self.axes, last_twist=self.twist)
+        if self.last is None:
+            return dict(joy_messages=0, last_joy_ns=None, last_joy_axes=())
+        sample = self.last
+        return dict(joy_messages=sample.samples_total,
+                    last_joy_ns=sample.received_realtime_ns, last_joy_axes=sample.axes,
+                    last_joy_buttons=sample.buttons,
+                    joy_pressed_counts=dict(sample.pressed_counts),
+                    joy_released_counts=dict(sample.released_counts),
+                    joy_missing_since_read=sample.missing_samples_since_read,
+                    joy_missing_total=sample.missing_samples_total,
+                    joy_sequence_available=sample.sequence_available,
+                    joy_event_history_complete=sample.event_history_complete,
+                    joy_sequence_diagnostics=dict(sample.sequence_diagnostics))
 
     def close(self):
-        self.rclpy.shutdown()
-        self.thread.join()
-        self.node.destroy_node()
+        self.reader.close()
 
 
 def transition_duration(policy, frame, root):
@@ -250,6 +188,10 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
         if getattr(frame, 'pull_context_receive_stamp_ns', 0):
             record['pull_context_receive_stamp_ns'] = frame.pull_context_receive_stamp_ns
         try:
+            # Drain even during transition so queued short presses are consumed
+            # on every 50 Hz tick, without changing the policy's timer.
+            axes = directions.snapshot()
+            record.update(directions.statistics())
             elapsed = realtime_ns() - started
             if elapsed < transition_ns:
                 record["phase"] = "transition"
@@ -258,8 +200,7 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
                           if i in policy.driven_slots else dict(motor)
                           for i, motor in enumerate(target)]
             else:
-                axes, twist = directions.snapshot()
-                command = policy.command(axes, twist)
+                command = policy.command(axes)
                 observation = policy.observe(frame.q, frame.dq, frame.gyro, frame.quat, command)
                 record["S3"] = realtime_ns()
                 action = policy.infer(observation)
@@ -310,7 +251,6 @@ def parse_args(argv=None):
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--duration", type=float, default=0.0,
                         help="total loop seconds; 0 or omitted runs until interrupted")
-    parser.add_argument("--joy-source", choices=("aorta", "ros2"), default="aorta")
     parser.add_argument("--exec-sha256", default=NOT_MEASURED)
     parser.add_argument("--yaml-sha256", default=NOT_MEASURED)
     parser.add_argument("--external-pd", choices=("PD-A", "PD-B", NOT_MEASURED), default=NOT_MEASURED)
@@ -335,7 +275,7 @@ def main():
                     aorta_sdk_version=version("aorta-sdk"), aorta_msgs_version=version("aorta-msgs"),
                     locomotion_exec_sha256=args.exec_sha256, locomotion_yaml_sha256=args.yaml_sha256,
                     external_pd=args.external_pd, load_description=args.load_description,
-                    mode="shadow" if args.shadow else "live", joy_source=args.joy_source,
+                    mode="shadow" if args.shadow else "live", joy_source="aorta",
                     duration_s=args.duration,
                     S1_source="Python pull recv return, before root lookup and decode",
                     S5_source="would-publish boundary" if args.shadow else "ExternalController.publish entry",
@@ -363,10 +303,9 @@ def main():
                        current_action=transport.observed_status.current_action,
                        phase=transport.observed_status.phase.value,
                        generation=transport.observed_status.generation))
-        directions = DirectionInput(transport, args.joy_source)
+        directions = DirectionInput(transport)
         log.write(dict(record_type="transport", timestamp_ns=realtime_ns(),
-                       aorta_publishers=len(transport.publishers),
-                       ros2_publishers=sum(1 for _ in directions.node.publishers)))
+                       aorta_publishers=len(transport.publishers)))
         if controller:
             controller.enter_external(args.timeout)
             entered = True
@@ -384,7 +323,7 @@ def main():
                 if directions is not None:
                     try:
                         log.write(dict(record_type="direction_input", timestamp_ns=realtime_ns(),
-                                       source=args.joy_source, **directions.statistics()))
+                                       source="aorta", **directions.statistics()))
                     finally:
                         directions.close()
             finally:

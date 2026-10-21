@@ -95,7 +95,7 @@ class VelocityModePolicy:
         self.history: deque[np.ndarray] = deque(maxlen=self.history_len)
         self.last_action = np.zeros(len(self.names), dtype=np.float32)
 
-    def command(self, axes: tuple[float, ...], twist=(0.0, 0.0, 0.0)) -> np.ndarray:
+    def command(self, axes: tuple[float, ...]) -> np.ndarray:
         import numpy as np
 
         cfg = self.config["command"]
@@ -105,9 +105,6 @@ class VelocityModePolicy:
             v = float(axes[i]) if 0 <= i < len(axes) else 0.0
             lo, hi = cfg[f"{name}_range"]
             result.append(0.0 if abs(v) < cfg["deadband"] else v * (hi if v >= 0 else -lo))
-        # Source profile is twist+joy: active sticks win, otherwise /vel_cmd.
-        if not any(result):
-            result = list(twist)
         return np.asarray([
             min(max(v, cfg[f"{name}_range"][0]), cfg[f"{name}_range"][1])
             for v, name in zip(result, ("vx", "vy", "wz"))
