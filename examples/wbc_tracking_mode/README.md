@@ -10,6 +10,26 @@ python examples/wbc_tracking_mode/wbc_tracking_mode.py --model /path/to/actor_g1
 
 `--dry-run` 合成反馈，不连接机器人；`--replay-mcap` 使用匹配BFBS的公共 BodyState；`--live --confirm-motion` 才进入控制。`--motion` 为可选命名关节 NPZ，省略时保持平衡站姿参考；`--duration` 限定直播时间。日志 `vita.wbc_tracking.v1` 含推理/观测及实际 session/sequence、transition_duration；不把 applied 时间当设备 ACK。
 
+## 日志容量与完整观测
+
+默认每步记录 `observation_length`、`observation_sha256`，不保存完整 observation。
+SHA256 输入是观测按 C 顺序展开后的 little-endian float32 原始字节，保留正负零。
+需要逐项离线比对时显式加 `--log-observation`；此时完整 `observation` 与长度、摘要一起保留。
+`decoded` 和 `state` 默认仍完整记录，供命令、限位与反馈比对；它们合计约3.6 KB/步，
+本次现场 observation 约25.8 KB/步，是主要日志体积来源。实际大小随模型与反馈变化。
+
+控制循环只提交独占的观测/状态快照到有界队列（256条）；后台线程计算摘要、转换数组、
+序列化 JSON 并写盘。队列满时丢弃新行并计数，不等待磁盘、不改变原50 Hz节拍。
+最终 `summary.logging`（失败时可能是独立 `logging_summary`）报告
+`records_submitted/enqueued/written/dropped`、`queue_max_depth/capacity` 和 `writer_error`；
+written包含最终summary，enqueued不包含单独保留的summary，不能用日志行数代替策略步数。
+日志队列有损，缺失行不能推断为命令未发送。
+
+退出先按原流程尝试 CANCEL→PASSIVE，再排空已接收日志、flush并等待写线程结束。
+磁盘或序列化失败会在关闭时报告并令正常运行退出为错误；已有控制异常仍是主异常，
+不会被日志关闭异常覆盖。磁盘完全不可写时最终summary也可能无法落盘，此时计数写到stderr。
+本修改不调整新鲜度、计算超时、策略频率、增益、目标或运动准入。
+
 ## 环境与安全
 
 以下命令从 SDK 仓库或离线发布包根目录运行。安装命令面向含完整 wheelhouse 的离线发布包（含所需 extra 依赖）；缺包时先获取匹配产物，不安装别的消息版本或绕过依赖检查。使用独立 CPython 3.10 venv；依赖版本以根目录 `compatibility.json` 为准。机器人上的 SDK 主机先 source `/app/script/env.sh`，再激活 venv；PC 使用部署方提供的 peer 配置。设置 `ZENOH_SESSION_CONFIG_URI` 和与机器人一致的 `--group`，不复制认证内容。安装与 `--help` 不代表已获得运动许可。

@@ -8,6 +8,7 @@ and must confirm PASSIVE, which can let loaded limbs fall. Installation and
 from locomotion_aorta._demo_feedback import (state_log_fields, publish_log_fields,
                                             feedback_age_ns, NOT_MEASURED)
 import argparse
+from collections import deque
 import hashlib
 import json
 import math
@@ -92,16 +93,118 @@ def replay_states(path, steps, period):
 
 
 class Recorder:
-    def __init__(self, path, header):
+    def __init__(self, path, header, *, log_observation=False, capacity=256):
         # Refuse overwrites so a failed trial does not erase the previous evidence.
+        if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
+            raise ValueError('log queue capacity must be a positive integer')
         self.file = Path(path).open('x', buffering=1024*1024)
+        self.log_observation = log_observation
+        self.capacity = capacity
+        self._condition = threading.Condition()
+        self._rows = deque()
+        self._closing = False
+        self._summary = None
+        self._error = None
+        self._submitted = self._enqueued = self._written = self._dropped = self._max_depth = 0
+        self._thread = threading.Thread(target=self._run, name='wbc-jsonl-writer', daemon=True)
+        self._thread.start()
         self.write(dict(kind='header', **header))
 
     def write(self, row):
-        self.file.write(json.dumps(row, allow_nan=False, separators=(',', ':'))+'\n')
+        with self._condition:
+            if self._closing:
+                raise RuntimeError('recorder is closed')
+            self._submitted += 1
+            if row.get('kind') == 'summary':
+                # Keep the final summary out of the lossy control-loop queue.
+                self._summary = dict(row)
+                return True
+            if self._error is not None or len(self._rows) >= self.capacity:
+                self._dropped += 1
+                return False
+            self._rows.append(dict(row))
+            self._enqueued += 1
+            self._max_depth = max(self._max_depth, len(self._rows))
+            self._condition.notify()
+            return True
+
+    def statistics(self):
+        with self._condition:
+            return dict(records_submitted=self._submitted, records_enqueued=self._enqueued,
+                        records_written=self._written, records_dropped=self._dropped,
+                        queue_max_depth=self._max_depth, queue_capacity=self.capacity,
+                        writer_error=str(self._error) if self._error else None)
+
+    def _format(self, row):
+        row = dict(row)
+        if 'observation' in row:
+            import numpy as np
+            observation = np.asarray(row.pop('observation'), dtype='<f4').reshape(-1)
+            row.update(observation_length=int(observation.size),
+                       observation_sha256=hashlib.sha256(observation.tobytes()).hexdigest(),
+                       observation_encoding='little-endian float32, C order')
+            if self.log_observation:
+                row['observation'] = observation.tolist()
+        # Array materialization and JSON formatting run only on the writer thread.
+        return json.dumps(row, allow_nan=False, separators=(',', ':'),
+                          default=lambda value: value.tolist())+'\n'
+
+    def _failed(self, error, *, current_dropped=False):
+        with self._condition:
+            if self._error is None:
+                self._error = error
+            self._dropped += len(self._rows)+int(current_dropped)
+            self._rows.clear()
+
+    def _run(self):
+        try:
+            while True:
+                with self._condition:
+                    self._condition.wait_for(lambda: self._rows or self._closing)
+                    if not self._rows:
+                        break
+                    row = self._rows.popleft()
+                try:
+                    self.file.write(self._format(row))
+                    with self._condition:
+                        self._written += 1
+                except Exception as error:
+                    self._failed(error, current_dropped=True)
+            if self._error is None:
+                summary = dict(self._summary or dict(kind='logging_summary'))
+                counts = self.statistics()
+                counts['records_written'] += 1  # Includes this final summary on success.
+                summary['logging'] = counts
+                self.file.write(self._format(summary))
+                with self._condition:
+                    self._written += 1
+                self.file.flush()
+        except Exception as error:
+            self._failed(error)
+        finally:
+            try:
+                self.file.close()
+            except Exception as error:
+                self._failed(error)
 
     def close(self):
-        self.file.close()
+        # Called after the live finally block has attempted CANCEL/PASSIVE.
+        with self._condition:
+            self._closing = True
+            self._condition.notify()
+        self._thread.join()
+        if self._error is not None:
+            raise OSError('WBC log writer failed: '+json.dumps(self.statistics())) from self._error
+
+
+def finish_recording(recorder):
+    original_error = sys.exc_info()[1]
+    try:
+        recorder.close()
+    except Exception as error:
+        print(str(error), file=sys.stderr, flush=True)
+        if original_error is None:
+            raise
 
 
 def infer_step(model, policy, session, state, cycle, *, record_time=0):
@@ -127,7 +230,7 @@ def infer_step(model, policy, session, state, cycle, *, record_time=0):
                observation_ms=(before_mono-acquired_mono)/1e6,
                record_log_time_ns=record_time, reference_frame=session.frame,
                reference_source='clip' if session.playing else 'stand',
-               observation=obs.tolist(), decoded=decoded,
+               observation=obs.copy(), decoded=decoded,
                max_abs_obs=float(abs(obs).max()),
                applied_session_id=state.applied_session_id,
                applied_sequence=state.applied_sequence,
@@ -138,7 +241,7 @@ def infer_step(model, policy, session, state, cycle, *, record_time=0):
     row.update(S2=acquired_wall,S3=before_wall,S4=after_wall,S5=NOT_MEASURED,S6=NOT_MEASURED,publish_result='not_called')
     # Capture real input evidence: no inference-input/state-ID placeholders.
     q, dq, quat, gyro = policy.state(state)
-    row['state'] = dict(q=q.tolist(), dq=dq.tolist(), quaternion=quat.tolist(), gyro=gyro.tolist())
+    row['state'] = dict(q=q.copy(), dq=dq.copy(), quaternion=quat.copy(), gyro=gyro.copy())
     return command, row
 
 
@@ -313,6 +416,8 @@ def main():
                         help='cache/publication age and new-feedback deadline; pull requires synchronized REALTIME clocks')
     parser.add_argument('--max-compute-ms', type=float, default=50.)
     parser.add_argument('--log', type=Path, required=True, help='new JSONL evidence file; never overwritten')
+    parser.add_argument('--log-observation', action='store_true',
+                        help='include full observation; default logs float32 length/SHA256 only')
     args = parser.parse_args()
     if args.live and not args.confirm_motion:
         parser.error('--live requires --confirm-motion and separately authorized on-site conditions')
@@ -333,7 +438,7 @@ def main():
                   inference_wire_clock='ts_client_created_us/ts_client_send_us: client CLOCK_MONOTONIC microseconds; cross-host sync not assumed',
                   local_latency_clock='client CLOCK_MONOTONIC nanoseconds',
                   args={k:str(v) if isinstance(v, Path) else v for k,v in vars(args).items()})
-    recorder = Recorder(args.log, header)
+    recorder = Recorder(args.log, header, log_observation=args.log_observation)
     try:
         if args.live:
             import os
@@ -368,7 +473,7 @@ def main():
         recorder.write(dict(kind='failure', error_type=type(error).__name__, message=str(error)))
         raise
     finally:
-        recorder.close()
+        finish_recording(recorder)
 
 
 if __name__ == '__main__':
