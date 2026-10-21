@@ -75,7 +75,7 @@ class OfflineInstallTest(unittest.TestCase):
                     check=True,
                 )
             denied = subprocess.run(
-                [python, "-I", str(bundle / "examples/external_control.py")],
+                [python, "-I", str(bundle / "examples/external_control/external_control.py")],
                 capture_output=True, text=True,
             )
             self.assertEqual(denied.returncode, 2)

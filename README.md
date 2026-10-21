@@ -31,10 +31,10 @@ dependencies come from this SDK repository's `v0.1.0-rc.4` Release. Select the
 pinned 0.1.4 wheel; older schema assets remain available for older SDKs.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
-The SDK also includes **Velocity mode** (`examples/velocity_mode.py`) and
-**WBC tracking mode** (`examples/wbc_tracking_mode.py`). Both use public body31
+The SDK also includes **Velocity mode** (`examples/velocity_mode/velocity_mode.py`) and
+**WBC tracking mode** (`examples/wbc_tracking_mode/wbc_tracking_mode.py`). Both use public body31
 and the built-in C++ ONNX backend through EXTERNAL. See
-[Velocity mode](examples/velocity_mode.md) and [WBC tracking mode](examples/wbc_tracking_mode.md)
+[Velocity mode](examples/velocity_mode/README.md) and [WBC tracking mode](examples/wbc_tracking_mode/README.md)
 for the old-to-new names, optional dependencies and offline entry points.
 These additions await independent package/numerical acceptance; a unit test is
 not robot-motion evidence.
@@ -103,13 +103,13 @@ and [PC networking and Zenoh configuration](https://vitadynamics.feishu.cn/wiki/
 
 | Main demo | Behavior already implemented |
 |---|---|
-| `examples/gripper_external.py` | One entry for read-only gripper info/state, single-side target/return and dual-side sine; motion shares body zero/hold and one EXTERNAL lifecycle. |
-| `examples/brainco_hand_external.py` | Independent hand info/state/touch and authorized hand motion; `examples/brainco_capture.py` records/exports feedback. |
-| `examples/teleop_policy.py` | PC-local ONNX inference and gamepad input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
+| `examples/gripper/gripper_external.py` | One entry for read-only gripper info/state, single-side target/return and dual-side sine; motion shares body zero/hold and one EXTERNAL lifecycle. |
+| `examples/brainco_hand/brainco_hand_external.py` | Independent hand info/state/touch and authorized hand motion; `examples/brainco_hand/brainco_capture.py` records/exports feedback. |
+| `examples/teleop_policy/teleop_policy.py` | PC-local ONNX inference and gamepad input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
 
-Basic examples remain `examples/external_control.py` for body EXTERNAL,
-`examples/body_state_subscriber.py` for read-only BodyState, and
-`examples/fixed_stand_pose.py` as the robot-profile zero-pose helper.
+Basic examples remain `examples/external_control/external_control.py` for body EXTERNAL,
+`examples/body_state_subscriber/body_state_subscriber.py` for read-only BodyState, and
+`examples/fixed_stand_pose/fixed_stand_pose.py` as the robot-profile zero-pose helper.
 The policy demo is not limited to offline use; installation or `--help`
 does not authorize live motion.
 
@@ -140,7 +140,7 @@ test ! -e "$PC_PROFILE" && install -m 600 config/pc_session_peer.json5 "$PC_PROF
 ${EDITOR:-vi} "$PC_PROFILE"
 export ZENOH_SESSION_CONFIG_URI="$PC_PROFILE"
 test -r "$ZENOH_SESSION_CONFIG_URI"
-python examples/body_state_subscriber.py --group default --timeout 5
+python examples/body_state_subscriber/body_state_subscriber.py --group default --timeout 5
 ```
 
 The last command connects to the robot and reads feedback; run it only with
@@ -151,7 +151,7 @@ blocker; do not remove it to connect.
 
 ## Motion example
 
-`examples/external_control.py` requests control and moves 30 installed body joints in the public 31 roster.
+`examples/external_control/external_control.py` requests control and moves 30 installed body joints in the public 31 roster.
 Review its targets and gains for the specific robot, and obtain explicit
 motion authorization, reliable support, an attendant and emergency-stop access.
 Installation and read-only checks do not authorize motion.
@@ -175,7 +175,7 @@ The pinned public `0.1.4` wheel provides the new hand roots; the older
 With connection authorization and the configured peer profile, read both hands:
 
 ```bash
-python examples/brainco_hand_external.py --dry-run --side both --group default --timeout 5
+python examples/brainco_hand/brainco_hand_external.py --dry-run --side both --group default --timeout 5
 ```
 
 The default entry is also read-only: no lease, hand command or touch write.
@@ -200,7 +200,7 @@ After separate on-site motion authorization, support, an attendant and an
 emergency stop, a right-hand sequential round can be run with:
 
 ```bash
-python examples/brainco_hand_external.py --side right --group default --timeout 5 --body-gains zero --pattern sequential --confirm-motion
+python examples/brainco_hand/brainco_hand_external.py --side right --group default --timeout 5 --body-gains zero --pattern sequential --confirm-motion
 ```
 
 The default speed is **20 degrees/s**, converted to float32 rad/s and checked
@@ -222,7 +222,7 @@ which must confirm PASSIVE. There is no automatic neutral hand trajectory;
 PASSIVE can let loaded body limbs fall. A killed client does not guarantee
 lease release. Hand session/sequence and body EXTERNAL generation are separate.
 
-`examples/brainco_capture.py` subscribes to independent hand topics plus body
+`examples/brainco_hand/brainco_capture.py` subscribes to independent hand topics plus body
 BodyState/ControlStatus (and historical LowCmd/LowState recordings) and exports MCAP with the optional `hil` extra.
 Missing or nonfinite hand feedback is retained as JSON null, never a synthetic
 zero. Five-stage robot timestamps use Vita host microseconds; zero future stages
@@ -266,7 +266,7 @@ converted into one another or into robot/device acquisition clock domains.
 The single-frame CLI uses this same read-only source:
 
 ```bash
-python examples/body_state_subscriber.py --group default --timeout 5
+python examples/body_state_subscriber/body_state_subscriber.py --group default --timeout 5
 ```
 
 ## Development and offline packaging
@@ -364,7 +364,7 @@ and reports. It does not establish robot performance or motion acceptance.
 
 ## Independent AGX grippers (in preparation)
 
-The single `examples/gripper_external.py` entry contains the EXTERNAL lifecycle,
+The single `examples/gripper/gripper_external.py` entry contains the EXTERNAL lifecycle,
 body zero/hold, single-side targets/return and optional dual-side sine mode.
 `GripperClient` uses `/sdk/foot_humanoid/gripper/<left|right>/{cmd,state,info}`.
 It shares the same `GripperInfo` DTO with `get_robot_info`; there is no per-side
@@ -372,7 +372,7 @@ info RPC and no gripper slot in the 31-joint BodyCmd. The default example and
 `--dry-run` only subscribe, without ownership or command publication:
 
 ```bash
-python examples/gripper_external.py --side right --dry-run --group default --timeout 5
+python examples/gripper/gripper_external.py --side right --dry-run --group default --timeout 5
 ```
 
 `publish_target(q, dq=0, torque_cmd_nm=None)` uses absolute **total opening in m**
@@ -390,7 +390,7 @@ After explicit on-site authorization, suspension/support, an attendant and an
 emergency stop, choose a target from the actual Info limits and run:
 
 ```bash
-python examples/gripper_external.py --side right --target-m "$TARGET_OPENING_M" --confirm-motion
+python examples/gripper/gripper_external.py --side right --target-m "$TARGET_OPENING_M" --confirm-motion
 ```
 
 The example enters EXTERNAL through the existing body preflight/PREPARE/COMMIT,
@@ -421,12 +421,12 @@ period and 30 s of sine streaming; transitions add to the total runtime.
 share one time phase but do not promise atomic device output or arrival.
 
 ```bash
-python examples/gripper_external.py --side both --pattern sine --body-pose zero --body-gains hold --period-s 10 --duration 30 --confirm-motion
+python examples/gripper/gripper_external.py --side both --pattern sine --body-pose zero --body-gains hold --period-s 10 --duration 30 --confirm-motion
 ```
 
 ## PC policy example (in preparation)
 
-`examples/teleop_policy.py` subscribes to BodyState, discovers the actual body
+`examples/teleop_policy/teleop_policy.py` subscribes to BodyState, discovers the actual body
 roster, runs a local action 17 ONNX policy, and uses the same EXTERNAL lease and
 CANCEL exit. Before every live inference it waits up to the existing `--timeout`
 for a strictly increasing BodyState `state_id`; unchanged or older feedback is
@@ -456,3 +456,16 @@ replace it with the delivered shoes model and recheck metadata/profile parity
 when available. The example does not replace the robot's complete action17 FSM,
 VR/upper stream or hardware validation. Live motion remains subject to the
 existing on-site authorization and emergency-stop requirements above.
+
+## Demo 目录
+
+每个目录包含运行说明、前提与退出方式（从仓库/离线包根运行命令）：
+
+- [velocity_mode](examples/velocity_mode/README.md)
+- [wbc_tracking_mode](examples/wbc_tracking_mode/README.md)
+- [teleop_policy](examples/teleop_policy/README.md)
+- [brainco_hand](examples/brainco_hand/README.md)
+- [gripper](examples/gripper/README.md)
+- [external_control](examples/external_control/README.md)
+- [fixed_stand_pose](examples/fixed_stand_pose/README.md)
+- [body_state_subscriber](examples/body_state_subscriber/README.md)

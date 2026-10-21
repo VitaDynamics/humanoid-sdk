@@ -14,8 +14,8 @@ try:
 except ImportError:
     raise unittest.SkipTest('install the policy demo extras to run preflight tests')
 
-from examples import velocity_mode
-from examples.velocity_mode_policy import VelocityModePolicy
+from examples.velocity_mode import velocity_mode
+from examples.velocity_mode.velocity_mode_policy import VelocityModePolicy
 from locomotion_aorta._policy_state import ASAMPLE_BODY_JOINT_NAMES
 from locomotion_aorta.wbc_tracking_policy import CONTRACT_KEY
 from test_wbc_tracking_policy import FakeClock, FakeController, FakeModel, example, policy
@@ -85,7 +85,7 @@ class PolicyPreflightTest(unittest.TestCase):
             model_path, log_path = Path(temp)/'model.onnx', Path(temp)/'wbc.jsonl'
             model_path.write_bytes(b'explicit unit model; inference mocked')
             argv = ['wbc_tracking_mode', '--live', '--confirm-motion', '--model', str(model_path),
-                    '--profile', str(ROOT/'examples/wbc_tracking_asample.json'),
+                    '--profile', str(ROOT/'examples/wbc_tracking_mode/wbc_tracking_asample.json'),
                     '--duration', '.041', '--log', str(log_path)]
             with patch.object(sys, 'argv', argv), \
                  patch.dict('os.environ', {'ZENOH_SESSION_CONFIG_URI': 'unit-only-no-transport'}), \

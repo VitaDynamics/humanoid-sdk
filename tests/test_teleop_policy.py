@@ -8,7 +8,7 @@ import threading
 from types import SimpleNamespace as NS
 import unittest
 
-from examples.teleop_policy import JoyCommand, Policy, bodycmd, live, objects
+from examples.teleop_policy.teleop_policy import JoyCommand, Policy, bodycmd, live, objects
 
 
 ROOT = Path(__file__).parent / "fixtures/teleop"

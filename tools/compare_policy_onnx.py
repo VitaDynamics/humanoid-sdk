@@ -34,7 +34,7 @@ def collect(args):
     if args.kind == 'velocity':
         # Source example is an input to the acceptance runner, not an import of
         # a second SDK: sys.path still resolves the installed SDK under test.
-        sys.path.insert(0, str(Path(args.sdk_source)/'examples'))
+        sys.path.insert(0, str(Path(args.sdk_source)/'examples/velocity_mode'))
         from velocity_mode_policy import VelocityModePolicy
         policy = VelocityModePolicy(args.locomotion_dir)
         model = policy.model_path

@@ -70,7 +70,7 @@ class PublicPolicyStateTest(unittest.TestCase):
 
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'install .[velocity-demo] for PyYAML')
     def test_velocity_lazy_native_model_and_public_roster(self):
-        from examples.velocity_mode_policy import VelocityModePolicy
+        from examples.velocity_mode.velocity_mode_policy import VelocityModePolicy
         import yaml
         metadata = json.loads((Path(__file__).parent/'fixtures/velocity_model_metadata.json').read_text())
         calls = []

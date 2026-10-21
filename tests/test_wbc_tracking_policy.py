@@ -20,7 +20,7 @@ from locomotion_aorta.wbc_tracking_policy import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('tracking_example', ROOT/'examples/wbc_tracking_mode.py')
+spec = importlib.util.spec_from_file_location('tracking_example', ROOT/'examples/wbc_tracking_mode/wbc_tracking_mode.py')
 example = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(example)
 
@@ -28,7 +28,7 @@ spec.loader.exec_module(example)
 def policy():
     raw = (ROOT/'tests/fixtures/actor_g1_contract.json').read_text()
     contract = Contract.from_metadata({CONTRACT_KEY: raw})
-    return WbcTrackingPolicy(contract, json.loads((ROOT/'examples/wbc_tracking_asample.json').read_text()))
+    return WbcTrackingPolicy(contract, json.loads((ROOT/'examples/wbc_tracking_mode/wbc_tracking_asample.json').read_text()))
 
 
 class TrackingMathTest(unittest.TestCase):

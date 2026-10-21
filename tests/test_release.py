@@ -55,11 +55,34 @@ class ReleaseTest(unittest.TestCase):
             (root / "CLAUDE.md").symlink_to("AGENTS.md")
             for name in ("examples", "python/locomotion_aorta", "config", "dist", "wheels"):
                 (root / name).mkdir(parents=True)
-            examples = ("brainco_hand_external.py", "brainco_capture.py", "gripper_external.py",
-                        "external_control.py", "body_state_subscriber.py", "teleop_policy.py",
-                        "fixed_stand_pose.py", "fixed_stand_profile.json", "action17_contract.json")
+            examples = (
+                'body_state_subscriber/README.md',
+                'body_state_subscriber/body_state_subscriber.py',
+                'brainco_hand/README.md',
+                'brainco_hand/brainco_capture.py',
+                'brainco_hand/brainco_hand_external.py',
+                'external_control/README.md',
+                'external_control/external_control.py',
+                'fixed_stand_pose/README.md',
+                'fixed_stand_pose/fixed_stand_pose.py',
+                'fixed_stand_pose/fixed_stand_profile.json',
+                'gripper/README.md',
+                'gripper/gripper_external.py',
+                'teleop_policy/README.md',
+                'teleop_policy/action17_contract.json',
+                'teleop_policy/teleop_policy.py',
+                'velocity_mode/README.md',
+                'velocity_mode/velocity_mode.py',
+                'velocity_mode/velocity_mode_latency.py',
+                'velocity_mode/velocity_mode_policy.py',
+                'wbc_tracking_mode/README.md',
+                'wbc_tracking_mode/wbc_tracking_asample.json',
+                'wbc_tracking_mode/wbc_tracking_mode.py',
+            )
             for name in examples:
-                shutil.copyfile(ROOT / "examples" / name, root / "examples" / name)
+                target = root / "examples" / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / "examples" / name, target)
             source = ROOT / "config/pc_session_peer.json5"
             if source.exists():
                 shutil.copyfile(source, root / "config/pc_session_peer.json5")

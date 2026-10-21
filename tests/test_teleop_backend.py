@@ -6,7 +6,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest import mock
 
-from examples.teleop_policy import Model
+from examples.teleop_policy.teleop_policy import Model
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -83,9 +83,9 @@ class Block:
             raise ImportError('optional dependency imported: ' + fullname)
 sys.meta_path.insert(0, Block())
 import locomotion_aorta
-from examples import teleop_policy
+from examples.teleop_policy import teleop_policy
 sys.argv = ['teleop_policy.py', '--help']
-runpy.run_path('examples/teleop_policy.py', run_name='__main__')
+runpy.run_path('examples/teleop_policy/teleop_policy.py', run_name='__main__')
 """
         result = subprocess.run([sys.executable, "-c", script], cwd=ROOT,
                                 capture_output=True, text=True, timeout=30)

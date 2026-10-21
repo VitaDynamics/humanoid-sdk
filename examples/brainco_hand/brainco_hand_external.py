@@ -14,7 +14,7 @@ from locomotion_aorta import ExternalController, ExternalPhase, HandClient, Hand
 from locomotion_aorta.hand import validate_info
 # Load the existing sibling example even in isolated Python (-I) bundle checks.
 _body_spec = importlib.util.spec_from_file_location(
-    'brainco_body_hold_baseline', Path(__file__).with_name('external_control.py'))
+    'brainco_body_hold_baseline', Path(__file__).resolve().parents[1] / 'external_control/external_control.py')
 body = importlib.util.module_from_spec(_body_spec)
 _body_spec.loader.exec_module(body)
 

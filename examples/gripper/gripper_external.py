@@ -15,7 +15,7 @@ from locomotion_aorta import InhibitReason
 # The existing SDK body example remains the authority for its unchanged guards.
 _body_spec = importlib.util.spec_from_file_location(
     'gripper_body_hold_baseline',
-    Path(__file__).with_name('external_control.py'))
+    Path(__file__).resolve().parents[1] / 'external_control/external_control.py')
 body = importlib.util.module_from_spec(_body_spec)
 _body_spec.loader.exec_module(body)
 
@@ -77,7 +77,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
     plan = None
     if body_pose == 'zero':
         spec = importlib.util.spec_from_file_location(
-            'gripper_fixed_stand_pose', Path(__file__).with_name('fixed_stand_pose.py'))
+            'gripper_fixed_stand_pose', Path(__file__).resolve().parents[1] / 'fixed_stand_pose/fixed_stand_pose.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         plan = module.FixedStandPose(info)  # Reject all bad/missing zero limits before PREPARE.

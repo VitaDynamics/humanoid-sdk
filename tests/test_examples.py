@@ -4,7 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from examples import external_control, body_state_subscriber
+from examples.external_control import external_control
+from examples.body_state_subscriber import body_state_subscriber
 from locomotion_aorta import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,

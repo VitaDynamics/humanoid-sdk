@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 import struct
 
-from examples.teleop_policy import Model, Policy, objects
+from examples.teleop_policy.teleop_policy import Model, Policy, objects
 from test_teleop_policy import NAMES
 
 

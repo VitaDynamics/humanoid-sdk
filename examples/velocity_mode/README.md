@@ -1,3 +1,23 @@
+# 速度模式 demo
+
+参考机器人 action 13/HUMANOID 的模型与 profile，在 SDK 中本地推理后请求 **EXTERNAL**；不是给机器人发送 action 13。`--shadow` 只读控制面，`--live` 会控制本体。需要完整公共31槽配置、已就绪反馈、匹配模型和部署 locomotion 目录。
+
+```bash
+python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[velocity-demo]==0.2.0'
+python examples/velocity_mode/velocity_mode.py --help
+python examples/velocity_mode/velocity_mode.py --shadow --locomotion-dir /path/to/locomotion --log /new/path/velocity-shadow.jsonl --duration 60
+```
+
+`--log` 使用新路径；`--duration 0`/省略为不限时。0.2.0 默认 Aorta 方向输入依赖尚未交付的匹配 Joy 绑定，不能靠安装错误消息版本补齐；选择 ROS2 输入也需部署匹配的 ROS2 环境。下文保留实际方向依赖与 S0–S6 时钟说明；日志中的推理耗时、实际 session/sequence、applied 键不等于硬件动作完成。
+
+## 环境与安全
+
+以下命令从 SDK 仓库或离线发布包根目录运行。安装命令面向含完整 wheelhouse 的离线发布包（含所需 extra 依赖）；缺包时先获取匹配产物，不安装别的消息版本或绕过依赖检查。使用独立 CPython 3.10 venv；依赖版本以根目录 `compatibility.json` 为准。机器人上的 SDK 主机先 source `/app/script/env.sh`，再激活 venv；PC 使用部署方提供的 peer 配置。设置 `ZENOH_SESSION_CONFIG_URI` 和与机器人一致的 `--group`，不复制认证内容。安装与 `--help` 不代表已获得运动许可。
+
+现场运动须单独授权并确认吊装/支撑、活动空间、夹点与可用急停；由现场人员操作。`--confirm-motion` 仅为程序确认参数。异常先停测试，由现场人员使用物理急停，不自动重试、清错或重启。运动例程正常退出走 CANCEL→PASSIVE；PASSIVE 可能使负载下落，客户端崩溃不能保证释放控制权。只读与离线模式不进入 EXTERNAL，不需要或发送 CANCEL。
+
+## 原合同与详细说明
+
 # Velocity mode
 
 `action13_external.py` / `Action13Policy` are now `velocity_mode.py` /
@@ -14,7 +34,7 @@ paths remain their original deployment paths. In particular the transition
 parameters are read from `config/locomotion_foot_humanoid_asample.yaml`.
 
 ```bash
-python examples/velocity_mode.py --help
+python examples/velocity_mode/velocity_mode.py --help
 ```
 
 `--shadow` is read-only for control: it never constructs a control publisher or

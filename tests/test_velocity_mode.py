@@ -11,10 +11,10 @@ missing = [name for name in ("numpy", "yaml") if importlib.util.find_spec(name) 
 if missing:
     raise unittest.SkipTest(f"optional velocity mode dependencies unavailable: {', '.join(missing)}")
 import numpy as np
-from examples import velocity_mode as example
-from examples import velocity_mode_latency as latency
-from examples.velocity_mode_latency import CycleLog, NOT_MEASURED
-from examples.velocity_mode_policy import VelocityModePolicy
+from examples.velocity_mode import velocity_mode as example
+from examples.velocity_mode import velocity_mode_latency as latency
+from examples.velocity_mode.velocity_mode_latency import CycleLog, NOT_MEASURED
+from examples.velocity_mode.velocity_mode_policy import VelocityModePolicy
 
 
 def frame_state(state_id):

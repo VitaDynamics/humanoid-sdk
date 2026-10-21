@@ -16,7 +16,7 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from examples import gripper_external as demo
+from examples.gripper import gripper_external as demo
 from locomotion_aorta import BODY_CMD_TOPIC
 from test_examples import FakeClock, RecordingController
 from test_fixed_stand_pose import body_info

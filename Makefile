@@ -8,14 +8,14 @@ check check-hil: export PYTHONPATH := python:tests
 
 check: test
 	$(PYTHON) -m pip check
-	$(PYTHON) examples/body_state_subscriber.py --help
-	$(PYTHON) examples/external_control.py --help
-	$(PYTHON) examples/teleop_policy.py --help
-	$(PYTHON) examples/brainco_hand_external.py --help
-	$(PYTHON) examples/brainco_capture.py --help
-	$(PYTHON) examples/gripper_external.py --help
-	$(PYTHON) examples/velocity_mode.py --help
-	$(PYTHON) examples/wbc_tracking_mode.py --help
+	$(PYTHON) examples/body_state_subscriber/body_state_subscriber.py --help
+	$(PYTHON) examples/external_control/external_control.py --help
+	$(PYTHON) examples/teleop_policy/teleop_policy.py --help
+	$(PYTHON) examples/brainco_hand/brainco_hand_external.py --help
+	$(PYTHON) examples/brainco_hand/brainco_capture.py --help
+	$(PYTHON) examples/gripper/gripper_external.py --help
+	$(PYTHON) examples/velocity_mode/velocity_mode.py --help
+	$(PYTHON) examples/wbc_tracking_mode/wbc_tracking_mode.py --help
 	test -L CLAUDE.md
 	test "$$(readlink CLAUDE.md)" = AGENTS.md
 	cmp AGENTS.md CLAUDE.md

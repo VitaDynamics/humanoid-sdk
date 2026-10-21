@@ -6,7 +6,7 @@ import signal
 import unittest
 from unittest.mock import patch
 
-from examples import brainco_hand_external as demo
+from examples.brainco_hand import brainco_hand_external as demo
 from locomotion_aorta import BODY_CMD_TOPIC, HandState, HandJointState, HandCmd, HandJointCmd
 from test_examples import FakeClock, RecordingController
 from test_hand import codec, info_obj

@@ -9,7 +9,7 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "velocity_mode"))
 from velocity_mode import decode_state
 from velocity_mode_policy import VelocityModePolicy
 from lowlevel.BodyState import BodyState

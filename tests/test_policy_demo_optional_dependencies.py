@@ -39,7 +39,7 @@ class OptionalPolicyDependenciesTest(unittest.TestCase):
         for missing in (['numpy'], ['yaml'], ['numpy', 'yaml']):
             for script in ('velocity_mode', 'wbc_tracking_mode'):
                 with self.subTest(missing=missing, script=script):
-                    result = self.run_without(missing, f'examples/{script}.py', '--help')
+                    result = self.run_without(missing, f'examples/{script}/{script}.py', '--help')
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn('usage:', result.stdout)
 
