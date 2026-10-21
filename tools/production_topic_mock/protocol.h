@@ -9,7 +9,8 @@
 namespace production_mock {
 constexpr size_t kSlots = 31;
 struct Request {
-  int version = 0, operation = 0;
+  uint32_t version = 0;
+  int operation = 0;
   std::string request_id, client_id, lease_id, action;
 };
 struct Ack {

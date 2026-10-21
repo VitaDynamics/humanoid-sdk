@@ -14,12 +14,37 @@ HERE = Path(__file__).resolve().parent
 SCHEMAS = ("body_state", "body_cmd", "get_robot_info", "control_request", "control_ack", "control_status")
 PROTOCOL_CHECKS = r'''
 #include "protocol.h"
+#include "control_request_generated.h"
 #include <cassert>
 #include <limits>
+#include <type_traits>
+#include <utility>
 using namespace production_mock;
+static_assert(std::is_same_v<decltype(Request::version),
+                            decltype(std::declval<const locomotion_sdk::ControlRequest&>()
+                                         .protocol_version())>);
 int main() {
   Protocol p(10,100,50);
   Request r{2,1,"req","client","","EXTERNAL"};
+  for (const uint32_t version : {uint32_t{2}, uint32_t{0x80000002},
+                                 std::numeric_limits<uint32_t>::max()}) {
+    locomotion_sdk::ControlRequestT wire;
+    wire.protocol_version=version;
+    wire.operation=locomotion_sdk::ControlOperation_PREPARE;
+    wire.request_id="version-check";
+    wire.client_id="client";
+    wire.action_name="EXTERNAL";
+    flatbuffers::FlatBufferBuilder builder;
+    builder.Finish(locomotion_sdk::ControlRequest::Pack(builder,&wire));
+    const std::vector<uint8_t> bytes(builder.GetBufferPointer(),
+                                    builder.GetBufferPointer()+builder.GetSize());
+    const auto decoded=DecodeRequest(bytes);
+    assert(decoded.version==version);
+    if (version!=2) {
+      assert(p.RequestControl(decoded,999).error==1001);
+      assert(p.status().phase==0);
+    }
+  }
   auto prep=p.RequestControl(r,1000); assert(prep.accepted && !prep.lease_id.empty());
   assert(p.status().phase==2);
   auto duplicate=p.RequestControl(r,1001); assert(duplicate.lease_id==prep.lease_id);
@@ -132,7 +157,8 @@ def build(args):
     run([args.cxx, "-pthread", *objects, core, "-Wl,-rpath," + str(directory), "-o", binary])
     checks = directory / "protocol-checks.cpp"
     checks.write_text(PROTOCOL_CHECKS)
-    run([*flags, checks, directory / "protocol.o", "-o", directory / "protocol-checks"])
+    run([*flags, checks, directory / "protocol.o", directory / "request.o",
+         "-o", directory / "protocol-checks"])
     if args.run_protocol_checks:
         if args.target_arch != platform.machine():
             raise ValueError("never execute cross-built ARM checks on the build host")
