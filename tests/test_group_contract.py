@@ -103,5 +103,17 @@ class GroupContractTest(unittest.TestCase):
                 self.create('pull','robot-A')
             self.assertFalse(Node.instances[-1].endpoints)
 
+    def test_mock_runner_mapping_with_explicit_group_passes(self):
+        from tools.production_topic_mock.run import child_environment
+        group='mock-sdkmain-'+('a'*19)
+        values=child_environment({},group,'/tmp/mock-private-peer.json')
+        with patch.dict(os.environ,values,clear=True):
+            source=self.create('pull',group)
+            self.assertEqual(source.group,group)
+            self.assertEqual(Node.instances[-1].actual,group)
+            self.assertEqual(len(Node.instances[-1].endpoints),2)
+            source.close()
+
+
 if __name__=='__main__':
     unittest.main()
