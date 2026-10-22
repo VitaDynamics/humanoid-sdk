@@ -42,7 +42,7 @@ class FetchDependenciesTest(unittest.TestCase):
         self.assertEqual(self.manifest["dependency_release_tag"], "v0.1.0-rc.4")
         self.assertEqual(self.manifest["dependency_release_repository"], "VitaDynamics/humanoid-sdk")
         self.assertEqual(self.manifest["wheel_sha256"]["vbot_humanoid_msgs-0.1.5-py3-none-any.whl"],
-                         "371a06baefebaa4ceff88dd430784ea47c960e372fe4abe1e3be2c31c1f79646")
+                         "9f2949f0f4748554627c624c93cf382159dd6a4fbbd845d7a83ed2af241e2afd")
 
     def test_each_architecture_downloads_four_exact_assets_from_the_sdk_release(self):
         for arch in ("x86_64", "aarch64"):

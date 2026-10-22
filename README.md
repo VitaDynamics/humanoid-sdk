@@ -3,7 +3,7 @@
 SDK **0.2.1** is in preparation; packaging and release are pending.
 This candidate pins the generated public body/EE/Joy schema **0.1.5** and BODY
 protocol 2. The actual generated wheel SHA-256 is
-`371a06baefebaa4ceff88dd430784ea47c960e372fe4abe1e3be2c31c1f79646`.
+`9f2949f0f4748554627c624c93cf382159dd6a4fbbd845d7a83ed2af241e2afd`.
 It preserves the prior 17 BFBS contracts and adds Joy as the eighteenth root.
 Schema generation is complete; SDK packaging, full acceptance and release
 publication are pending. Use only the complete wheelhouse and hashes in

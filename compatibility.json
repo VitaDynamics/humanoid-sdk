@@ -18,7 +18,7 @@
     "aorta_sdk-2026.10.20-py3-none-linux_aarch64.whl": "559f8c22871fda131e6d706fa9dd5edc4b07fa3297cf42f51a844318bf9ff7ba",
     "aorta_sdk-2026.10.20-py3-none-linux_x86_64.whl": "e0909b322f20b78a2b043a9605b5f495f8555039480999273fb4e6ad0eb1c5f0",
     "flatbuffers-25.12.19-py2.py3-none-any.whl": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
-    "vbot_humanoid_msgs-0.1.5-py3-none-any.whl": "371a06baefebaa4ceff88dd430784ea47c960e372fe4abe1e3be2c31c1f79646"
+    "vbot_humanoid_msgs-0.1.5-py3-none-any.whl": "9f2949f0f4748554627c624c93cf382159dd6a4fbbd845d7a83ed2af241e2afd"
   },
   "dependency_release_tag": "v0.1.0-rc.4",
   "aorta_abi_version": 13,
