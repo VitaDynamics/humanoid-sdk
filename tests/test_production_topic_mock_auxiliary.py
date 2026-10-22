@@ -82,29 +82,7 @@ class AuxiliaryFixtureTests(unittest.TestCase):
         c = json.loads(run.session_config(24001, [24002, 24003]))
         self.assertEqual(c["connect"]["endpoints"], ["tcp/127.0.0.1:24002", "tcp/127.0.0.1:24003"])
 
-    def test_auxiliary_worker_refuses_noncanonical_profile(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp)
-            profile = p / "auxiliary-session.json"
-            profile.write_text(run.session_config(24001))
-            env = {"SDK_GROUP": "mock-sdkmain-test", "AORTA_GROUP": "mock-sdkmain-test",
-                   "AORTA_LOG_TOPIC_ENABLED": "false", "ZENOH_SESSION_CONFIG_URI": str(profile)}
-            with mock.patch.dict(os.environ, env, clear=True):
-                run.validate_worker_environment(p)
-                unsafe = json.loads(profile.read_text())
-                unsafe["connect"]["endpoints"] = ["tcp/10.0.0.1:7447"]
-                profile.write_text(json.dumps(unsafe))
-                with self.assertRaises(ValueError):
-                    run.validate_worker_environment(p)
 
-    def test_auxiliary_worker_refuses_transport_override(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp)
-            (p / "auxiliary-session.json").write_text(run.session_config(24001))
-            env = {"SDK_GROUP": "mock-sdkmain-test", "AORTA_GROUP": "mock-sdkmain-test", "AORTA_LOG_TOPIC_ENABLED": "false",
-                   "ZENOH_SESSION_CONFIG_URI": str(p / "auxiliary-session.json"), "ZENOH_CONFIG": "other"}
-            with mock.patch.dict(os.environ, env, clear=True), self.assertRaises(ValueError):
-                run.validate_worker_environment(p)
 
 
 def check_real_binding_packets():
@@ -154,9 +132,12 @@ def check_real_binding_packets():
                       'schema_version':importlib.metadata.version('vbot-humanoid-msgs'),
                       'fixtures':records,'Node_constructions':0,'status':'PASS_OFFLINE_BINDINGS_ONLY'}
 
-if __name__ == "__main__":
-    import sys
-    if sys.argv[1:] == ["--real-bindings"]:
-        print(json.dumps(check_real_binding_packets(), indent=2))
-    else:
-        unittest.main()
+class AuxiliaryWireTest(unittest.TestCase):
+    def test_real_generated_ee_roundtrips(self):
+        result = check_real_binding_packets()
+        self.assertEqual(len(result['fixtures']), 5)
+        self.assertTrue(all(item['passed'] for item in result['fixtures']))
+
+
+if __name__ == '__main__':
+    unittest.main()

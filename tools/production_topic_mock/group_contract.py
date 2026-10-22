@@ -1,19 +1,9 @@
 """One pinned Aorta group limit shared with the C++ endpoint precheck."""
-from pathlib import Path
-import re
 import secrets
 
-# Aorta's private MAX_GROUP_LEN is mirrored once, in aorta_contract.h.
-_declaration = re.search(r"MAX_GROUP_LEN\s*=\s*(\d+)\s*;",
-                         Path(__file__).with_name("aorta_contract.h").read_text())
-if _declaration is None:
-    raise RuntimeError("missing pinned Aorta MAX_GROUP_LEN declaration")
-MAX_GROUP_LEN = int(_declaration[1])
-_prefix = re.search(r'GROUP_PREFIX\[\]\s*=\s*"([^"]+)"',
-                    Path(__file__).with_name("aorta_contract.h").read_text())
-if _prefix is None:
-    raise RuntimeError("missing pinned Mock group prefix declaration")
-GROUP_PREFIX = _prefix[1]
+# Pinned Aorta 2026.10.20 group limit; prefix remains the runner contract.
+MAX_GROUP_LEN = 32
+GROUP_PREFIX = "mock-sdkmain-"
 
 
 def validate_group(group):
