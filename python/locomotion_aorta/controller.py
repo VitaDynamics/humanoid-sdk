@@ -1,4 +1,6 @@
 import math
+import operator
+import os
 import threading
 import time
 import uuid
@@ -66,6 +68,7 @@ class ExternalController:
         node_name: str | None = None,
         client_id: str | None = None,
         _transport: Transport | None = None,
+        _subscribe_body_state: bool = True,
     ) -> None:
         self.group = _nonempty_text(group, "group")
         self.node_name = _nonempty_text(
@@ -81,6 +84,8 @@ class ExternalController:
         )
 
         self._condition = threading.Condition()
+        self._capture_publish_timing = os.environ.get("LOCOMOTION_AORTA_PUBLISH_TIMING") == "1"
+        self._publish_trace = threading.local()
         self._latest_body_state: BodyState | None = None
         self._body_info: BodyInfo | None = None
         self._latest_status: ControlStatus | None = None
@@ -94,9 +99,10 @@ class ExternalController:
         self._subscriptions: list[Any] = []
 
         try:
-            self._subscriptions.append(
-                self.transport.subscribe(BODY_STATE_TOPIC, self._on_body_state)
-            )
+            if _subscribe_body_state:
+                self._subscriptions.append(
+                    self.transport.subscribe(BODY_STATE_TOPIC, self._on_body_state)
+                )
             self._subscriptions.append(
                 self.transport.subscribe(CONTROL_ACK_TOPIC, self._on_ack)
             )
@@ -199,12 +205,43 @@ class ExternalController:
             raise
 
     def publish(self, command: BodyCmd) -> BodyCmd:
+        if not self._capture_publish_timing:
+            return self._publish(command)
+        trace = {'clock': 'monotonic_ns', 'outcome': 'raised'}
+        begin = time.perf_counter_ns()
+        self._publish_trace.last = trace
+        try:
+            result = self._publish(command, trace)
+            trace['outcome'] = 'returned'
+            return result
+        except BaseException as error:
+            trace['error_type'] = type(error).__name__
+            raise
+        finally:
+            trace['publish_total_ns'] = time.perf_counter_ns() - begin
+
+    @property
+    def publish_timing(self):
+        """Last publish diagnostics on this thread, or None when disabled."""
+        trace = getattr(self._publish_trace, 'last', None)
+        return dict(trace) if trace is not None else None
+
+    def _publish(self, command: BodyCmd, trace=None) -> BodyCmd:
+        waiting = time.perf_counter_ns() if trace is not None else 0
         with self._condition:
+            if trace is not None:
+                trace['condition_wait_ns'] = time.perf_counter_ns() - waiting
             self._ensure_open()
             population = None
             if self._body_info is not None and len(self._body_info.joints) == BODY_SLOTS:
                 population = tuple(j.populated for j in self._body_info.joints)
-            _validate_command(command, population)
+            validation = time.perf_counter_ns() if trace is not None else 0
+            try:
+                _validate_command(command, population)
+            finally:
+                if trace is not None:
+                    trace['validation_ns'] = time.perf_counter_ns() - validation
+            preparing = time.perf_counter_ns() if trace is not None else 0
             status = self._latest_status
             if not self._status_allows_publish(status):
                 raise NotRunningError(
@@ -238,7 +275,22 @@ class ExternalController:
                 ts_client_send_us=time.monotonic_ns() // 1000,
             )
             self._next_external_sequence += 1
-        self.transport.publish(BODY_CMD_TOPIC, external_command)
+            if trace is not None:
+                trace.update(session_id=external_command.session_id,
+                             sequence=external_command.sequence,
+                             session_replace_ns=time.perf_counter_ns() - preparing)
+        sending = time.perf_counter_ns() if trace is not None else 0
+        try:
+            self.transport.publish(BODY_CMD_TOPIC, external_command)
+        finally:
+            if trace is not None:
+                trace['transport_call_wall_ns'] = time.perf_counter_ns() - sending
+                getter = getattr(self.transport, '_last_publish_timing', None)
+                if getter is not None:
+                    try:
+                        trace.update(getter() or {})
+                    except Exception as error:
+                        trace['timing_error_type'] = type(error).__name__
         return external_command
 
     def exit_external(self, timeout: float) -> ControlStatus:
@@ -477,6 +529,16 @@ def _validate_command(command: BodyCmd, populated: tuple[bool, ...] | None = Non
         raise InvalidCommandError("joints must be a 31-slot tuple")
     if command.action != BodyCmdAction.EXTERNAL:
         raise InvalidCommandError("ExternalController requires EXTERNAL action")
+    for name in ('input_state_id', 'input_state_ts_real_us', 'ts_client_created_us'):
+        value = getattr(command, name)
+        if name == 'ts_client_created_us':
+            value = value or 0  # _publish fills unset creation times.
+        try:
+            value = operator.index(value)
+        except TypeError as error:
+            raise InvalidCommandError(f"{name} must be a uint64") from error
+        if not 0 <= value < 2**64:
+            raise InvalidCommandError(f"{name} must be a uint64")
     for index, motor in enumerate(command.joints):
         if not isinstance(motor, BodyJointCmd):
             raise InvalidCommandError(f"joints[{index}] must be a BodyJointCmd")

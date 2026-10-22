@@ -104,6 +104,9 @@ def decode_body_state(view: Any) -> BodyState:
                 imu_states=tuple(imus))
 
 
+_decode_body_state_python = decode_body_state  # Reference for native golden tests.
+
+
 def decode_robot_info(view: Any) -> RobotInfo:
     from ._hand_codec import decode_info
     from ._gripper_codec import decode_info as decode_gripper_info

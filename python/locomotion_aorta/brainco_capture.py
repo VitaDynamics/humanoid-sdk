@@ -189,7 +189,7 @@ class TraceWriter:
 
 def capture_live(output: Path, metadata, duration_s, *, group="default", capacity=256,
                  node_factory=None, bindings=None, monotonic=time.monotonic, marker_reader=None):
-    """Bounded, read-only capture. An incomplete file is retained on failure."""
+    """Read-only capture with a bounded callback queue and explicit drops."""
     metadata_checked(metadata)
     if type(duration_s) not in (int, float) or not math.isfinite(duration_s) or not 0 < duration_s <= 86400:
         raise ValueError("duration must be in (0,86400] seconds")
@@ -220,13 +220,12 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
             except queue.Full:
                 dropped += 1
     with output.open("x", encoding="utf-8") as stream:
-        writer = TraceWriter(stream, {**metadata, "requested_group": group}, "observer_monotonic_ns")
+        writer = TraceWriter(stream, {**metadata, "requested_group": group},
+            "observer_monotonic_ns")
         try:
             node = node_factory("brainco_hil_observer", group)
-            # Pinned Core resolves AORTA_GROUP and may ignore the constructor
-            # argument. Refuse silently observing another group.
-            if node.group() != group:
-                raise ValueError("effective Aorta group differs from --group; verify AORTA_GROUP/profile")
+            from ._group import require_node_group
+            require_node_group(node, group)
             for kind, topic in TOPICS.items():
                 node.create_subscriber_typed(bytes, topic,
                     lambda payload, ctx, kind=kind: receive(kind, payload, ctx),
@@ -240,7 +239,8 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
                     writer.write({"type": "marker", "label": label,
                                   "capture_timestamp_ns": time.monotonic_ns()})
                 try:
-                    item = pending.get(timeout=min(0.05, max(0, deadline - monotonic())))
+                    item = pending.get(timeout=min(0.05,
+                                                   max(0, deadline - monotonic())))
                 except queue.Empty:
                     continue
                 kind, payload, stamp, sequence, publisher = item

@@ -1,45 +1,42 @@
 #!/usr/bin/env python3
-"""Velocity mode over SDK 0.2.0, with TONIGHT/071 per-cycle latency records."""
+"""Velocity mode over SDK 0.2.1 with per-cycle latency records."""
 
 import argparse
 from dataclasses import dataclass
-import hashlib
 from importlib.metadata import version
 import os
+import signal
+import sys
 from pathlib import Path
 import threading
 import time
 import uuid
 
-from locomotion_aorta import ExternalController, BodyCmd, BodyJointCmd
-import locomotion_aorta
-from locomotion_aorta._body_codec import decode_body_state
-from locomotion_aorta.transport import (
-    _AortaTransport, _load_aorta_bindings,
-    BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC,
+from locomotion_aorta import (
+    PullController, PullTransport, BodyCmd, BodyJointCmd, JoyReader, ExternalPhase,
 )
+import locomotion_aorta
+
 
 try:
-    from .velocity_mode_latency import CycleLog, NOT_MEASURED, realtime_ns
     from .velocity_mode_policy import VelocityModePolicy
 except ImportError:
-    # Isolated (-I) bundle execution omits the script folder from sys.path.
+    # Isolated (-I) bundle execution does not put the script folder on sys.path.
     import importlib.util
-    def _sibling(name):
-        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + ".py"))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    _latency = _sibling("velocity_mode_latency")
-    CycleLog, NOT_MEASURED, realtime_ns = _latency.CycleLog, _latency.NOT_MEASURED, _latency.realtime_ns
-    VelocityModePolicy = _sibling("velocity_mode_policy").VelocityModePolicy
+    _policy_spec = importlib.util.spec_from_file_location(
+        "velocity_mode_policy", Path(__file__).with_name("velocity_mode_policy.py"))
+    _policy = importlib.util.module_from_spec(_policy_spec)
+    _policy_spec.loader.exec_module(_policy)
+    VelocityModePolicy = _policy.VelocityModePolicy
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from policy_support import (CycleLog, NOT_MEASURED, realtime_ns, publish_log_fields,
+                            LOWSTATE_WINDOW_S, joy_log_fields)
 
 
 PERIOD_S = 0.02
-# RobotStateTimeoutConfig in the source baseline; no new timeout parameter.
-INPUT_FRESHNESS_S = 1.0
 PERIOD_NS = int(PERIOD_S * 1_000_000_000)
-INPUT_FRESHNESS_NS = int(INPUT_FRESHNESS_S * 1_000_000_000)
 
 
 @dataclass(frozen=True)
@@ -52,186 +49,31 @@ class StateFrame:
     s0: int | str
     s1: int
     s2: int
+    pull_context_receive_stamp_ns: int = 0
 
 
-def decode_state(view, s1: int) -> StateFrame:
-    state = decode_body_state(view)
-    hip = next(imu for imu in state.imu_states if imu.location == 0)
-    q, dq = tuple(m.q for m in state.joints), tuple(m.dq for m in state.joints)
-    return StateFrame(state, q, dq, hip.state.gyroscope, hip.state.quaternion,
-                      state.ts_state_pub_us * 1000 if state.ts_state_pub_us else NOT_MEASURED,
-                      s1, realtime_ns())
+def read_frame(transport, timeout):
+    state = transport.wait_state(timeout)
+    hip = next(i for i, location in enumerate(state.imu_location) if location == 0)
+    if not state.imu_state_present[hip]:
+        raise ValueError('HIP IMU state is absent')
+    values = state.imu_values[hip]
+    return StateFrame(state, state.q, state.dq, values[4:7], values[:4],
+        state.ts_state_pub_us * 1000 if state.ts_state_pub_us else NOT_MEASURED,
+        state.received_realtime_ns, realtime_ns(), state.pull_context_receive_stamp_ns)
 
 
-class PolicyTransport(_AortaTransport):
-    """Reuse SDK body codecs/session protocol; shadow constructs no publishers."""
-
-    def __init__(self, *, group: str, shadow: bool) -> None:
-        self.condition = threading.Condition()
-        self.frame = None
-        self.observed_status = None
-        self.decode_error = None
-        if shadow:
-            # Native Aorta otherwise creates its own /log publisher, even
-            # when the Python transport never asks for a publisher.
-            os.environ["AORTA_LOG_TOPIC_ENABLED"] = "false"
-            self._bindings = _load_aorta_bindings()
-            self.node = self._bindings.aorta.Node(f"velocity_mode-shadow-{uuid.uuid4()}", group)
-            self.publishers = {}
-            self.subscriptions = []
-            self._closed = False
-            self._info_clients = {}
-            self._info_lock = threading.Lock()
-        else:
-            super().__init__(node_name=f"velocity_mode-live-{uuid.uuid4()}", group=group)
-
-    def subscribe(self, topic, callback):
-        if topic != BODY_STATE_TOPIC:
-            return super().subscribe(topic, callback)
-
-        def decoder(payload):
-            # Callback entry before FlatBuffers root lookup or materialization.
-            s1 = realtime_ns()
-            return self._bindings.body_state_decoder(payload), s1
-
-        def received(decoded, context):
-            view, s1 = decoded
-            try:
-                frame = decode_state(view, s1)
-            except Exception as error:
-                with self.condition:
-                    self.decode_error = error
-                    self.condition.notify_all()
-                return
-            with self.condition:
-                self.frame = frame
-                self.condition.notify_all()
-            callback(frame.state)
-
-        sub = self.node.create_subscriber_typed(
-            decoder, topic, received, qos=self._bindings.aorta.QoS.sensor_data()
-        )
-        self.subscriptions.append(sub)
-        return sub
-
-    def record_status(self, status):
-        with self.condition:
-            self.observed_status = status
-            self.condition.notify_all()
-
-    def wait_ready(self, timeout: float) -> StateFrame:
-        with self.condition:
-            ready = self.condition.wait_for(
-                lambda: self.decode_error is not None or
-                (self.frame is not None and self.observed_status is not None), timeout
-            )
-            if self.decode_error is not None:
-                raise self.decode_error
-            if not ready:
-                raise TimeoutError("waiting for body state and ControlStatus")
-            if self.observed_status.current_action == "EXTERNAL":
-                raise RuntimeError("an EXTERNAL session is already active")
-            return self.frame
-
-    def latest(self) -> StateFrame:
-        with self.condition:
-            if self.decode_error is not None:
-                raise self.decode_error
-            return self.frame
-
-
-class DirectionInput:
-    def __init__(self, transport, source):
-        import rclpy
-        from rclpy.node import Node
-        from sensor_msgs.msg import Joy
-        from geometry_msgs.msg import Twist
-
-        if source == "aorta":
-            try:
-                from locomotion.Joy import Joy as AortaJoy
-            except ImportError as error:
-                raise RuntimeError("Aorta direction input requires deployment-matched locomotion.Joy bindings; "
-                                   "the public SDK wheel set does not include them. "
-                                   "Select --joy-source ros2 only when explicitly intended.") from error
-
-        class NoPublisher:
-            def publish(self, _message):
-                pass
-
-        class SubscriberNode(Node):
-            def create_publisher(self, msg_type, topic, qos_profile, **kwargs):
-                # rclpy Node otherwise creates /parameter_events implicitly.
-                if topic == "/parameter_events":
-                    return NoPublisher()
-                raise RuntimeError(f"subscriber node cannot publish {topic}")
-
-        self.rclpy = rclpy
-        self.lock = threading.Lock()
-        self.axes = ()
-        self.twist = (0.0, 0.0, 0.0)
-        self.joy_time = self.twist_time = None
-        self.joy_messages = self.twist_messages = 0
-        self.error = None
-        rclpy.init(args=[])
-        self.node = SubscriberNode(f"velocity_mode_direction_{uuid.uuid4().hex}",
-                                   enable_rosout=False, start_parameter_services=False)
-        if source == "ros2":
-            self.joy_sub = self.node.create_subscription(Joy, "/joy", self.on_joy, 10)
-        else:
-            self.joy_sub = transport.node.create_subscriber_typed(
-                AortaJoy.GetRootAs, "locomotion/joy", self.on_aorta_joy,
-                qos=transport._bindings.aorta.QoS.realtime_control()
-            )
-        self.twist_sub = self.node.create_subscription(Twist, "/vel_cmd", self.on_twist, 10)
-        self.thread = threading.Thread(target=self.spin, daemon=True)
-        self.thread.start()
-
-    def spin(self):
-        try:
-            self.rclpy.spin(self.node)
-        except Exception as error:
-            if self.rclpy.ok():
-                self.error = error
-
-    def on_joy(self, message):
-        with self.lock:
-            self.axes = tuple(message.axes)
-            self.joy_time = realtime_ns()
-            self.joy_messages += 1
-
-    def on_aorta_joy(self, message, context):
-        with self.lock:
-            self.axes = tuple(message.Axes(i) for i in range(message.AxesLength()))
-            self.joy_time = realtime_ns()
-            self.joy_messages += 1
-
-    def on_twist(self, message):
-        with self.lock:
-            self.twist = (message.linear.x, message.linear.y, message.angular.z)
-            self.twist_time = realtime_ns()
-            self.twist_messages += 1
-
-    def snapshot(self):
-        if self.error is not None:
-            raise self.error
-        with self.lock:
-            now = realtime_ns()
-            return (self.axes if self.joy_time is not None and
-                    0 <= now - self.joy_time <= INPUT_FRESHNESS_NS else (),
-                    self.twist if self.twist_time is not None and
-                    0 <= now - self.twist_time <= INPUT_FRESHNESS_NS else (0.0, 0.0, 0.0))
-
-    def statistics(self):
-        with self.lock:
-            return dict(joy_messages=self.joy_messages, twist_messages=self.twist_messages,
-                        last_joy_ns=self.joy_time, last_twist_ns=self.twist_time,
-                        last_joy_axes=self.axes, last_twist=self.twist)
-
-    def close(self):
-        self.rclpy.shutdown()
-        self.thread.join()
-        self.node.destroy_node()
+def wait_ready(transport, timeout):
+    if transport.control_status is not None and transport.control_status.current_action == "EXTERNAL":
+        raise RuntimeError("an EXTERNAL session is already active")
+    deadline = time.monotonic() + timeout
+    read_frame(transport, max(0, deadline - time.monotonic()))
+    status = transport.poll_control_status(max(0, deadline - time.monotonic()))
+    if status is None:
+        raise TimeoutError("waiting for body state and ControlStatus")
+    if status.current_action == "EXTERNAL":
+        raise RuntimeError("an EXTERNAL session is already active")
+    return status
 
 
 def transition_duration(policy, frame, root):
@@ -250,20 +92,44 @@ def transition_duration(policy, frame, root):
     return target, duration
 
 
-def run_cycles(policy, transport, directions, log, *, controller, duration, transition):
-    initial = transport.latest()
+def require_running(controller, expected=None):
+    status = controller.status
+    if (status is None or status.current_action != 'EXTERNAL'
+            or status.phase != ExternalPhase.RUNNING or getattr(status, 'timeout_hold', False)):
+        raise RuntimeError('EXTERNAL is no longer RUNNING')
+    if expected is not None and any(getattr(status, key, 0) != getattr(expected, key, 0)
+            for key in ('generation', 'client_id', 'lease_id', 'reject_count', 'ingress_drop_count')):
+        raise RuntimeError('EXTERNAL ownership or rejection/drop counters changed')
+    return status
+
+
+def run_cycles(policy, frames, directions, log, *, controller, duration, transition, stop=None):
+    initial = frames()
     target, transition_s = transition
     policy.reset()
-    started = realtime_ns()
+    started = time.monotonic_ns()
+    stop = stop if stop is not None else threading.Event()
+    expected = require_running(controller) if controller else None
+    last_state_id, last_advance = initial.state.state_id, started
     duration_ns = int(duration * 1_000_000_000) if duration else None
     transition_ns = int(transition_s * 1_000_000_000)
     next_cycle = started
     cycle = 0
-    while duration_ns is None or realtime_ns() - started < duration_ns:
-        delay = next_cycle - realtime_ns()
+    previous_publish_ns = None
+    while not stop.is_set() and (duration_ns is None or time.monotonic_ns() - started < duration_ns):
+        delay = next_cycle - time.monotonic_ns()
         if delay > 0:
             time.sleep(delay / 1_000_000_000)
-        frame = transport.latest()
+        if stop.is_set():
+            break
+        frame = frames()
+        now = time.monotonic_ns()
+        if frame.state.state_id > last_state_id:
+            last_state_id, last_advance = frame.state.state_id, now
+        if now-last_advance >= LOWSTATE_WINDOW_S*1e9:
+            raise TimeoutError('BodyState did not advance within the live lowstate window')
+        if controller:
+            require_running(controller, expected)
         cycle += 1
         record = dict(cycle=cycle, state_id=frame.state.state_id,
                       S0=frame.s0, S1=frame.s1, S2=frame.s2,
@@ -275,9 +141,17 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
                       applied_session_id=frame.state.applied_session_id,
                       applied_sequence=frame.state.applied_sequence,
                       ts_first_output_us=frame.state.ts_first_output_us,
-                      joint_error_codes=[j.error_code for j in frame.state.joints])
+                      joint_error_codes=(frame.state.error_code.tolist() if hasattr(frame.state, "error_code")
+                                         else [j.error_code for j in frame.state.joints]))
+        if getattr(frame, 'pull_context_receive_stamp_ns', 0):
+            record['pull_context_receive_stamp_ns'] = frame.pull_context_receive_stamp_ns
         try:
-            elapsed = realtime_ns() - started
+            # Drain even during transition so queued short presses are consumed
+            # on every 50 Hz tick, without changing the policy's timer.
+            sample = directions.read()
+            axes = sample.axes if sample.is_fresh(realtime_ns()) else ()
+            record.update(joy_log_fields(sample))
+            elapsed = time.monotonic_ns() - started
             if elapsed < transition_ns:
                 record["phase"] = "transition"
                 progress = elapsed / transition_ns
@@ -285,8 +159,7 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
                           if i in policy.driven_slots else dict(motor)
                           for i, motor in enumerate(target)]
             else:
-                axes, twist = directions.snapshot()
-                command = policy.command(axes, twist)
+                command = policy.command(axes)
                 observation = policy.observe(frame.q, frame.dq, frame.gyro, frame.quat, command)
                 record["S3"] = realtime_ns()
                 action = policy.infer(observation)
@@ -298,17 +171,29 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
                               input_state_id=frame.state.state_id,
                               input_state_ts_real_us=frame.state.ts_state_real_us)
             record["target_q"] = [motor.q for motor in command.joints]
+            if stop.is_set():
+                break
             if controller:
+                require_running(controller, expected)
+                if time.monotonic_ns()-last_advance >= LOWSTATE_WINDOW_S*1e9:
+                    raise TimeoutError('BodyState did not advance within the live lowstate window')
                 record["S5"] = realtime_ns()
+                publish_mono = time.monotonic_ns()
+                record['control_interval_ns'] = (publish_mono-previous_publish_ns
+                    if previous_publish_ns is not None else NOT_MEASURED)
+                previous_publish_ns = publish_mono
                 try:
                     sent = controller.publish(command)
-                    record.update(session_id=sent.session_id, sequence=sent.sequence)
+                    publish_log_fields(record, sent)
                     record["publish_result"] = "returned"
                 except BaseException:
                     record["publish_result"] = "raised"
                     raise
                 finally:
                     record["S6"] = realtime_ns()
+                    timing = getattr(controller, 'publish_timing', None)
+                    if timing is not None:
+                        record['publish_timing'] = timing
             else:
                 record["S5"] = realtime_ns()
                 record["publish_result"] = "shadow_would_publish"
@@ -318,9 +203,10 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
             raise
         finally:
             log.cycle(record)
-        # Fixed 50 Hz target; an overrun resumes at the current time without
-        # bursts of catch-up commands. No per-segment extra 20 ms delay.
-        next_cycle = max(next_cycle + PERIOD_NS, realtime_ns())
+        # Keep a monotonic 50 Hz timer; after an overrun wait a full period.
+        next_deadline = next_cycle + PERIOD_NS
+        now = time.monotonic_ns()
+        next_cycle = next_deadline if next_deadline > now else now + PERIOD_NS
 
 
 def parse_args(argv=None):
@@ -334,7 +220,6 @@ def parse_args(argv=None):
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--duration", type=float, default=0.0,
                         help="total loop seconds; 0 or omitted runs until interrupted")
-    parser.add_argument("--joy-source", choices=("aorta", "ros2"), default="aorta")
     parser.add_argument("--exec-sha256", default=NOT_MEASURED)
     parser.add_argument("--yaml-sha256", default=NOT_MEASURED)
     parser.add_argument("--external-pd", choices=("PD-A", "PD-B", NOT_MEASURED), default=NOT_MEASURED)
@@ -348,33 +233,29 @@ def parse_args(argv=None):
 def main():
     args = parse_args()
     policy = VelocityModePolicy(args.locomotion_dir)
-    metadata = dict(sdk_release="0.2.0", sdk_base_commit="335341bc765f0ad46a2b77eec8abcccd2b22756b",
-                    sdk_version=version("locomotion-aorta"),
+    metadata = dict(sdk_version=version("locomotion-aorta"),
                     sdk_directory=str(Path(locomotion_aorta.__file__).resolve().parent),
-                    sdk_files_sha256={name: hashlib.sha256(Path(locomotion_aorta.__file__).with_name(name).read_bytes()).hexdigest()
-                                      for name in ("controller.py", "transport.py", "types.py", "_body_codec.py", "__init__.py")},
                     example_directory=str(Path(__file__).resolve().parent),
-                    example_sha256={name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                                    for name in ("velocity_mode.py", "velocity_mode_policy.py", "velocity_mode_latency.py")},
                     aorta_sdk_version=version("aorta-sdk"), aorta_msgs_version=version("aorta-msgs"),
                     locomotion_exec_sha256=args.exec_sha256, locomotion_yaml_sha256=args.yaml_sha256,
                     external_pd=args.external_pd, load_description=args.load_description,
-                    mode="shadow" if args.shadow else "live", joy_source=args.joy_source,
+                    mode="shadow" if args.shadow else "live", joy_source="aorta",
                     duration_s=args.duration,
-                    S1_source="Python typed decoder entry (includes decoding; excludes pre-dispatch queue)",
+                    S1_source="Python pull recv return, before root lookup and decode",
                     S5_source="would-publish boundary" if args.shadow else "ExternalController.publish entry",
                     period_s=PERIOD_S, models=[policy.inventory])
     log = transport = controller = directions = None
     entered = False
+    stop = threading.Event()
+    handlers = {sig: signal.signal(sig, lambda *_args: stop.set())
+                for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
-        transport = PolicyTransport(group=args.group, shadow=args.shadow)
-        if args.shadow:
-            transport.subscribe(BODY_STATE_TOPIC, lambda state: None)
-            transport.subscribe(CONTROL_STATUS_TOPIC, transport.record_status)
-        else:
-            controller = ExternalController(group=args.group, _transport=transport)
-            transport.subscribe(CONTROL_STATUS_TOPIC, transport.record_status)
-        transport.wait_ready(args.timeout)
+        transport = PullTransport(group=args.group, publishers=not args.shadow,
+            node_name=f"velocity-mode-{uuid.uuid4().hex}")
+        if not args.shadow:
+            controller = PullController(group=args.group, _transport=transport)
+        status = wait_ready(transport, args.timeout)
+        frames = lambda: read_frame(transport, args.timeout)
         response = controller.get_robot_info(args.timeout) if controller else transport.get_robot_info(args.timeout)
         if response.info is None or response.info.body is None:
             raise RuntimeError(response.error_message or "RobotInfo has no body roster")
@@ -385,19 +266,18 @@ def main():
                        populated=[j.populated for j in response.info.body.joints],
                        is_mock=[j.is_mock for j in response.info.body.joints]))
         log.write(dict(record_type="preflight", timestamp_ns=realtime_ns(),
-                       current_action=transport.observed_status.current_action,
-                       phase=transport.observed_status.phase.value,
-                       generation=transport.observed_status.generation))
-        directions = DirectionInput(transport, args.joy_source)
+                       current_action=status.current_action,
+                       phase=status.phase.value,
+                       generation=status.generation))
+        directions = JoyReader(transport.node)
         log.write(dict(record_type="transport", timestamp_ns=realtime_ns(),
-                       aorta_publishers=len(transport.publishers),
-                       ros2_publishers=sum(1 for _ in directions.node.publishers)))
+                       aorta_publishers=len(transport.publishers)))
         if controller:
             controller.enter_external(args.timeout)
             entered = True
-        transition = transition_duration(policy, transport.latest(), args.locomotion_dir)
-        run_cycles(policy, transport, directions, log, controller=controller,
-                   duration=args.duration, transition=transition)
+        transition = transition_duration(policy, frames(), args.locomotion_dir)
+        run_cycles(policy, frames, directions, log, controller=controller,
+                   duration=args.duration, transition=transition, stop=stop)
     finally:
         try:
             if entered:
@@ -409,16 +289,22 @@ def main():
                 if directions is not None:
                     try:
                         log.write(dict(record_type="direction_input", timestamp_ns=realtime_ns(),
-                                       source=args.joy_source, **directions.statistics()))
+                                       source="aorta", **joy_log_fields(directions.read())))
                     finally:
                         directions.close()
             finally:
-                if controller is not None:
-                    controller.close()
-                elif transport is not None:
-                    transport.close()
-                if log is not None:
-                    log.close()
+                try:
+                    if controller is not None:
+                        controller.close()
+                    elif transport is not None:
+                        transport.close()
+                finally:
+                    try:
+                        if log is not None:
+                            log.close()
+                    finally:
+                        for sig, handler in handlers.items():
+                            signal.signal(sig, handler)
 
 
 if __name__ == "__main__":

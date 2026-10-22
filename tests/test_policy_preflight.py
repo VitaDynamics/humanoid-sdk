@@ -45,16 +45,18 @@ class PolicyPreflightTest(unittest.TestCase):
         transport.observed_status = SimpleNamespace(current_action='PASSIVE',
             phase=SimpleNamespace(value='IDLE'), generation=0)
         transport.publishers, directions.node.publishers = {}, []
-        directions.statistics.return_value = {}
+        directions.read.return_value = __import__("test_velocity_mode").joy_sample()
         with tempfile.TemporaryDirectory() as temp:
             args = velocity_mode.parse_args(['--live', '--locomotion-dir', '/unused',
                                              '--log', str(Path(temp)/'velocity.jsonl')])
             with patch.object(velocity_mode, 'parse_args', return_value=args), \
-                 patch.object(velocity_mode, 'version', return_value='0.2.0'), \
+                 patch.object(velocity_mode, 'version', return_value='0.2.1'), \
                  patch.object(velocity_mode, 'VelocityModePolicy', return_value=p), \
-                 patch.object(velocity_mode, 'PolicyTransport', return_value=transport), \
-                 patch.object(velocity_mode, 'ExternalController', return_value=controller), \
-                 patch.object(velocity_mode, 'DirectionInput', return_value=directions), \
+                 patch.object(velocity_mode, 'PullTransport', return_value=transport), \
+                 patch.object(velocity_mode, 'wait_ready', return_value=transport.observed_status), \
+                 patch.object(velocity_mode, 'read_frame', return_value=Mock()), \
+                 patch.object(velocity_mode, 'PullController', return_value=controller), \
+                 patch.object(velocity_mode, 'JoyReader', return_value=directions), \
                  patch.object(velocity_mode, 'transition_duration', return_value=([], 0.)), \
                  patch.object(velocity_mode, 'run_cycles') as run:
                 if expected_missing:
@@ -81,6 +83,7 @@ class PolicyPreflightTest(unittest.TestCase):
         model.session = SimpleNamespace(metadata={CONTRACT_KEY:
             (ROOT/'tests/fixtures/actor_g1_contract.json').read_text()})
         source = Mock()
+        source.wait_state = client.wait_state
         with tempfile.TemporaryDirectory() as temp:
             model_path, log_path = Path(temp)/'model.onnx', Path(temp)/'wbc.jsonl'
             model_path.write_bytes(b'explicit unit model; inference mocked')
@@ -90,9 +93,8 @@ class PolicyPreflightTest(unittest.TestCase):
             with patch.object(sys, 'argv', argv), \
                  patch.dict('os.environ', {'ZENOH_SESSION_CONFIG_URI': 'unit-only-no-transport'}), \
                  patch('locomotion_aorta.wbc_tracking_policy.Model', return_value=model), \
-                 patch('locomotion_aorta.ExternalController', return_value=nullcontext(client)), \
-                 patch('locomotion_aorta.BodyStateSource', return_value=source), \
-                 patch('locomotion_aorta._policy_state.PolicyStateSource', return_value=client), \
+                 patch('locomotion_aorta.PullController', return_value=nullcontext(client)), \
+                 patch('locomotion_aorta.PullStateSource', return_value=source), \
                  patch.object(example, 'live', partial(example.live,
                     monotonic=clock.monotonic, sleep=clock.sleep)):
                 if expected_missing:

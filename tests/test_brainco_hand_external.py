@@ -98,7 +98,7 @@ class ExternalHandTest(unittest.TestCase):
         for args, expected in (([], 'hold'), (['--body-gains', 'hold'], 'hold'),
                                (['--body-gains', 'zero'], 'zero')):
             with self.subTest(expected=expected), patch.object(demo, 'HandClient'), \
-                 patch.object(demo, 'ExternalController'), patch.object(demo, 'run') as run:
+                 patch.object(demo, 'PullController'), patch.object(demo, 'run') as run:
                 demo.main(['--confirm-motion', '--side', 'left'] + args)
                 self.assertEqual(run.call_args.kwargs['body_gains'], expected)
         with patch.object(demo, 'HandClient') as hand, patch('sys.stderr', new_callable=io.StringIO):
@@ -115,7 +115,7 @@ class ExternalHandTest(unittest.TestCase):
     def test_dryrun_and_default_use_readonly_clients_without_body_controller(self):
         for args in (['--dry-run', '--side', 'left'], ['--side', 'right'],
                      ['--dry-run', '--body-gains', 'zero'], ['--body-gains', 'zero']):
-            with patch.object(demo, 'HandClient') as hand, patch.object(demo, 'ExternalController') as body, \
+            with patch.object(demo, 'HandClient') as hand, patch.object(demo, 'PullController') as body, \
                  patch.object(demo, 'observe') as observe:
                 demo.main(args)
                 body.assert_not_called()
@@ -148,7 +148,7 @@ class ExternalHandTest(unittest.TestCase):
 
     def test_touch_cli_waits_for_topic_update_before_external_run(self):
         with patch.object(demo, 'HandClient') as hand, \
-             patch.object(demo, 'ExternalController'), \
+             patch.object(demo, 'PullController'), \
              patch.object(demo, 'wait_touch_info') as wait, patch.object(demo, 'run') as run:
             client = hand.return_value.__enter__.return_value
             client.set_touch.return_value = False
@@ -295,7 +295,7 @@ class ExternalHandTest(unittest.TestCase):
                                  '--low-frac', '.1', '--high-frac', '.9', '--feedback-interval', '3'],
                                 dict(speed_deg_s=20., pattern='sequential', loop=True,
                                      low_frac=.1, high_frac=.9, feedback_interval=3.))):
-            with patch.object(demo, 'HandClient'), patch.object(demo, 'ExternalController'), \
+            with patch.object(demo, 'HandClient'), patch.object(demo, 'PullController'), \
                  patch.object(demo, 'run') as run:
                 demo.main(['--confirm-motion'] + args)
                 for key, value in expected.items():
@@ -314,7 +314,7 @@ class ExternalHandTest(unittest.TestCase):
                 argv = [part for key, value in options.items()
                         for part in ('--' + key.replace('_', '-'), str(value))]
                 with patch.object(demo, 'HandClient') as client, \
-                     patch.object(demo, 'ExternalController') as controller, \
+                     patch.object(demo, 'PullController') as controller, \
                      patch('sys.stderr', new_callable=io.StringIO):
                     with self.assertRaises(SystemExit): demo.main(argv)
                     client.assert_not_called(); controller.assert_not_called()

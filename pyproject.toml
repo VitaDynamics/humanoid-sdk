@@ -4,28 +4,29 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "locomotion-aorta"
-version = "0.2.0"
+version = "0.2.1"
 description = "VITA humanoid Aorta client with a lazy native ONNX demo backend"
 requires-python = "==3.10.*"
 dependencies = [
     "aorta-sdk==2026.10.20",
     "aorta-msgs==2026.10.20",
-    "vbot-humanoid-msgs==0.1.4",
+    "vbot-humanoid-msgs==0.1.5",
     "flatbuffers==25.12.19",
 ]
 
 readme = "README.md"
 license-files = [
+    "demo_onnx/cpp/body_cmd_vendor/LICENSE",
     "demo_onnx/licenses/onnxruntime/LICENSE",
     "demo_onnx/licenses/onnxruntime/ThirdPartyNotices.txt",
     "demo_onnx/licenses/pybind11/LICENSE",
 ]
 
 [project.optional-dependencies]
-hil = ["mcap==1.3.1"]
+state-arrays = ["numpy==1.26.4"]
+hil = ["mcap==1.3.1", "numpy==1.26.4"]
 teleop-demo = [
     "numpy; python_version == '3.10' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
-    "pygame; python_version == '3.10' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
 ]
 
 velocity-demo = ["numpy==1.26.4", "PyYAML"]

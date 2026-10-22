@@ -65,6 +65,34 @@ class ObservationTests(unittest.TestCase):
         expected = struct.unpack('82f',struct.pack('82f',*raw))
         self.assertEqual(obs,expected*6)
 
+    def test_array_input_matches_dto_without_materializing_joints_or_imu(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest('NumPy is optional for source-only tests')
+        from lowlevel.BodyImuLocation import BodyImuLocation
+        class Arrays:
+            @property
+            def joints(self):
+                raise AssertionError('native policy must not construct joint DTOs')
+            @property
+            def imu_states(self):
+                raise AssertionError('native policy must not construct IMU DTOs')
+        arrays = Arrays()
+        arrays.q = np.asarray([j.q for j in self.state.joints], dtype=np.float32)
+        arrays.dq = np.asarray([j.dq for j in self.state.joints], dtype=np.float32)
+        arrays.error_code = np.zeros(31, dtype=np.uint32)
+        arrays.imu_values = np.zeros((2, 13), dtype=np.float32)
+        arrays.imu_values[1, :7] = [1, 0, 0, 0, 1, 2, 3]
+        arrays.imu_location = [BodyImuLocation.TRUNK, BodyImuLocation.HIP]
+        arrays.imu_status = [1, 1]
+        arrays.imu_state_present = [1, 1]
+        arrays.attitude_valid = True
+        command = (.25, -.5, .125, .75)
+        expected = self.policy.observation(self.state, self.body, command, 'HIP')
+        actual = Policy(METADATA, CONTRACT).observation(arrays, self.body, command, BodyImuLocation.HIP)
+        self.assertEqual(actual, expected)
+
     def test_oldest_to_newest_and_action_feedback(self):
         self.policy.observation(self.state,self.body,(0,0,0,.75),'HIP')
         self.policy.targets([.125]*12,self.body)
@@ -161,6 +189,7 @@ class LifecycleTests(unittest.TestCase):
                 if 'enter' in events and mode=='wait_error':raise TimeoutError('actual feedback timeout')
                 state.state_id += 1
                 return state
+            wait_state = wait_body_state
             def enter_external(self,timeout):
                 events.append('enter')
                 if mode=='entry_error':raise TimeoutError('entry interrupted after PREPARE')
@@ -203,6 +232,7 @@ class LifecycleTests(unittest.TestCase):
             def wait_body_state(self, timeout):
                 state.state_id += 1
                 return state
+            wait_state = wait_body_state
             def enter_external(self, timeout):
                 events.append('enter')
                 return status
@@ -255,13 +285,14 @@ class LifecycleTests(unittest.TestCase):
             def get_robot_info(self, timeout):
                 return NS(info=NS(body=body), status=API.ServiceStatus.SUCCESS, error_message='')
             def wait_body_state(self, timeout):
-                if len(reads) >= 100:
+                if len(reads) >= 1100:
                     raise AssertionError('test read budget exceeded: frozen BodyState loop did not terminate')
                 reads.append(timeout)
                 state.state_id = ids[min(len(reads)-1, len(ids)-1)]
                 if stop_during_wait and len(reads) == 3:
                     stop.set()
                 return state
+            wait_state = wait_body_state
             def enter_external(self, timeout):
                 events.append('enter')
                 return status
@@ -309,10 +340,11 @@ class LifecycleTests(unittest.TestCase):
                         return NS(info=NS(body=body), status=API.ServiceStatus.SUCCESS, error_message='')
                     def wait_body_state(self, timeout):
                         self.reads += 1
-                        if self.reads > 100:
+                        if self.reads > 1100:
                             raise AssertionError('test read budget exceeded: frozen BodyState loop did not terminate')
                         state.state_id = 10 if self.reads == 1 else 11 if self.reads == 2 else tail
                         return state
+                    wait_state = wait_body_state
                     def enter_external(self, timeout):
                         events.append('enter')
                         return status
@@ -357,6 +389,7 @@ class LifecycleTests(unittest.TestCase):
                         return NS(status=status,info=NS(body=body),error_message='discovery failed exactly')
                     def wait_body_state(self,timeout):
                         raise AssertionError('must not wait for feedback on failed discovery')
+                    wait_state = wait_body_state
                 with self.assertRaises(RuntimeError) as caught:
                     live(Controller(),API,Policy(METADATA,CONTRACT),None,lambda:(),threading.Event(),5)
                 self.assertIn(repr(status),str(caught.exception))

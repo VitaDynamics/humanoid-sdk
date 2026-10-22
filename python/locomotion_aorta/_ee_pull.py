@@ -1,0 +1,39 @@
+"""Caller-thread, keep-last end-effector reception; no Python worker."""
+import threading
+
+
+class FeedbackPulls:
+    def __init__(self, node, receive, failed):
+        self.node, self.receive, self.failed = node, receive, failed
+        self.rings = {}
+        self._lock = threading.RLock()
+
+    def add(self, kind, decoder, topic, qos):
+        ring = self.node.create_subscriber_pull(topic, depth=1, qos=qos)
+        self.rings[kind] = ring, decoder
+        return ring
+
+    def poll(self, wait_kind=None, timeout=0):
+        # One latest sample per topic, not an unbounded drain driven by state Hz.
+        # A bounded wait also lets close/other topic events be noticed promptly.
+        # Only one caller drains at a time. A publisher reading cached Info
+        # must never wait behind another caller's bounded blocking recv.
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            # Info establishes the contract used to validate state/touch.
+            for kind in ('info', 'state', 'touch'):
+                if kind not in self.rings:
+                    continue
+                ring, decoder = self.rings[kind]
+                try:
+                    sample = ring.try_recv()
+                    if sample is None and kind == wait_kind and timeout > 0:
+                        sample = ring.recv(min(timeout, .05))
+                    if sample is not None:
+                        self.receive(kind, decoder(sample.payload))
+                except Exception as error:
+                    self.failed(error)
+        finally:
+            self._lock.release()
+        return True

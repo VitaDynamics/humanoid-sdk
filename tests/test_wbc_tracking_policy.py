@@ -201,6 +201,7 @@ class FakeController:
                                  ts_state_real_us=self.state.ts_state_real_us+2000,
                                  received_monotonic_ns=round(self.clock.now*1e9))
         return self.state
+    wait_state = wait_body_state
 
     def enter_external(self, timeout):
         self.enters += 1
@@ -239,7 +240,58 @@ class TrackingLoopTest(unittest.TestCase):
         self.assertTrue(all(r['session_id'] > 2**63 and r['sequence'] > 2**63 for r in rows))
         self.assertEqual(len(set(c.input_state_id for c in commands)), 3)
         self.assertTrue(all(c.input_state_ts_real_us > 0 for c in commands))
+        for i, row in enumerate(rows):
+            self.assertTrue(all(isinstance(row[f'S{n}'], int) for n in range(2, 7)))
+            self.assertEqual(row['publish_result'], 'returned')
+            self.assertEqual(row['control_interval_ns'], 'NOT_MEASURED' if i == 0 else 20_000_000)
+            self.assertEqual(row['applied_sequence_lag'], 'NOT_MEASURED')
         self.assertEqual(self.rec.rows[-1]['current_action'], 'PASSIVE')
+
+    def test_policy_is_50hz_with_400hz_latest_state_source(self):
+        self.args.duration=.19
+        source_ids=[];times=[];start=self.clock.now
+        original_state=self.controller.state
+        def latest(timeout):
+            sample_index=round((self.clock.now-start)*400)
+            source_ids.append(sample_index)
+            return replace(original_state,state_id=sample_index,
+                           ts_state_real_us=original_state.ts_state_real_us+sample_index*2500,
+                           received_monotonic_ns=round(self.clock.now*1e9))
+        self.controller.wait_state=latest
+        original_publish=self.controller.publish
+        def publish(command):
+            times.append(self.clock.now)
+            return original_publish(command)
+        self.controller.publish=publish
+        result=self.run_live()
+        self.assertEqual(result['steps'],10)
+        np.testing.assert_allclose(np.diff(times),[.02]*9,rtol=0,atol=1e-12)
+        np.testing.assert_array_equal(np.diff([c.input_state_id for c in self.controller.commands]),[8]*9)
+        self.assertEqual(self.model.calls,11)  # one warmup; ten 50Hz policy evaluations.
+
+    def test_publish_timing_is_joined_to_the_actual_returned_key(self):
+        original_type = type(self.controller)
+        def timing(controller):
+            if not controller.commands:
+                return None
+            sent = controller.commands[-1]
+            return dict(session_id=sent.session_id, sequence=sent.sequence, encode_native_ns=123)
+        with patch.object(original_type, 'publish_timing', property(timing), create=True):
+            self.run_live()
+        for row in [x for x in self.rec.rows if x.get('published')]:
+            self.assertEqual((row['session_id'], row['sequence']),
+                             (row['publish_timing']['session_id'], row['publish_timing']['sequence']))
+            self.assertEqual(row['publish_timing']['encode_native_ns'],123)
+
+    def test_publish_failure_survives_a_diagnostic_write_failure(self):
+        self.controller.publish = lambda _: (_ for _ in ()).throw(RuntimeError('send failed'))
+        original = self.rec.write
+        def write(row):
+            if row.get('published') is False:raise OSError('log full')
+            original(row)
+        self.rec.write = write
+        with self.assertRaisesRegex(RuntimeError,'send failed'):self.run_live()
+        self.assertEqual(self.controller.exits,1)
 
     def test_stale_cache_and_nonadvancing_state_stop(self):
         state = self.controller.wait_body_state(.1)

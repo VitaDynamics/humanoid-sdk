@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import time
+import threading
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path[:0]=[str(ROOT/'tests'),str(ROOT/'tests/latency')]
@@ -35,9 +36,9 @@ def publisher(directory,session):
         (directory/'publisher.json').write_text(json.dumps(rows,indent=2)+'\n')
 
 
-def run(output):
+def run(output, *, pull=False):
     from run import config_files,terminate
-    from locomotion_aorta import BodyStateSource
+    from locomotion_aorta import BodyStateSource, PullStateSource
     import locomotion_aorta._state_stream as stream
     output.mkdir(parents=True,exist_ok=False)
     for key in tuple(os.environ):
@@ -52,7 +53,11 @@ def run(output):
     # The caller starts this parent in an isolated environment; the config is set before Node construction.
     os.environ['ZENOH_SESSION_CONFIG_URI']=str(directory/'python.json')
     stream.BODY_STATE_TOPIC=f'/bench/sdk_state_source/{session}/body_state'
-    source=BodyStateSource(group='default')
+    if pull:
+        import locomotion_aorta.pull as pull_api
+        pull_api.BODY_STATE_TOPIC=stream.BODY_STATE_TOPIC
+        pull_api.CONTROL_STATUS_TOPIC=f'/bench/sdk_state_source/{session}/control_status'
+    source=(PullStateSource if pull else BodyStateSource)(group='default')
     rows=[];child=None
     with (directory/'publisher.log').open('w') as log:
         try:
@@ -61,7 +66,18 @@ def run(output):
                 stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
             previous=None
             for seq,state_id in enumerate((91,91,0),1):
-                snapshot=source.snapshot(5,after=previous)
+                if pull:
+                    deadline = time.monotonic()+5
+                    while True:
+                        remaining = deadline-time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError('pull probe did not receive a new snapshot')
+                        snapshot = source.wait_state(remaining)
+                        if snapshot is not previous:
+                            break
+                        time.sleep(.001)
+                else:
+                    snapshot=source.snapshot(5,after=previous)
                 assert snapshot.body_state().state_id==state_id
                 rows.append(dict(sequence=seq,state_id=state_id,
                                  received_monotonic_ns=snapshot.received_monotonic_ns,
@@ -69,6 +85,30 @@ def run(output):
                 previous=snapshot
                 (directory/f'ack-{seq}').touch()
             assert child.wait(timeout=5)==0
+            close_wait = {}
+            if pull:
+                assert source.wait_state(0) is snapshot
+                # A source with an existing snapshot returns it immediately.
+                # Exercise close/unblock on a fresh source waiting for its first frame.
+                wait_config=json.loads((directory/'python.json').read_text())
+                wait_config['listen']['endpoints']=['tcp/127.0.0.1:0']
+                (directory/'waiter.json').write_text(json.dumps(wait_config))
+                os.environ['ZENOH_SESSION_CONFIG_URI']=str(directory/'waiter.json')
+                waiting_source = PullStateSource(group='default')
+                entered = threading.Event()
+                def wait_after_publisher():
+                    entered.set()
+                    try:
+                        waiting_source.wait_state(5)
+                        close_wait['unexpected_frame'] = True
+                    except BaseException as error:
+                        close_wait['error'] = type(error).__name__
+                waiting = threading.Thread(target=wait_after_publisher)
+                waiting.start()
+                assert entered.wait(5)
+                waiting_source.close()
+                waiting.join(5)
+                assert not waiting.is_alive() and 'error' in close_wait, close_wait
             source.close()
             assert snapshot.body_state().joints[30].q==30.125
             sent=json.loads((directory/'publisher.json').read_text())
@@ -77,7 +117,7 @@ def run(output):
                 assert b['received_realtime_ns']>=a['publish_realtime_ns']
             results.append(dict(received=rows,private_state_publishers=1,
                                 control_publishers=0,
-                                closed_snapshot_valid=True))
+                                closed_snapshot_valid=True, **close_wait))
         finally:
             source.close()
             if child is not None:terminate(child)
@@ -91,9 +131,10 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--publisher',type=int)
+    parser.add_argument('--pull',action='store_true')
     args=parser.parse_args()
     if args.publisher:publisher(args.output,args.publisher)
-    else:print(run(args.output)['status'])
+    else:print(run(args.output,pull=args.pull)['status'])
 
 
 if __name__=='__main__':main()

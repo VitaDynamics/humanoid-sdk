@@ -37,14 +37,20 @@ class StateSourceTest(unittest.TestCase):
         return source
 
     def test_snapshot_caches_incompatible_body_revision_error(self):
-        from types import SimpleNamespace
+        import flatbuffers
+        from lowlevel import BodyState as module
         from locomotion_aorta.state import BodyStateSnapshot
-        decoder = mock.Mock(return_value=SimpleNamespace(ProtocolVersion=lambda: 1))
-        snapshot = BodyStateSnapshot(b'old', decoder, 1, 2)
+        builder = flatbuffers.Builder(1)
+        module.BodyStateStart(builder)
+        module.BodyStateAddProtocolVersion(builder, 1)
+        builder.Finish(module.BodyStateEnd(builder))
+        payload = bytes(builder.Output())
+        decoder = mock.Mock(wraps=module.BodyState.GetRootAs)
+        snapshot = BodyStateSnapshot(payload, decoder, 1, 2)
         for _ in range(2):
             with self.assertRaisesRegex(ValueError, 'protocol_version'):
                 snapshot.body_state()
-        decoder.assert_called_once_with(b'old')
+        decoder.assert_called_once_with(payload)
 
     def test_default_timeout_and_after_use_received_object_identity(self):
         source = self.source()
@@ -199,7 +205,7 @@ class StateSourceTest(unittest.TestCase):
         self.assertIn(BODY_STATE_TOPIC, transport.callbacks)
 
     def test_state_only_adapter_needs_no_publisher_or_client_factory(self):
-        node = SimpleNamespace(create_subscriber=mock.Mock(return_value=object()), close=mock.Mock())
+        node = SimpleNamespace(group=lambda:'test', create_subscriber=mock.Mock(return_value=object()), close=mock.Mock())
         aorta = SimpleNamespace(Node=mock.Mock(return_value=node),
                                 QoS=SimpleNamespace(sensor_data=lambda: 'sensor'))
         decoder = module('BodyState')

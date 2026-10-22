@@ -2,6 +2,7 @@
 import importlib
 
 from .transport import AortaBindingsUnavailableError, BODY_STATE_TOPIC
+from ._group import require_node_group
 
 
 class _StateStream:
@@ -10,6 +11,7 @@ class _StateStream:
         decoder = importlib.import_module("lowlevel.BodyState").BodyState.GetRootAs
         self.node = aorta.Node(node_name, group)
         try:
+            require_node_group(self.node, group)
             self.subscription = self.node.create_subscriber(
                 BODY_STATE_TOPIC, lambda payload, _ctx: callback(payload, decoder),
                 qos=aorta.QoS.sensor_data())

@@ -14,3 +14,13 @@ def robot_info_reply():
     identities = tuple(BodyMotorIdentity('fake-can', i + 1, i != 14) for i in range(31))
     body = BodyInfo(0, 31, tuple('fake_joint_' + str(i) for i in range(31)), joints, identities)
     return GetRobotInfoResponse(ServiceStatus.SUCCESS, RobotInfo(1, 0, body, ()), '')
+
+
+def body_array_frame(state):
+    """Array-shaped feedback for pull-based example tests."""
+    from dataclasses import fields
+    from types import SimpleNamespace
+    return SimpleNamespace(**{field.name: getattr(state, field.name) for field in fields(state)},
+                           q=tuple(j.q for j in state.joints),
+                           dq=tuple(j.dq for j in state.joints),
+                           error_code=tuple(j.error_code for j in state.joints))

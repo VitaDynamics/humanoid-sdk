@@ -73,7 +73,7 @@ class ReleaseTest(unittest.TestCase):
                 'teleop_policy/teleop_policy.py',
                 'velocity_mode/README.md',
                 'velocity_mode/velocity_mode.py',
-                'velocity_mode/velocity_mode_latency.py',
+                'policy_support.py',
                 'velocity_mode/velocity_mode_policy.py',
                 'wbc_tracking_mode/README.md',
                 'wbc_tracking_mode/wbc_tracking_asample.json',
@@ -115,12 +115,12 @@ class ReleaseTest(unittest.TestCase):
                 self.assertFalse((output / "examples" / retired).exists())
                 self.assertNotIn("examples/" + retired, manifest["files"])
             self.assertEqual(sorted(p.name for p in (output / "wheelhouse").glob("locomotion_aorta-*.whl")),
-                             [f"locomotion_aorta-0.2.0-cp310-cp310-{platform}.whl"
+                             [f"locomotion_aorta-0.2.1-cp310-cp310-{platform}.whl"
                               for platform in sorted(compatibility["platforms"])])
             # A single architecture or a pure/raw wheel must not masquerade as the release pair.
-            arm = root / "dist/locomotion_aorta-0.2.0-cp310-cp310-manylinux_2_35_aarch64.whl"
+            arm = root / "dist/locomotion_aorta-0.2.1-cp310-cp310-manylinux_2_35_aarch64.whl"
             arm.unlink()
-            (root / "dist/locomotion_aorta-0.2.0-py3-none-any.whl").write_bytes(b"retired pure wheel")
+            (root / "dist/locomotion_aorta-0.2.1-py3-none-any.whl").write_bytes(b"retired pure wheel")
             missing = Path(temporary) / "missing-arm"
             with mock.patch.object(package_release, "ROOT", root):
                 with self.assertRaisesRegex(ValueError, "missing audited SDK wheel"):

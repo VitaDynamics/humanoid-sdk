@@ -41,6 +41,31 @@ jobs:
           set -euo pipefail
           python -m pip install --no-index "$RUNNER_TEMP"/wheelhouse/*.whl
           python -m pip check
+      - name: Install build and test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install build==1.2.2.post1 scikit-build-core==0.11.6 pybind11==2.13.6 ninja==1.11.1.3 \
+            -r demo_onnx/requirements-release.txt -r demo_onnx/requirements-test.txt pygame==2.6.1 mcap==1.3.1
+      - name: Fetch and verify official ORT archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/fetch_ort.py --output "$RUNNER_TEMP/onnxruntime.tgz"
+      - name: Build SDK wheel and repair with public auditwheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          CMAKE_ARGS="-DORT_ARCHIVE=$RUNNER_TEMP/onnxruntime.tgz" \
+            python -m build --wheel --no-isolation --outdir "$RUNNER_TEMP/sdk-raw" . 2>&1 | tee "$RUNNER_TEMP/sdk-build.log"
+          python -m auditwheel repair --only-plat --plat manylinux_2_35_x86_64 \
+            --wheel-dir "$RUNNER_TEMP/sdk-wheel" "$RUNNER_TEMP"/sdk-raw/*.whl 2>&1 | tee "$RUNNER_TEMP/sdk-repair.log"
+      - name: Install measured SDK wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --no-index --find-links "$RUNNER_TEMP/wheelhouse" "$RUNNER_TEMP"/sdk-wheel/*.whl
+          python -m pip check
       - name: Build standalone C++ Mock
         shell: bash
         run: |
@@ -86,6 +111,9 @@ jobs:
             ${{ runner.temp }}/latency-results/
             ${{ runner.temp }}/latency-build.log
             ${{ runner.temp }}/latency-build/build.json
+            ${{ runner.temp }}/sdk-wheel/
+            ${{ runner.temp }}/sdk-build.log
+            ${{ runner.temp }}/sdk-repair.log
           if-no-files-found: error
           retention-days: 30
       - name: Add report download link to Summary
@@ -151,6 +179,22 @@ jobs:
           PYTHONPATH=.:tests python -m unittest discover -s tests -v 2>&1 | tee "$RUNNER_TEMP/sdk-tests.log"
           python -m unittest discover -s demo_onnx/tests -v 2>&1 | tee "$RUNNER_TEMP/native-tests.log"
           python tests/latency/state_source_probe.py --output "$RUNNER_TEMP/state-source-results"
+      - name: Compile production-topic Mock and run real two-node IPC smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY_DOWNLOAD'
+          import importlib.util, os, pathlib, urllib.request
+          spec = importlib.util.spec_from_file_location('benchmark_build', 'tests/latency/build_mock.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          with urllib.request.urlopen(module.FB_URL, timeout=120) as response:
+              pathlib.Path(os.environ['RUNNER_TEMP'], 'flatbuffers.tar.gz').write_bytes(response.read())
+          PY_DOWNLOAD
+          python tools/production_topic_mock/build.py --build-dir "$RUNNER_TEMP/production-mock" \
+            --flatbuffers-archive "$RUNNER_TEMP/flatbuffers.tar.gz" --run-protocol-checks
+          python -m unittest tools.production_topic_mock.test_group_contract -v
+          MOCK_BUILD_DIR="$RUNNER_TEMP/production-mock" python -m unittest tools.production_topic_mock.test_ipc -v
       - name: Upload wheel, tests and partial failure evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

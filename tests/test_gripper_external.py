@@ -165,7 +165,7 @@ class GripperExampleTest(unittest.TestCase):
                     demo.main(['--side', 'right'] + flags, _client_factory=factory,
                               _controller_factory=controller)
                     observe.assert_called_once()
-                factory.assert_called_once_with('right', group='default', read_only=True)
+                factory.assert_called_once_with('right', group='default', read_only=True, pull_feedback=True)
                 controller.assert_not_called()
                 self.assertFalse(g.commands)
 

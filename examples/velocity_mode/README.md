@@ -3,12 +3,12 @@
 参考机器人 action 13/HUMANOID 的模型与 profile，在 SDK 中本地推理后请求 **EXTERNAL**；不是给机器人发送 action 13。`--shadow` 只读控制面，`--live` 会控制本体。需要完整公共31槽配置、已就绪反馈、匹配模型和部署 locomotion 目录。
 
 ```bash
-python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[velocity-demo]==0.2.0'
+python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[velocity-demo]==0.2.1'
 python examples/velocity_mode/velocity_mode.py --help
 python examples/velocity_mode/velocity_mode.py --shadow --locomotion-dir /path/to/locomotion --log /new/path/velocity-shadow.jsonl --duration 60
 ```
 
-`--log` 使用新路径；`--duration 0`/省略为不限时。0.2.0 默认 Aorta 方向输入依赖尚未交付的匹配 Joy 绑定，不能靠安装错误消息版本补齐；选择 ROS2 输入也需部署匹配的 ROS2 环境。下文保留实际方向依赖与 S0–S6 时钟说明；日志中的推理耗时、实际 session/sequence、applied 键不等于硬件动作完成。
+`--log` 使用新路径；`--duration 0`/省略为不限时。0.2.1 使用 public0.1.5 的 Aorta `locomotion/joy` 与 JoyReader，依赖固定的 Aorta2026.10.20/FlatBuffers25.12.19；没有ROS2、pygame或固定中立输入回退。下文保留实际方向依赖与 S0–S6 时钟说明；日志中的推理耗时、实际 session/sequence、applied 键不等于硬件动作完成。
 
 ## 环境与安全
 
@@ -25,7 +25,7 @@ python examples/velocity_mode/velocity_mode.py --shadow --locomotion-dir /path/t
 The SDK name changed; robot action 13/HUMANOID, protocol enums and model metadata
 names did not. This program runs a client policy through **EXTERNAL**, not action 13.
 
-Use a compatible SDK 0.2.0 installation with the finalized 0.1.4 message wheel
+Use a compatible SDK 0.2.1 installation with the finalized 0.1.5 message wheel
 and the `velocity-demo` extra. Inference uses its bundled C++ ORT 1.20.1 backend,
 loaded only when constructing the model. There is no Python ORT fallback.
 Provide the deployment's exported locomotion directory (model, action profile
@@ -57,32 +57,81 @@ in the startup error; EXTERNAL is not entered.
 The model's 28-joint order, history, scaling, clipped-action feedback, target
 limits and ankle feedforward remain unchanged. Current velocity asset metadata
 is 93 values × 5 history frames; validate the supplied model's actual metadata.
-The asymmetric vx/vy/wz ranges, deadbands, twist/joy priority, 1s input freshness,
+The asymmetric vx/vy/wz ranges, deadbands, 1s input freshness,
 50Hz schedule and initial transition retain the source profile's values.
 Duration omitted or zero remains unlimited; a positive duration is bounded.
-The original finally/CANCEL/close path remains active for Ctrl-C and errors.
+The original finally/CANCEL/close path remains active for SIGINT, SIGTERM and
+errors. Scheduling, transition progress and duration use monotonic time;
+S0–S6 retain their original REALTIME log clocks. No BodyState advance for the
+existing 200 ms live-feedback window stops new targets. Late cycles wait a
+full period before resuming; they do not publish catch-up bursts.
 
 ## Direction dependency
 
-The default remains `--joy-source aorta`, subscribing to `locomotion/joy`.
-It additionally needs the deployment-matched generated `locomotion.Joy` Python
-binding and a ROS2 environment for the existing `/vel_cmd` subscriber. The
-final public SDK wheel set does **not** include that Joy binding. This is an
-open packaging dependency, not a reason to install the old rc.3 message wheel
-over the new SDK. Until a matching binding is handed off, the default Aorta
-input is **not ready for customer use**. No decoder is hand-written here and
-no automatic input-source fallback occurs.
+SDK 0.2.1 uses only Aorta `locomotion/joy`, through the SDK's `JoyReader`.
+There is no direction-source CLI option, ROS input subscription or velocity
+fallback. Neutral, missing or stale input produces zero direction through the
+existing profile. This requires the matching public humanoid **0.1.5** wheel,
+Aorta 2026.10.20 and FlatBuffers 25.12.19. Dependency pins are listed in
+compatibility.json. The older 0.1.4 public wheel
+has no Joy binding and cannot supply this entry point. Do not mix an older
+message wheel into the SDK to obtain it.
 
-`--joy-source ros2` explicitly uses `/joy` and `/vel_cmd` in that deployment's
-ROS2 environment. It does not bridge topics, publish joystick data, or change
-the profile's axis/range mapping. Selecting it is a user's explicit choice.
+```python
+from locomotion_aorta import JoyReader
+
+with JoyReader(node) as reader:  # reuse the deployment-configured Aorta node
+    sample = reader.read()     # call once per policy tick; drains internally
+    axes = sample.axes if sample.is_fresh() else ()
+    presses = sample.pressed_counts.get(0, 0)
+    releases = sample.released_counts.get(0, 0)
+```
+
+The reader creates one pull subscription and no Python callback/worker thread.
+It reads until the ring is empty on every tick, including the initial
+transition. Axes/buttons come from the final frame; press/release counts compare
+every adjacent frame (zero versus nonzero), including multiple short presses
+within one tick. A successful read consumes the returned increments and keeps
+the last state, receipt time and cumulative gap count. Empty reads return zero
+increments without refreshing the receipt time. First samples establish a
+baseline; adding/removing button indices does not invent edges.
+
+Snapshots are immutable and single-consumer. `received_realtime_ns` is direct
+CLOCK_REALTIME immediately after pull returns, not network arrival time;
+freshness uses this local receipt with the existing 1s window. Producer
+publication stamps remain diagnostic and do not require synchronized clocks.
+A same-name publisher reset establishes a new sequence/button baseline without
+inventing edges; ambiguous intervals remain incomplete. `missing_samples_since_read` and
+`missing_samples_total` count forward gaps in the payload AortaHeader's uint64
+sequence (zero is valid). Duplicates, resets/reordering, wrap and source changes
+are diagnosed separately. Missing header/source identity is unknown, not zero
+loss. `event_history_complete` is false for a known gap or ambiguous interval;
+it does not recover events missing from those frames. `sequence_diagnostics`
+and per-cycle event counts are also included in the velocity log.
+
+Duplicate or older sequences do not overwrite axes, buttons, receipt time or
+the sequence baseline. A same-identity sequence reset must catch up, or use a
+new publisher identity; uint64 contiguous wrap remains valid. Malformed frames
+are skipped and counted by `decode_errors_total` and the `decode_error`
+diagnostic, without refreshing freshness or discarding previously counted
+edges. Transport failures still propagate.
+
+The default ring depth is 256. Size it from the actual peak input rate with at
+least ten 50Hz ticks of headroom: next power of two of
+`max(256, ceil(peak_hz * 0.2) + 2)`. The 20Hz app-agent refill timer is not an
+upper bound on direct input publication; the actual peak is not measured here.
+Ring overflow silently evicts the oldest frame, and the underlying pull
+`dropped_count()` stays zero. Sequence gaps can reveal missing frames after a
+baseline, but cannot locate the loss or recreate missed presses. The reader
+never caps the number drained per tick or claims lossless delivery during an
+unbounded stall. Close it before closing its node.
 
 ## Records and offline acceptance
 
-S0 is BodyState.ts_state_pub_us; S1 is the Python decoder-entry timestamp and
-S2 the completed materialization timestamp. S3–S6 retain their original
+S0 is BodyState.ts_state_pub_us; S1 is the SDK pull receipt/dequeue boundary and
+S2 the completed NumPy frame materialization timestamp. S3–S6 retain their original
 observation/inference/publish-call boundaries. These are CLOCK_REALTIME ns;
-S1 is not a native receive timestamp. Reusing a state retains its original
+S1 and pull_context_receive_stamp_ns are not network-arrival timestamps. Reusing a state retains its original
 S0/S1/S2. SDK-owned client created/send timestamps use the SDK's own clock.
 Do not subtract robot and client clocks without independent synchronization.
 

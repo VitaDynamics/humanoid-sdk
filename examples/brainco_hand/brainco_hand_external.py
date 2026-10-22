@@ -10,7 +10,7 @@ import struct
 import signal
 import time
 
-from locomotion_aorta import ExternalController, ExternalPhase, HandClient, HandType, InhibitReason
+from locomotion_aorta import PullController, ExternalPhase, HandClient, HandType, InhibitReason
 from locomotion_aorta.hand import validate_info
 # Load the existing sibling example even in isolated Python (-I) bundle checks.
 _body_spec = importlib.util.spec_from_file_location(
@@ -160,7 +160,7 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
     body_info = body.require_body_info(controller, timeout)
     start_state = body._wait_for_stationary_body_state(
         controller, body_info=body_info, timeout=timeout, sleep=sleep, monotonic=monotonic)
-    start_q = tuple(m.q if cap.populated else 0.0 for m, cap in zip(start_state.joints, body_info.joints))
+    start_q = tuple(float(q) if cap.populated else 0.0 for q, cap in zip(start_state.q, body_info.joints))
     hold = body._position_command(start_q)
     if body_gains == 'zero':
         hold = replace(hold, joints=tuple(replace(cmd, kp=0.0, kd=0.0, dq=0.0, tau=0.0)
@@ -192,7 +192,7 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
                        (entered.generation, entered.client_id, entered.lease_id)
                     or status.reject_count != entered.reject_count):
                 raise RuntimeError('body EXTERNAL ownership/phase/reject_count changed')
-            state = controller.wait_body_state(timeout)
+            state = controller.wait_state(timeout)
             body._validate_body_state(state, body_info=body_info, require_stationary=False)
             now = monotonic()
             if state.state_id != last_body_id:
@@ -201,8 +201,8 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
                 raise RuntimeError('body lowstate became stale')
             # Retain the current pose using the inherited endpoint tolerance;
             # abort instead of continuing hand movement if the body drifts.
-            if any(abs(m.q - q) > body.RETURN_ENDPOINT_POSITION_TOLERANCE_RAD
-                   for m, q, cap in zip(state.joints, start_q, body_info.joints) if cap.populated):
+            if any(abs(actual - q) > body.RETURN_ENDPOINT_POSITION_TOLERANCE_RAD
+                   for actual, q, cap in zip(state.q, start_q, body_info.joints) if cap.populated):
                 raise RuntimeError('body departed from its held pose')
             controller.publish(replace(hold, input_state_id=state.state_id,
                                        input_state_ts_real_us=state.ts_state_real_us))
@@ -376,11 +376,11 @@ def main(argv=None):
     sides = ('left', 'right') if args.side == 'both' else (args.side,)
     with ExitStack() as stack:
         if readonly:
-            clients = [stack.enter_context(HandClient(side, group=args.group, read_only=True)) for side in sides]
+            clients = [stack.enter_context(HandClient(side, group=args.group, read_only=True, pull_feedback=True)) for side in sides]
             observe(clients, timeout=args.timeout)
         else:
-            controller = stack.enter_context(ExternalController(group=args.group))
-            clients = [stack.enter_context(HandClient(side, group=args.group, node=controller.transport.node))
+            controller = stack.enter_context(PullController(group=args.group))
+            clients = [stack.enter_context(HandClient(side, group=args.group, node=controller.transport.node, pull_feedback=True))
                        for side in sides]
             if args.touch != 'keep':
                 for client in clients:

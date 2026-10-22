@@ -1,34 +1,25 @@
 # Humanoid SDK
 
-SDK **0.2.0** is in preparation; packaging and release are pending.
-This version provides public body31/EXTERNAL, independent hand/gripper
-clients, Aorta 2026.10.20 and an independent read-only BodyStateSource.
-
-This candidate requires public body/EE schema **0.1.4** and BODY protocol 2.
-Its 40-byte BodyJointState layout is incompatible with 0.1.2 (56 bytes); use
-matching robot software and generated bindings. The 0.1.4 dependency wheel is
-published in the schema repository's official `humanoid-msgs-0.1.4` Release
-and mirrored, byte for byte, in this SDK repository's
-[`v0.1.0-rc.4` dependency Release](https://github.com/VitaDynamics/humanoid-sdk/releases/tag/v0.1.0-rc.4),
-following the #10 dependency delivery flow.
-Its SHA-256 is `31fbd1f710a8e92043cc1d0ec80657fc5f76aad4a47e0926d94d70e415185169`.
-Installation requires the complete matching wheelhouse and hashes in
-[compatibility.json](compatibility.json).
+SDK **0.2.1** is in preparation; packaging and release are pending.
+This candidate pins the generated public body/EE/Joy schema **0.1.5** and BODY
+protocol 2. The actual generated wheel SHA-256 is
+`9f2949f0f4748554627c624c93cf382159dd6a4fbbd845d7a83ed2af241e2afd`.
+It preserves the prior 17 BFBS contracts and adds Joy as the eighteenth root.
+Schema generation is complete; SDK packaging, full acceptance and release
+publication are pending. Use only the complete wheelhouse and hashes in
+[compatibility.json](compatibility.json), with matching robot software.
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
 with **CPython 3.10**, glibc **2.35+** and GLIBCXX **3.4.29+**
-(Ubuntu 22.04 or newer). SDK 0.2.0 ships one distribution containing both the
+(Ubuntu 22.04 or newer). SDK 0.2.1 ships one distribution containing both the
 client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
-aarch64 only. There is no pure Python or separate backend wheel for 0.2.0.
-Version 0.2.1 is planned to restore general platform support through separate
-platform and pure Python wheels under the same SDK package name.
+aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 
 Dependencies are pinned to Aorta SDK and messages `2026.10.20` (ABI 13),
-`vbot-humanoid-msgs==0.1.4`, and `flatbuffers==25.12.19`. Verify wheel filenames
-and SHA-256s against [compatibility.json](compatibility.json). All four runtime
-dependencies come from this SDK repository's `v0.1.0-rc.4` Release. Select the
-pinned 0.1.4 wheel; older schema assets remain available for older SDKs.
+`vbot-humanoid-msgs==0.1.5`, and `flatbuffers==25.12.19`. Verify wheel filenames
+and SHA-256s against [compatibility.json](compatibility.json). The runtime dependency delivery follows the `v0.1.0-rc.4` Release flow.
+Use the official 0.1.5 wheel and dependency pins in compatibility.json.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
 The SDK also includes **Velocity mode** (`examples/velocity_mode/velocity_mode.py`) and
@@ -38,6 +29,12 @@ and the built-in C++ ONNX backend through EXTERNAL. See
 for the old-to-new names, optional dependencies and offline entry points.
 These additions await independent package/numerical acceptance; a unit test is
 not robot-motion evidence.
+
+The 0.2.1 Joy input candidate adds `JoyReader`: drain Aorta input snapshots in
+the policy thread and read the latest axes plus accumulated button edge and
+sequence-gap counts. See [the Joy reader contract](examples/velocity_mode/README.md#direction-dependency).
+It uses the official public messages 0.1.5 wheel pinned in compatibility.json.
+SDK release publication remains pending; build/install the complete matching bundle.
 
 Match the robot's public schema hashes and roster to [compatibility.json](compatibility.json).
 Control requests use protocol 2; ACK/Status remain protocol 1; new body roots use
@@ -105,7 +102,7 @@ and [PC networking and Zenoh configuration](https://vitadynamics.feishu.cn/wiki/
 |---|---|
 | `examples/gripper/gripper_external.py` | One entry for read-only gripper info/state, single-side target/return and dual-side sine; motion shares body zero/hold and one EXTERNAL lifecycle. |
 | `examples/brainco_hand/brainco_hand_external.py` | Independent hand info/state/touch and authorized hand motion; `examples/brainco_hand/brainco_capture.py` records/exports feedback. |
-| `examples/teleop_policy/teleop_policy.py` | PC-local ONNX inference and gamepad input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
+| `examples/teleop_policy/teleop_policy.py` | PC-local ONNX inference and Aorta Joy input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
 
 Basic examples remain `examples/external_control/external_control.py` for body EXTERNAL,
 `examples/body_state_subscriber/body_state_subscriber.py` for read-only BodyState, and
@@ -122,7 +119,7 @@ bundle root:
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-python -m pip install --no-index --find-links wheelhouse locomotion-aorta==0.2.0
+python -m pip install --no-index --find-links wheelhouse 'locomotion-aorta[state-arrays]==0.2.1'
 python -m pip check
 python -c 'import aorta, flatbuffers, locomotion_aorta; import lowlevel.BodyCmd, lowlevel.BodyState, locomotion_sdk.ControlStatus'
 ```
@@ -149,6 +146,19 @@ a router, but the robot-facing address, listener, namespace and authentication
 must all match the deployment. Missing authentication is an installation
 blocker; do not remove it to connect.
 
+### Effective Aorta group
+
+Pinned Aorta 2026.10.20 Core selects its group from `AORTA_GROUP` (unset means
+`default`), even when a different group is passed to `Node`. Before creating
+nodes, set `AORTA_GROUP` to the same value as the SDK `group=` / demo `--group`.
+The SDK checks `Node.group()` before creating publishers/subscribers and rejects
+a mismatch, reporting requested/effective values and the `AORTA_GROUP` setting.
+It does not change the process environment. `SDK_GROUP` is only a demo/runner
+convention; setting it alone does not configure Core. The production-topic
+Mock runner sets both variables in its isolated children; clients must pass
+that same group explicitly. This group check does not validate peer routing,
+namespace, credentials or permission to move a robot.
+
 ## Motion example
 
 `examples/external_control/external_control.py` requests control and moves 30 installed body joints in the public 31 roster.
@@ -169,7 +179,7 @@ Use the public EE wheel pinned in [compatibility.json](compatibility.json).
 The distribution is `vbot-humanoid-msgs`; generated imports retain `lowlevel`,
 `locomotion_sdk`, `aorta.services.humanoid_locomotion` and `*_schema_meta`.
 Do not install the full private `vita-msgs` wheel or a temporary HIL wheel.
-The pinned public `0.1.4` wheel provides the new hand roots; the older
+The pinned public `0.1.5` wheel provides the new hand roots; the older
 `0.1.0` public wheel does not.
 
 With connection authorization and the configured peer profile, read both hands:
@@ -231,6 +241,14 @@ root is required. Host tests and packaging do not establish device HIL.
 
 ## Read-only body state
 
+The opt-in `PullStateSource` and `PullController` provide `wait_state(timeout)`
+and ControlStatus snapshots using Aorta keep-last rings. Install the
+`state-arrays` extra for native NumPy feedback. The arrays own their storage;
+joint clocks retain uint64, errors uint32, and positions/velocities/torques
+float32. `imu_state_present` distinguishes an absent sample from numeric zeros.
+The original callback API remains available. Pull depth 1 intentionally skips
+older queued samples; its drop counter is not a packet-loss measurement.
+
 `BodyStateSource` subscribes only to BodyState; it creates no control publisher,
 service client or lease. It is independent of `ExternalController`.
 
@@ -280,7 +298,7 @@ editable SDK install.
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install --no-index --find-links wheelhouse \
-  aorta-sdk==2026.10.20 aorta-msgs==2026.10.20 vbot-humanoid-msgs==0.1.4 flatbuffers==25.12.19
+  aorta-sdk==2026.10.20 aorta-msgs==2026.10.20 vbot-humanoid-msgs==0.1.5 flatbuffers==25.12.19
 python -m pip install mcap==1.3.1
 make check
 ```
@@ -322,7 +340,7 @@ python tests/offline_install.py dist/offline-bundle
 ```
 
 The bundle includes the compiled extension and ORT inside each SDK wheel,
-examples, source and the public PC configuration template. NumPy and pygame
+examples, source and the public PC configuration template. NumPy
 remain optional demo dependencies. The packager verifies pinned dependency
 hashes, requires both SDK architecture filenames, refuses configured credentials
 and existing output directories, and writes `MANIFEST.json` with file digests
@@ -427,18 +445,18 @@ python examples/gripper/gripper_external.py --side both --pattern sine --body-po
 ## PC policy example (in preparation)
 
 `examples/teleop_policy/teleop_policy.py` subscribes to BodyState, discovers the actual body
-roster, runs a local action 17 ONNX policy, and uses the same EXTERNAL lease and
+roster, drains Aorta `locomotion/joy` through the same JoyReader as velocity,
+runs a local action 17 ONNX policy, and uses the same EXTERNAL lease and
 CANCEL exit. Before every live inference it waits up to the existing `--timeout`
 for a strictly increasing BodyState `state_id`; unchanged or older feedback is
 not reused for another inference or leg command, and timeout attempts CANCEL.
 The SDK wheel already contains the C++ ONNX Runtime 1.20.1 CPU backend and
 its shared libraries. Only constructing a model loads the bundled inference backend;
 core imports and example `--help` do not load it. There is no Python ONNX
-Runtime fallback. The optional `teleop-demo` extra installs only NumPy and
-pygame from a complete matching demo wheelhouse:
+Runtime fallback. The optional `teleop-demo` extra installs only NumPy from a complete matching demo wheelhouse:
 
 ```bash
-python -m pip install --no-index --find-links demo-wheelhouse 'locomotion-aorta[teleop-demo]==0.2.0'
+python -m pip install --no-index --find-links demo-wheelhouse 'locomotion-aorta[teleop-demo]==0.2.1'
 python -m pip check
 ```
 
@@ -469,3 +487,47 @@ existing on-site authorization and emergency-stop requirements above.
 - [external_control](examples/external_control/README.md)
 - [fixed_stand_pose](examples/fixed_stand_pose/README.md)
 - [body_state_subscriber](examples/body_state_subscriber/README.md)
+
+Teleop input and the deployed action 17 mapping are documented in
+[examples/teleop_policy/README.md](examples/teleop_policy/README.md). Live input comes from
+the robot's Aorta Joy publisher, using the same JoyReader as velocity mode.
+
+Hand and gripper examples select `pull_feedback=True` on their clients. State,
+info and touch are decoded on the polling caller; no Python receive worker is
+created. The optional user callbacks then run on that caller. The default
+client mode remains compatible with existing asynchronous callback users.
+Each pull client has one polling consumer and retains only the latest sample
+per topic. Independent EE payloads still use the generated Python codecs;
+BodyState/BodyCmd use the native codecs. `PullController.wait_body_state()`
+uses the native DTO decoder; `wait_state()` retains native arrays. `brainco_capture live` uses its bounded callback queue for all topics, including
+commands, and reports queue drops explicitly. Transport loss remains unmeasured.
+
+Pull feedback is a latest-state snapshot, not a policy clock. `wait_state(timeout)`
+waits for a first frame, then polls the depth=1 ring and otherwise returns the
+previous immutable snapshot with unchanged receipt timestamps; timeout=0 does
+not block. Live policy demos retain their configured 50 Hz timer, independently
+of the BodyState publication rate (including 400 Hz). Core context receive stamps
+are dequeue/assembly times, not network-arrival times.
+
+Velocity stops publishing if BodyState does not advance within the existing
+200 ms live-feedback window. WBC retains `--max-state-age-ms` (default 50 ms):
+pull feedback must pass local feedback receipt age. Producer timestamps remain diagnostic; freshness
+does not compare clocks from different machines.
+The Core dequeue stamp alone cannot establish arrival age. Policy schedules,
+duration and transitions use monotonic time; late cycles re-anchor one full
+period ahead instead of sending catch-up bursts. Velocity SIGINT/SIGTERM stop
+new targets and run the existing CANCEL/close path.
+
+Pull ControlStatus conversion errors are counted in
+`PullTransport.status_decode_errors` and retain the last valid snapshot;
+transport failures still propagate. `PullController.wait_body_state()` retains
+the callback controller's `ExternalControlTimeoutError` contract. After close,
+wait/publish raise `ControllerClosedError`, while `status` returns its last
+snapshot. Creating a read-only source does not change Aorta logging environment
+variables. Publisher construction validates the native schema/header ABI before
+control ownership can be requested.
+
+EE pull clients serialize ring consumption. A concurrent caller that finds a
+poll in progress uses already cached Info/state instead of waiting behind that
+caller's blocking receive. The existing Info validation and command guards
+still apply; this does not create a callback or polling worker.

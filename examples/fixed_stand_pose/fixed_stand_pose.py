@@ -29,10 +29,11 @@ class FixedStandPose:
 
     def measured(self, state):
         values = []
-        if len(state.joints) != len(self.info.joints):
+        positions = state.q
+        if len(positions) != len(self.info.joints):
             raise ValueError('BodyState differs from Info roster')
-        for name, cap, sample in zip(self.info.joint_names, self.info.joints, state.joints):
-            values.append(sample.q if cap.populated else 0.0)
+        for name, cap, q in zip(self.info.joint_names, self.info.joints, positions):
+            values.append(float(q) if cap.populated else 0.0)
         self.check(values)
         return tuple(values)
 

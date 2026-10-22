@@ -7,7 +7,22 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
+def require_installed_codec(sdk, native):
+    """Reject source shadowing: the measured wheel must contain the codec."""
+    prefix = Path(sys.prefix).resolve()
+    for module in (sdk, native):
+        if not Path(module.__file__).resolve().is_relative_to(prefix):
+            raise RuntimeError(f"benchmark requires installed SDK wheel: {module.__file__}")
+
+
+def encode_with_timing(encode, timing, *args, **kwargs):
+    # Whole native encoder boundary: owned-input conversion through returned bytes.
+    timing.fill_ns = time.monotonic_ns()
+    timing.fill_realtime_ns = time.time_ns()
+    result = encode(*args, **kwargs)
+    timing.filled_ns = time.monotonic_ns()
+    timing.filled_realtime_ns = time.time_ns()
+    return result
 
 
 def main():
@@ -21,6 +36,8 @@ def main():
     import locomotion_aorta.transport as sdk
     from locomotion_aorta import BodyCmd, BodyJointCmd, BodyCmdAction, ServiceStatus
     from aorta.publisher import Publisher
+    from locomotion_aorta import _body_cmd_native as native
+    require_installed_codec(sdk, native)
 
     prefix = f"/bench/sdk_latency/{args.session}"
     sdk.BODY_STATE_TOPIC = prefix + "/lowstate"
@@ -29,7 +46,7 @@ def main():
     sdk.CONTROL_REQUEST_TOPIC = prefix + "/unused_request"
     sdk.CONTROL_ACK_TOPIC = prefix + "/unused_ack"
     sdk.CONTROL_STATUS_TOPIC = prefix + "/unused_status"
-    decode, fill, publish_bytes = sdk.decode_body_state, sdk._fill_body_cmd, Publisher.publish_bytes
+    decode, encode, publish_bytes = sdk.decode_body_state, native.encode, Publisher.publish_bytes
     timing = threading.local()
     rows, errors = [], []
     lock = threading.Lock()
@@ -49,13 +66,8 @@ def main():
         timing.decoded_realtime_ns = time.time_ns()
         return result
 
-    def timed_fill(*argv):
-        timing.fill_ns = time.monotonic_ns()
-        timing.fill_realtime_ns = time.time_ns()
-        result = fill(*argv)
-        timing.filled_ns = time.monotonic_ns()
-        timing.filled_realtime_ns = time.time_ns()
-        return result
+    def timed_encode(*argv, **kwargs):
+        return encode_with_timing(encode, timing, *argv, **kwargs)
 
     def timed_publish(publisher, *argv, **kwargs):
         # This is the Python Aorta byte-publish entry, NOT a CAN/TCP send stamp.
@@ -64,7 +76,7 @@ def main():
         return publish_bytes(publisher, *argv, **kwargs)
 
     sdk.decode_body_state = timed_decode
-    sdk._fill_body_cmd = timed_fill
+    native.encode = timed_encode
     Publisher.publish_bytes = timed_publish
     transport = sdk.create_aorta_transport(node_name="sdk_ci_python", group="default")
 
@@ -129,7 +141,9 @@ def main():
                                  "returned_realtime_ns"))
                 writer.writerows(rows)
             (args.directory / "client.json").write_text(json.dumps({
-                "sdk_source": sdk.__file__, "errors": errors, "callbacks": len(rows)}, indent=2))
+                "sdk_source": sdk.__file__, "native_codec": native.__file__,
+                "encode_boundary": "native.encode including marshal and returned bytes",
+                "errors": errors, "callbacks": len(rows)}, indent=2))
     return 0 if rows and not errors else 1
 
 

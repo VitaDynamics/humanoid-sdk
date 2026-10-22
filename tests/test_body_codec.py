@@ -185,7 +185,12 @@ class BodyCodecTest(unittest.TestCase):
         # Only protocol_version is safe to read from the incompatible v1 frame.
         for version in (0, 1, 3):
             with self.subTest(version=version), self.assertRaisesRegex(ValueError, 'protocol_version'):
-                codec.decode_body_state(SimpleNamespace(ProtocolVersion=lambda: version))
+                builder = flatbuffers.Builder(1)
+                m = module('BodyState')
+                m.BodyStateStart(builder)
+                m.BodyStateAddProtocolVersion(builder, version)
+                builder.Finish(m.BodyStateEnd(builder))
+                codec.decode_body_state(m.BodyState.GetRootAs(builder.Output()))
 
     def test_joint_error_enum_and_removed_dto_fields_follow_public_bindings(self):
         from locomotion_aorta import JointError, BodyJointState, BodyImuSample
@@ -378,6 +383,7 @@ class BodyCodecTest(unittest.TestCase):
         class Node:
             calls = []
             def __init__(self, *a): pass
+            def group(self): return 'default'
             def create_publisher_typed(self, *a, **kw): return object()
             def create_client_typed(self, *a, **kw): self.calls.append((a,kw)); return client
             def close(self): pass
@@ -386,7 +392,8 @@ class BodyCodecTest(unittest.TestCase):
         bindings = SimpleNamespace(aorta=fake_aorta, control_request_schema_meta=object(), body_cmd_schema_meta=object(),
                                    get_robot_info_request=request_module, get_robot_info_response=reply_module,
                                    get_robot_info_schema_meta=importlib.import_module('get_robot_info_schema_meta'))
-        with patch.object(transport,'_load_aorta_bindings',return_value=bindings):
+        with patch.object(transport,'_load_aorta_bindings',return_value=bindings), \
+             patch('locomotion_aorta._native_body_codec.NativeBodyPublisher'):
             t = transport.create_aorta_transport(node_name='rpc-test',group='default')
         try:
             for _ in range(2):

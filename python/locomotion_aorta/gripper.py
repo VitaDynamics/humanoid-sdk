@@ -51,7 +51,7 @@ class GripperClient(GripperClientLifecycle):
     """
 
     def __init__(self, side, *, node=None, _wire=None, group='default', read_only=False,
-                 on_info=None, on_state=None, _session_id=None):
+                 on_info=None, on_state=None, _session_id=None, pull_feedback=False):
         if side not in ('left', 'right'):
             raise ValueError('side must be left or right')
         if _session_id is not None:
@@ -67,7 +67,7 @@ class GripperClient(GripperClientLifecycle):
         super().__init__(side, node=node, bindings=wire.bindings, group=group,
                          decode_info=wire.decode_info, decode_state=wire.decode_state,
                          read_only=read_only, on_info=on_info, on_state=on_state,
-                         owns_node=owns_node, _session_id=_session_id)
+                         owns_node=owns_node, _session_id=_session_id, pull_feedback=pull_feedback)
 
     def publish_target(self, q, dq=0.0, *, torque_cmd_nm=None, cmd_id=None, input_state=None):
         """Send q in metres and dq host cap in m/s; 0 stays configuration-default.

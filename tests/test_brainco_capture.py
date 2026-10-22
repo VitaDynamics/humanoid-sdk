@@ -169,6 +169,33 @@ class BrainCoCaptureTest(unittest.TestCase):
         self.assertEqual(rows[-1]["dropped_messages"], 2)
         self.assertEqual(rows[-1]["transport_loss"], "not_measured")
 
+    def test_callback_capture_keeps_body_command_burst_in_order(self):
+        import flatbuffers
+        from locomotion_aorta._body_codec import create_body_cmd
+        from locomotion_aorta import BodyJointCmd
+        from lowlevel import BodyCmd
+        node = self.fake_node()
+        original = node.create_subscriber_typed
+        def subscribe(decoder, topic, callback, **kwargs):
+            original(decoder, topic, callback, **kwargs)
+            if topic == capture.TOPICS['body_cmd']:
+                for sequence in range(5):
+                    builder = flatbuffers.Builder(1024)
+                    joints = create_body_cmd(builder, (BodyJointCmd(),) * 31)
+                    BodyCmd.BodyCmdStart(builder)
+                    BodyCmd.BodyCmdAddJoints(builder, joints)
+                    BodyCmd.BodyCmdAddSequence(builder, sequence)
+                    builder.Finish(BodyCmd.BodyCmdEnd(builder))
+                    callback(bytes(builder.Output()), SimpleNamespace(sequence=sequence))
+        node.create_subscriber_typed = subscribe
+        output = self.path / 'burst'
+        capture.capture_live(output, metadata(), .04, node_factory=lambda *a: node,
+                             monotonic=Clock())
+        rows = read_rows(output)
+        self.assertEqual([r['sequence'] for r in rows if r['type'] == 'body_cmd'], list(range(5)))
+        self.assertEqual(rows[-1]['dropped_messages'], 0)
+        self.assertTrue(node.closed)
+
     def test_keyboard_interrupt_and_decode_error_close_node_and_leave_incomplete_file(self):
         for name, kwargs, error in (("interrupt", dict(fail=KeyboardInterrupt()), KeyboardInterrupt),
                                     ("bad", dict(invalid=True), ValueError)):

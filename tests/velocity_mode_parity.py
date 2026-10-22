@@ -10,7 +10,8 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "velocity_mode"))
-from velocity_mode import decode_state
+from velocity_mode import StateFrame
+from locomotion_aorta._body_codec import decode_body_state
 from velocity_mode_policy import VelocityModePolicy
 from lowlevel.BodyState import BodyState
 
@@ -25,7 +26,11 @@ def main():
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     policy = VelocityModePolicy(args.locomotion_dir)
-    frame = decode_state(BodyState.GetRootAs(args.state_bin.read_bytes()), 1)
+    state = decode_body_state(BodyState.GetRootAs(args.state_bin.read_bytes()))
+    hip = next(imu for imu in state.imu_states if imu.location == 0).state
+    frame = StateFrame(state, tuple(j.q for j in state.joints),
+                       tuple(j.dq for j in state.joints), hip.gyroscope,
+                       hip.quaternion, state.ts_state_pub_us * 1000, 1, 1)
     oracle = args.output_dir / "oracle"
     command = ["g++", "-std=c++17", "-O2", str(Path(__file__).with_suffix(".cpp")),
                "-I", str(args.robot_source), "-I", str(args.ort_dir / "include"),

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — effective group validation
+
+Controller and body state source startup now rejects a requested SDK group
+that differs from the effective `AORTA_GROUP` (or Core's `default`). Programs
+that set `AORTA_GROUP` but leave the SDK `group="default"` must pass the matching
+group explicitly. Hand, gripper and BrainCo capture already rejected mismatches;
+this extends that check to the body controller and state sources.
+
+## 0.2.1 (in preparation)
+
+- Add opt-in pull BodyState/ControlStatus snapshots and C++ BodyState NumPy decode
+  and BodyCmd encoding; keep the original callback APIs compatible.
+- Move examples to latest body feedback while keeping each configured control
+  period independent of state publication frequency.
+- Add Aorta Joy draining and button-edge diagnostics, and common policy-cycle
+  timing/applied-sequence logs. Pin the actual generated public 0.1.5 wheel
+  and all 18 BFBS hashes; prior 17 contracts remain unchanged.
+
 ## 0.2.0 (in preparation)
 
 - Use the public 31-slot BodyCmd/BodyState interfaces and EXTERNAL control;

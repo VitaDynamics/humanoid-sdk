@@ -6,9 +6,9 @@ import time
 from collections.abc import Callable, Sequence
 
 from locomotion_aorta import (
-    ExternalController,
+    PullController,
     ExternalPhase,
-    BodyState,
+    BodyStateArrays,
     BodyCmd,
     BodyJointCmd,
     BodyCmdAction,
@@ -36,7 +36,7 @@ FIXED_STAND_KD = (3.0, 3.0, 2.0, 4.0, 2.0, 1.0, 3.0, 3.0, 2.0, 4.0, 2.0, 1.0, 2.
 
 
 def run(
-    controller: ExternalController,
+    controller: PullController,
     *,
     timeout: float,
     sleep: Callable[[float], None] = time.sleep,
@@ -51,9 +51,8 @@ def run(
         sleep=sleep,
         monotonic=monotonic,
     )
-    start_q = tuple(
-        motor.q if cap.populated else 0.0 for motor, cap in zip(start_state.joints, info.joints)
-    )
+    positions = start_state.q
+    start_q = tuple(float(q) if cap.populated else 0.0 for q, cap in zip(positions,info.joints))
     return_q = list(start_q)
     # Offset only the elbows toward zero to avoid the observed hip interference.
     for slot in (18, 25):
@@ -86,7 +85,7 @@ def run(
         last_state_change = monotonic()
         next_publish = monotonic()
 
-        def publish_frame(q: Sequence[float]) -> BodyState:
+        def publish_frame(q: Sequence[float]) -> BodyStateArrays:
             nonlocal last_state_id, last_state_change, next_publish
             delay = next_publish - monotonic()
             if delay > 0:
@@ -108,7 +107,7 @@ def run(
                     "robot reject_count changed during the trajectory"
                 )
 
-            state = controller.wait_body_state(timeout)
+            state = controller.wait_state(timeout)
             _validate_body_state(state, body_info=info, require_stationary=False)
             now = monotonic()
             if state.state_id != last_state_id:
@@ -154,7 +153,7 @@ def run(
             emit("CANCEL confirmed PASSIVE")
 
 
-def require_body_info(controller: ExternalController, timeout: float):
+def require_body_info(controller: PullController, timeout: float):
     response = controller.get_robot_info(timeout)
     if response.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS):
         raise RuntimeError(f"get_robot_info failed: status={response.status} {response.error_message}")
@@ -167,30 +166,30 @@ def require_body_info(controller: ExternalController, timeout: float):
 
 
 def _wait_for_stationary_body_state(
-    controller: ExternalController,
+    controller: PullController,
     *,
     body_info,
     timeout: float,
     sleep: Callable[[float], None],
     monotonic: Callable[[], float],
-) -> BodyState:
+) -> BodyStateArrays:
     deadline = monotonic() + timeout
     stationary_since: float | None = None
     last_new_time = monotonic()
     last_state_id: int | None = None
-    latest: BodyState | None = None
+    latest: BodyStateArrays | None = None
 
     while monotonic() < deadline:
         remaining = deadline - monotonic()
-        latest = controller.wait_body_state(max(remaining, 0.001))
+        latest = controller.wait_state(max(remaining, 0.001))
         _validate_body_state(latest, body_info=body_info, require_stationary=False)
         now = monotonic()
         if latest.state_id != last_state_id:
             last_state_id = latest.state_id
             last_new_time = now
             if any(
-                abs(motor.dq) > STATIONARY_DQ_RAD_S
-                for motor, cap in zip(latest.joints, body_info.joints) if cap.populated
+                abs(dq) > STATIONARY_DQ_RAD_S
+                for dq, cap in zip(latest.dq, body_info.joints) if cap.populated
             ):
                 stationary_since = None
             elif stationary_since is None:
@@ -205,26 +204,22 @@ def _wait_for_stationary_body_state(
 
 
 def _validate_body_state(
-    state: BodyState, *, body_info, require_stationary: bool
+    state: BodyStateArrays, *, body_info, require_stationary: bool
 ) -> None:
     if not state.attitude_valid:
         raise RuntimeError("body state attitude is invalid")
-    if len(state.joints) != COMMAND_SLOTS:
-        raise RuntimeError(
-            f"body state has {len(state.joints)} motor slots; "
-            f"{COMMAND_SLOTS} required"
-        )
-    for index, (motor, cap) in enumerate(zip(state.joints, body_info.joints)):
+    q, dq, errors = state.q, state.dq, state.error_code
+    if len(q) != COMMAND_SLOTS:
+        raise RuntimeError(f"body state has {len(q)} motor slots; {COMMAND_SLOTS} required")
+    for index, (position, velocity, error, cap) in enumerate(zip(q,dq,errors,body_info.joints)):
         if not cap.populated:
             continue
-        if motor.error_code != JointError.NONE:
-            raise RuntimeError(f"body state motor[{index}] error_code={motor.error_code}")
-        if not math.isfinite(motor.q) or not math.isfinite(motor.dq):
+        if error != JointError.NONE:
+            raise RuntimeError(f"body state motor[{index}] error_code={error}")
+        if not math.isfinite(position) or not math.isfinite(velocity):
             raise RuntimeError(f"body state motor[{index}] q/dq is not finite")
-        if require_stationary and abs(motor.dq) > STATIONARY_DQ_RAD_S:
-            raise RuntimeError(
-                f"body state motor[{index}] is moving at {motor.dq:.3f} rad/s"
-            )
+        if require_stationary and abs(velocity) > STATIONARY_DQ_RAD_S:
+            raise RuntimeError(f"body state motor[{index}] is moving at {velocity:.3f} rad/s")
 
 
 def _segment_steps(start_q: Sequence[float]) -> int:
@@ -236,7 +231,7 @@ def _segment_steps(start_q: Sequence[float]) -> int:
     return math.ceil(duration_s / PERIOD_S)
 
 
-def _position_command(q: Sequence[float], state: BodyState | None = None) -> BodyCmd:
+def _position_command(q: Sequence[float], state: BodyStateArrays | None = None) -> BodyCmd:
     if len(q) != COMMAND_SLOTS:
         raise ValueError(f"position command must contain {COMMAND_SLOTS} slots")
     commands = tuple(
@@ -249,7 +244,7 @@ def _position_command(q: Sequence[float], state: BodyState | None = None) -> Bod
 
 
 def _publish_segment(
-    publish: Callable[[Sequence[float]], BodyState],
+    publish: Callable[[Sequence[float]], BodyStateArrays],
     start: Sequence[float],
     target: Sequence[float],
     steps: int,
@@ -266,7 +261,7 @@ def _publish_segment(
 
 
 def _publish_dwell(
-    publish: Callable[[Sequence[float]], BodyState],
+    publish: Callable[[Sequence[float]], BodyStateArrays],
     target: Sequence[float],
     *,
     body_info,
@@ -280,10 +275,10 @@ def _publish_dwell(
         state = publish(target)
         now = monotonic()
         at_endpoint = all(
-            not cap.populated or (abs(motor.q - target_q) <= position_tolerance_rad
-            and abs(motor.dq) <= STATIONARY_DQ_RAD_S)
-            for motor, target_q, cap in zip(
-                state.joints[:COMMAND_SLOTS], target, body_info.joints
+            not cap.populated or (abs(q - target_q) <= position_tolerance_rad
+            and abs(dq) <= STATIONARY_DQ_RAD_S)
+            for q, dq, target_q, cap in zip(
+                state.q, state.dq, target, body_info.joints
             )
         )
         if at_endpoint:
@@ -318,7 +313,7 @@ def main() -> None:
     if not args.confirm_motion:
         parser.error("--confirm-motion is required")
 
-    with ExternalController(group=args.group) as controller:
+    with PullController(group=args.group) as controller:
         run(controller, timeout=args.timeout)
 
 

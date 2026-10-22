@@ -1,4 +1,4 @@
-from body_fixtures import sample_motor, robot_info_reply
+from body_fixtures import body_array_frame, sample_motor, robot_info_reply
 import math
 import unittest
 from types import SimpleNamespace
@@ -68,6 +68,8 @@ class RecordingController:
         self.calls.append("wait_body_state")
         self._emit_body_state()
         return self.controller.wait_body_state(timeout)
+    def wait_state(self, timeout):
+        return body_array_frame(self.wait_body_state(timeout))
 
     def get_robot_info(self, timeout: float):
         return self.controller.get_robot_info(timeout)
@@ -226,10 +228,10 @@ class ExamplesSmokeTest(unittest.TestCase):
         state = BodyState(state_id=8, ts_state_real_us=0, attitude_valid=True,
                           joints=tuple(sample_motor(q=0.1, dq=0.0, body_index=i,
                                                     populated=i != 14) for i in range(31)))
-        source = SimpleNamespace(snapshot=mock.Mock(return_value=SimpleNamespace(body_state=lambda: state)))
+        source = SimpleNamespace(wait_state=mock.Mock(return_value=body_array_frame(state)))
         output: list[str] = []
         body_state_subscriber.run_once(source, timeout=0.1, emit=output.append)
-        source.snapshot.assert_called_once_with(0.1)
+        source.wait_state.assert_called_once_with(0.1)
         self.assertEqual(
             output,
             ["state_id=8 ts_state_real_us=0"]
@@ -245,11 +247,11 @@ class ExamplesSmokeTest(unittest.TestCase):
         motors[14] = sample_motor(q=math.nan, dq=math.inf)
         state = BodyState(1, tuple(motors), attitude_valid=True)
         info = robot_info_reply().info.body
-        external_control._validate_body_state(state, body_info=info, require_stationary=True)
+        external_control._validate_body_state(body_array_frame(state), body_info=info, require_stationary=True)
         for error in (3, 20, 255):
             motors[0] = replace(motors[0], error_code=error)
             with self.subTest(error=error), self.assertRaisesRegex(RuntimeError, f'error_code={error}'):
-                external_control._validate_body_state(replace(state, joints=tuple(motors)),
+                external_control._validate_body_state(body_array_frame(replace(state, joints=tuple(motors))),
                                                       body_info=info, require_stationary=False)
 
     def test_external_example_runs_full_body_round_trip_and_enters_passive(self):

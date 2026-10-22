@@ -49,9 +49,9 @@ def _observe_zero_dwell(frame, target, *, body, body_info, monotonic, emit):
     samples = math.ceil(body.DWELL_S / body.PERIOD_S)
     for sample in range(samples):
         state = frame(target)  # Retains the lifecycle's safety/protocol checks.
-        error = max((abs(j.q - q) for j, q, cap in zip(state.joints, target, body_info.joints)
+        error = max((abs(actual - q) for actual, q, cap in zip(state.q, target, body_info.joints)
                      if cap.populated), default=0.0)
-        speed = max((abs(j.dq) for j, cap in zip(state.joints, body_info.joints) if cap.populated), default=0.0)
+        speed = max((abs(dq) for dq, cap in zip(state.dq, body_info.joints) if cap.populated), default=0.0)
         peak_error = max(peak_error, error)
         peak_speed = max(peak_speed, speed)
         emit(f'ZERO_DWELL observation_only=true sample={sample + 1} '
@@ -83,7 +83,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
         plan = module.FixedStandPose(info)  # Reject all bad/missing zero limits before PREPARE.
     initial = body._wait_for_stationary_body_state(
         controller, body_info=info, timeout=timeout, sleep=sleep, monotonic=monotonic)
-    pose = tuple(j.q if cap.populated else 0.0 for j, cap in zip(initial.joints, info.joints))
+    pose = tuple(float(q) if cap.populated else 0.0 for q, cap in zip(initial.q, info.joints))
     if plan is not None:
         plan.measured(initial)
     hold = body._position_command(pose)
@@ -108,7 +108,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
         if plan is not None:
             # Use the latest real sample after the owned RUNNING transition,
             # never the model pose or a pre-entry commanded pose.
-            initial = controller.wait_body_state(timeout)
+            initial = controller.wait_state(timeout)
             body._validate_body_state(initial, body_info=info, require_stationary=False)
             pose = plan.measured(initial)
         last_id = initial.state_id
@@ -131,7 +131,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
                        (entered.generation, entered.client_id, entered.lease_id)
                     or status.reject_count != entered.reject_count):
                 raise RuntimeError(f'body EXTERNAL ownership/phase/reject_count changed: {status!r}')
-            state = controller.wait_body_state(timeout)
+            state = controller.wait_state(timeout)
             body._validate_body_state(state, body_info=info, require_stationary=False)
             now = monotonic()
             if state.state_id != last_id:
@@ -139,7 +139,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             elif now - last_change >= body.LOWSTATE_WINDOW_S:
                 raise RuntimeError('body lowstate became stale')
             if check_hold:
-                errors = tuple(state.joints[i].q - pose[i] for i in hold_slots)
+                errors = tuple(float(state.q[i]) - pose[i] for i in hold_slots)
                 for i, error in zip(hold_slots, errors):
                     hold_peak_abs_error[i] = max(hold_peak_abs_error[i], abs(error))
                 hold_samples += 1
@@ -572,19 +572,19 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None):
         from locomotion_aorta import GripperClient
         _client_factory = GripperClient
     if _controller_factory is None:
-        from locomotion_aorta import ExternalController
-        _controller_factory = ExternalController
+        from locomotion_aorta import PullController
+        _controller_factory = PullController
     readonly = args.dry_run or not args.confirm_motion
     with ExitStack() as stack:
         sides = ('left', 'right') if args.side == 'both' else (args.side,)
         if readonly:
             for side in sides:
-                client = stack.enter_context(_client_factory(side, group=args.group, read_only=True))
+                client = stack.enter_context(_client_factory(side, group=args.group, read_only=True, pull_feedback=True))
                 observe(client, timeout=args.timeout)
         else:
             controller = stack.enter_context(_controller_factory(group=args.group))
             clients = [stack.enter_context(_client_factory(side, group=args.group,
-                                                          node=controller.transport.node)) for side in sides]
+                                                          node=controller.transport.node, pull_feedback=True)) for side in sides]
             try:
                 if args.pattern == 'sine':
                     run_sine(controller, clients, low=args.sine_min_m, high=args.sine_max_m,

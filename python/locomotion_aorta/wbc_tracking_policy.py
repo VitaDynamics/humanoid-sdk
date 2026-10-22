@@ -265,15 +265,30 @@ class WbcTrackingPolicy:
         self.last_action[:] = 0
 
     def state(self, state):
-        if len(state.joints) != 31 or not state.attitude_valid:
-            raise ValueError('expected 31-slot feedback with valid HIP attitude')
-        hip = [x for x in state.imu_states if x.location == HIP]
-        if len(hip) != 1 or hip[0].status != SAMPLE_OK or hip[0].state is None:
-            raise ValueError('one healthy HIP IMU is required; TRUNK is not a fallback')
-        quat = quaternion(hip[0].state.quaternion)
-        gyro = finite(hip[0].state.gyroscope, 'HIP gyroscope')
-        q = finite([state.joints[i].q for i in self.mapping], 'joint position')
-        dq = finite([state.joints[i].dq for i in self.mapping], 'joint velocity')
+        from .state_arrays import BodyStateArrays
+        if isinstance(state, BodyStateArrays):
+            if len(state.q) != 31 or not state.attitude_valid:
+                raise ValueError('expected 31-slot feedback with valid HIP attitude')
+            indices = np.flatnonzero(state.imu_location == HIP)
+            if len(indices) != 1:
+                raise ValueError('one healthy HIP IMU is required; TRUNK is not a fallback')
+            i = indices[0]
+            if state.imu_status[i] != SAMPLE_OK or not state.imu_state_present[i]:
+                raise ValueError('one healthy HIP IMU is required; TRUNK is not a fallback')
+            quat = quaternion(state.imu_values[i, :4])
+            gyro = finite(state.imu_values[i, 4:7], 'HIP gyroscope')
+            q = finite(state.q[self.mapping], 'joint position')
+            dq = finite(state.dq[self.mapping], 'joint velocity')
+        else:
+            if len(state.joints) != 31 or not state.attitude_valid:
+                raise ValueError('expected 31-slot feedback with valid HIP attitude')
+            hip = [x for x in state.imu_states if x.location == HIP]
+            if len(hip) != 1 or hip[0].status != SAMPLE_OK or hip[0].state is None:
+                raise ValueError('one healthy HIP IMU is required; TRUNK is not a fallback')
+            quat = quaternion(hip[0].state.quaternion)
+            gyro = finite(hip[0].state.gyroscope, 'HIP gyroscope')
+            q = finite([state.joints[i].q for i in self.mapping], 'joint position')
+            dq = finite([state.joints[i].dq for i in self.mapping], 'joint velocity')
         if gyro.shape != (3,):
             raise ValueError('expected three body-frame angular velocities')
         gravity = rotation(quat).T @ [0., 0., -1.]
