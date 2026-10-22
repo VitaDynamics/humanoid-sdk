@@ -132,6 +132,22 @@ class PullTest(unittest.TestCase):
         self.assertEqual(c.exit_external(.2).current_action,'PASSIVE')
         self.assertEqual([r.operation for _,r in t.published],[ControlOperation.PREPARE,ControlOperation.COMMIT,ControlOperation.CANCEL])
 
+    def test_reservation_drains_pending_generation_and_revocation(self):
+        from locomotion_aorta import NotRunningError
+        c,t=self.fixture()
+        c.enter_external(.2)
+        first=c._reserve_command()
+        t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
+            status_seq=2,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
+            client_id='client',lease_id='L',generation=84))
+        second=c._reserve_command()
+        self.assertEqual((first.session_id,first.sequence),(42,1))
+        self.assertEqual((second.session_id,second.sequence),(84,1))
+        t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
+            status_seq=3,current_action='PASSIVE',phase=ExternalPhase.IDLE,
+            client_id='client',lease_id='L',generation=84))
+        with self.assertRaises(NotRunningError):c._reserve_command()
+
     def test_entry_timeout_keeps_deadline_and_best_effort_cancel(self):
         c,t=self.fixture(True)
         with self.assertRaises(ExternalControlTimeoutError):c.enter_external(.03)

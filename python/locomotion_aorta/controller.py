@@ -251,22 +251,22 @@ class ExternalController:
             finally:
                 if trace is not None:
                     trace['validation_ns'] = time.perf_counter_ns() - validation
-            preparing = time.perf_counter_ns() if trace is not None else 0
-            context = self._reserve_command()
-            external_command = replace(
-                command,
-                protocol_version=BODY_PROTOCOL_VERSION,
-                action=BodyCmdAction.EXTERNAL,
-                root_quat=None,
-                session_id=context.session_id,
-                sequence=context.sequence,
-                ts_client_created_us=command.ts_client_created_us or time.monotonic_ns() // 1000,
-                ts_client_send_us=time.monotonic_ns() // 1000,
-            )
-            if trace is not None:
-                trace.update(session_id=external_command.session_id,
-                             sequence=external_command.sequence,
-                             session_replace_ns=time.perf_counter_ns() - preparing)
+        preparing = time.perf_counter_ns() if trace is not None else 0
+        context = self._reserve_command()
+        external_command = replace(
+            command,
+            protocol_version=BODY_PROTOCOL_VERSION,
+            action=BodyCmdAction.EXTERNAL,
+            root_quat=None,
+            session_id=context.session_id,
+            sequence=context.sequence,
+            ts_client_created_us=command.ts_client_created_us or time.monotonic_ns() // 1000,
+            ts_client_send_us=time.monotonic_ns() // 1000,
+        )
+        if trace is not None:
+            trace.update(session_id=external_command.session_id,
+                         sequence=external_command.sequence,
+                         session_replace_ns=time.perf_counter_ns() - preparing)
         sending = time.perf_counter_ns() if trace is not None else 0
         try:
             self.transport.publish(BODY_CMD_TOPIC, external_command)
@@ -287,6 +287,7 @@ class ExternalController:
         This never enters EXTERNAL or publishes. Failed sends consume their key;
         callers must not replay a reservation after a reconnect or lease change.
         This local snapshot does not replace robot admission.
+        Call outside _condition so pull reception cannot invert its lock order.
         """
         with self._condition:
             self._ensure_open()
