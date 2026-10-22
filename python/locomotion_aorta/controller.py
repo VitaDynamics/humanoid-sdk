@@ -5,7 +5,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, TypeVar
 
 from .transport import (
@@ -58,6 +58,16 @@ class ControllerClosedError(ExternalControlError):
 
 _T = TypeVar("_T")
 _MAX_UINT64 = (1 << 64) - 1
+
+
+@dataclass(frozen=True, slots=True)
+class _CommandContext:
+    """One call's confirmed connection context, never an ownership credential."""
+
+    client_id: str
+    lease_id: str
+    session_id: int
+    sequence: int
 
 
 class ExternalController:
@@ -242,6 +252,44 @@ class ExternalController:
                 if trace is not None:
                     trace['validation_ns'] = time.perf_counter_ns() - validation
             preparing = time.perf_counter_ns() if trace is not None else 0
+            context = self._reserve_command()
+            external_command = replace(
+                command,
+                protocol_version=BODY_PROTOCOL_VERSION,
+                action=BodyCmdAction.EXTERNAL,
+                root_quat=None,
+                session_id=context.session_id,
+                sequence=context.sequence,
+                ts_client_created_us=command.ts_client_created_us or time.monotonic_ns() // 1000,
+                ts_client_send_us=time.monotonic_ns() // 1000,
+            )
+            if trace is not None:
+                trace.update(session_id=external_command.session_id,
+                             sequence=external_command.sequence,
+                             session_replace_ns=time.perf_counter_ns() - preparing)
+        sending = time.perf_counter_ns() if trace is not None else 0
+        try:
+            self.transport.publish(BODY_CMD_TOPIC, external_command)
+        finally:
+            if trace is not None:
+                trace['transport_call_wall_ns'] = time.perf_counter_ns() - sending
+                getter = getattr(self.transport, '_last_publish_timing', None)
+                if getter is not None:
+                    try:
+                        trace.update(getter() or {})
+                    except Exception as error:
+                        trace['timing_error_type'] = type(error).__name__
+        return external_command
+
+    def _reserve_command(self) -> _CommandContext:
+        """Reserve from the connection's stream for a validated BODY/EE call.
+
+        This never enters EXTERNAL or publishes. Failed sends consume their key;
+        callers must not replay a reservation after a reconnect or lease change.
+        This local snapshot does not replace robot admission.
+        """
+        with self._condition:
+            self._ensure_open()
             status = self._latest_status
             if not self._status_allows_publish(status):
                 raise NotRunningError(
@@ -264,34 +312,13 @@ class ExternalController:
                 )
             if self._next_external_sequence > _MAX_UINT64:
                 raise ExternalControlError("external sequence exhausted")
-            external_command = replace(
-                command,
-                protocol_version=BODY_PROTOCOL_VERSION,
-                action=BodyCmdAction.EXTERNAL,
-                root_quat=None,
+            context = _CommandContext(
+                client_id=self.client_id, lease_id=self._lease_id,
                 session_id=self._external_session_id,
                 sequence=self._next_external_sequence,
-                ts_client_created_us=command.ts_client_created_us or time.monotonic_ns() // 1000,
-                ts_client_send_us=time.monotonic_ns() // 1000,
             )
             self._next_external_sequence += 1
-            if trace is not None:
-                trace.update(session_id=external_command.session_id,
-                             sequence=external_command.sequence,
-                             session_replace_ns=time.perf_counter_ns() - preparing)
-        sending = time.perf_counter_ns() if trace is not None else 0
-        try:
-            self.transport.publish(BODY_CMD_TOPIC, external_command)
-        finally:
-            if trace is not None:
-                trace['transport_call_wall_ns'] = time.perf_counter_ns() - sending
-                getter = getattr(self.transport, '_last_publish_timing', None)
-                if getter is not None:
-                    try:
-                        trace.update(getter() or {})
-                    except Exception as error:
-                        trace['timing_error_type'] = type(error).__name__
-        return external_command
+            return context
 
     def exit_external(self, timeout: float) -> ControlStatus:
         deadline = _deadline(timeout)

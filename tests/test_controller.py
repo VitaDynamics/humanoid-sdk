@@ -94,6 +94,63 @@ def make_command(sequence_hint: int, *, q: float = 0.0) -> BodyCmd:
 
 
 class ExternalControllerTest(unittest.TestCase):
+    def test_connection_reservations_share_the_body_command_stream(self):
+        harness = ControllerHarness()
+        self.addCleanup(harness.controller.close)
+        harness.accept_enter()
+        harness.controller.enter_external(timeout=0.1)
+
+        first = harness.controller._reserve_command()
+        body = harness.controller.publish(make_command(999))
+        last = harness.controller._reserve_command()
+
+        self.assertEqual(
+            [(value.session_id, value.sequence) for value in (first, body, last)],
+            [(42, 1), (42, 2), (42, 3)],
+        )
+        self.assertEqual((first.client_id, first.lease_id),
+                         (harness.controller.client_id, harness.lease_id))
+        self.assertEqual([message.operation for topic, message in harness.transport.published
+                          if topic == CONTROL_REQUEST_TOPIC],
+                         [ControlOperation.PREPARE, ControlOperation.COMMIT])
+
+    def test_failed_body_send_does_not_reuse_a_connection_key(self):
+        harness = ControllerHarness()
+        self.addCleanup(harness.controller.close)
+        harness.accept_enter()
+        harness.controller.enter_external(timeout=0.1)
+        attempted = []
+
+        def fail_body(topic, message):
+            if topic == BODY_CMD_TOPIC:
+                attempted.append(message)
+                raise OSError('transport send failed')
+
+        harness.transport.on_publish = fail_body
+        with self.assertRaisesRegex(OSError, 'transport send failed'):
+            harness.controller.publish(make_command(0))
+        reserved = harness.controller._reserve_command()
+        self.assertEqual((attempted[0].session_id, attempted[0].sequence), (42, 1))
+        self.assertEqual((reserved.session_id, reserved.sequence), (42, 2))
+
+    def test_connection_reservation_rechecks_owner_and_generation(self):
+        harness = ControllerHarness()
+        self.addCleanup(harness.controller.close)
+        harness.accept_enter()
+        harness.controller.enter_external(timeout=0.1)
+        first = harness.controller._reserve_command()
+        harness.status(action='EXTERNAL', phase=ExternalPhase.TIMEOUT_HOLD, generation=84)
+        with self.assertRaises(NotRunningError):
+            harness.controller._reserve_command()
+        harness.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
+        second = harness.controller._reserve_command()
+        self.assertEqual((first.session_id, first.sequence), (42, 1))
+        self.assertEqual((second.session_id, second.sequence), (84, 1))
+        # Previously returned context cannot establish ownership after revocation.
+        harness.status(action='PASSIVE', phase=ExternalPhase.IDLE)
+        with self.assertRaises(NotRunningError):
+            harness.controller._reserve_command()
+
     def test_default_transport_fails_closed_until_aorta_bindings_exist(
         self,
     ) -> None:
