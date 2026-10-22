@@ -3,8 +3,6 @@
 import argparse
 import math
 import time
-import sys
-from pathlib import Path
 from collections.abc import Callable, Sequence
 
 from locomotion_aorta import (
@@ -20,10 +18,6 @@ from locomotion_aorta import (
 )
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from policy_support import LOWSTATE_WINDOW_S
-
-
 COMMAND_SLOTS = BODY_SLOTS
 PERIOD_S = 0.02
 MAX_PEAK_SPEED_RAD_S = 0.10
@@ -34,6 +28,7 @@ ZERO_ENDPOINT_POSITION_TOLERANCE_RAD = 0.08
 RETURN_ENDPOINT_POSITION_TOLERANCE_RAD = 0.05
 ELBOW_RETURN_OFFSET_RAD = math.radians(10.0)
 STATIONARY_DQ_RAD_S = 0.05
+LOWSTATE_WINDOW_S = 0.2
 
 # A-sample FIXED_STAND baseline with shoulder pitch/elbow kp=80 for tuning.
 DEMO_KP = (100.0, 100.0, 60.0, 150.0, 80.0, 40.0, 100.0, 100.0, 60.0, 150.0, 80.0, 40.0, 80.0, 80.0, 0.0, 80.0, 40.0, 40.0, 80.0, 60.0, 60.0, 80.0, 80.0, 40.0, 40.0, 80.0, 60.0, 60.0, 80.0, 20.0, 20.0)

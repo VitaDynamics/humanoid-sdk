@@ -530,8 +530,11 @@ def _validate_command(command: BodyCmd, populated: tuple[bool, ...] | None = Non
     if command.action != BodyCmdAction.EXTERNAL:
         raise InvalidCommandError("ExternalController requires EXTERNAL action")
     for name in ('input_state_id', 'input_state_ts_real_us', 'ts_client_created_us'):
+        value = getattr(command, name)
+        if name == 'ts_client_created_us':
+            value = value or 0  # _publish fills unset creation times.
         try:
-            value = operator.index(getattr(command, name))
+            value = operator.index(value)
         except TypeError as error:
             raise InvalidCommandError(f"{name} must be a uint64") from error
         if not 0 <= value < 2**64:

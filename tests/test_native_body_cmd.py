@@ -88,9 +88,26 @@ class NativeBodyCmdTest(unittest.TestCase):
     def test_controller_rejects_invalid_metadata_before_native_encoding(self):
         for field in ('input_state_id', 'input_state_ts_real_us',
                       'ts_client_created_us'):
-            for value in (-1, 2**64, 1.5, 'x', None):
+            invalid_values = [-1, 2**64, 1.5, 'x']
+            if field != 'ts_client_created_us':
+                invalid_values.append(None)
+            for value in invalid_values:
                 with self.subTest(field=field, value=value), self.assertRaises(InvalidCommandError):
                     _validate_command(dataclasses.replace(make_command(), **{field: value}))
+
+    def test_controller_fills_unset_creation_times_before_encoding(self):
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+        h.accept_enter()
+        h.controller.enter_external(.1)
+        for created in (None, 0.0, 0):
+            with self.subTest(created=created), mock.patch(
+                    'locomotion_aorta.controller.time.monotonic_ns', return_value=1234567890):
+                sent = h.controller.publish(dataclasses.replace(
+                    make_command(), ts_client_created_us=created))
+            self.assertEqual(sent.ts_client_created_us, 1234567)
+            self.assertIsInstance(sent.ts_client_created_us, int)
+            self.assertBytes(sent)
 
     def test_controller_keeps_numpy_metadata_and_overrides_ignored_fields(self):
         import numpy as np
