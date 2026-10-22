@@ -155,9 +155,8 @@ nodes, set `AORTA_GROUP` to the same value as the SDK `group=` / demo `--group`.
 The SDK checks `Node.group()` before creating publishers/subscribers and rejects
 a mismatch, reporting requested/effective values and the `AORTA_GROUP` setting.
 It does not change the process environment. `SDK_GROUP` is only a demo/runner
-convention; setting it alone does not configure Core. The production-topic
-Mock runner sets both variables in its isolated children; clients must pass
-that same group explicitly. This group check does not validate peer routing,
+convention; setting it alone does not configure Core. Clients must pass
+the effective group explicitly. This group check does not validate peer routing,
 namespace, credentials or permission to move a robot.
 
 ## Motion example
