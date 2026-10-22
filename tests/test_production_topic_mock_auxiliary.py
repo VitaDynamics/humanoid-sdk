@@ -1,8 +1,5 @@
 """Fixture-only optional EE/Joy checks; no SDK nodes or worker processes."""
 import json
-import os
-from pathlib import Path
-import tempfile
 import unittest
 from unittest import mock
 
@@ -83,12 +80,9 @@ class AuxiliaryFixtureTests(unittest.TestCase):
         self.assertEqual(c["connect"]["endpoints"], ["tcp/127.0.0.1:24002", "tcp/127.0.0.1:24003"])
 
 
-
-
 def check_real_binding_packets():
     import importlib
     import importlib.metadata
-    import json
     from unittest import mock
 
     from tools.production_topic_mock import generated_object, pack_object

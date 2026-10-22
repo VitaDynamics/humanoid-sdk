@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
-import importlib.util
-_support_spec = importlib.util.spec_from_file_location(
-    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
-_support = importlib.util.module_from_spec(_support_spec)
-_support_spec.loader.exec_module(_support)
-joint_columns = _support.joint_columns
 import argparse
 import math
 import time
+import sys
+from pathlib import Path
 from collections.abc import Callable, Sequence
 
 from locomotion_aorta import (
     PullController,
     ExternalPhase,
-    BodyState,
+    BodyStateArrays,
     BodyCmd,
     BodyJointCmd,
     BodyCmdAction,
@@ -23,6 +18,10 @@ from locomotion_aorta import (
     BODY_SLOTS,
     ServiceStatus,
 )
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from policy_support import LOWSTATE_WINDOW_S
 
 
 COMMAND_SLOTS = BODY_SLOTS
@@ -35,7 +34,6 @@ ZERO_ENDPOINT_POSITION_TOLERANCE_RAD = 0.08
 RETURN_ENDPOINT_POSITION_TOLERANCE_RAD = 0.05
 ELBOW_RETURN_OFFSET_RAD = math.radians(10.0)
 STATIONARY_DQ_RAD_S = 0.05
-LOWSTATE_WINDOW_S = 0.2
 
 # A-sample FIXED_STAND baseline with shoulder pitch/elbow kp=80 for tuning.
 DEMO_KP = (100.0, 100.0, 60.0, 150.0, 80.0, 40.0, 100.0, 100.0, 60.0, 150.0, 80.0, 40.0, 80.0, 80.0, 0.0, 80.0, 40.0, 40.0, 80.0, 60.0, 60.0, 80.0, 80.0, 40.0, 40.0, 80.0, 60.0, 60.0, 80.0, 20.0, 20.0)
@@ -58,7 +56,7 @@ def run(
         sleep=sleep,
         monotonic=monotonic,
     )
-    positions, _, _ = joint_columns(start_state)
+    positions = start_state.q
     start_q = tuple(float(q) if cap.populated else 0.0 for q, cap in zip(positions,info.joints))
     return_q = list(start_q)
     # Offset only the elbows toward zero to avoid the observed hip interference.
@@ -92,7 +90,7 @@ def run(
         last_state_change = monotonic()
         next_publish = monotonic()
 
-        def publish_frame(q: Sequence[float]) -> BodyState:
+        def publish_frame(q: Sequence[float]) -> BodyStateArrays:
             nonlocal last_state_id, last_state_change, next_publish
             delay = next_publish - monotonic()
             if delay > 0:
@@ -179,12 +177,12 @@ def _wait_for_stationary_body_state(
     timeout: float,
     sleep: Callable[[float], None],
     monotonic: Callable[[], float],
-) -> BodyState:
+) -> BodyStateArrays:
     deadline = monotonic() + timeout
     stationary_since: float | None = None
     last_new_time = monotonic()
     last_state_id: int | None = None
-    latest: BodyState | None = None
+    latest: BodyStateArrays | None = None
 
     while monotonic() < deadline:
         remaining = deadline - monotonic()
@@ -196,7 +194,7 @@ def _wait_for_stationary_body_state(
             last_new_time = now
             if any(
                 abs(dq) > STATIONARY_DQ_RAD_S
-                for dq, cap in zip(joint_columns(latest)[1], body_info.joints) if cap.populated
+                for dq, cap in zip(latest.dq, body_info.joints) if cap.populated
             ):
                 stationary_since = None
             elif stationary_since is None:
@@ -211,11 +209,11 @@ def _wait_for_stationary_body_state(
 
 
 def _validate_body_state(
-    state: BodyState, *, body_info, require_stationary: bool
+    state: BodyStateArrays, *, body_info, require_stationary: bool
 ) -> None:
     if not state.attitude_valid:
         raise RuntimeError("body state attitude is invalid")
-    q, dq, errors = joint_columns(state)
+    q, dq, errors = state.q, state.dq, state.error_code
     if len(q) != COMMAND_SLOTS:
         raise RuntimeError(f"body state has {len(q)} motor slots; {COMMAND_SLOTS} required")
     for index, (position, velocity, error, cap) in enumerate(zip(q,dq,errors,body_info.joints)):
@@ -238,7 +236,7 @@ def _segment_steps(start_q: Sequence[float]) -> int:
     return math.ceil(duration_s / PERIOD_S)
 
 
-def _position_command(q: Sequence[float], state: BodyState | None = None) -> BodyCmd:
+def _position_command(q: Sequence[float], state: BodyStateArrays | None = None) -> BodyCmd:
     if len(q) != COMMAND_SLOTS:
         raise ValueError(f"position command must contain {COMMAND_SLOTS} slots")
     commands = tuple(
@@ -251,7 +249,7 @@ def _position_command(q: Sequence[float], state: BodyState | None = None) -> Bod
 
 
 def _publish_segment(
-    publish: Callable[[Sequence[float]], BodyState],
+    publish: Callable[[Sequence[float]], BodyStateArrays],
     start: Sequence[float],
     target: Sequence[float],
     steps: int,
@@ -268,7 +266,7 @@ def _publish_segment(
 
 
 def _publish_dwell(
-    publish: Callable[[Sequence[float]], BodyState],
+    publish: Callable[[Sequence[float]], BodyStateArrays],
     target: Sequence[float],
     *,
     body_info,
@@ -285,7 +283,7 @@ def _publish_dwell(
             not cap.populated or (abs(q - target_q) <= position_tolerance_rad
             and abs(dq) <= STATIONARY_DQ_RAD_S)
             for q, dq, target_q, cap in zip(
-                joint_columns(state)[0], joint_columns(state)[1], target, body_info.joints
+                state.q, state.dq, target, body_info.joints
             )
         )
         if at_endpoint:

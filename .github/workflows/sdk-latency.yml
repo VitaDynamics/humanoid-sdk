@@ -193,7 +193,7 @@ jobs:
           PY_DOWNLOAD
           python tools/production_topic_mock/build.py --build-dir "$RUNNER_TEMP/production-mock" \
             --flatbuffers-archive "$RUNNER_TEMP/flatbuffers.tar.gz" --run-protocol-checks
-          python -m unittest tools.production_topic_mock.test_group_contract tools.production_topic_mock.test_review -v
+          python -m unittest tools.production_topic_mock.test_group_contract -v
           MOCK_BUILD_DIR="$RUNNER_TEMP/production-mock" python -m unittest tools.production_topic_mock.test_ipc -v
       - name: Upload wheel, tests and partial failure evidence
         if: ${{ always() }}

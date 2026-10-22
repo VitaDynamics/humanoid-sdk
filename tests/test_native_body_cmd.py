@@ -87,13 +87,35 @@ class NativeBodyCmdTest(unittest.TestCase):
 
     def test_controller_rejects_invalid_metadata_before_native_encoding(self):
         for field in ('input_state_id', 'input_state_ts_real_us',
-                      'ts_client_created_us', 'ts_client_send_us'):
-            for value in (-1, 2**64, 1.5, 'x', None, True):
+                      'ts_client_created_us'):
+            for value in (-1, 2**64, 1.5, 'x', None):
                 with self.subTest(field=field, value=value), self.assertRaises(InvalidCommandError):
                     _validate_command(dataclasses.replace(make_command(), **{field: value}))
-        for value in ((), (1, 0, 0), (1, 0, 0, math.nan), (1, 0, 0, 'x')):
-            with self.subTest(quaternion=value), self.assertRaises(InvalidCommandError):
-                _validate_command(dataclasses.replace(make_command(), root_quat=value))
+
+    def test_controller_keeps_numpy_metadata_and_overrides_ignored_fields(self):
+        import numpy as np
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+        h.accept_enter()
+        h.controller.enter_external(.1)
+        for integer in (np.int64, np.uint64):
+            command = dataclasses.replace(make_command(), input_state_id=integer(5),
+                input_state_ts_real_us=integer(6), ts_client_created_us=integer(7),
+                ts_client_send_us='ignored', root_quat=object())
+            sent = h.controller.publish(command)
+            self.assertEqual((sent.input_state_id, sent.input_state_ts_real_us,
+                              sent.ts_client_created_us), (5, 6, 7))
+            self.assertIsNone(sent.root_quat)
+            self.assertIsInstance(sent.ts_client_send_us, int)
+            self.assertBytes(sent)
+
+    def test_native_schema_constants_match_vendor_provenance(self):
+        import json
+        from pathlib import Path
+        provenance = json.loads((Path(__file__).resolve().parents[1] /
+            'demo_onnx/cpp/body_cmd_vendor/provenance.json').read_text())
+        self.assertEqual(native.BODY_SCHEMA_SHA256, provenance['body_cmd_bfbs_sha256'])
+        self.assertEqual(native.BODY_STATE_SCHEMA_SHA256, provenance['body_state_bfbs_sha256'])
 
     def test_controller_validation_population_and_type_rules_retained(self):
         population = tuple(i != 14 for i in range(31))

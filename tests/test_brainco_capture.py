@@ -194,7 +194,6 @@ class BrainCoCaptureTest(unittest.TestCase):
         rows = read_rows(output)
         self.assertEqual([r['sequence'] for r in rows if r['type'] == 'body_cmd'], list(range(5)))
         self.assertEqual(rows[-1]['dropped_messages'], 0)
-        self.assertEqual(rows[0]['feedback_retention'], 'callback-queue')
         self.assertTrue(node.closed)
 
     def test_keyboard_interrupt_and_decode_error_close_node_and_leave_incomplete_file(self):

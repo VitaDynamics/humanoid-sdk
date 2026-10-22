@@ -164,16 +164,16 @@ class FeedbackAgeTest(unittest.TestCase):
         policy = S(state=Mock())
         for published in (0, 99_900_000, 100_000_001):
             state = self.state(published); state.stamp_ns = 2
-            self.assertEqual(feedback_age_ns(state, 10_000_000_000, 100_000_000_000), 0)
+            self.assertEqual(feedback_age_ns(state, 10_000_000_000), 0)
             self.assertIs(wait_fresh(S(wait_state=lambda timeout: state), policy,
                 previous_ns=1, timeout=.1, max_age=.05, stop=threading.Event(),
                 monotonic=lambda: 10.), state)
         state.received_monotonic_ns = 0
         with self.assertRaises(ValueError):
-            feedback_age_ns(state, 10_000_000_000, 100_000_000_000)
+            feedback_age_ns(state, 10_000_000_000)
         state.received_monotonic_ns = 10_000_000_001
         with self.assertRaises(TimeoutError):
-            feedback_age_ns(state, 10_000_000_000, 100_000_000_000)
+            feedback_age_ns(state, 10_000_000_000)
         state.received_monotonic_ns = 9_900_000_000
         with self.assertRaisesRegex(TimeoutError, 'stale'):
             wait_fresh(S(wait_state=lambda timeout: state), policy,

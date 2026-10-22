@@ -20,4 +20,4 @@ metadata模板/捕获字段见根README；输出路径必须新建。手运动�
 
 ## 0.2.1 拉取式末端反馈
 
-此demo选择 `pull_feedback=True`，状态/Info（及手touch）在调用方拉取解码，无Python接收回调线程；仍保留Python末端编解码。运动循环保持固定节拍，反馈高频不会提高命令频率。BrainCo capture只读轮询，还可采命令topic；环覆盖统计未测，不能宣无损。
+此demo选择 `pull_feedback=True`，状态/Info（及手touch）在调用方拉取解码，无Python接收回调线程；仍保留Python末端编解码。运动循环保持固定节拍，反馈高频不会提高命令频率。BrainCo capture 使用有界回调队列采集状态与命令，显式报告队列丢弃；传输丢失未测，不能宣无损。

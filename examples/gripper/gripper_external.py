@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
 """Independent AGX demo; defaults to read-only info/state subscriptions."""
-from pathlib import Path
-import importlib.util
-_support_spec = importlib.util.spec_from_file_location(
-    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
-_support = importlib.util.module_from_spec(_support_spec)
-_support_spec.loader.exec_module(_support)
-joint_columns = _support.joint_columns
 import argparse
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
@@ -56,9 +49,9 @@ def _observe_zero_dwell(frame, target, *, body, body_info, monotonic, emit):
     samples = math.ceil(body.DWELL_S / body.PERIOD_S)
     for sample in range(samples):
         state = frame(target)  # Retains the lifecycle's safety/protocol checks.
-        error = max((abs(actual - q) for actual, q, cap in zip(joint_columns(state)[0], target, body_info.joints)
+        error = max((abs(actual - q) for actual, q, cap in zip(state.q, target, body_info.joints)
                      if cap.populated), default=0.0)
-        speed = max((abs(dq) for dq, cap in zip(joint_columns(state)[1], body_info.joints) if cap.populated), default=0.0)
+        speed = max((abs(dq) for dq, cap in zip(state.dq, body_info.joints) if cap.populated), default=0.0)
         peak_error = max(peak_error, error)
         peak_speed = max(peak_speed, speed)
         emit(f'ZERO_DWELL observation_only=true sample={sample + 1} '
@@ -90,7 +83,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
         plan = module.FixedStandPose(info)  # Reject all bad/missing zero limits before PREPARE.
     initial = body._wait_for_stationary_body_state(
         controller, body_info=info, timeout=timeout, sleep=sleep, monotonic=monotonic)
-    pose = tuple(float(q) if cap.populated else 0.0 for q, cap in zip(joint_columns(initial)[0], info.joints))
+    pose = tuple(float(q) if cap.populated else 0.0 for q, cap in zip(initial.q, info.joints))
     if plan is not None:
         plan.measured(initial)
     hold = body._position_command(pose)
@@ -146,7 +139,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             elif now - last_change >= body.LOWSTATE_WINDOW_S:
                 raise RuntimeError('body lowstate became stale')
             if check_hold:
-                errors = tuple(float(joint_columns(state)[0][i]) - pose[i] for i in hold_slots)
+                errors = tuple(float(state.q[i]) - pose[i] for i in hold_slots)
                 for i, error in zip(hold_slots, errors):
                     hold_peak_abs_error[i] = max(hold_peak_abs_error[i], abs(error))
                 hold_samples += 1

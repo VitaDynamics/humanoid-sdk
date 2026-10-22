@@ -72,8 +72,8 @@ SDK 0.2.1 uses only Aorta `locomotion/joy`, through the SDK's `JoyReader`.
 There is no direction-source CLI option, ROS input subscription or velocity
 fallback. Neutral, missing or stale input produces zero direction through the
 existing profile. This requires the matching public humanoid **0.1.5** wheel,
-Aorta 2026.10.20 and FlatBuffers 25.12.19. The dependency pin and installable
-0.2.1 bundle follow generation and integration; the older 0.1.4 public wheel
+Aorta 2026.10.20 and FlatBuffers 25.12.19. Dependency pins are listed in
+compatibility.json. The older 0.1.4 public wheel
 has no Joy binding and cannot supply this entry point. Do not mix an older
 message wheel into the SDK to obtain it.
 

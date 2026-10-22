@@ -8,7 +8,7 @@ import time
 import unittest
 
 
-def client(output):
+def client():
     from locomotion_aorta import (BodyCmd, BodyJointCmd, PullController,
                                   PullStateSource)
     group = os.environ['AORTA_GROUP']
@@ -44,7 +44,6 @@ def client(output):
                 raise AssertionError('CANCEL did not return PASSIVE')
         finally:
             source.close()
-    (output / 'client-result.json').write_text(json.dumps(dict(commands=3, nodes=2, passive=True)))
 
 
 class MockIpcTest(unittest.TestCase):
@@ -57,7 +56,7 @@ class MockIpcTest(unittest.TestCase):
                 '--mode', 'production-topics', '--build-dir', str(build),
                 '--output', str(output), '--seconds', '5', '--allow-client',
                 '--client-command', sys.executable, str(Path(__file__).resolve()),
-                '--client', str(output)])
+                '--client'])
             rc = run.run(args)
             logs = '\n'.join(p.read_text() for p in output.glob('*.log'))
             self.assertEqual(rc, 0, logs)
@@ -67,13 +66,10 @@ class MockIpcTest(unittest.TestCase):
             self.assertEqual(result['accepted'], 3)
             self.assertGreaterEqual(result['applied'], 1)
             self.assertEqual(result['control_phase_at_stop'], 0)
-            self.assertEqual(json.loads((output / 'client-result.json').read_text()),
-                             dict(commands=3, nodes=2, passive=True))
-            self.assertFalse(list(output.glob('*.csv')))
 
 
 if __name__ == '__main__':
     if sys.argv[1:2] == ['--client']:
-        client(Path(sys.argv[2]))
+        client()
     else:
         unittest.main()

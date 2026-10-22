@@ -220,10 +220,7 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
             except queue.Full:
                 dropped += 1
     with output.open("x", encoding="utf-8") as stream:
-        writer = TraceWriter(stream, {**metadata, "requested_group": group,
-            "feedback_retention": "callback-queue",
-            "pull_overwrites": "not_applicable",
-            "capture_stamp_semantics": "host callback"},
+        writer = TraceWriter(stream, {**metadata, "requested_group": group},
             "observer_monotonic_ns")
         try:
             node = node_factory("brainco_hil_observer", group)

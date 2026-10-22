@@ -12,13 +12,6 @@ import time
 
 from locomotion_aorta import PullController, ExternalPhase, HandClient, HandType, InhibitReason
 from locomotion_aorta.hand import validate_info
-from pathlib import Path
-import importlib.util
-_support_spec = importlib.util.spec_from_file_location(
-    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
-_support = importlib.util.module_from_spec(_support_spec)
-_support_spec.loader.exec_module(_support)
-joint_columns = _support.joint_columns
 # Load the existing sibling example even in isolated Python (-I) bundle checks.
 _body_spec = importlib.util.spec_from_file_location(
     'brainco_body_hold_baseline', Path(__file__).resolve().parents[1] / 'external_control/external_control.py')
@@ -167,7 +160,7 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
     body_info = body.require_body_info(controller, timeout)
     start_state = body._wait_for_stationary_body_state(
         controller, body_info=body_info, timeout=timeout, sleep=sleep, monotonic=monotonic)
-    start_q = tuple(float(q) if cap.populated else 0.0 for q, cap in zip(joint_columns(start_state)[0], body_info.joints))
+    start_q = tuple(float(q) if cap.populated else 0.0 for q, cap in zip(start_state.q, body_info.joints))
     hold = body._position_command(start_q)
     if body_gains == 'zero':
         hold = replace(hold, joints=tuple(replace(cmd, kp=0.0, kd=0.0, dq=0.0, tau=0.0)
@@ -209,7 +202,7 @@ def run(controller, clients, *, timeout, body_gains='hold', speed_deg_s=20.0,
             # Retain the current pose using the inherited endpoint tolerance;
             # abort instead of continuing hand movement if the body drifts.
             if any(abs(actual - q) > body.RETURN_ENDPOINT_POSITION_TOLERANCE_RAD
-                   for actual, q, cap in zip(joint_columns(state)[0], start_q, body_info.joints) if cap.populated):
+                   for actual, q, cap in zip(state.q, start_q, body_info.joints) if cap.populated):
                 raise RuntimeError('body departed from its held pose')
             controller.publish(replace(hold, input_state_id=state.state_id,
                                        input_state_ts_real_us=state.ts_state_real_us))

@@ -1,11 +1,4 @@
 """Example-only FIXED_STAND target, from the recorded robot source profile."""
-from pathlib import Path
-import importlib.util
-_support_spec = importlib.util.spec_from_file_location(
-    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
-_support = importlib.util.module_from_spec(_support_spec)
-_support_spec.loader.exec_module(_support)
-joint_columns = _support.joint_columns
 import json
 import math
 from pathlib import Path
@@ -36,7 +29,7 @@ class FixedStandPose:
 
     def measured(self, state):
         values = []
-        positions, _, _ = joint_columns(state)
+        positions = state.q
         if len(positions) != len(self.info.joints):
             raise ValueError('BodyState differs from Info roster')
         for name, cap, q in zip(self.info.joint_names, self.info.joints, positions):

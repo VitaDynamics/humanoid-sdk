@@ -17,14 +17,9 @@ import threading
 import time
 
 
-# File-based loading also supports isolated (-I) execution from a bundle.
-import importlib.util
-_support_spec = importlib.util.spec_from_file_location(
-    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
-_support = importlib.util.module_from_spec(_support_spec)
-_support_spec.loader.exec_module(_support)
-state_log_fields, publish_log_fields = _support.state_log_fields, _support.publish_log_fields
-feedback_age_ns, NOT_MEASURED = _support.feedback_age_ns, _support.NOT_MEASURED
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from policy_support import (state_log_fields, publish_log_fields,
+                            feedback_age_ns, NOT_MEASURED)
 
 
 class ReferenceSession:
@@ -286,7 +281,7 @@ def wait_fresh(controller, policy, *, previous_ns, timeout, max_age,
             raise TimeoutError('feedback did not advance before the freshness deadline')
         state = controller.wait_state(timeout=remaining)
         if state.stamp_ns > previous_ns:
-            age_ns = feedback_age_ns(state, round(monotonic()*1e9), time.time_ns())
+            age_ns = feedback_age_ns(state, round(monotonic()*1e9))
             if not 0 <= age_ns <= max_age*1e9:
                 raise TimeoutError('feedback cache is stale or has a future timestamp')
             policy.state(state)

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Velocity mode over SDK 0.2.1, with TONIGHT/071 per-cycle latency records."""
+"""Velocity mode over SDK 0.2.1 with per-cycle latency records."""
 
 import argparse
 from dataclasses import dataclass
 from importlib.metadata import version
 import os
 import signal
+import sys
 from pathlib import Path
 import threading
 import time
@@ -29,15 +30,9 @@ except ImportError:
     VelocityModePolicy = _policy.VelocityModePolicy
 
 
-# File-based loading also supports isolated (-I) execution from a bundle.
-import importlib.util
-_support_spec = importlib.util.spec_from_file_location(
-    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
-_support = importlib.util.module_from_spec(_support_spec)
-_support_spec.loader.exec_module(_support)
-CycleLog, NOT_MEASURED, realtime_ns = _support.CycleLog, _support.NOT_MEASURED, _support.realtime_ns
-publish_log_fields, LOWSTATE_WINDOW_S = _support.publish_log_fields, _support.LOWSTATE_WINDOW_S
-joy_log_fields = _support.joy_log_fields
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from policy_support import (CycleLog, NOT_MEASURED, realtime_ns, publish_log_fields,
+                            LOWSTATE_WINDOW_S, joy_log_fields)
 
 
 PERIOD_S = 0.02

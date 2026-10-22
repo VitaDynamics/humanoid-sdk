@@ -20,14 +20,9 @@ import time
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
-# File-based loading also supports isolated (-I) execution from a bundle.
-import importlib.util
-_support_spec = importlib.util.spec_from_file_location(
-    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
-_support = importlib.util.module_from_spec(_support_spec)
-_support_spec.loader.exec_module(_support)
-joint_columns, state_log_fields = _support.joint_columns, _support.state_log_fields
-publish_log_fields, NOT_MEASURED = _support.publish_log_fields, _support.NOT_MEASURED
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from policy_support import (CycleLog, joint_columns, state_log_fields,
+                            publish_log_fields, NOT_MEASURED, joy_log_fields)
 from lowlevel.BodySampleStatus import BodySampleStatus
 from lowlevel.JointError import JointError
 
@@ -424,7 +419,6 @@ def main() -> None:
     log = None
     try:
         if args.log:
-            CycleLog = _support.CycleLog
             log = CycleLog(args.log,dict(
                 demo='teleop_policy', input='aorta locomotion/joy via JoyReader',
                 period_s=policy.period, model=str(Path(args.model).resolve()),
@@ -439,7 +433,7 @@ def main() -> None:
                     return last_joy.axes if last_joy.is_fresh() else ()
                 live(controller,api,policy,model,axes,stop,args.timeout,
                      duration=args.duration,recorder=log,
-                     input_statistics=lambda: _support.joy_log_fields(last_joy))
+                     input_statistics=lambda: joy_log_fields(last_joy))
     finally:
         if log is not None:
             log.close()

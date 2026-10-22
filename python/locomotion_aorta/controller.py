@@ -1,4 +1,5 @@
 import math
+import operator
 import os
 import threading
 import time
@@ -528,16 +529,13 @@ def _validate_command(command: BodyCmd, populated: tuple[bool, ...] | None = Non
         raise InvalidCommandError("joints must be a 31-slot tuple")
     if command.action != BodyCmdAction.EXTERNAL:
         raise InvalidCommandError("ExternalController requires EXTERNAL action")
-    for name in ('input_state_id', 'input_state_ts_real_us',
-                 'ts_client_created_us', 'ts_client_send_us'):
-        value = getattr(command, name)
-        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < 2**64:
+    for name in ('input_state_id', 'input_state_ts_real_us', 'ts_client_created_us'):
+        try:
+            value = operator.index(getattr(command, name))
+        except TypeError as error:
+            raise InvalidCommandError(f"{name} must be a uint64") from error
+        if not 0 <= value < 2**64:
             raise InvalidCommandError(f"{name} must be a uint64")
-    if command.root_quat is not None:
-        if (not isinstance(command.root_quat, tuple) or len(command.root_quat) != 4
-                or any(isinstance(v, bool) or not isinstance(v, (int, float))
-                       or not math.isfinite(v) for v in command.root_quat)):
-            raise InvalidCommandError("root_quat must contain four finite numbers")
     for index, motor in enumerate(command.joints):
         if not isinstance(motor, BodyJointCmd):
             raise InvalidCommandError(f"joints[{index}] must be a BodyJointCmd")

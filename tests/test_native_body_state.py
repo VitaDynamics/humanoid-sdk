@@ -143,21 +143,53 @@ class NativeBodyStateTest(unittest.TestCase):
         controller.transport = t
         controller._condition = __import__("threading").Condition()
         controller._closed = False
-        for seed in range(32):
-            data = state_buffer(seed)
-            t._pulls[BODY_STATE_TOPIC].samples.append(
-                S(payload=data, context=S(receive_stamp_ns=42)))
-            with mock.patch('locomotion_aorta.pull.decode_body_state_arrays',
-                            side_effect=AssertionError('array materialization used')):
-                actual = controller.wait_body_state(.1)
-            expected = _decode_body_state_python(module('BodyState').BodyState.GetRootAs(data))
-            self.same(expected, actual)
-            self.assertIs(controller.wait_body_state(0), actual)
+        _state_decoder.cache_clear()
+        self.addCleanup(_state_decoder.cache_clear)
+        with mock.patch.object(native, 'decode_state', wraps=native.decode_state) as decode:
+            for seed in range(32):
+                data = state_buffer(seed)
+                t._pulls[BODY_STATE_TOPIC].samples.append(
+                    S(payload=data, context=S(receive_stamp_ns=42)))
+                with mock.patch('locomotion_aorta.pull.decode_body_state_arrays',
+                                side_effect=AssertionError('array materialization used')):
+                    actual = controller.wait_body_state(.1)
+                expected = _decode_body_state_python(module('BodyState').BodyState.GetRootAs(data))
+                self.same(expected, actual)
+                self.assertIs(controller.wait_body_state(0), actual)
+                self.assertEqual(decode.call_count, seed + 1)
+                decode.assert_called_with(data, 0)
         _state_decoder.cache_clear()
         with mock.patch('body_state_schema_meta.SCHEMA_HASH_HEX', 'wrong'):
             with self.assertRaisesRegex(RuntimeError, 'pinned BODY2'):
                 decode_body_state_native(data)
         _state_decoder.cache_clear()
+
+    def test_bad_pull_frame_raises_once_and_preserves_previous_snapshot(self):
+        from test_pull import PullTest, S
+        from locomotion_aorta.transport import BODY_STATE_TOPIC
+        for arrays in (True, False):
+            with self.subTest(arrays=arrays):
+                t = PullTest().transport()
+                read = t.wait_state if arrays else t._wait_body_state
+                ring = t._pulls[BODY_STATE_TOPIC]
+                def put(payload):
+                    ring.samples.append(S(payload=payload, context=S(receive_stamp_ns=42)))
+                put(state_buffer(3))
+                first = read(0)
+                receipt = t._latest_sample
+                put(b'bad')
+                with self.assertRaises(ValueError):
+                    read(0)
+                self.assertIs(t._latest_sample, receipt)
+                self.assertIs(read(0), first)
+                put(state_buffer(4))
+                self.assertNotEqual(read(0).state_id, first.state_id)
+                empty = PullTest().transport()
+                empty._pulls[BODY_STATE_TOPIC].samples.append(
+                    S(payload=b'bad', context=S(receive_stamp_ns=42)))
+                empty_read = empty.wait_state if arrays else empty._wait_body_state
+                with self.assertRaises(ValueError): empty_read(0)
+                with self.assertRaises(TimeoutError): empty_read(0)
 
     def test_native_entry_returns_only_the_state_dto(self):
         data = state_buffer(3);view = module('BodyState').BodyState.GetRootAs(data)

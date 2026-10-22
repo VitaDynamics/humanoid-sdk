@@ -6,8 +6,8 @@
 
 namespace production_mock::aorta_contract {
 // Aorta v2026.10.20 (309b8691), core/src/key_expr.rs::MAX_GROUP_LEN.
-// This private Rust constant is not exported by the C ABI. Python reads this
-// same declaration; do not give the two prechecks independent limits.
+// This private Rust constant is not exported by the C ABI.
+// Keep this value aligned with group_contract.py when updating the pin.
 inline constexpr std::size_t MAX_GROUP_LEN = 32;
 inline constexpr const char GROUP_PREFIX[] = "mock-sdkmain-";
 

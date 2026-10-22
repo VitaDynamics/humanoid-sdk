@@ -19,8 +19,7 @@ aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 Dependencies are pinned to Aorta SDK and messages `2026.10.20` (ABI 13),
 `vbot-humanoid-msgs==0.1.5`, and `flatbuffers==25.12.19`. Verify wheel filenames
 and SHA-256s against [compatibility.json](compatibility.json). The runtime dependency delivery follows the `v0.1.0-rc.4` Release flow.
-The new generated 0.1.5 wheel must be present with the pinned SHA before
-installation; generation does not imply release publication.
+Use the official 0.1.5 wheel and dependency pins in compatibility.json.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
 The SDK also includes **Velocity mode** (`examples/velocity_mode/velocity_mode.py`) and

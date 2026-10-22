@@ -1,4 +1,4 @@
-"""TONIGHT/071 JSONL contract. All S/L points use CLOCK_REALTIME nanoseconds."""
+"""Shared policy-example logging and local feedback freshness checks."""
 
 import json
 import time
@@ -47,13 +47,11 @@ class CycleLog:
         self.stream.close()
 
 
-"""Shared demo views/diagnostics; no transport, policy or automatic publishing."""
-NOT_MEASURED = 'NOT_MEASURED'
 # Existing live-demo lowstate window; policies must not refresh a frozen input.
 LOWSTATE_WINDOW_S = .2
 
 
-def feedback_age_ns(state, monotonic_ns, realtime_ns):
+def feedback_age_ns(state, monotonic_ns):
     """Return local cache age; producer and client clocks need not agree."""
     received = state.received_monotonic_ns
     if not received:

@@ -43,9 +43,9 @@ set_target_properties(ort PROPERTIES
 pybind11_add_module(_body_cmd_native NO_EXTRAS WITH_SOABI
   cpp/body_cmd_encoder.cpp cpp/body_state_decoder.cpp)
 target_include_directories(_body_cmd_native PRIVATE cpp/body_cmd_vendor)
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../compatibility.json" body_manifest)
-string(JSON body_cmd_sha GET "${body_manifest}" schema_sha256 body_cmd)
-string(JSON body_state_sha GET "${body_manifest}" schema_sha256 body_state)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cpp/body_cmd_vendor/provenance.json" body_manifest)
+string(JSON body_cmd_sha GET "${body_manifest}" body_cmd_bfbs_sha256)
+string(JSON body_state_sha GET "${body_manifest}" body_state_bfbs_sha256)
 target_compile_definitions(_body_cmd_native PRIVATE
   BODY_CMD_SCHEMA_SHA256="${body_cmd_sha}"
   BODY_STATE_SCHEMA_SHA256="${body_state_sha}")

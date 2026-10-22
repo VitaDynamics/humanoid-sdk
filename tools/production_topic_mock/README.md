@@ -58,11 +58,11 @@ cooperative CANCEL; remaining owned children are then terminated and reaped.
 
 `mock-result.json` reports accepted/rejected/applied commands, protocol request
 and parse/endpoint error counts. `auxiliary.json` reports auxiliary counts and
-pull-ring drops. No CSV, S0–S6 report or build/output SHA manifest is produced.
+pull-ring drops.
 
 ## Tests
 
-`make check` includes both Mock directory unit suites. The native-wheel CI job
+`make check` includes the Mock group-contract unit suite. The native-wheel CI job
 compiles the C++ Mock with warnings as errors, runs its protocol checks, and
 runs a real SDK IPC smoke: two Nodes, RobotInfo, PREPARE/COMMIT, three BodyCmd
 frames, applied identity echo and CANCEL/PASSIVE. Run that smoke locally with:

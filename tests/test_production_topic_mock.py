@@ -1,15 +1,10 @@
 """Pure-Python invariants; these tests do not compile/run C++ or open Aorta."""
 import argparse
 import json
-import os
-from pathlib import Path
-import tempfile
 import unittest
 from unittest import mock
 
 from tools.production_topic_mock import run
-
-
 
 
 class IsolationTests(unittest.TestCase):
@@ -102,12 +97,6 @@ class IsolationTests(unittest.TestCase):
                   [[True, 0, 0, 0], [1, 0, 0, 0]], [[float("nan"), 0, 0, 0], [1, 0, 0, 0]]):
             with self.subTest(q=q), self.assertRaises(ValueError):
                 run.validate_imu(q)
-
-
-
-
-
-
 
 
 if __name__ == "__main__":

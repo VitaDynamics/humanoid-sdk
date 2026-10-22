@@ -1,4 +1,4 @@
-"""One pinned Aorta group limit shared with the C++ endpoint precheck."""
+"""Pinned Aorta group limit for the isolated Mock runner."""
 import secrets
 
 # Pinned Aorta 2026.10.20 group limit; prefix remains the runner contract.
@@ -17,7 +17,7 @@ def validate_group(group):
 
 
 def new_group():
-    # At the pinned limit this preserves112 random bits in a19-character
+    # At the pinned limit this preserves 112 random bits in a 19-character
     # URL-safe suffix; unlike uuid32 the complete group fits Aorta's limit.
     suffix_bytes = (MAX_GROUP_LEN - len(GROUP_PREFIX)) * 3 // 4
     return validate_group(GROUP_PREFIX + secrets.token_urlsafe(suffix_bytes))

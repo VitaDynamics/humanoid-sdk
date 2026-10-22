@@ -5,13 +5,6 @@ from collections.abc import Callable
 from contextlib import closing
 
 from locomotion_aorta import PullStateSource
-from pathlib import Path
-import importlib.util
-_support_spec = importlib.util.spec_from_file_location(
-    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
-_support = importlib.util.module_from_spec(_support_spec)
-_support_spec.loader.exec_module(_support)
-joint_columns = _support.joint_columns
 
 
 def run_once(
@@ -22,7 +15,7 @@ def run_once(
 ) -> None:
     state = source.wait_state(timeout)
     emit(f"state_id={state.state_id} ts_state_real_us={state.ts_state_real_us}")
-    for index, (q,dq,error) in enumerate(zip(*joint_columns(state))):
+    for index, (q,dq,error) in enumerate(zip(state.q, state.dq, state.error_code)):
         emit(f"joint[{index}] error_code={error} q={q:.6f} dq={dq:.6f}")
 
 

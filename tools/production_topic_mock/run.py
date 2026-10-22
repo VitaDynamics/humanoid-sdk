@@ -19,8 +19,6 @@ except ImportError:
     from group_contract import new_group, validate_group
 
 
-
-
 def session_config(port, connect_port=None):
     connections = connect_port if isinstance(connect_port, list) else ([] if connect_port is None else [connect_port])
     for index, value in enumerate((port, *connections)):
@@ -94,12 +92,6 @@ def validate_imu(quaternions):
         if abs(sum(v * v for v in q) - 1) > .001:
             raise ValueError("IMU quaternion must be normalized; no implicit correction")
     return quaternions
-
-
-
-
-
-
 
 
 def run(args):

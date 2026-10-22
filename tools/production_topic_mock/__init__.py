@@ -6,12 +6,8 @@ import json
 import math
 from pathlib import Path
 import struct
+import sys
 import time
-
-
-
-
-
 
 
 def validate_auxiliary(spec):
@@ -205,13 +201,12 @@ def run_auxiliary(output, fixture, seconds):
                             validate_target(endpoint["info"], command.q, command.dq, command.torque_cmd_nm)
                         if command.session_id not in endpoint["last_by_session"] and len(endpoint["last_by_session"]) >= 1024:
                             raise ValueError("synthetic EE session capacity exceeded")
-                        previous = endpoint["last_by_session"].get(command.session_id)
-                        gap = max(0, command.sequence - previous - 1) if previous is not None else None
                         endpoint["last_by_session"][command.session_id] = command.sequence
                         endpoint.update(command=command, last_received_us=received, last_accepted_us=time.time_ns() // 1000,
                                         pending=True, last_output_us=0)
                         counts["command"] += 1
                     except (ValueError, TypeError, IndexError, AttributeError, struct.error) as exc:
+                        print(f"Rejected {endpoint['side']} EE command: {exc}", file=sys.stderr)
                         endpoint["rejected"] += 1
                         counts["command"] += 1
             for stream in streams:

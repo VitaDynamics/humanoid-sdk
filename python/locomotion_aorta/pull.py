@@ -88,21 +88,29 @@ class PullTransport(_AortaTransport):
         Core receive_stamp_ns is dequeue/assembly time, not network arrival.
         """
         with self._state_lock:
-            sample, wall, mono = self._receive_state(timeout)
-            if self._latest_state is None:
+            received = self._receive_state(timeout)
+            if received is not self._latest_sample or self._latest_state is None:
+                sample, wall, mono = received
                 state = replace(decode_body_state_arrays(sample.payload),
                     received_monotonic_ns=mono, received_realtime_ns=wall,
                     pull_context_receive_stamp_ns=sample.context.receive_stamp_ns)
                 self._ensure_open()
+                if received is not self._latest_sample:
+                    self._latest_body_state = None
+                self._latest_sample = received
                 self._latest_state = state
             return self._latest_state
 
     def _wait_body_state(self, timeout):
         with self._state_lock:
-            sample, _, _ = self._receive_state(timeout)
-            if self._latest_body_state is None:
+            received = self._receive_state(timeout)
+            if received is not self._latest_sample or self._latest_body_state is None:
+                sample, _, _ = received
                 state = decode_body_state_native(sample.payload)
                 self._ensure_open()
+                if received is not self._latest_sample:
+                    self._latest_state = None
+                self._latest_sample = received
                 self._latest_body_state = state
             return self._latest_body_state
 
@@ -126,9 +134,7 @@ class PullTransport(_AortaTransport):
         self._ensure_open()
         if sample is None:
             raise TimeoutError('waiting for body state')
-        self._latest_sample = sample, wall, mono
-        self._latest_state = self._latest_body_state = None
-        return self._latest_sample
+        return sample, wall, mono
 
     def _ensure_open(self):
         if self._closed:
