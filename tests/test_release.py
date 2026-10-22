@@ -73,7 +73,7 @@ class ReleaseTest(unittest.TestCase):
                 'teleop_policy/teleop_policy.py',
                 'velocity_mode/README.md',
                 'velocity_mode/velocity_mode.py',
-                'velocity_mode/velocity_mode_latency.py',
+                'policy_support.py',
                 'velocity_mode/velocity_mode_policy.py',
                 'wbc_tracking_mode/README.md',
                 'wbc_tracking_mode/wbc_tracking_asample.json',

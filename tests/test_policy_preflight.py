@@ -45,16 +45,18 @@ class PolicyPreflightTest(unittest.TestCase):
         transport.observed_status = SimpleNamespace(current_action='PASSIVE',
             phase=SimpleNamespace(value='IDLE'), generation=0)
         transport.publishers, directions.node.publishers = {}, []
-        directions.statistics.return_value = {}
+        directions.read.return_value = __import__("test_velocity_mode").joy_sample()
         with tempfile.TemporaryDirectory() as temp:
             args = velocity_mode.parse_args(['--live', '--locomotion-dir', '/unused',
                                              '--log', str(Path(temp)/'velocity.jsonl')])
             with patch.object(velocity_mode, 'parse_args', return_value=args), \
                  patch.object(velocity_mode, 'version', return_value='0.2.1'), \
                  patch.object(velocity_mode, 'VelocityModePolicy', return_value=p), \
-                 patch.object(velocity_mode, 'PolicyTransport', return_value=transport), \
-                 patch.object(velocity_mode, 'ExternalController', return_value=controller), \
-                 patch.object(velocity_mode, 'DirectionInput', return_value=directions), \
+                 patch.object(velocity_mode, 'PullTransport', return_value=transport), \
+                 patch.object(velocity_mode, 'wait_ready', return_value=transport.observed_status), \
+                 patch.object(velocity_mode, 'read_frame', return_value=Mock()), \
+                 patch.object(velocity_mode, 'PullController', return_value=controller), \
+                 patch.object(velocity_mode, 'JoyReader', return_value=directions), \
                  patch.object(velocity_mode, 'transition_duration', return_value=([], 0.)), \
                  patch.object(velocity_mode, 'run_cycles') as run:
                 if expected_missing:

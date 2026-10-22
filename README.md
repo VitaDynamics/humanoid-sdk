@@ -34,8 +34,8 @@ not robot-motion evidence.
 The 0.2.1 Joy input candidate adds `JoyReader`: drain Aorta input snapshots in
 the policy thread and read the latest axes plus accumulated button edge and
 sequence-gap counts. See [the Joy reader contract](examples/velocity_mode/README.md#direction-dependency).
-It requires public messages 0.1.5; its generated wheel/pin and final SDK version
-are pending integration, so this source increment is not an installable 0.2.1 release.
+It uses the official public messages 0.1.5 wheel pinned in compatibility.json.
+SDK release publication remains pending; build/install the complete matching bundle.
 
 Match the robot's public schema hashes and roster to [compatibility.json](compatibility.json).
 Control requests use protocol 2; ACK/Status remain protocol 1; new body roots use
@@ -499,9 +499,9 @@ created. The optional user callbacks then run on that caller. The default
 client mode remains compatible with existing asynchronous callback users.
 Each pull client has one polling consumer and retains only the latest sample
 per topic. Independent EE payloads still use the generated Python codecs;
-BodyState/BodyCmd use the native codecs. `brainco_capture live` also pulls
-command topics, and reports ring overwrites as not measured rather than
-claiming a lossless trace.
+BodyState/BodyCmd use the native codecs. `PullController.wait_body_state()`
+uses the native DTO decoder; `wait_state()` retains native arrays. `brainco_capture live` uses its bounded callback queue for all topics, including
+commands, and reports queue drops explicitly. Transport loss remains unmeasured.
 
 Pull feedback is a latest-state snapshot, not a policy clock. `wait_state(timeout)`
 waits for a first frame, then polls the depth=1 ring and otherwise returns the
@@ -512,9 +512,8 @@ are dequeue/assembly times, not network-arrival times.
 
 Velocity stops publishing if BodyState does not advance within the existing
 200 ms live-feedback window. WBC retains `--max-state-age-ms` (default 50 ms):
-pull feedback must pass both local cache age and the producer's
-`ts_state_pub_us` CLOCK_REALTIME publication age. This requires synchronized
-robot/client REALTIME clocks; unknown/future publication stamps are rejected.
+pull feedback must pass local feedback receipt age. Producer timestamps remain diagnostic; freshness
+does not compare clocks from different machines.
 The Core dequeue stamp alone cannot establish arrival age. Policy schedules,
 duration and transitions use monotonic time; late cycles re-anchor one full
 period ahead instead of sending catch-up bursts. Velocity SIGINT/SIGTERM stop

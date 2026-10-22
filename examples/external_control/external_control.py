@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 
-from locomotion_aorta._demo_feedback import joint_columns
+from pathlib import Path
+import importlib.util
+_support_spec = importlib.util.spec_from_file_location(
+    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
+_support = importlib.util.module_from_spec(_support_spec)
+_support_spec.loader.exec_module(_support)
+joint_columns = _support.joint_columns
 import argparse
 import math
 import time
 from collections.abc import Callable, Sequence
 
 from locomotion_aorta import (
-    PullController as ExternalController,
+    PullController,
     ExternalPhase,
     BodyState,
     BodyCmd,
@@ -37,7 +43,7 @@ FIXED_STAND_KD = (3.0, 3.0, 2.0, 4.0, 2.0, 1.0, 3.0, 3.0, 2.0, 4.0, 2.0, 1.0, 2.
 
 
 def run(
-    controller: ExternalController,
+    controller: PullController,
     *,
     timeout: float,
     sleep: Callable[[float], None] = time.sleep,
@@ -154,7 +160,7 @@ def run(
             emit("CANCEL confirmed PASSIVE")
 
 
-def require_body_info(controller: ExternalController, timeout: float):
+def require_body_info(controller: PullController, timeout: float):
     response = controller.get_robot_info(timeout)
     if response.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS):
         raise RuntimeError(f"get_robot_info failed: status={response.status} {response.error_message}")
@@ -167,7 +173,7 @@ def require_body_info(controller: ExternalController, timeout: float):
 
 
 def _wait_for_stationary_body_state(
-    controller: ExternalController,
+    controller: PullController,
     *,
     body_info,
     timeout: float,
@@ -314,7 +320,7 @@ def main() -> None:
     if not args.confirm_motion:
         parser.error("--confirm-motion is required")
 
-    with ExternalController(group=args.group) as controller:
+    with PullController(group=args.group) as controller:
         run(controller, timeout=args.timeout)
 
 

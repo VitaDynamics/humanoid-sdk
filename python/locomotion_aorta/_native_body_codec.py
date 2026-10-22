@@ -16,9 +16,10 @@ def _state_decoder():
     return _body_cmd_native.decode_state
 
 
-def decode_body_state_native(view, *, measure=False):
-    state, timing = _state_decoder()(view._tab.Bytes, view._tab.Pos, measure)
-    return (state, timing) if measure else state
+def decode_body_state_native(view):
+    payload, offset = ((view._tab.Bytes, view._tab.Pos) if hasattr(view, "_tab")
+                       else (view, 0))
+    return _state_decoder()(payload, offset)
 
 
 class NativeBodyPublisher:

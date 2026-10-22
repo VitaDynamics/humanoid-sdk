@@ -81,15 +81,16 @@ Host inference and packaging results do not establish ARM execution or HIL.
 The same SDK wheel also contains `locomotion_aorta._body_cmd_native`, an
 independent extension without an ONNX Runtime dependency. Python keeps command
 validation, population, ownership, sequence assignment and returned DTOs. The
-extension copies inputs while holding the GIL, then releases it while building
-the complete FlatBuffer. The pinned Aorta publisher retains its Core clock,
+extension marshals inputs and builds the complete FlatBuffer while holding
+the GIL. Native BodyState DTO and NumPy decoding also retain the GIL. The pinned Aorta publisher retains its Core clock,
 header counter/node policy, schema and QoS; sending uses `publish_bytes`.
 There is no automatic Python-encoding fallback.
 
 `cpp/body_cmd_vendor/provenance.json` records the exact generated BODY2 header
-and FlatBuffers 25.9.23 header closure/license. `tests/test_native_body_cmd.py`
+and FlatBuffers 25.12.19 header closure/license. `tests/test_native_body_cmd.py`
 compares complete buffers with the generated Python builder, including default
 elision, explicit action, integer boundaries and fixed31 population semantics.
+Public 0.1.5 retains the same BodyCmd/BodyState BFBS as 0.1.4.
 Installed-wheel validation must run that suite with the native codec present;
 a source-only skip is not native acceptance.
 
@@ -98,7 +99,8 @@ capture per-thread publish diagnostics. Velocity/WBC cycle logs include them
 as `publish_timing`, associated with the returned session/sequence. Durations
 use monotonic nanoseconds and leave existing S5/S6 timestamps unchanged.
 Controller wait, validation, preparation, header/Core-clock call, marshaling,
-native encoding, encoding GIL reacquisition and raw-send call are separate.
+native encoding and raw-send call are separate. Read `controller.publish_timing`
+for a copy of the last diagnostics on the calling thread.
 Nested call-wall durations overlap inner stages and must not be added twice.
 The raw-send call wall includes ctypes/GIL reacquisition; it is not pure Core,
 network or physical-output latency. Initial GIL wait before entering Python is

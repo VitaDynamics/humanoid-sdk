@@ -73,7 +73,7 @@ elif mode == 'wbc_tracking_mode':
         try: main()
         except Reached: pass
 elif mode in ('external_control','brainco_hand','gripper'):
-    g['ExternalController'] = reached
+    g['PullController'] = reached
     argv = [str(path),'--confirm-motion']
     if mode == 'gripper':
         argv += ['--side','left','--target-m','.03']

@@ -63,7 +63,6 @@ class NativeBodyCmdTest(unittest.TestCase):
         expected = oracle(command, stamp, node, sequence)
         actual, trace = native.encode(command, stamp, node, sequence, True)
         self.assertEqual(actual, expected)
-        self.assertTrue(trace['gil_released_during_encode'])
         self.assertGreaterEqual(trace['encode_native_ns'], 0)
         return actual
 
@@ -85,24 +84,16 @@ class NativeBodyCmdTest(unittest.TestCase):
         data = self.assertBytes(BodyCmd((BodyJointCmd(),)*31), 0, '', 0)
         view = importlib.import_module('lowlevel.BodyCmd').BodyCmd.GetRootAs(data)
         self.assertNotEqual(view._tab.Offset(6), 0)  # action id1 even at default18
-        for name in ('protocol_version', 'session_id', 'sequence', 'input_state_id',
-                     'input_state_ts_real_us', 'ts_client_created_us', 'ts_client_send_us'):
-            self.assertBytes(dataclasses.replace(make_command(), **{name: 0.0}))
 
-    def test_encoder_invalid_scalars_match_python_error_class(self):
-        for field, values in [('input_state_id', [-1, 2**64, 1.5, 'x', None]),
-                              ('protocol_version', [-1, 2**32, 1.5]),
-                              ('action', [-1, 256, 18.0])]:
-            for value in values:
-                command = dataclasses.replace(make_command(), **{field: value})
-                with self.subTest(field=field, value=value):
-                    with self.assertRaises(Exception) as expected: oracle(command)
-                    with self.assertRaises(type(expected.exception)): native.encode(command, 123, 'codec', 0)
-        for value in [1e300, 'x', None]:
-            command = dataclasses.replace(make_command(), joints=(BodyJointCmd(q=value),)*31)
-            with self.subTest(joint=value):
-                with self.assertRaises(Exception) as expected: oracle(command)
-                with self.assertRaises(type(expected.exception)): native.encode(command, 123, 'codec', 0)
+    def test_controller_rejects_invalid_metadata_before_native_encoding(self):
+        for field in ('input_state_id', 'input_state_ts_real_us',
+                      'ts_client_created_us', 'ts_client_send_us'):
+            for value in (-1, 2**64, 1.5, 'x', None, True):
+                with self.subTest(field=field, value=value), self.assertRaises(InvalidCommandError):
+                    _validate_command(dataclasses.replace(make_command(), **{field: value}))
+        for value in ((), (1, 0, 0), (1, 0, 0, math.nan), (1, 0, 0, 'x')):
+            with self.subTest(quaternion=value), self.assertRaises(InvalidCommandError):
+                _validate_command(dataclasses.replace(make_command(), root_quat=value))
 
     def test_controller_validation_population_and_type_rules_retained(self):
         population = tuple(i != 14 for i in range(31))
@@ -154,7 +145,6 @@ class NativeBodyCmdTest(unittest.TestCase):
         transport._bindings = SimpleNamespace(body_cmd_schema_meta=importlib.import_module('body_cmd_schema_meta'))
         transport.publish(BODY_CMD_TOPIC, make_command())
         trace = transport._last_publish_timing()
-        self.assertTrue(trace['gil_released_during_encode'])
         self.assertIn('core_clock_call_wall_ns', trace)
         self.assertIn('send_call_wall_ns', trace)
         pub.failure = OSError('send')
@@ -173,28 +163,28 @@ class PublishTimingTest(unittest.TestCase):
 
     def test_returned_key_validation_failure_and_send_error_trace(self):
         h=self.harness();sent=h.controller.publish(make_command())
-        trace=h.controller._last_publish_timing()
+        trace=h.controller.publish_timing
         self.assertEqual((trace['session_id'],trace['sequence']), (sent.session_id,sent.sequence))
         self.assertEqual(trace['outcome'], 'returned')
         for field in ['condition_wait_ns','validation_ns','session_replace_ns','transport_call_wall_ns','publish_total_ns']:
             self.assertGreaterEqual(trace[field],0)
         bad=dataclasses.replace(make_command(),joints=(BodyJointCmd(q=True),)*31)
         with self.assertRaises(InvalidCommandError):h.controller.publish(bad)
-        trace=h.controller._last_publish_timing();self.assertNotIn('session_id',trace)
+        trace=h.controller.publish_timing;self.assertNotIn('session_id',trace)
         self.assertEqual(trace['error_type'],'InvalidCommandError')
         def fail(topic,message):
             if topic==BODY_CMD_TOPIC:raise OSError('send failed')
         h.transport.on_publish=fail
         with self.assertRaises(OSError):h.controller.publish(make_command())
-        trace=h.controller._last_publish_timing();self.assertEqual(trace['outcome'],'raised')
+        trace=h.controller.publish_timing;self.assertEqual(trace['outcome'],'raised')
         self.assertIn('session_id',trace);self.assertEqual(trace['error_type'],'OSError')
 
     def test_diagnostic_getter_cannot_change_success_or_mask_send_failure(self):
         h = self.harness()
         h.transport._last_publish_timing = lambda: (_ for _ in ()).throw(ValueError('diagnostic'))
         sent = h.controller.publish(make_command())
-        self.assertEqual(h.controller._last_publish_timing()['sequence'], sent.sequence)
-        self.assertEqual(h.controller._last_publish_timing()['timing_error_type'], 'ValueError')
+        self.assertEqual(h.controller.publish_timing['sequence'], sent.sequence)
+        self.assertEqual(h.controller.publish_timing['timing_error_type'], 'ValueError')
         def fail(topic, message):
             if topic == BODY_CMD_TOPIC:
                 raise OSError('actual send failure')
@@ -205,8 +195,8 @@ class PublishTimingTest(unittest.TestCase):
     def test_thread_local_profiles_do_not_cross_threads(self):
         h=self.harness()
         def publish(i):
-            sent=h.controller.publish(make_command(i));trace=h.controller._last_publish_timing()
+            sent=h.controller.publish(make_command(i));trace=h.controller.publish_timing
             return sent.sequence,trace['sequence']
         with ThreadPoolExecutor(4) as pool:keys=list(pool.map(publish,range(40)))
         self.assertTrue(all(a==b for a,b in keys));self.assertEqual(len({a for a,b in keys}),40)
-        self.assertIsNone(h.controller._last_publish_timing())
+        self.assertIsNone(h.controller.publish_timing)

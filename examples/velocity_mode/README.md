@@ -98,10 +98,10 @@ baseline; adding/removing button indices does not invent edges.
 
 Snapshots are immutable and single-consumer. `received_realtime_ns` is direct
 CLOCK_REALTIME immediately after pull returns, not network arrival time;
-freshness requires both this receipt and the AortaHeader producer publication
-stamp to be within 1s. Robot/client REALTIME clocks must be synchronized;
-unknown, future or old source stamps produce neutral direction. Draining an
-old backlog cannot refresh its source age. `missing_samples_since_read` and
+freshness uses this local receipt with the existing 1s window. Producer
+publication stamps remain diagnostic and do not require synchronized clocks.
+A same-name publisher reset establishes a new sequence/button baseline without
+inventing edges; ambiguous intervals remain incomplete. `missing_samples_since_read` and
 `missing_samples_total` count forward gaps in the payload AortaHeader's uint64
 sequence (zero is valid). Duplicates, resets/reordering, wrap and source changes
 are diagnosed separately. Missing header/source identity is unknown, not zero

@@ -19,9 +19,12 @@ class FeedbackPulls:
         # Only one caller drains at a time. A publisher reading cached Info
         # must never wait behind another caller's bounded blocking recv.
         if not self._lock.acquire(blocking=False):
-            return
+            return False
         try:
-            for kind in sorted(self.rings, key=lambda k: k != 'info'):
+            # Info establishes the contract used to validate state/touch.
+            for kind in ('info', 'state', 'touch'):
+                if kind not in self.rings:
+                    continue
                 ring, decoder = self.rings[kind]
                 try:
                     sample = ring.try_recv()
@@ -33,3 +36,4 @@ class FeedbackPulls:
                     self.failed(error)
         finally:
             self._lock.release()
+        return True

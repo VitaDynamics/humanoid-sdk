@@ -20,7 +20,14 @@ import time
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
-from locomotion_aorta._demo_feedback import joint_columns, state_log_fields, publish_log_fields, NOT_MEASURED
+# File-based loading also supports isolated (-I) execution from a bundle.
+import importlib.util
+_support_spec = importlib.util.spec_from_file_location(
+    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
+_support = importlib.util.module_from_spec(_support_spec)
+_support_spec.loader.exec_module(_support)
+joint_columns, state_log_fields = _support.joint_columns, _support.state_log_fields
+publish_log_fields, NOT_MEASURED = _support.publish_log_fields, _support.NOT_MEASURED
 from lowlevel.BodySampleStatus import BodySampleStatus
 from lowlevel.JointError import JointError
 
@@ -342,7 +349,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
                     raise
                 finally:
                     row['S6'] = time.time_ns()
-                    timing = getattr(controller,'_last_publish_timing',lambda:None)()
+                    timing = getattr(controller, 'publish_timing', None)
                     if timing is not None:
                         row['publish_timing'] = timing
             except BaseException as error:
@@ -411,23 +418,28 @@ def main() -> None:
                                   'physical_command_names':list(policy.names)}))
         return
     import locomotion_aorta as api  # D2 public binding; no legacy LowCmd fallback
-    from locomotion_aorta._demo_input import DirectionInput
     stop = threading.Event()
     old_handlers = {sig:signal.signal(sig,lambda signum,frame:stop.set())
                     for sig in (signal.SIGINT,signal.SIGTERM)}
     log = None
     try:
         if args.log:
-            from locomotion_aorta._demo_latency import CycleLog
+            CycleLog = _support.CycleLog
             log = CycleLog(args.log,dict(
                 demo='teleop_policy', input='aorta locomotion/joy via JoyReader',
                 period_s=policy.period, model=str(Path(args.model).resolve()),
                 model_sha256=hashlib.sha256(Path(args.model).read_bytes()).hexdigest(),
                 clock='CLOCK_REALTIME', source_stamp='S1 SDK recv return; dequeue stamp is not arrival'))
         with api.PullController(group=args.group) as controller:
-            with closing(DirectionInput(controller.transport)) as directions:
-                live(controller,api,policy,model,directions.snapshot,stop,args.timeout,
-                     duration=args.duration,recorder=log,input_statistics=directions.statistics)
+            with closing(api.JoyReader(controller.transport.node)) as directions:
+                last_joy = None
+                def axes():
+                    nonlocal last_joy
+                    last_joy = directions.read()
+                    return last_joy.axes if last_joy.is_fresh() else ()
+                live(controller,api,policy,model,axes,stop,args.timeout,
+                     duration=args.duration,recorder=log,
+                     input_statistics=lambda: _support.joy_log_fields(last_joy))
     finally:
         if log is not None:
             log.close()

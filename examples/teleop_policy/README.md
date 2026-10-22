@@ -38,11 +38,11 @@ python examples/teleop_policy/teleop_policy.py --model /path/to/action17.onnx --
 
 # Action 17 teleop policy input
 
-Live input uses Aorta `locomotion/joy`, through the same SDK JoyReader and
-DirectionInput as velocity mode. It drains pending Joy samples each policy
+Live input uses Aorta `locomotion/joy`, through the same SDK JoyReader as
+velocity mode. It drains pending Joy samples each policy
 tick, uses the latest axes, and records button-edge/gap diagnostics. A sample
 is fresh for 1 s using its original local REALTIME dequeue stamp; reading a
-cached sample does not refresh that stamp. Missing/stale/future-stamped input
+cached sample does not refresh that stamp. Missing or stale local receipt
 supplies zero velocity axes, followed by the profile's normal deceleration.
 
 The source contract is robot `a0ecd6e208a092e7eb55aa6bf96336e5f40c133e`:

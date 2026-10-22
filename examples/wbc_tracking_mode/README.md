@@ -92,11 +92,10 @@ alone is not source-time advancement: the original increasing source-time and
 50Hz schedule without catch-up bursts, stop-before-entry behavior and
 CANCEL/PASSIVE verification remain. Exit to PASSIVE can release loaded limbs.
 An exception is not permission for automatic retry or a service restart.
-For pull feedback, the 50 ms age bound checks both the original local cache
-receipt and `ts_state_pub_us`, the robot's REALTIME publication stamp. Robot and
-client REALTIME clocks must be synchronized; missing/future publication stamps
-are rejected. Core's receive stamp is a dequeue stamp and does not establish
-arrival age. Source-time advancement is still required independently.
+For pull feedback, the existing 50 ms age bound uses the local cache receipt.
+Producer publication stamps are diagnostic and may use a different machine
+clock. Core's receive stamp is a dequeue stamp, not network arrival. Feedback
+must still advance independently before each inference.
 Before requesting EXTERNAL, RobotInfo must contain all model joint names and
 the fixed neck names, with each of those joints marked populated. Startup
 errors list the missing or unpopulated names and do not take ownership.

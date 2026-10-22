@@ -149,7 +149,11 @@ class GripperClientLifecycle:
                 if self._pulls is None:
                     self._condition.wait(remaining)
             if self._pulls is not None:
-                self._pulls.poll(kind, remaining)
+                if not self._pulls.poll(kind, remaining):
+                    with self._condition:
+                        self._ensure_open()
+                        if self._latest[kind] is value:
+                            self._condition.wait(min(remaining, .05))
 
     def wait_info(self, timeout=5.0, *, after_info=None):
         """Use event identity for later periodic info, not its acquisition stamp."""

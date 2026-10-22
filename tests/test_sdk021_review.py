@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from locomotion_aorta import ControllerClosedError, ExternalControlTimeoutError
-from locomotion_aorta._demo_feedback import feedback_age_ns
+from examples.policy_support import feedback_age_ns
 from locomotion_aorta.transport import CONTROL_STATUS_TOPIC
 import test_pull as pull_tests
 import test_joy as joy_tests
@@ -114,14 +114,14 @@ class JoyReviewTest(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
 
-    def test_late_release_does_not_rebase_pressed_state_or_freshness(self):
+    def test_restart_rebases_state_without_inventing_edges(self):
         f = self.fixture
         first = f.read(payload(10, buttons=(1,), axes=(.5,)))
         f.time_ns.return_value += 100
         late = f.read(payload(8, buttons=(0,), axes=(-.5,)))
-        self.assertEqual((late.axes, late.buttons), (first.axes, first.buttons))
-        self.assertEqual(late.received_realtime_ns, first.received_realtime_ns)
-        resumed = f.read(payload(11, buttons=(1,)))
+        self.assertEqual((late.axes, late.buttons), ((-.5,), (0,)))
+        self.assertGreater(late.received_realtime_ns, first.received_realtime_ns)
+        resumed = f.read(payload(9, buttons=(0,)))
         self.assertFalse(resumed.pressed_counts or resumed.released_counts)
         self.assertEqual(resumed.missing_samples_total, 0)
 
@@ -133,13 +133,13 @@ class JoyReviewTest(unittest.TestCase):
         self.assertEqual(duplicate.axes, first.axes)
         self.assertEqual(duplicate.received_realtime_ns, first.received_realtime_ns)
 
-    def test_old_unknown_and_future_source_stamps_are_not_fresh_on_dequeue(self):
+    def test_remote_clock_does_not_determine_local_freshness(self):
         f = self.fixture
         f.time_ns.return_value = 4_000_000_000
         for n, stamp in enumerate((0, 1_000_000_000, 4_000_000_001)):
             with self.subTest(stamp=stamp):
                 sample = f.read(payload(n, published_ns=stamp))
-                self.assertFalse(sample.is_fresh(4_000_000_000))
+                self.assertTrue(sample.is_fresh(4_000_000_000))
         self.assertTrue(f.read(payload(3, published_ns=4_000_000_000)).is_fresh(4_000_000_000))
 
     def test_truncated_and_invalid_utf8_drop_count_without_refresh_then_recover(self):
@@ -159,27 +159,26 @@ class FeedbackAgeTest(unittest.TestCase):
         return S(received_monotonic_ns=10_000_000_000,
                  ts_state_pub_us=published, pull_context_receive_stamp_ns=123)
 
-    def test_fresh_dequeue_does_not_hide_old_publication(self):
-        state = self.state(99_900_000)
-        self.assertEqual(feedback_age_ns(state, 10_000_000_000, 100_000_000_000), 100_000_000)
+    def test_publication_clock_skew_is_diagnostic_and_cache_age_is_local(self):
         from examples.wbc_tracking_mode.wbc_tracking_mode import wait_fresh
-        state.stamp_ns = 2
         policy = S(state=Mock())
-        with patch('examples.wbc_tracking_mode.wbc_tracking_mode.time.time_ns', return_value=100_000_000_000):
-            with self.assertRaisesRegex(TimeoutError, 'stale'):
-                wait_fresh(S(wait_state=lambda timeout: state), policy, previous_ns=1,
-                           timeout=.1, max_age=.05, stop=threading.Event(), monotonic=lambda: 10.)
-        policy.state.assert_not_called()
-
-    def test_unknown_future_and_negative_receipt_cannot_authorize_feedback(self):
+        for published in (0, 99_900_000, 100_000_001):
+            state = self.state(published); state.stamp_ns = 2
+            self.assertEqual(feedback_age_ns(state, 10_000_000_000, 100_000_000_000), 0)
+            self.assertIs(wait_fresh(S(wait_state=lambda timeout: state), policy,
+                previous_ns=1, timeout=.1, max_age=.05, stop=threading.Event(),
+                monotonic=lambda: 10.), state)
+        state.received_monotonic_ns = 0
         with self.assertRaises(ValueError):
-            feedback_age_ns(self.state(0), 10_000_000_000, 100_000_000_000)
+            feedback_age_ns(state, 10_000_000_000, 100_000_000_000)
+        state.received_monotonic_ns = 10_000_000_001
         with self.assertRaises(TimeoutError):
-            feedback_age_ns(self.state(100_000_001), 10_000_000_000, 100_000_000_000)
-        with self.assertRaises(TimeoutError):
-            feedback_age_ns(self.state(99_990_000), 9_999_999_999, 100_000_000_000)
-        self.assertEqual(feedback_age_ns(self.state(99_990_000), 10_001_000_000,
-                                         100_000_000_000), 10_000_000)
+            feedback_age_ns(state, 10_000_000_000, 100_000_000_000)
+        state.received_monotonic_ns = 9_900_000_000
+        with self.assertRaisesRegex(TimeoutError, 'stale'):
+            wait_fresh(S(wait_state=lambda timeout: state), policy,
+                previous_ns=1, timeout=.1, max_age=.05, stop=threading.Event(),
+                monotonic=lambda: 10.)
 
 
 class EEConcurrencyTest(unittest.TestCase):
@@ -259,8 +258,8 @@ class VelocityReviewTest(unittest.TestCase):
              patch.object(example.time, 'time_ns', side_effect=realtime), \
              patch.object(example.time, 'sleep', side_effect=lambda dt: setattr(
                  clock, 'now', clock.now+round(dt*1e9))):
-            example.run_cycles(policy, S(latest=latest),
-                S(snapshot=lambda: (), statistics=lambda: {}),
+            example.run_cycles(policy, latest,
+                S(read=__import__("test_velocity_mode").joy_sample),
                 S(cycle=self.records.append), controller=controller,
                 duration=duration, transition=([], 0.))
 
@@ -303,7 +302,7 @@ class VelocityReviewTest(unittest.TestCase):
         transport.publishers = {}
         controller.get_robot_info.return_value = S(info=S(body=S(roster_version=1, joints=[])))
         controller.exit_external.return_value = S(current_action='PASSIVE', phase=S(value='IDLE'))
-        directions.statistics.return_value = {}
+        directions.read.return_value = __import__("test_velocity_mode").joy_sample()
         before = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
         def run(*args, stop, **kwargs):
             self.assertFalse(stop.is_set())
@@ -312,9 +311,11 @@ class VelocityReviewTest(unittest.TestCase):
         with patch.object(example, 'version', return_value='0.2.1'), \
              patch.object(example, 'parse_args', return_value=args), \
              patch.object(example, 'VelocityModePolicy', return_value=Mock(inventory={}, order=[])), \
-             patch.object(example, 'PolicyTransport', return_value=transport), \
-             patch.object(example, 'ExternalController', return_value=controller), \
-             patch.object(example, 'DirectionInput', return_value=directions), \
+             patch.object(example, 'PullTransport', return_value=transport), \
+                 patch.object(example, 'wait_ready', return_value=transport.observed_status), \
+                 patch.object(example, 'read_frame', return_value=Mock()), \
+             patch.object(example, 'PullController', return_value=controller), \
+             patch.object(example, 'JoyReader', return_value=directions), \
              patch.object(example, 'CycleLog', return_value=log), \
              patch.object(example, 'transition_duration', return_value=([], 0.)), \
              patch.object(example, 'run_cycles', side_effect=run):

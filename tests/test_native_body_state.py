@@ -81,12 +81,8 @@ class NativeBodyStateTest(unittest.TestCase):
     def compare(self, data, *, offset=0):
         view = module('BodyState').BodyState.GetRootAs(data, offset)
         expected = _decode_body_state_python(view)
-        actual, timing = decode_body_state_native(view, measure=True)
+        actual = decode_body_state_native(view)
         self.same(expected, actual)
-        self.assertTrue(timing['gil_released_during_decode'])
-        for name in ('decode_input_own_ns', 'decode_native_ns',
-                     'decode_gil_reacquire_wall_ns', 'decode_python_objects_ns'):
-            self.assertGreaterEqual(timing[name], 0)
         return actual
 
     def test_original_generated_golden_all_fields_and_imu_order(self):
@@ -119,7 +115,7 @@ class NativeBodyStateTest(unittest.TestCase):
         for n in range(len(data)):
             with self.subTest(length=n), self.assertRaises(ValueError):
                 native.decode_state(data[:n], pos)
-        for off in (0, 1, 2, 3, len(data), len(data)+1, 2**63):
+        for off in (1, 2, 3, len(data), len(data)+1, 2**63):
             with self.subTest(offset=off), self.assertRaises(ValueError): native.decode_state(data, off)
         corrupt = bytearray(data);struct.pack_into('<i', corrupt, pos, 0x7fffffff)
         with self.assertRaises(ValueError): native.decode_state(corrupt, pos)
@@ -132,24 +128,39 @@ class NativeBodyStateTest(unittest.TestCase):
         source = bytearray(data);result = decode_body_state(module('BodyState').BodyState.GetRootAs(source))
         source[:] = bytes(len(source));self.same(expected, result)
 
-    def test_parallel_decodes_have_owned_independent_state_and_release_gil(self):
+    def test_parallel_decodes_have_owned_independent_state_with_gil_held(self):
         payloads = [state_buffer(i) for i in range(32)]
         with ThreadPoolExecutor(4) as pool:
             states = list(pool.map(self.compare, payloads))
         self.assertEqual(len({id(s) for s in states}), 32)
 
-    def test_native_entry_legacy_snapshot_and_schema_pin(self):
-        data = state_buffer(3);view = module('BodyState').BodyState.GetRootAs(data)
-        with mock.patch('locomotion_aorta._body_codec._decode_body_state_python', side_effect=AssertionError('oracle used')):
-            self.same(decode_body_state(view), BodyStateSnapshot(data, module('BodyState').BodyState.GetRootAs, 1, 2).body_state())
+    def test_production_pull_dto_uses_native_and_matches_python_field_by_field(self):
+        from test_pull import PullTest, S
+        from locomotion_aorta import PullController
+        from locomotion_aorta.transport import BODY_STATE_TOPIC
+        t = PullTest().transport()
+        controller = PullController.__new__(PullController)
+        controller.transport = t
+        controller._condition = __import__("threading").Condition()
+        controller._closed = False
+        for seed in range(32):
+            data = state_buffer(seed)
+            t._pulls[BODY_STATE_TOPIC].samples.append(
+                S(payload=data, context=S(receive_stamp_ns=42)))
+            with mock.patch('locomotion_aorta.pull.decode_body_state_arrays',
+                            side_effect=AssertionError('array materialization used')):
+                actual = controller.wait_body_state(.1)
+            expected = _decode_body_state_python(module('BodyState').BodyState.GetRootAs(data))
+            self.same(expected, actual)
+            self.assertIs(controller.wait_body_state(0), actual)
         _state_decoder.cache_clear()
         with mock.patch('body_state_schema_meta.SCHEMA_HASH_HEX', 'wrong'):
-            with self.assertRaisesRegex(RuntimeError, 'pinned BODY2'): decode_body_state(view)
+            with self.assertRaisesRegex(RuntimeError, 'pinned BODY2'):
+                decode_body_state_native(data)
         _state_decoder.cache_clear()
-        self.compare(data)
 
-    def test_unmeasured_native_path_has_no_diagnostic_fields(self):
+    def test_native_entry_returns_only_the_state_dto(self):
         data = state_buffer(3);view = module('BodyState').BodyState.GetRootAs(data)
-        state, timing = native.decode_state(data, view._tab.Pos)
-        self.assertIsNone(timing);self.same(_decode_body_state_python(view), state)
+        state = native.decode_state(data, view._tab.Pos)
+        self.same(_decode_body_state_python(view), state)
 

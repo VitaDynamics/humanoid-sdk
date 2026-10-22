@@ -12,9 +12,25 @@ if missing:
     raise unittest.SkipTest(f"optional velocity mode dependencies unavailable: {', '.join(missing)}")
 import numpy as np
 from examples.velocity_mode import velocity_mode as example
-from examples.velocity_mode import velocity_mode_latency as latency
-from examples.velocity_mode.velocity_mode_latency import CycleLog, NOT_MEASURED
+from examples import policy_support as latency
+from examples.policy_support import CycleLog, NOT_MEASURED
 from examples.velocity_mode.velocity_mode_policy import VelocityModePolicy
+
+
+def joy_sample():
+    return SimpleNamespace(axes=(), buttons=(), pressed_counts={}, released_counts={},
+        samples_total=0, received_realtime_ns=1, missing_samples_since_read=0,
+        missing_samples_total=0, sequence_available=True, event_history_complete=True,
+        sequence_diagnostics={}, is_fresh=lambda *args: True)
+
+
+def read_axes(reader):
+    reader._test_last = reader.read()
+    return reader._test_last.axes if reader._test_last.is_fresh() else ()
+
+
+def joy_statistics(reader):
+    return example.joy_log_fields(reader._test_last)
 
 
 def frame_state(state_id):
@@ -123,15 +139,17 @@ class LoggingTest(unittest.TestCase):
         transport.observed_status = SimpleNamespace(current_action="PASSIVE",
             phase=SimpleNamespace(value="IDLE"), generation=0)
         transport.publishers, directions.node.publishers = {}, []
-        directions.statistics.return_value = {}
+        directions.read.return_value = __import__("test_velocity_mode").joy_sample()
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp)/"run.jsonl"
             args = example.parse_args(["--shadow", "--locomotion-dir", "/unused", "--log", str(path)])
             with patch.object(example, "version", return_value="0.2.1"), \
                  patch.object(example, "parse_args", return_value=args), \
                  patch.object(example, "VelocityModePolicy", return_value=policy), \
-                 patch.object(example, "PolicyTransport", return_value=transport), \
-                 patch.object(example, "DirectionInput", return_value=directions), \
+                 patch.object(example, "PullTransport", return_value=transport), \
+                 patch.object(example, "wait_ready", return_value=transport.observed_status), \
+                 patch.object(example, "read_frame", return_value=Mock()), \
+                 patch.object(example, "JoyReader", return_value=directions), \
                  patch.object(example, "transition_duration", return_value=([], 0.)), \
                  patch.object(example, "run_cycles"):
                 example.main()
@@ -205,7 +223,7 @@ class DirectionSourceTest(unittest.TestCase):
         node = SimpleNamespace(create_subscriber_pull=Mock(return_value=ring))
         unavailable = {name: None for name in ("rclpy", "sensor_msgs", "geometry_msgs")}
         with patch.dict(sys.modules, unavailable), patch.object(example.threading, "Thread") as thread:
-            directions = example.DirectionInput(SimpleNamespace(node=node))
+            directions = example.JoyReader(node)
             thread.assert_not_called()
         self.addCleanup(directions.close)
         return directions, ring
@@ -215,12 +233,12 @@ class DirectionSourceTest(unittest.TestCase):
         directions, ring = self.fixture()
         with patch.object(example.time, "time_ns", return_value=1_000_000_000):
             ring.put(payload(0))
-            directions.snapshot()
+            read_axes(directions)
             ring.put(payload(1, axes=(0., 1., 0., -1.), buttons=(1,)),
                      payload(2, axes=(0., 1., 0., -1.), buttons=(0,)))
-            axes = directions.snapshot()
+            axes = read_axes(directions)
         np.testing.assert_array_equal(policy_fixture().command(axes), [.9, 0., -.8])
-        stats = directions.statistics()
+        stats = joy_statistics(directions)
         self.assertEqual(stats["joy_messages"], 3)
         self.assertEqual(stats["joy_pressed_counts"], {0: 1})
         self.assertEqual(stats["joy_released_counts"], {0: 1})
@@ -234,19 +252,19 @@ class DirectionSourceTest(unittest.TestCase):
         axes = (0., 1., 0., 0.)
         with patch.object(example.time, "time_ns", return_value=received):
             ring.put(payload(0, axes=axes, published_ns=received))
-            self.assertEqual(directions.snapshot(), axes)
+            self.assertEqual(read_axes(directions), axes)
         with patch.object(example.time, "time_ns", return_value=received+1_000_000_000):
-            self.assertEqual(directions.snapshot(), axes)
+            self.assertEqual(read_axes(directions), axes)
         for now in (received+1_000_000_001, received-1):
             with self.subTest(now=now), patch.object(example.time, "time_ns", return_value=now):
-                self.assertEqual(directions.snapshot(), ())
-        self.assertEqual(directions.statistics()["last_joy_ns"], received)
+                self.assertEqual(read_axes(directions), ())
+        self.assertEqual(joy_statistics(directions)["last_joy_ns"], received)
 
     def test_reader_errors_propagate_and_close_owns_only_subscription(self):
         directions, ring = self.fixture()
         ring.queue.append(RuntimeError("disconnected"))
         with self.assertRaisesRegex(RuntimeError, "disconnected"):
-            directions.snapshot()
+            read_axes(directions)
         directions.close()
         ring.close.assert_called_once_with()
 
@@ -274,7 +292,7 @@ class TransportTest(unittest.TestCase):
         bindings = SimpleNamespace(aorta=SimpleNamespace(Node=Node, QoS=qos))
         with patch.dict(example.os.environ, {}, clear=True), \
              patch("locomotion_aorta.transport._load_aorta_bindings", return_value=bindings):
-            transport = example.PolicyTransport(group="default", shadow=True)
+            transport = example.PullTransport(group="default", node_name="test", publishers=False)
             self.assertEqual(transport.publishers, {})
             self.assertNotIn("AORTA_LOG_TOPIC_ENABLED", example.os.environ)
             transport.close()
@@ -287,12 +305,9 @@ class TransportTest(unittest.TestCase):
         self.assertFalse(hasattr(command, 'cmd_id'))
 
     def test_preflight_refuses_existing_external_session(self):
-        transport = example.PolicyTransport.__new__(example.PolicyTransport)
-        transport.condition = __import__("threading").Condition()
-        transport.frame, transport.decode_error = object(), None
-        transport.observed_status = SimpleNamespace(current_action="EXTERNAL")
+        transport = SimpleNamespace(control_status=SimpleNamespace(current_action="EXTERNAL"))
         with self.assertRaisesRegex(RuntimeError, "already active"):
-            transport.wait_ready(1.)
+            example.wait_ready(transport, 1.)
 
 
 class CycleTest(unittest.TestCase):
@@ -308,7 +323,7 @@ class CycleTest(unittest.TestCase):
         frame = example.StateFrame(frame_state(123), (0.,) * 31, (0.,) * 31,
                                    (0.,) * 3, (1., 0., 0., 0.), 100, 101, 102)
         transport = SimpleNamespace(latest=lambda: frame, receipt=None)
-        directions = SimpleNamespace(snapshot=lambda: (), statistics=lambda: {})
+        directions = SimpleNamespace(read=joy_sample)
         records, times = [], []
 
         def publish(command):
@@ -323,7 +338,7 @@ class CycleTest(unittest.TestCase):
 
         controller = SimpleNamespace(publish=publish, status=running_status()) if live else None
         if controller is not None and timing:
-            controller._last_publish_timing = lambda: dict(publish_total_ns=123,
+            controller.publish_timing = dict(publish_total_ns=123,
                 outcome='raised' if fail else 'returned')
         with patch.object(example.time, "time_ns", side_effect=lambda: clock.now), \
              patch.object(example.time, "monotonic_ns", side_effect=lambda: clock.now), \
@@ -331,7 +346,7 @@ class CycleTest(unittest.TestCase):
              patch.object(example.time, "monotonic", side_effect=AssertionError("monotonic clock used")), \
              patch.object(example.time, "perf_counter_ns", side_effect=AssertionError("perf clock used")):
             try:
-                example.run_cycles(policy, transport, directions, SimpleNamespace(cycle=records.append),
+                example.run_cycles(policy, transport.latest, directions, SimpleNamespace(cycle=records.append),
                                    controller=controller, duration=.05, transition=([], 0.))
             except RuntimeError:
                 if not fail:
@@ -375,20 +390,19 @@ class CycleTest(unittest.TestCase):
         clock = SimpleNamespace(now=base)
         frame = example.StateFrame(frame_state(1), (0.,)*31, (0.,)*31,
                                    (0.,)*3, (1.,0.,0.,0.), 1, 2, 3)
-        directions = SimpleNamespace(snapshot=Mock(return_value=()),
-                                     statistics=Mock(return_value={"joy_pressed_counts": {0: 1}}))
+        sample = joy_sample(); sample.pressed_counts = {0: 1}
+        directions = SimpleNamespace(read=Mock(return_value=sample))
         records = []
         def sleep(delay):
             clock.now += round(delay*1e9)
         with patch.object(example.time, "time_ns", side_effect=lambda: clock.now), \
              patch.object(example.time, "monotonic_ns", side_effect=lambda: clock.now), \
              patch.object(example.time, "sleep", side_effect=sleep):
-            example.run_cycles(policy, SimpleNamespace(latest=lambda: frame), directions,
+            example.run_cycles(policy, lambda: frame, directions,
                                SimpleNamespace(cycle=records.append), controller=None,
                                duration=.04, transition=(target, 1.))
         self.assertGreaterEqual(len(records), 2)
-        self.assertEqual(directions.snapshot.call_count, len(records))
-        self.assertEqual(directions.statistics.call_count, len(records))
+        self.assertEqual(directions.read.call_count, len(records))
         self.assertTrue(all(r["phase"] == "transition" for r in records))
         self.assertTrue(all(r["joy_pressed_counts"] == {0: 1} for r in records))
         policy.infer.assert_not_called()
@@ -414,7 +428,7 @@ class CycleTest(unittest.TestCase):
             return replace(command,session_id=7,sequence=len(published))
         def sleep(delay):clock.now+=round(delay*1e9)
         with patch.object(example.time,'time_ns',side_effect=lambda:clock.now),patch.object(example.time,'monotonic_ns',side_effect=lambda:clock.now),patch.object(example.time,'sleep',side_effect=sleep):
-            example.run_cycles(policy,SimpleNamespace(latest=latest),SimpleNamespace(snapshot=lambda:(),statistics=lambda:{}),SimpleNamespace(cycle=records.append),controller=SimpleNamespace(publish=publish,status=running_status()),duration=.19,transition=([],0.))
+            example.run_cycles(policy,latest,SimpleNamespace(read=joy_sample),SimpleNamespace(cycle=records.append),controller=SimpleNamespace(publish=publish,status=running_status()),duration=.19,transition=([],0.))
         self.assertEqual(len(inferred),11)  # t=0..200ms: original grid/bounded-loop semantics.
         self.assertEqual(len(published),len(inferred))
         self.assertEqual(len(records),len(inferred))
@@ -464,8 +478,8 @@ class DurationTest(unittest.TestCase):
         with patch.object(example.time, "time_ns", side_effect=lambda: clock.now), \
              patch.object(example.time, "monotonic_ns", side_effect=lambda: clock.now), \
              self.assertRaises(KeyboardInterrupt):
-            example.run_cycles(policy, SimpleNamespace(latest=latest),
-                               SimpleNamespace(snapshot=lambda: (), statistics=lambda: {}),
+            example.run_cycles(policy, latest,
+                               SimpleNamespace(read=joy_sample),
                                SimpleNamespace(cycle=record), controller=None, duration=0,
                                transition=([],0.))
         self.assertEqual(len(records), 3)
@@ -480,15 +494,17 @@ class DurationTest(unittest.TestCase):
         transport.get_robot_info.return_value = SimpleNamespace(info=SimpleNamespace(body=SimpleNamespace(roster_version=1, joints=[])))
         controller.get_robot_info.return_value = transport.get_robot_info.return_value
         directions.node.publishers = []
-        directions.statistics.return_value = {}
+        directions.read.return_value = __import__("test_velocity_mode").joy_sample()
         controller.exit_external.return_value = SimpleNamespace(current_action="PASSIVE",
             phase=SimpleNamespace(value="IDLE"))
         with patch.object(example, "version", return_value="0.2.1"), \
              patch.object(example, "parse_args", return_value=args), \
              patch.object(example, "VelocityModePolicy", return_value=Mock(inventory={}, order=[])), \
-             patch.object(example, "PolicyTransport", return_value=transport), \
-             patch.object(example, "ExternalController", return_value=controller), \
-             patch.object(example, "DirectionInput", return_value=directions), \
+             patch.object(example, "PullTransport", return_value=transport), \
+                 patch.object(example, "wait_ready", return_value=transport.observed_status), \
+                 patch.object(example, "read_frame", return_value=Mock()), \
+             patch.object(example, "PullController", return_value=controller), \
+             patch.object(example, "JoyReader", return_value=directions), \
              patch.object(example, "CycleLog", return_value=log), \
              patch.object(example, "transition_duration", return_value=([],0.)), \
              patch.object(example, "run_cycles", side_effect=KeyboardInterrupt), \

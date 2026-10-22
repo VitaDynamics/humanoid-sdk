@@ -18,7 +18,7 @@ class Ring:
 
 class PullTest(unittest.TestCase):
     def transport(self):
-        t=PullTransport.__new__(PullTransport);t._closed=False;t._state_lock=threading.Lock();t._status_lock=threading.Lock();t._status=None;t._latest_state=None
+        t=PullTransport.__new__(PullTransport);t._closed=False;t._state_lock=threading.Lock();t._status_lock=threading.RLock();t._status=None;t._latest_state=None;t._latest_sample=None;t._latest_body_state=None
         t._pulls={BODY_STATE_TOPIC:Ring(),CONTROL_STATUS_TOPIC:Ring()};t._callbacks={BODY_STATE_TOPIC:[],CONTROL_STATUS_TOPIC:[]}
         t._bindings=S(control_status_decoder=lambda v:v);t._subscriber_spec=lambda topic:(None,lambda v:v,None)
         return t
@@ -47,7 +47,7 @@ class PullTest(unittest.TestCase):
         self.assertEqual(seen,[s]);self.assertEqual(threads,[threading.get_ident()])
         sub.close();sub.close();self.assertFalse(t._callbacks[CONTROL_STATUS_TOPIC])
 
-    def test_wait_state_timestamp_after_recv_and_native_arrays_before_callbacks(self):
+    def test_wait_state_timestamp_after_recv_and_native_arrays(self):
         t=self.transport();t._pulls[BODY_STATE_TOPIC].samples.append(S(payload=b'state',context=S(receive_stamp_ns=42)))
         from dataclasses import dataclass
         @dataclass(frozen=True)
@@ -117,6 +117,7 @@ class PullTest(unittest.TestCase):
         def poll():
             while pending:original(CONTROL_STATUS_TOPIC,pending.pop(0))
         t.poll_control_status=poll
+        t._wait_body_state=lambda timeout:t.wait_state(timeout).body_state()
         def publish(topic,req):
             self.assertEqual(topic,CONTROL_REQUEST_TOPIC)
             t.emit('/sdk/foot_humanoid/control/ack',ControlAck(request_id=req.request_id,operation=req.operation,accepted=not reject,lease_id='L'))
@@ -142,8 +143,8 @@ class PullTest(unittest.TestCase):
         with self.assertRaises(ControlRejectedError):c.enter_external(.1)
         self.assertEqual(t.published[-1][1].operation,ControlOperation.CANCEL)
 
-    def test_state_source_wait_alias_and_close_are_readonly(self):
+    def test_state_source_has_one_array_wait_api_and_close_is_readonly(self):
         calls=[];state=object();transport=S(wait_state=lambda timeout:(calls.append(timeout)or state),close=lambda:calls.append('close'),control_status='snapshot')
         source=PullStateSource(_transport=transport)
-        self.assertIs(source.wait_state(.1),state);self.assertIs(source.wait_body_state(.2),state)
-        self.assertEqual(source.control_status,'snapshot');source.close();self.assertEqual(calls,[.1,.2,'close'])
+        self.assertIs(source.wait_state(.1),state);self.assertFalse(hasattr(source, "wait_body_state"))
+        self.assertEqual(source.control_status,'snapshot');source.close();self.assertEqual(calls,[.1,'close'])

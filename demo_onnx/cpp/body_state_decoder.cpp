@@ -2,7 +2,6 @@
 
 #include <pybind11/numpy.h>
 
-#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -13,11 +12,6 @@
 
 namespace py = pybind11;
 namespace {
-using Clock = std::chrono::steady_clock;
-using Stamp = Clock::time_point;
-int64_t Ns(Stamp a, Stamp b) {
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count();
-}
 
 struct Imu {
   uint8_t location, status;
@@ -34,13 +28,20 @@ struct State {
 };
 
 template <uint16_t N>
-py::tuple Floats(const flatbuffers::Array<float, N>* values) {
+py::tuple Floats(const flatbuffers::Array<float, N> *values) {
   py::tuple result(N);
   for (uint16_t i = 0; i < N; ++i) result[i] = values->Get(i);
   return result;
 }
 
-State ReadState(const uint8_t* data, size_t size, size_t offset) {
+State ReadState(const uint8_t *data, size_t size, size_t offset) {
+  if (offset == 0) {
+    if (size < sizeof(flatbuffers::uoffset_t))
+      throw std::invalid_argument("invalid BodyState root offset");
+    offset = flatbuffers::ReadScalar<flatbuffers::uoffset_t>(data);
+    if (offset == 0)
+      throw std::invalid_argument("invalid BodyState root offset");
+  }
   State result;
   // A generated Python view can refer to an embedded table. Verify that
   // exact table offset rather than assuming the root starts at byte zero.
@@ -49,8 +50,8 @@ State ReadState(const uint8_t* data, size_t size, size_t offset) {
       offset % alignof(flatbuffers::soffset_t))
     throw std::invalid_argument("invalid BodyState table offset");
   flatbuffers::Verifier verifier(data, size);
-  const auto* view =
-      reinterpret_cast<const lowlevel::BodyState*>(data + offset);
+  const auto *view =
+      reinterpret_cast<const lowlevel::BodyState *>(data + offset);
   if (!verifier.VerifyTable(view))
     throw std::invalid_argument("invalid BodyState FlatBuffer");
   if (view->protocol_version() != 2)
@@ -66,16 +67,16 @@ State ReadState(const uint8_t* data, size_t size, size_t offset) {
   result.session = view->applied_session_id();
   result.sequence = view->applied_sequence();
   result.output = view->ts_first_output_us();
-  if (const auto* joints = view->joints()) {
+  if (const auto *joints = view->joints()) {
     if (joints->size() != 31)
       throw std::invalid_argument(
           "body vector requires exactly 31 joint slots");
     result.joints.reserve(31);
-    for (const auto* joint : *joints) result.joints.push_back(*joint);
+    for (const auto *joint : *joints) result.joints.push_back(*joint);
   }
-  if (const auto* imus = view->imu_states()) {
+  if (const auto *imus = view->imu_states()) {
     result.imus.reserve(imus->size());
-    for (const auto* sample : *imus) {
+    for (const auto *sample : *imus) {
       Imu imu{static_cast<uint8_t>(sample->location()),
               static_cast<uint8_t>(sample->status()),
               sample->ts_sampled_us(),
@@ -90,40 +91,28 @@ State ReadState(const uint8_t* data, size_t size, size_t offset) {
   return result;
 }
 
-py::tuple Decode(py::buffer input, size_t offset, bool measure,
-                 const py::object& state_type, const py::object& joint_type,
-                 const py::object& imu_type, const py::object& sample_type) {
-  const auto begin = measure ? Clock::now() : Stamp{};
+py::object Decode(py::buffer input, size_t offset, const py::object &state_type,
+                  const py::object &joint_type, const py::object &imu_type,
+                  const py::object &sample_type) {
   // bytes is retained without copying. Mutable/borrowed buffers are copied
-  // while holding the GIL; the native section never reads mutable Python data.
+  // before decoding, so results never borrow mutable caller storage.
   py::bytes owned =
       py::reinterpret_steal<py::bytes>(PyObject_Bytes(input.ptr()));
   if (!owned) throw py::error_already_set();
-  auto* data = reinterpret_cast<const uint8_t*>(PyBytes_AS_STRING(owned.ptr()));
+  auto *data =
+      reinterpret_cast<const uint8_t *>(PyBytes_AS_STRING(owned.ptr()));
   const auto size = static_cast<size_t>(PyBytes_GET_SIZE(owned.ptr()));
-  State result;
-  Stamp start{}, finish{};
-  bool released = false;
-  {
-    py::gil_scoped_release release;
-    if (measure) {
-      start = Clock::now();
-      released = !PyGILState_Check();
-    }
-    result = ReadState(data, size, offset);
-    if (measure) finish = Clock::now();
-  }
-  const auto acquired = measure ? Clock::now() : Stamp{};
+  State result = ReadState(data, size, offset);
   py::tuple joints(result.joints.size());
   for (size_t i = 0; i < result.joints.size(); ++i) {
-    const auto& j = result.joints[i];
+    const auto &j = result.joints[i];
     joints[i] = joint_type(j.ts_acquired_hw_us(), j.ts_ingested_us(),
                            j.ts_assembled_us(), j.q(), j.dq(), j.tau_est(),
                            static_cast<uint32_t>(j.error_code()));
   }
   py::tuple imus(result.imus.size());
   for (size_t i = 0; i < result.imus.size(); ++i) {
-    const auto& imu = result.imus[i];
+    const auto &imu = result.imus[i];
     py::object state = py::none();
     if (imu.state) {
       state = imu_type(
@@ -137,14 +126,7 @@ py::tuple Decode(py::buffer input, size_t offset, bool measure,
       state_type(result.id, joints, result.protocol, result.roster, result.real,
                  result.pub, result.consumed, result.attitude, imus,
                  result.session, result.sequence, result.output);
-  if (!measure) return py::make_tuple(dto, py::none());
-  py::dict timing;
-  timing["decode_input_own_ns"] = Ns(begin, start);
-  timing["decode_native_ns"] = Ns(start, finish);
-  timing["decode_gil_reacquire_wall_ns"] = Ns(finish, acquired);
-  timing["decode_python_objects_ns"] = Ns(acquired, Clock::now());
-  timing["gil_released_during_decode"] = released;
-  return py::make_tuple(dto, timing);
+  return dto;
 }
 
 struct Arrays {
@@ -156,8 +138,8 @@ struct Arrays {
 };
 
 template <class T>
-py::array View(std::vector<T>& data, py::ssize_t columns,
-               const py::capsule& owner) {
+py::array View(std::vector<T> &data, py::ssize_t columns,
+               const py::capsule &owner) {
   py::array result =
       columns == 1
           ? py::array(py::dtype::of<T>(),
@@ -173,78 +155,58 @@ py::array View(std::vector<T>& data, py::ssize_t columns,
   return result;
 }
 
-py::tuple DecodeArrays(py::buffer input, size_t offset, bool measure) {
-  const auto begin = measure ? Clock::now() : Stamp{};
+py::dict DecodeArrays(py::buffer input, size_t offset) {
   py::bytes owned =
       py::reinterpret_steal<py::bytes>(PyObject_Bytes(input.ptr()));
   if (!owned) throw py::error_already_set();
-  auto* data = reinterpret_cast<const uint8_t*>(PyBytes_AS_STRING(owned.ptr()));
+  auto *data =
+      reinterpret_cast<const uint8_t *>(PyBytes_AS_STRING(owned.ptr()));
   const auto size = static_cast<size_t>(PyBytes_GET_SIZE(owned.ptr()));
   auto arrays = std::make_unique<Arrays>();
-  Stamp start{}, finish{};
-  bool released = false;
-  {
-    py::gil_scoped_release release;
-    if (measure) {
-      start = Clock::now();
-      released = !PyGILState_Check();
-    }
-    if (offset == 0) {
-      if (size < sizeof(flatbuffers::uoffset_t))
-        throw std::invalid_argument("invalid BodyState root offset");
-      offset = flatbuffers::ReadScalar<flatbuffers::uoffset_t>(data);
-      if (offset == 0)
-        throw std::invalid_argument("invalid BodyState root offset");
-    }
-    arrays->state = ReadState(data, size, offset);
-    const auto joint_count = arrays->state.joints.size();
-    arrays->q.reserve(joint_count);
-    arrays->dq.reserve(joint_count);
-    arrays->tau.reserve(joint_count);
-    arrays->errors.reserve(joint_count);
-    arrays->joint_stamps.reserve(joint_count * 3);
-    const auto imu_count = arrays->state.imus.size();
-    arrays->imu.reserve(imu_count * 13);
-    arrays->imu_stamps.reserve(imu_count * 4);
-    arrays->locations.reserve(imu_count);
-    arrays->status.reserve(imu_count);
-    arrays->present.reserve(imu_count);
-    for (const auto& j : arrays->state.joints) {
-      arrays->q.push_back(j.q());
-      arrays->dq.push_back(j.dq());
-      arrays->tau.push_back(j.tau_est());
-      arrays->joint_stamps.insert(
-          arrays->joint_stamps.end(),
-          {j.ts_acquired_hw_us(), j.ts_ingested_us(), j.ts_assembled_us()});
-      arrays->errors.push_back(static_cast<uint32_t>(j.error_code()));
-    }
-    for (const auto& i : arrays->state.imus) {
-      arrays->locations.push_back(i.location);
-      arrays->status.push_back(i.status);
-      arrays->present.push_back(i.state.has_value());
-      arrays->imu_stamps.insert(
-          arrays->imu_stamps.end(),
-          {i.sampled, i.acquired, i.ingested, i.assembled});
-      if (i.state) {
-        for (uint16_t j = 0; j < 4; ++j)
-          arrays->imu.push_back(i.state->quaternion()->Get(j));
-        for (auto* values :
-             {i.state->gyroscope(), i.state->accelerometer(), i.state->rpy()})
-          for (uint16_t j = 0; j < 3; ++j)
-            arrays->imu.push_back(values->Get(j));
-      } else {
-        arrays->imu.insert(arrays->imu.end(), 13, 0.0f);
-      }
-    }
-    if (measure) finish = Clock::now();
+  arrays->state = ReadState(data, size, offset);
+  const auto joint_count = arrays->state.joints.size();
+  arrays->q.reserve(joint_count);
+  arrays->dq.reserve(joint_count);
+  arrays->tau.reserve(joint_count);
+  arrays->errors.reserve(joint_count);
+  arrays->joint_stamps.reserve(joint_count * 3);
+  const auto imu_count = arrays->state.imus.size();
+  arrays->imu.reserve(imu_count * 13);
+  arrays->imu_stamps.reserve(imu_count * 4);
+  arrays->locations.reserve(imu_count);
+  arrays->status.reserve(imu_count);
+  arrays->present.reserve(imu_count);
+  for (const auto &j : arrays->state.joints) {
+    arrays->q.push_back(j.q());
+    arrays->dq.push_back(j.dq());
+    arrays->tau.push_back(j.tau_est());
+    arrays->joint_stamps.insert(
+        arrays->joint_stamps.end(),
+        {j.ts_acquired_hw_us(), j.ts_ingested_us(), j.ts_assembled_us()});
+    arrays->errors.push_back(static_cast<uint32_t>(j.error_code()));
   }
-  const auto acquired = measure ? Clock::now() : Stamp{};
+  for (const auto &i : arrays->state.imus) {
+    arrays->locations.push_back(i.location);
+    arrays->status.push_back(i.status);
+    arrays->present.push_back(i.state.has_value());
+    arrays->imu_stamps.insert(arrays->imu_stamps.end(),
+                              {i.sampled, i.acquired, i.ingested, i.assembled});
+    if (i.state) {
+      for (uint16_t j = 0; j < 4; ++j)
+        arrays->imu.push_back(i.state->quaternion()->Get(j));
+      for (auto *values :
+           {i.state->gyroscope(), i.state->accelerometer(), i.state->rpy()})
+        for (uint16_t j = 0; j < 3; ++j) arrays->imu.push_back(values->Get(j));
+    } else {
+      arrays->imu.insert(arrays->imu.end(), 13, 0.0f);
+    }
+  }
   // All memory is independently owned; NumPy wrappers hold the capsule, not
-  // a transport cache or the borrowed input. No Python API runs above.
-  auto* a = arrays.get();
-  py::capsule owner(a, [](void* p) { delete static_cast<Arrays*>(p); });
+  // a transport cache or the borrowed input.
+  auto *a = arrays.get();
+  py::capsule owner(a, [](void *p) { delete static_cast<Arrays *>(p); });
   arrays.release();
-  const auto& v = a->state;
+  const auto &v = a->state;
   py::dict out;
   out["q"] = View(a->q, 1, owner);
   out["dq"] = View(a->dq, 1, owner);
@@ -266,29 +228,21 @@ py::tuple DecodeArrays(py::buffer input, size_t offset, bool measure) {
   out["applied_session_id"] = v.session;
   out["applied_sequence"] = v.sequence;
   out["ts_first_output_us"] = v.output;
-  if (!measure) return py::make_tuple(out, py::none());
-  py::dict timing;
-  timing["decode_input_own_ns"] = Ns(begin, start);
-  timing["decode_native_ns"] = Ns(start, finish);
-  timing["decode_gil_reacquire_wall_ns"] = Ns(finish, acquired);
-  timing["decode_numpy_views_ns"] = Ns(acquired, Clock::now());
-  timing["gil_released_during_decode"] = released;
-  return py::make_tuple(out, timing);
+  return out;
 }
 }  // namespace
 
-void BindBodyState(py::module_& module) {
+void BindBodyState(py::module_ &module) {
   module.def("decode_state_arrays", &DecodeArrays, py::arg("payload"),
-             py::arg("table_offset") = 0, py::arg("measure") = false);
+             py::arg("table_offset") = 0);
   auto types = py::module_::import("locomotion_aorta.body_types");
-  module.attr("BODY_STATE_SCHEMA_SHA256") =
-      "514af044787e6f29789e77359503d9f2d87f29513e4b44bcecdeeabaf1151c2e";
+  module.attr("BODY_STATE_SCHEMA_SHA256") = BODY_STATE_SCHEMA_SHA256;
   module.def(
       "decode_state",
       [state = types.attr("BodyState"), joint = types.attr("BodyJointState"),
-       imu = types.attr("BodyImuState"), sample = types.attr("BodyImuSample")](
-          py::buffer input, size_t offset, bool measure) {
-        return Decode(input, offset, measure, state, joint, imu, sample);
+       imu = types.attr("BodyImuState"),
+       sample = types.attr("BodyImuSample")](py::buffer input, size_t offset) {
+        return Decode(input, offset, state, joint, imu, sample);
       },
-      py::arg("payload"), py::arg("table_offset"), py::arg("measure") = false);
+      py::arg("payload"), py::arg("table_offset") = 0);
 }

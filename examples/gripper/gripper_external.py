@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Independent AGX demo; defaults to read-only info/state subscriptions."""
-from locomotion_aorta._demo_feedback import joint_columns
+from pathlib import Path
+import importlib.util
+_support_spec = importlib.util.spec_from_file_location(
+    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
+_support = importlib.util.module_from_spec(_support_spec)
+_support_spec.loader.exec_module(_support)
+joint_columns = _support.joint_columns
 import argparse
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
@@ -573,8 +579,8 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None):
         from locomotion_aorta import GripperClient
         _client_factory = GripperClient
     if _controller_factory is None:
-        from locomotion_aorta import PullController as ExternalController
-        _controller_factory = ExternalController
+        from locomotion_aorta import PullController
+        _controller_factory = PullController
     readonly = args.dry_run or not args.confirm_motion
     with ExitStack() as stack:
         sides = ('left', 'right') if args.side == 'both' else (args.side,)

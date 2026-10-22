@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Velocity mode over SDK 0.2.0, with TONIGHT/071 per-cycle latency records."""
+"""Velocity mode over SDK 0.2.1, with TONIGHT/071 per-cycle latency records."""
 
 import argparse
 from dataclasses import dataclass
-import hashlib
 from importlib.metadata import version
-from locomotion_aorta._demo_feedback import publish_log_fields, LOWSTATE_WINDOW_S
 import os
 import signal
 from pathlib import Path
@@ -14,14 +12,10 @@ import time
 import uuid
 
 from locomotion_aorta import (
-    PullController as ExternalController, PullTransport, BodyCmd, BodyJointCmd, JoyReader, ExternalPhase,
+    PullController, PullTransport, BodyCmd, BodyJointCmd, JoyReader, ExternalPhase,
 )
 import locomotion_aorta
-from locomotion_aorta._body_codec import decode_body_state
-from locomotion_aorta.transport import (
-    _AortaTransport, _load_aorta_bindings,
-    BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC,
-)
+
 
 try:
     from .velocity_mode_policy import VelocityModePolicy
@@ -35,8 +29,15 @@ except ImportError:
     VelocityModePolicy = _policy.VelocityModePolicy
 
 
-from locomotion_aorta._demo_input import DirectionInput
-from locomotion_aorta._demo_latency import CycleLog, NOT_MEASURED, realtime_ns
+# File-based loading also supports isolated (-I) execution from a bundle.
+import importlib.util
+_support_spec = importlib.util.spec_from_file_location(
+    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
+_support = importlib.util.module_from_spec(_support_spec)
+_support_spec.loader.exec_module(_support)
+CycleLog, NOT_MEASURED, realtime_ns = _support.CycleLog, _support.NOT_MEASURED, _support.realtime_ns
+publish_log_fields, LOWSTATE_WINDOW_S = _support.publish_log_fields, _support.LOWSTATE_WINDOW_S
+joy_log_fields = _support.joy_log_fields
 
 
 PERIOD_S = 0.02
@@ -56,59 +57,28 @@ class StateFrame:
     pull_context_receive_stamp_ns: int = 0
 
 
-def decode_state(view, s1: int, pull_context_receive_stamp_ns=0) -> StateFrame:
-    state = decode_body_state(view)
-    hip = next(imu for imu in state.imu_states if imu.location == 0)
-    q, dq = tuple(m.q for m in state.joints), tuple(m.dq for m in state.joints)
-    return StateFrame(state, q, dq, hip.state.gyroscope, hip.state.quaternion,
-                      state.ts_state_pub_us * 1000 if state.ts_state_pub_us else NOT_MEASURED,
-                      s1, realtime_ns(), pull_context_receive_stamp_ns)
+def read_frame(transport, timeout):
+    state = transport.wait_state(timeout)
+    hip = next(i for i, location in enumerate(state.imu_location) if location == 0)
+    if not state.imu_state_present[hip]:
+        raise ValueError('HIP IMU state is absent')
+    values = state.imu_values[hip]
+    return StateFrame(state, state.q, state.dq, values[4:7], values[:4],
+        state.ts_state_pub_us * 1000 if state.ts_state_pub_us else NOT_MEASURED,
+        state.received_realtime_ns, realtime_ns(), state.pull_context_receive_stamp_ns)
 
 
-class PolicyTransport(PullTransport):
-    """Use SDK wait_state/native NumPy feedback; shadow constructs no publishers."""
-
-    def __init__(self, *, group: str, shadow: bool) -> None:
-        self.condition = threading.Condition()
-        self.frame = None
-        self.observed_status = None
-        self._pull_timeout = 5.0
-        super().__init__(node_name=f"velocity_mode-{'shadow' if shadow else 'live'}-{uuid.uuid4()}",
-                         group=group, publishers=not shadow)
-
-    def _recv_frame(self, timeout):
-        state = self.wait_state(timeout)
-        hip = next(i for i, location in enumerate(state.imu_location) if location == 0)
-        if not state.imu_state_present[hip]:
-            raise ValueError('HIP IMU state is absent')
-        values = state.imu_values[hip]
-        frame = StateFrame(state, state.q, state.dq, values[4:7], values[:4],
-            state.ts_state_pub_us * 1000 if state.ts_state_pub_us else NOT_MEASURED,
-            state.received_realtime_ns, realtime_ns(), state.pull_context_receive_stamp_ns)
-        self.frame = frame
-        return frame
-
-    def record_status(self, status):
-        self.observed_status = status
-
-    def wait_ready(self, timeout: float) -> StateFrame:
-        if self.observed_status is not None and self.observed_status.current_action == "EXTERNAL":
-            raise RuntimeError("an EXTERNAL session is already active")
-        self._pull_timeout = timeout
-        deadline = time.monotonic() + timeout
-        self._recv_frame(max(0, deadline - time.monotonic()))
-        self.poll_control_status(max(0, deadline - time.monotonic()))
-        if self.observed_status is None:
-            raise TimeoutError("waiting for body state and ControlStatus")
-        if self.observed_status.current_action == "EXTERNAL":
-            raise RuntimeError("an EXTERNAL session is already active")
-        return self.frame
-
-    def latest(self) -> StateFrame:
-        self.poll_control_status()
-        frame = self._recv_frame(self._pull_timeout)
-        self.poll_control_status()
-        return frame
+def wait_ready(transport, timeout):
+    if transport.control_status is not None and transport.control_status.current_action == "EXTERNAL":
+        raise RuntimeError("an EXTERNAL session is already active")
+    deadline = time.monotonic() + timeout
+    read_frame(transport, max(0, deadline - time.monotonic()))
+    status = transport.poll_control_status(max(0, deadline - time.monotonic()))
+    if status is None:
+        raise TimeoutError("waiting for body state and ControlStatus")
+    if status.current_action == "EXTERNAL":
+        raise RuntimeError("an EXTERNAL session is already active")
+    return status
 
 
 def transition_duration(policy, frame, root):
@@ -138,8 +108,8 @@ def require_running(controller, expected=None):
     return status
 
 
-def run_cycles(policy, transport, directions, log, *, controller, duration, transition, stop=None):
-    initial = transport.latest()
+def run_cycles(policy, frames, directions, log, *, controller, duration, transition, stop=None):
+    initial = frames()
     target, transition_s = transition
     policy.reset()
     started = time.monotonic_ns()
@@ -157,7 +127,7 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
             time.sleep(delay / 1_000_000_000)
         if stop.is_set():
             break
-        frame = transport.latest()
+        frame = frames()
         now = time.monotonic_ns()
         if frame.state.state_id > last_state_id:
             last_state_id, last_advance = frame.state.state_id, now
@@ -183,8 +153,9 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
         try:
             # Drain even during transition so queued short presses are consumed
             # on every 50 Hz tick, without changing the policy's timer.
-            axes = directions.snapshot()
-            record.update(directions.statistics())
+            sample = directions.read()
+            axes = sample.axes if sample.is_fresh(realtime_ns()) else ()
+            record.update(joy_log_fields(sample))
             elapsed = time.monotonic_ns() - started
             if elapsed < transition_ns:
                 record["phase"] = "transition"
@@ -225,7 +196,7 @@ def run_cycles(policy, transport, directions, log, *, controller, duration, tran
                     raise
                 finally:
                     record["S6"] = realtime_ns()
-                    timing = getattr(controller, '_last_publish_timing', lambda: None)()
+                    timing = getattr(controller, 'publish_timing', None)
                     if timing is not None:
                         record['publish_timing'] = timing
             else:
@@ -267,14 +238,9 @@ def parse_args(argv=None):
 def main():
     args = parse_args()
     policy = VelocityModePolicy(args.locomotion_dir)
-    metadata = dict(sdk_release="0.2.1", sdk_base_commit="8ef2e015830bc861e293f944f831c1ed05b1136b",
-                    sdk_version=version("locomotion-aorta"),
+    metadata = dict(sdk_version=version("locomotion-aorta"),
                     sdk_directory=str(Path(locomotion_aorta.__file__).resolve().parent),
-                    sdk_files_sha256={name: hashlib.sha256(Path(locomotion_aorta.__file__).with_name(name).read_bytes()).hexdigest()
-                                      for name in ("controller.py", "transport.py", "types.py", "_body_codec.py", "__init__.py")},
                     example_directory=str(Path(__file__).resolve().parent),
-                    example_sha256={name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                                    for name in ("velocity_mode.py", "velocity_mode_policy.py", "velocity_mode_latency.py")},
                     aorta_sdk_version=version("aorta-sdk"), aorta_msgs_version=version("aorta-msgs"),
                     locomotion_exec_sha256=args.exec_sha256, locomotion_yaml_sha256=args.yaml_sha256,
                     external_pd=args.external_pd, load_description=args.load_description,
@@ -289,13 +255,12 @@ def main():
     handlers = {sig: signal.signal(sig, lambda *_args: stop.set())
                 for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
-        transport = PolicyTransport(group=args.group, shadow=args.shadow)
-        if args.shadow:
-            transport.subscribe(CONTROL_STATUS_TOPIC, transport.record_status)
-        else:
-            controller = ExternalController(group=args.group, _transport=transport)
-            transport.subscribe(CONTROL_STATUS_TOPIC, transport.record_status)
-        transport.wait_ready(args.timeout)
+        transport = PullTransport(group=args.group, publishers=not args.shadow,
+            node_name=f"velocity-mode-{uuid.uuid4().hex}")
+        if not args.shadow:
+            controller = PullController(group=args.group, _transport=transport)
+        status = wait_ready(transport, args.timeout)
+        frames = lambda: read_frame(transport, args.timeout)
         response = controller.get_robot_info(args.timeout) if controller else transport.get_robot_info(args.timeout)
         if response.info is None or response.info.body is None:
             raise RuntimeError(response.error_message or "RobotInfo has no body roster")
@@ -306,17 +271,17 @@ def main():
                        populated=[j.populated for j in response.info.body.joints],
                        is_mock=[j.is_mock for j in response.info.body.joints]))
         log.write(dict(record_type="preflight", timestamp_ns=realtime_ns(),
-                       current_action=transport.observed_status.current_action,
-                       phase=transport.observed_status.phase.value,
-                       generation=transport.observed_status.generation))
-        directions = DirectionInput(transport)
+                       current_action=status.current_action,
+                       phase=status.phase.value,
+                       generation=status.generation))
+        directions = JoyReader(transport.node)
         log.write(dict(record_type="transport", timestamp_ns=realtime_ns(),
                        aorta_publishers=len(transport.publishers)))
         if controller:
             controller.enter_external(args.timeout)
             entered = True
-        transition = transition_duration(policy, transport.latest(), args.locomotion_dir)
-        run_cycles(policy, transport, directions, log, controller=controller,
+        transition = transition_duration(policy, frames(), args.locomotion_dir)
+        run_cycles(policy, frames, directions, log, controller=controller,
                    duration=args.duration, transition=transition, stop=stop)
     finally:
         try:
@@ -329,7 +294,7 @@ def main():
                 if directions is not None:
                     try:
                         log.write(dict(record_type="direction_input", timestamp_ns=realtime_ns(),
-                                       source="aorta", **directions.statistics()))
+                                       source="aorta", **joy_log_fields(directions.read())))
                     finally:
                         directions.close()
             finally:

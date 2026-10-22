@@ -5,8 +5,6 @@ Live mode requests EXTERNAL ownership and moves the body. Exit sends CANCEL
 and must confirm PASSIVE, which can let loaded limbs fall. Installation and
 --confirm-motion do not replace authorization for a specific robot and trial.
 """
-from locomotion_aorta._demo_feedback import (state_log_fields, publish_log_fields,
-                                            feedback_age_ns, NOT_MEASURED)
 import argparse
 from collections import deque
 import hashlib
@@ -17,6 +15,16 @@ import signal
 import sys
 import threading
 import time
+
+
+# File-based loading also supports isolated (-I) execution from a bundle.
+import importlib.util
+_support_spec = importlib.util.spec_from_file_location(
+    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
+_support = importlib.util.module_from_spec(_support_spec)
+_support_spec.loader.exec_module(_support)
+state_log_fields, publish_log_fields = _support.state_log_fields, _support.publish_log_fields
+feedback_age_ns, NOT_MEASURED = _support.feedback_age_ns, _support.NOT_MEASURED
 
 
 class ReferenceSession:
@@ -280,7 +288,7 @@ def wait_fresh(controller, policy, *, previous_ns, timeout, max_age,
         if state.stamp_ns > previous_ns:
             age_ns = feedback_age_ns(state, round(monotonic()*1e9), time.time_ns())
             if not 0 <= age_ns <= max_age*1e9:
-                raise TimeoutError('feedback cache/publication is stale or has a future timestamp')
+                raise TimeoutError('feedback cache is stale or has a future timestamp')
             policy.state(state)
             return state
         sleep(min(.001, remaining))
@@ -357,11 +365,11 @@ def live(model, policy, args, recorder, controller, *,
                 row['publish_result'] = 'raised'
                 try:
                     recorder.write(dict(row, published=False,
-                                        publish_timing=getattr(controller, '_last_publish_timing', lambda: None)()))
+                                        publish_timing=getattr(controller, 'publish_timing', None)))
                 except Exception:
                     pass  # Preserve the original publish failure if diagnostics also fail.
                 raise
-            timing = getattr(controller, '_last_publish_timing', lambda: None)()
+            timing = getattr(controller, 'publish_timing', None)
             if timing is not None:
                 row['publish_timing'] = timing
             row['S6'] = time.time_ns()
@@ -413,7 +421,7 @@ def main():
     parser.add_argument('--group', default='default')
     parser.add_argument('--timeout', type=float, default=5., help='session entry/exit deadline, seconds')
     parser.add_argument('--max-state-age-ms', type=float, default=50.,
-                        help='cache/publication age and new-feedback deadline; pull requires synchronized REALTIME clocks')
+                        help='local receipt age and new-feedback deadline')
     parser.add_argument('--max-compute-ms', type=float, default=50.)
     parser.add_argument('--log', type=Path, required=True, help='new JSONL evidence file; never overwritten')
     parser.add_argument('--log-observation', action='store_true',
@@ -445,13 +453,13 @@ def main():
             if not os.environ.get('ZENOH_SESSION_CONFIG_URI'):
                 raise ValueError('set the deployment-owned PC ZENOH_SESSION_CONFIG_URI before --live')
             from contextlib import closing
-            from locomotion_aorta import PullController as ExternalController, PullStateSource as BodyStateSource
+            from locomotion_aorta import PullController, PullStateSource
             print('EXTERNAL requires robot virtual_pd strategy and ankle_virtual_pd_intent=true. '
                   'This program does not change robot configuration. Exit CANCEL confirms PASSIVE.', flush=True)
             stop = threading.Event()
             previous = {sig:signal.signal(sig, lambda *_:stop.set()) for sig in (signal.SIGINT, signal.SIGTERM)}
             try:
-                with ExternalController(group=args.group) as controller, closing(BodyStateSource(group=args.group)) as source:
+                with PullController(group=args.group) as controller, closing(PullStateSource(group=args.group)) as source:
                     response = controller.get_robot_info(args.timeout)
                     if response.info is None or response.info.body is None:
                         raise RuntimeError(response.error_message or 'RobotInfo has no body roster')

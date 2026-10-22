@@ -2,7 +2,7 @@
 import unittest
 from types import SimpleNamespace as NS
 
-from locomotion_aorta._demo_feedback import NOT_MEASURED, publish_log_fields
+from examples.policy_support import NOT_MEASURED, publish_log_fields
 
 
 class DiagnosticJoinTest(unittest.TestCase):

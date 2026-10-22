@@ -158,7 +158,11 @@ class HandClient:
                 if self._pulls is None:
                     self._condition.wait(remaining)
             if self._pulls is not None:
-                self._pulls.poll(kind, remaining)
+                if not self._pulls.poll(kind, remaining):
+                    with self._condition:
+                        self._ensure_open()
+                        if self._latest[kind] is value:
+                            self._condition.wait(min(remaining, .05))
 
     def wait_state(self, timeout: float = 5.0, *, after_state_id: int | None = None) -> HandState:
         return self._wait('state', timeout, after_state_id)

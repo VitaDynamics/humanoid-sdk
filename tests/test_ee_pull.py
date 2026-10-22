@@ -61,6 +61,35 @@ class PullGripperNode(PullNode, RealPacketNode):
 
 
 class EEPullTest(unittest.TestCase):
+    def test_contending_waiters_sleep_on_condition_for_both_clients(self):
+        for factory, node in ((HandClient, PullHandNode()),
+                              (GripperClient, PullGripperNode())):
+            with self.subTest(client=factory.__name__):
+                client = factory('left', node=node, pull_feedback=True, read_only=True)
+                self.addCleanup(client.close)
+                pulls = client._pulls
+                owner = client
+                locked, release = threading.Event(), threading.Event()
+                def hold():
+                    with pulls._lock:
+                        locked.set()
+                        release.wait(1)
+                thread = threading.Thread(target=hold)
+                thread.start()
+                self.assertTrue(locked.wait(.5))
+                expected = NS(state_id=7)
+                def received(_timeout):
+                    owner._latest['state'] = expected
+                try:
+                    with patch.object(owner._condition, 'wait', side_effect=received) as wait:
+                        self.assertIs(client.wait_state(.1), expected)
+                    wait.assert_called_once()
+                    self.assertLessEqual(wait.call_args.args[0], .05)
+                finally:
+                    release.set()
+                    thread.join(1)
+                self.assertFalse(thread.is_alive())
+
     def hand(self, **kw):
         node = PullHandNode()
         with patch('threading.Thread', side_effect=AssertionError('Python worker created')):

@@ -10,9 +10,15 @@ import struct
 import signal
 import time
 
-from locomotion_aorta import PullController as ExternalController, ExternalPhase, HandClient, HandType, InhibitReason
+from locomotion_aorta import PullController, ExternalPhase, HandClient, HandType, InhibitReason
 from locomotion_aorta.hand import validate_info
-from locomotion_aorta._demo_feedback import joint_columns
+from pathlib import Path
+import importlib.util
+_support_spec = importlib.util.spec_from_file_location(
+    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
+_support = importlib.util.module_from_spec(_support_spec)
+_support_spec.loader.exec_module(_support)
+joint_columns = _support.joint_columns
 # Load the existing sibling example even in isolated Python (-I) bundle checks.
 _body_spec = importlib.util.spec_from_file_location(
     'brainco_body_hold_baseline', Path(__file__).resolve().parents[1] / 'external_control/external_control.py')
@@ -380,7 +386,7 @@ def main(argv=None):
             clients = [stack.enter_context(HandClient(side, group=args.group, read_only=True, pull_feedback=True)) for side in sides]
             observe(clients, timeout=args.timeout)
         else:
-            controller = stack.enter_context(ExternalController(group=args.group))
+            controller = stack.enter_context(PullController(group=args.group))
             clients = [stack.enter_context(HandClient(side, group=args.group, node=controller.transport.node, pull_feedback=True))
                        for side in sides]
             if args.touch != 'keep':

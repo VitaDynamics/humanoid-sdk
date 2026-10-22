@@ -72,11 +72,9 @@ class BodyStateArrays:
                          self.ts_first_output_us)
 
 
-def decode_body_state_arrays(payload, *, measure=False):
+def decode_body_state_arrays(payload):
     """Decode pinned BODY2 bytes, preserving absent vectors and unknown values."""
     from ._native_body_codec import _state_decoder
     from . import _body_cmd_native
     _state_decoder()  # Shared BFBS identity guard; no silent Python fallback.
-    values, timing = _body_cmd_native.decode_state_arrays(payload, 0, measure)
-    result = BodyStateArrays(**values)
-    return (result, timing) if measure else result
+    return BodyStateArrays(**_body_cmd_native.decode_state_arrays(payload))

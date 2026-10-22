@@ -183,15 +183,25 @@ class JoyReaderTest(unittest.TestCase):
         self.assertEqual(dict(sample.pressed_counts), {0: 1})
         self.assertTrue(sample.event_history_complete)
 
-    def test_reset_or_reorder_does_not_rebase_or_invent_uint64_gap(self):
+    def test_same_name_restart_accepts_new_baseline_without_false_edges(self):
         self.read(payload(100, buttons=(1,)))
         sample = self.read(payload(0))
         self.assertEqual(sample.missing_samples_total, 0)
         self.assertEqual(sample.sequence_diagnostics["reset_or_reorder"], 1)
         self.assertFalse(sample.released_counts)
         self.assertFalse(sample.event_history_complete)
-        self.assertEqual(sample.buttons, (1,))
-        self.assertTrue(self.read(payload(101, buttons=(1,))).event_history_complete)
+        self.assertEqual(sample.buttons, (0,))
+        self.assertTrue(self.read(payload(1)).event_history_complete)
+        for sequence in range(2, 5):
+            self.assertEqual(self.read(payload(sequence, axes=(float(sequence),))).axes,
+                             (float(sequence),))
+
+    def test_freshness_uses_local_receipt_despite_remote_clock_skew(self):
+        for stamp in (0, 1, 2**63):
+            with self.subTest(stamp=stamp):
+                sample = self.read(payload(stamp, published_ns=stamp))
+                self.assertTrue(sample.is_fresh(1_000_000_000))
+                self.assertFalse(sample.is_fresh(2_000_000_001))
 
     def test_source_change_rebases_buttons_and_does_not_cross_subtract(self):
         self.read(payload(100, buttons=(1,), publisher="a"))

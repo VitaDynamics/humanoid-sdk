@@ -270,10 +270,14 @@ class TrackingLoopTest(unittest.TestCase):
         self.assertEqual(self.model.calls,11)  # one warmup; ten 50Hz policy evaluations.
 
     def test_publish_timing_is_joined_to_the_actual_returned_key(self):
-        self.controller._last_publish_timing = lambda: dict(
-            session_id=self.controller.commands[-1].session_id,
-            sequence=self.controller.commands[-1].sequence, encode_native_ns=123)
-        self.run_live()
+        original_type = type(self.controller)
+        def timing(controller):
+            if not controller.commands:
+                return None
+            sent = controller.commands[-1]
+            return dict(session_id=sent.session_id, sequence=sent.sequence, encode_native_ns=123)
+        with patch.object(original_type, 'publish_timing', property(timing), create=True):
+            self.run_live()
         for row in [x for x in self.rec.rows if x.get('published')]:
             self.assertEqual((row['session_id'], row['sequence']),
                              (row['publish_timing']['session_id'], row['publish_timing']['sequence']))

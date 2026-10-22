@@ -17,9 +17,8 @@ class NativeStateArraysTest(unittest.TestCase):
 
     def compare(self, data):
         expected = decode_body_state(module('BodyState').BodyState.GetRootAs(data))
-        actual, timing = decode_body_state_arrays(data, measure=True)
+        actual = decode_body_state_arrays(data)
         self.same(expected, actual.body_state())
-        self.assertTrue(timing['gil_released_during_decode'])
         return actual
 
     def test_seeded_256_full_field_numpy_goldens_and_original_fixture(self):
@@ -69,7 +68,7 @@ class NativeStateArraysTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'pinned BODY2'):decode_body_state_arrays(state_buffer(3))
         _state_decoder.cache_clear()
 
-    def test_diagnostics_default_off_and_compatibility_is_lazy(self):
+    def test_compatibility_materialization_is_lazy(self):
         v=decode_body_state_arrays(state_buffer(3))
         self.assertNotIn('joints',v.__dict__);self.assertNotIn('imu_states',v.__dict__)
         self.assertEqual(len(v.joints),31);self.assertIs(v.joints,v.joints)

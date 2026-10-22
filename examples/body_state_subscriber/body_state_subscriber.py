@@ -4,12 +4,18 @@ import argparse
 from collections.abc import Callable
 from contextlib import closing
 
-from locomotion_aorta import PullStateSource as BodyStateSource
-from locomotion_aorta._demo_feedback import joint_columns
+from locomotion_aorta import PullStateSource
+from pathlib import Path
+import importlib.util
+_support_spec = importlib.util.spec_from_file_location(
+    "policy_support", Path(__file__).resolve().parents[1] / "policy_support.py")
+_support = importlib.util.module_from_spec(_support_spec)
+_support_spec.loader.exec_module(_support)
+joint_columns = _support.joint_columns
 
 
 def run_once(
-    source: BodyStateSource,
+    source: PullStateSource,
     *,
     timeout: float,
     emit: Callable[[str], None] = print,
@@ -25,7 +31,7 @@ def main() -> None:
     parser.add_argument("--group", default="default")
     parser.add_argument("--timeout", type=float, default=5.0)
     args = parser.parse_args()
-    with closing(BodyStateSource(group=args.group)) as source:
+    with closing(PullStateSource(group=args.group)) as source:
         run_once(source, timeout=args.timeout)
 
 

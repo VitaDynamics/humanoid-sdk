@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 from examples.teleop_policy import teleop_policy as teleop
 from examples.velocity_mode import velocity_mode as velocity
 from test_joy import PullRing, payload
+import test_velocity_mode as fixtures
 from test_teleop_policy import CONTRACT
 
 
@@ -28,16 +29,16 @@ class TeleopJoyTest(unittest.TestCase):
         ring = PullRing(256)
         node = NS(create_subscriber_pull=Mock(return_value=ring))
         with patch.dict(sys.modules, {'pygame': None}), patch('threading.Thread') as thread:
-            directions = velocity.DirectionInput(NS(node=node))
+            directions = velocity.JoyReader(node)
             thread.assert_not_called()
         self.addCleanup(directions.close)
         origin = 1_000_000_000
         with patch.object(velocity.time, 'time_ns', return_value=origin):
             ring.put(payload(0, axes=(0., 0., 0., 0.)))
-            directions.snapshot()
+            fixtures.read_axes(directions)
             ring.put(payload(1, axes=(-1., 1., 0., -1.), buttons=(1,)),
                      payload(2, axes=(-1., 1., 0., -1.), buttons=(0,)))
-            axes = directions.snapshot()
+            axes = fixtures.read_axes(directions)
         command = teleop.JoyCommand(CONTRACT)
         for _ in range(200):
             values = command.step(axes)
@@ -45,12 +46,12 @@ class TeleopJoyTest(unittest.TestCase):
         self.assertAlmostEqual(values[1], -.5)
         self.assertAlmostEqual(values[2], -.8)
         self.assertEqual(values[3], .855)
-        self.assertEqual(directions.statistics()['joy_pressed_counts'], {0: 1})
-        self.assertEqual(directions.statistics()['joy_released_counts'], {0: 1})
+        self.assertEqual(fixtures.joy_statistics(directions)['joy_pressed_counts'], {0: 1})
+        self.assertEqual(fixtures.joy_statistics(directions)['joy_released_counts'], {0: 1})
         for now, expected in ((origin+1_000_000_000, axes), (origin+1_000_000_001, ()), (origin-1, ())):
             with patch.object(velocity.time, 'time_ns', return_value=now):
-                self.assertEqual(directions.snapshot(), expected)
-        self.assertEqual(directions.statistics()['last_joy_ns'], origin)
+                self.assertEqual(fixtures.read_axes(directions), expected)
+        self.assertEqual(fixtures.joy_statistics(directions)['last_joy_ns'], origin)
 
     def test_contract_and_packaging_keep_deployed_command_and_no_hid_dependency(self):
         root = Path(__file__).resolve().parents[1]

@@ -38,10 +38,7 @@ class JoySnapshot:
         if self.received_realtime_ns is None:
             return False
         now = time.time_ns() if now_ns is None else now_ns
-        if not self.published_realtime_ns:
-            return False  # Unknown source age is not fresh joystick input.
-        return all(0 <= now-stamp <= JOY_FRESHNESS_NS for stamp in
-                   (self.received_realtime_ns, self.published_realtime_ns))
+        return 0 <= now - self.received_realtime_ns <= JOY_FRESHNESS_NS
 
 
 class JoyReader:
@@ -125,7 +122,9 @@ class JoyReader:
                     return
                 elif distance >= 1 << 63:
                     self._diagnose("reset_or_reorder")
-                    return  # Never roll the baseline/axes/receipt backwards.
+                    # A same-name publisher may have restarted. Accept its
+                    # new baseline without inventing gaps or button edges.
+                    previous = None
                 elif distance > 1:
                     self._missing += distance - 1
                     self._missing_total += distance - 1
@@ -152,9 +151,8 @@ class JoyReader:
         """Drain in arrival order; skip and count malformed input frames.
 
         received_realtime_ns is CLOCK_REALTIME immediately after pull returns,
-        not network arrival time. Freshness also checks the header's producer
-        REALTIME stamp: source/client clocks must be synchronized. Unknown,
-        future or old source stamps are neutral input, not a fresh backlog.
+        not network arrival time. Freshness uses this local receipt clock;
+        producer stamps are diagnostic and may use a different machine clock.
         Header gaps report observable missing sequence
         numbers; they neither locate the loss nor recover missed button edges.
         """

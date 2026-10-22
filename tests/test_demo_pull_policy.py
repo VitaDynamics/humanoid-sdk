@@ -107,7 +107,8 @@ class TimedDemoTests(unittest.TestCase):
                 times.append(clock.monotonic())
                 return NS(session_id=37, sequence=len(commands))
 
-            def _last_publish_timing(self):
+            @property
+            def publish_timing(self):
                 return dict(session_id=37, sequence=len(commands), encode_native_ns=10)
 
             def exit_external(self, timeout):
