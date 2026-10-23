@@ -308,19 +308,19 @@ class EndEffectorClientTest(unittest.TestCase):
     def test_wait_returns_cached_immutable_sample_without_refreshing_identity_or_time(self):
         harness, node = self.harness(running=False)
         client = self.client(harness, node)
-        first = client.wait_state(0)
+        first = client.wait_state(0.01)
         self.assertIs(client.state, first)
         with self.assertRaises(dataclasses.FrozenInstanceError):
             first.state_id = 2
         changed_metadata = dataclasses.replace(first.sample_ref, source_time_us=999, validity=0)
         with self.assertRaises(TimeoutError):
-            client.wait_state(0, after_sample=changed_metadata)
+            client.wait_state(0.01, after_sample=changed_metadata)
         repeated = state_object(); repeated.tsStatePubUs = 999
         node.emit('left', 'state', repeated)
         node.emit('left', 'state', state_object(sample=0))
         self.assertIs(client.state, first)
         node.emit('left', 'state', state_object(sample=2**64-1))
-        latest = client.wait_state(0, after_sample=first.sample_ref)
+        latest = client.wait_state(0.01, after_sample=first.sample_ref)
         self.assertEqual(latest.state_id, 2**64-1)
         self.assertIsNot(latest, first)
 
@@ -332,13 +332,13 @@ class EndEffectorClientTest(unittest.TestCase):
                     dataclasses.replace(sample, side=2), dataclasses.replace(sample, sample_id=2**64),
                     dataclasses.replace(sample, descriptor_ref=None)):
             with self.subTest(sample=bad), self.assertRaises(ValueError):
-                client.wait_state(0, after_sample=bad)
+                client.wait_state(0.01, after_sample=bad)
         obj = state_object(sample=2); obj.timeValidMask = 0; obj.tsStateRealUs = 999
         node.emit('left', 'state', obj)
         self.assertEqual(client.state.sample_ref.source_time_us, 0)
         self.assertFalse(client.state.sample_ref.validity & 2)
         with self.assertRaises(TimeoutError):
-            client.wait_info(0, after_descriptor=client.info.descriptor_ref)
+            client.wait_info(0.01, after_descriptor=client.info.descriptor_ref)
         for timeout in (-1, True, float('nan')):
             with self.subTest(timeout=timeout), self.assertRaises(ValueError):
                 client.wait_state(timeout)
@@ -355,7 +355,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertIsNone(client.state); self.assertIsNone(client.touch)
         self.assertEqual(client.info.descriptor_ref.descriptor_epoch, 2)
         node.emit('left', 'state', state_object(epoch=2))
-        self.assertEqual(client.wait_state(0, after_sample=previous).state_id, 1)
+        self.assertEqual(client.wait_state(0.01, after_sample=previous).state_id, 1)
 
     def test_changed_runtime_layout_or_immutable_same_ref_requires_recreation(self):
         for changed in (info_object(runtime=101), info_object(epoch=2, n=2), info_object()):
@@ -366,7 +366,7 @@ class EndEffectorClientTest(unittest.TestCase):
                     changed.firmware = 'changed-without-ref'
                 node.emit('left', 'info', changed)
                 with self.assertRaisesRegex(ValueError, 'recreate'):
-                    client.wait_state(0)
+                    client.wait_state(0.01)
                 with self.assertRaises(ValueError):
                     client.publish(target())
                 self.assertEqual(node.commands, [])
@@ -410,15 +410,15 @@ class EndEffectorClientTest(unittest.TestCase):
                     harness, node = self.harness()
                     client = self.client(harness, node, feedback=False)
                     node.emit('left', 'info', before)
-                    self.assertEqual(client.wait_info(0).descriptor_ref.descriptor_epoch, 1)
+                    self.assertEqual(client.wait_info(0.01).descriptor_ref.descriptor_epoch, 1)
                     node.emit('left', 'info', after)
                     with self.assertRaisesRegex(ValueError, 'recreate'):
-                        client.wait_info(0)
+                        client.wait_info(0.01)
                     with self.assertRaisesRegex(ValueError, 'recreate'):
                         client.publish(target())
                     node.emit('left', 'info', before)
                     with self.assertRaisesRegex(ValueError, 'recreate'):
-                        client.wait_state(0)
+                        client.wait_state(0.01)
                     self.assertEqual(node.commands, [])
                     self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
 
@@ -432,7 +432,7 @@ class EndEffectorClientTest(unittest.TestCase):
         old_state = state_object(n=2)
         old_state.validFields[0] &= ~Field.TEMPERATURE
         node.emit('left', 'state', old_state)
-        previous = client.wait_state(0).sample_ref
+        previous = client.wait_state(0.01).sample_ref
         self.assertEqual(client.publish(target(n=2)).key, CommandKey(42, 1))
 
         after = info_object(n=2, epoch=2)
@@ -440,7 +440,7 @@ class EndEffectorClientTest(unittest.TestCase):
         after.supportedStateFields[1] &= ~Field.TEMPERATURE
         after.firmware = 'new-description-same-shape'
         node.emit('left', 'info', after)
-        self.assertEqual(client.wait_info(0, after_descriptor=previous.descriptor_ref).firmware,
+        self.assertEqual(client.wait_info(0.01, after_descriptor=previous.descriptor_ref).firmware,
                          'new-description-same-shape')
         self.assertIsNone(client.state)
         node.emit('left', 'state', old_state)
@@ -448,7 +448,7 @@ class EndEffectorClientTest(unittest.TestCase):
         new_state = state_object(n=2, epoch=2)
         new_state.validFields[1] &= ~Field.TEMPERATURE
         node.emit('left', 'state', new_state)
-        self.assertEqual(client.wait_state(0, after_sample=previous).descriptor_ref, DescriptorRef(100, 2))
+        self.assertEqual(client.wait_state(0.01, after_sample=previous).descriptor_ref, DescriptorRef(100, 2))
         self.assertEqual(len(client.state.temperature_c), 2)
         self.assertEqual(client.publish(target(n=2)).key, CommandKey(42, 2))
         self.assertEqual(node.commands[-1][1].CurrentCmdLength(), 2)
@@ -462,14 +462,14 @@ class EndEffectorClientTest(unittest.TestCase):
         for obj in (state_object(side=2, sample=2), malformed):
             node.emit('left', 'state', obj)
             with self.assertRaisesRegex(ValueError, 'invalid EE state'):
-                client.wait_state(0)
+                client.wait_state(0.01)
             self.assertIs(client._latest['state'], first)
         node.emit('left', 'state', state_object(sample=2))
         second = client.state
         resized = state_object(sample=3); resized.rawPos = []; resized.rawValidFields = [14]
         node.emit('left', 'state', resized)
         with self.assertRaisesRegex(ValueError, 'invalid EE state'):
-            client.wait_state(0)
+            client.wait_state(0.01)
         self.assertIs(client._latest['state'], second)
         node.emit('left', 'state', state_object(sample=3))
         self.assertEqual(client.state.state_id, 3)
@@ -481,22 +481,22 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertFalse(any(topic.endswith('/touch') for topic in node.subscriptions))
         self.assertIsNone(client.touch)
         with self.assertRaisesRegex(ValueError, 'no touch capability'):
-            client.wait_touch(0)
+            client.wait_touch(0.01)
         self.assertEqual(node.commands, [])
 
     def test_touch_uses_region_validity_and_full_identity_without_republication_freshness(self):
         harness, node = self.harness(running=False)
         client = self.client(harness, node, touch=True)
-        first = client.wait_touch(0)
+        first = client.wait_touch(0.01)
         self.assertEqual(first.payload[-2:], b'\xff\xff')
         duplicate = touch_object(); duplicate.tsStatePubUs = 999
         node.emit('left', 'touch', duplicate)
         self.assertIs(client.touch, first)
         with self.assertRaises(TimeoutError):
-            client.wait_touch(0, after_sample=first.sample_ref)
+            client.wait_touch(0.01, after_sample=first.sample_ref)
         next_value = touch_object(sample=2**63+1); next_value.regionStamps[1].validity = 64
         node.emit('left', 'touch', next_value)
-        latest = client.wait_touch(0, after_sample=first.sample_ref)
+        latest = client.wait_touch(0.01, after_sample=first.sample_ref)
         self.assertEqual(latest.touch_state_id, 2**63+1)
         self.assertTrue(latest.sample_ref.validity & 8)
         self.assertFalse(latest.sample_ref.validity & 4)
@@ -509,7 +509,7 @@ class EndEffectorClientTest(unittest.TestCase):
         client.publish(target())
         last = client.state
         with client:
-            self.assertIs(client.wait_state(0), last)
+            self.assertIs(client.wait_state(0.01), last)
         handles = list(node.handles)
         client.close()
         node.emit('left', 'state', state_object(sample=2))
@@ -519,7 +519,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(len(seen), 1)
         self.assertIs(client._latest['state'], last)
         with self.assertRaises(ControllerClosedError):
-            client.wait_state(0)
+            client.wait_state(0.01)
         self.assertEqual(harness.controller.publish(make_command(0)).sequence, 2)
 
     def test_close_wakes_waiters_without_waiting_for_transport_or_fabricating_feedback(self):
@@ -560,7 +560,7 @@ class EndEffectorClientTest(unittest.TestCase):
         node.emit('left', 'info', info_object(touch=True))
         self.assertTrue(all(h.close_count == 1 for h in node.handles))
         with self.assertRaises(ControllerClosedError):
-            client.wait_touch(0)
+            client.wait_touch(0.01)
 
     def test_callback_can_close_client_and_touch_subscribe_failure_is_explicit(self):
         harness, node = self.harness(running=False)
@@ -569,16 +569,16 @@ class EndEffectorClientTest(unittest.TestCase):
         node.emit('left', 'info', info_object())
         node.emit('left', 'state', state_object())
         with self.assertRaises(ControllerClosedError):
-            client.wait_info(0)
+            client.wait_info(0.01)
         other = self.client(harness, node, feedback=False)
         node.fail_kind = 'touch'
         node.emit('left', 'info', info_object(touch=True))
         with self.assertRaisesRegex(ValueError, 'invalid EE touch'):
-            other.wait_touch(0)
+            other.wait_touch(0.01)
         node.fail_kind = None
         node.emit('left', 'info', info_object(touch=True))
         node.emit('left', 'touch', touch_object())
-        self.assertEqual(other.wait_touch(0).touch_state_id, 1)
+        self.assertEqual(other.wait_touch(0.01).touch_state_id, 1)
 
     def test_read_only_cli_is_actual_client_consumer_without_control_or_touch_writes(self):
         harness, node = self.harness(running=False)
@@ -593,7 +593,7 @@ class EndEffectorClientTest(unittest.TestCase):
             state.validFields = [Field.POS | Field.ERROR_CODE, 0]
             node.emit('left', 'state', state)
             node.emit('left', 'touch', touch_object())
-            cli.run_once(client, timeout=0, include_touch=True, emit=lines.append)
+            cli.run_once(client, timeout=0.01, include_touch=True, emit=lines.append)
             self.assertIn('0.031250 m error_code=0', lines[1])
             self.assertIn('pos=n/a error_code=unknown', lines[2])
             self.assertIn('payload_bytes=8', lines[3])
@@ -610,7 +610,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 node.emit('left', 'state', state_object())
         node.register_hook = feed
         with patch('locomotion_aorta.PullStateSource', return_value=source) as factory, patch('builtins.print'):
-            cli.main(['--side', 'left', '--group', 'test-group', '--timeout', '0'])
+            cli.main(['--side', 'left', '--group', 'test-group', '--timeout', '0.01'])
         factory.assert_called_once_with(group='test-group')
         self.assertEqual(harness.transport.close_count, 1)
         self.assertEqual(harness.transport.published, [])
@@ -630,7 +630,7 @@ class EndEffectorClientTest(unittest.TestCase):
         lines = []
         with patch.object(client, 'wait_state', side_effect=advance_epoch):
             with self.assertRaisesRegex(ValueError, 'State DescriptorRef'):
-                cli.run_once(client, timeout=0, emit=lines.append)
+                cli.run_once(client, timeout=0.01, emit=lines.append)
         self.assertEqual(client.state.descriptor_ref, DescriptorRef(100, 2))
         self.assertEqual(client.state.state_id, 2**63+7)
         self.assertEqual(lines, [])  # never old Ref + new state_id
@@ -652,7 +652,7 @@ class EndEffectorClientTest(unittest.TestCase):
         lines = []
         with patch.object(client, 'wait_touch', side_effect=advance_epoch):
             with self.assertRaisesRegex(ValueError, 'Touch DescriptorRef'):
-                cli.run_once(client, timeout=0, include_touch=True, emit=lines.append)
+                cli.run_once(client, timeout=0.01, include_touch=True, emit=lines.append)
         self.assertEqual(client.touch.descriptor_ref, DescriptorRef(100, 2))
         self.assertEqual(client.touch.touch_state_id, 2**63+9)
         self.assertEqual(lines, [])
@@ -669,7 +669,7 @@ class EndEffectorClientTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('ee_readonly_cli_complete_ref', script)
         cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
         lines = []
-        cli.run_once(client, timeout=0, include_touch=True, emit=lines.append)
+        cli.run_once(client, timeout=0.01, include_touch=True, emit=lines.append)
         self.assertIn(f'descriptor={client.state.descriptor_ref}', lines[0])
         self.assertIn(f'state_id={2**64-1}', lines[0])
         self.assertIn(f'descriptor={client.touch.descriptor_ref}', lines[-1])
@@ -971,6 +971,23 @@ class EndEffectorClientTest(unittest.TestCase):
                 self.assertEqual(node.rpc_options, [])
                 self.assertEqual(harness.transport.published, before)
                 self.assertEqual(harness.controller._next_external_sequence, 1)
+
+    def test_zero_timeout_is_rejected_by_all_ee_waits_with_valid_feedback_and_after_refs(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, touch=True, read_only=True)
+        cases = (
+            (client.wait_info, client.info, {'after_descriptor': client.info.descriptor_ref}),
+            (client.wait_state, client.state, {'after_sample': client.state.sample_ref}),
+            (client.wait_touch, client.touch, {'after_sample': client.touch.sample_ref}),
+        )
+        for wait, sample, after in cases:
+            self.assertIs(wait(.01), sample)
+            for options in ({}, after):
+                with self.subTest(wait=wait.__name__, after=bool(options)):
+                    with self.assertRaisesRegex(ValueError, 'finite positive'):
+                        wait(0, **options)
+        self.assertEqual(node.commands, [])
+        self.assertEqual(harness.transport.published, [])
 
 
 if __name__ == '__main__':
