@@ -8,7 +8,7 @@ from unittest.mock import patch
 from locomotion_aorta import PullController,PullStateSource,PullTransport,ExternalControlTimeoutError
 from locomotion_aorta import ControlAck,ControlStatus,ControlOperation,ExternalPhase
 from locomotion_aorta import BodyCmd,BodyJointCmd,ControllerClosedError,NotRunningError
-from locomotion_aorta.transport import BODY_STATE_TOPIC,CONTROL_STATUS_TOPIC,CONTROL_REQUEST_TOPIC
+from locomotion_aorta.transport import BODY_CMD_TOPIC,BODY_STATE_TOPIC,CONTROL_STATUS_TOPIC,CONTROL_REQUEST_TOPIC
 from fake_transport import FakeTransport
 
 class Ring:
