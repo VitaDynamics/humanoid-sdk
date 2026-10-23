@@ -559,6 +559,69 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(harness.transport.close_count, 1)
         self.assertEqual(harness.transport.published, [])
 
+    def test_cli_rejects_new_epoch_between_real_info_and_state_waits_before_output(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, read_only=True)
+        script = Path(__file__).resolve().parents[1] / 'examples/end_effector_state_subscriber/end_effector_state_subscriber.py'
+        spec = importlib.util.spec_from_file_location('ee_readonly_cli_state_epoch', script)
+        cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+        original_wait = client.wait_state
+        def advance_epoch(timeout):
+            info = info_object(epoch=2); info.firmware = 'new-epoch-same-shape'
+            node.emit('left', 'info', info)
+            node.emit('left', 'state', state_object(epoch=2, sample=2**63+7))
+            return original_wait(timeout)
+        lines = []
+        with patch.object(client, 'wait_state', side_effect=advance_epoch):
+            with self.assertRaisesRegex(ValueError, 'State DescriptorRef'):
+                cli.run_once(client, timeout=0, emit=lines.append)
+        self.assertEqual(client.state.descriptor_ref, DescriptorRef(100, 2))
+        self.assertEqual(client.state.state_id, 2**63+7)
+        self.assertEqual(lines, [])  # never old Ref + new state_id
+        self.assertEqual(node.commands, [])
+        self.assertEqual(harness.transport.published, [])
+
+    def test_cli_rejects_touch_epoch_change_after_state_without_partial_output(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, touch=True, read_only=True)
+        script = Path(__file__).resolve().parents[1] / 'examples/end_effector_state_subscriber/end_effector_state_subscriber.py'
+        spec = importlib.util.spec_from_file_location('ee_readonly_cli_touch_epoch', script)
+        cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+        original_wait = client.wait_touch
+        def advance_epoch(timeout):
+            info = info_object(epoch=2, touch=True); info.firmware = 'new-epoch-same-shape'
+            node.emit('left', 'info', info)
+            node.emit('left', 'touch', touch_object(epoch=2, sample=2**63+9))
+            return original_wait(timeout)
+        lines = []
+        with patch.object(client, 'wait_touch', side_effect=advance_epoch):
+            with self.assertRaisesRegex(ValueError, 'Touch DescriptorRef'):
+                cli.run_once(client, timeout=0, include_touch=True, emit=lines.append)
+        self.assertEqual(client.touch.descriptor_ref, DescriptorRef(100, 2))
+        self.assertEqual(client.touch.touch_state_id, 2**63+9)
+        self.assertEqual(lines, [])
+        self.assertEqual(node.commands, [])
+        self.assertEqual(harness.transport.published, [])
+
+    def test_cli_matching_epoch_prints_complete_state_and_touch_sample_identities(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, feedback=False, read_only=True)
+        node.emit('left', 'info', info_object(epoch=2, touch=True))
+        node.emit('left', 'state', state_object(epoch=2, sample=2**64-1))
+        node.emit('left', 'touch', touch_object(epoch=2, sample=2**63+3))
+        script = Path(__file__).resolve().parents[1] / 'examples/end_effector_state_subscriber/end_effector_state_subscriber.py'
+        spec = importlib.util.spec_from_file_location('ee_readonly_cli_complete_ref', script)
+        cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+        lines = []
+        cli.run_once(client, timeout=0, include_touch=True, emit=lines.append)
+        self.assertIn(f'descriptor={client.state.descriptor_ref}', lines[0])
+        self.assertIn(f'state_id={2**64-1}', lines[0])
+        self.assertIn(f'descriptor={client.touch.descriptor_ref}', lines[-1])
+        self.assertIn(f'touch_state_id={2**63+3}', lines[-1])
+        self.assertTrue(all('side=left' in lines[i] and 'layout=7' in lines[i] for i in (0, -1)))
+        self.assertEqual(node.commands, [])
+        self.assertEqual(harness.transport.published, [])
+
 
 if __name__ == '__main__':
     unittest.main()

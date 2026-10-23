@@ -13,7 +13,13 @@ def run_once(client, *, timeout, include_touch=False, emit=print):
 
     info = client.wait_info(timeout)
     state = client.wait_state(timeout)
-    emit(f'side={client.side} descriptor={info.descriptor_ref} layout={info.layout_id} '
+    if (state.descriptor_ref, state.layout_id, state.side) != (info.descriptor_ref, info.layout_id, info.side):
+        raise ValueError('EE State DescriptorRef/layout/side changed while reading; rerun for matching Info')
+    touch = client.wait_touch(timeout) if include_touch else None
+    if touch is not None and (touch.descriptor_ref, touch.layout_id, touch.side) != (
+            info.descriptor_ref, info.layout_id, info.side):
+        raise ValueError('EE Touch DescriptorRef/layout/side changed while reading; rerun for matching Info')
+    emit(f'side={client.side} descriptor={state.descriptor_ref} layout={state.layout_id} '
          f'state_id={state.state_id} sample_status={state.sample_status}')
     for i, name in enumerate(info.axis_names):
         # valid_fields is authoritative: a placeholder zero is not a reading.
@@ -22,9 +28,9 @@ def run_once(client, *, timeout, include_touch=False, emit=print):
         pos = f'{state.pos[i]:.6f} {unit}' if state.valid_fields[i] & Field.POS else 'n/a'
         fault = str(state.error_code[i]) if state.valid_fields[i] & Field.ERROR_CODE else 'unknown'
         emit(f'axis[{i}] {name} pos={pos} error_code={fault} mock={state.is_mock[i]}')
-    if include_touch:
-        touch = client.wait_touch(timeout)
-        emit(f'touch_state_id={touch.touch_state_id} payload_bytes={len(touch.payload)} '
+    if touch is not None:
+        emit(f'side={client.side} descriptor={touch.descriptor_ref} layout={touch.layout_id} '
+             f'touch_state_id={touch.touch_state_id} payload_bytes={len(touch.payload)} '
              f'region_validity={[stamp.validity for stamp in touch.region_stamps]}')
 
 
