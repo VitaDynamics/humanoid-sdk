@@ -3,6 +3,7 @@ import math
 import threading
 import unittest
 import uuid
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -21,6 +22,7 @@ from locomotion_aorta import (
     ControlRejectedError,
     ControlRequest,
     ControlStatus,
+    ControllerClosedError,
     ExternalControlTimeoutError,
     ExternalController,
     ExternalPhase,
@@ -94,6 +96,82 @@ def make_command(sequence_hint: int, *, q: float = 0.0) -> BodyCmd:
 
 
 class ExternalControllerTest(unittest.TestCase):
+    def test_foreign_owner_or_lease_cannot_publish_or_consume_key(self):
+        for phase in (ExternalPhase.RUNNING, ExternalPhase.TIMEOUT_HOLD):
+            for foreign in ({"client_id": "another-client"},
+                            {"lease_id": "another-lease"}):
+                with self.subTest(phase=phase, foreign=foreign):
+                    harness = ControllerHarness()
+                    self.addCleanup(harness.controller.close)
+                    harness.accept_enter()
+                    owned = harness.controller.enter_external(timeout=0.1)
+                    first = harness.controller.publish(make_command(0))
+                    requests = [message for topic, message in harness.transport.published
+                                if topic == CONTROL_REQUEST_TOPIC]
+
+                    harness.transport.emit(CONTROL_STATUS_TOPIC, replace(
+                        owned, status_seq=2, phase=phase,
+                        generation=84 if phase == ExternalPhase.RUNNING else 42,
+                        **foreign))
+                    with self.assertRaises(NotRunningError):
+                        harness.controller._reserve_command()
+                    with self.assertRaises(NotRunningError):
+                        harness.controller.publish(make_command(0))
+                    self.assertEqual(
+                        [message for topic, message in harness.transport.published
+                         if topic == BODY_CMD_TOPIC], [first])
+                    self.assertEqual(
+                        [message for topic, message in harness.transport.published
+                         if topic == CONTROL_REQUEST_TOPIC], requests)
+
+                    harness.transport.emit(
+                        CONTROL_STATUS_TOPIC, replace(owned, status_seq=3))
+                    resumed = harness.controller.publish(make_command(0))
+                    self.assertEqual((resumed.session_id, resumed.sequence), (42, 2))
+
+    def test_invalid_running_generation_does_not_reset_or_consume_key(self):
+        for generation in (0, -1, True, False, 42.0, "42", 1 << 64):
+            with self.subTest(generation=generation):
+                harness = ControllerHarness()
+                self.addCleanup(harness.controller.close)
+                harness.accept_enter()
+                owned = harness.controller.enter_external(timeout=0.1)
+                first = harness.controller.publish(make_command(0))
+                harness.transport.emit(CONTROL_STATUS_TOPIC, replace(
+                    owned, status_seq=2, generation=generation))
+
+                with self.assertRaises(NotRunningError):
+                    harness.controller._reserve_command()
+                with self.assertRaises(NotRunningError):
+                    harness.controller.publish(make_command(0))
+                self.assertEqual(
+                    [message for topic, message in harness.transport.published
+                     if topic == BODY_CMD_TOPIC], [first])
+
+                harness.transport.emit(
+                    CONTROL_STATUS_TOPIC, replace(owned, status_seq=3))
+                resumed = harness.controller.publish(make_command(0))
+                self.assertEqual((resumed.session_id, resumed.sequence), (42, 2))
+
+    def test_closed_controller_cannot_reserve_publish_or_accept_late_status(self):
+        harness = ControllerHarness()
+        self.addCleanup(harness.controller.close)
+        harness.accept_enter()
+        owned = harness.controller.enter_external(timeout=0.1)
+        harness.controller.close()
+        sent_at_close = list(harness.transport.published)
+
+        harness.transport.emit(CONTROL_STATUS_TOPIC, replace(
+            owned, status_seq=2, generation=84))
+        with self.assertRaises(ControllerClosedError):
+            harness.controller._reserve_command()
+        with self.assertRaises(ControllerClosedError):
+            harness.controller.publish(make_command(0))
+
+        self.assertIs(harness.controller.status, owned)
+        self.assertEqual(harness.transport.published, sent_at_close)
+        self.assertEqual(harness.transport.close_count, 1)
+
     def test_concurrent_reservations_and_body_publish_assign_unique_keys(self):
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)

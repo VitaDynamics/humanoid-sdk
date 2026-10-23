@@ -3,6 +3,7 @@ import threading
 import unittest
 import time
 from collections import deque
+from dataclasses import replace
 from types import SimpleNamespace as S
 from unittest.mock import patch
 from locomotion_aorta import PullController,PullStateSource,PullTransport,ExternalControlTimeoutError
@@ -154,6 +155,99 @@ class PullTest(unittest.TestCase):
             client_id='client',lease_id='L',generation=84))
         resumed=c.publish(command)
         self.assertEqual((resumed.session_id,resumed.sequence),(84,2))
+
+    def test_closed_controller_never_drains_pending_status_or_publishes(self):
+        controller, transport = self.fixture()
+        owned = controller.enter_external(.2)
+        controller.close()
+        sent_at_close = list(transport.published)
+        transport.emit(CONTROL_STATUS_TOPIC, replace(
+            owned, status_seq=2, generation=84))
+        command = BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31)))
+
+        with patch.object(transport, 'poll_control_status',
+                          wraps=transport.poll_control_status) as poll:
+            with self.assertRaises(ControllerClosedError):
+                controller._reserve_command()
+            with self.assertRaises(ControllerClosedError):
+                controller.publish(command)
+            self.assertIs(controller.status, owned)
+            poll.assert_not_called()
+
+        self.assertEqual(transport.published, sent_at_close)
+        self.assertEqual(transport.close_count, 1)
+
+    def test_pending_foreign_owner_or_lease_cannot_consume_key(self):
+        for phase in (ExternalPhase.RUNNING, ExternalPhase.TIMEOUT_HOLD):
+            for foreign in ({'client_id': 'another-client'},
+                            {'lease_id': 'another-lease'}):
+                with self.subTest(phase=phase, foreign=foreign):
+                    controller, transport = self.fixture()
+                    owned = controller.enter_external(.2)
+                    command = BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31)))
+                    first = controller.publish(command)
+                    requests = [message for topic, message in transport.published
+                                if topic == CONTROL_REQUEST_TOPIC]
+                    transport.emit(CONTROL_STATUS_TOPIC, replace(
+                        owned, status_seq=2, phase=phase,
+                        generation=84 if phase == ExternalPhase.RUNNING else 42,
+                        **foreign))
+
+                    with self.assertRaises(NotRunningError):
+                        controller._reserve_command()
+                    with self.assertRaises(NotRunningError):
+                        controller.publish(command)
+                    self.assertEqual(
+                        [message for topic, message in transport.published
+                         if topic == BODY_CMD_TOPIC], [first])
+                    self.assertEqual(
+                        [message for topic, message in transport.published
+                         if topic == CONTROL_REQUEST_TOPIC], requests)
+
+                    transport.emit(CONTROL_STATUS_TOPIC, replace(owned, status_seq=3))
+                    resumed = controller.publish(command)
+                    self.assertEqual((resumed.session_id, resumed.sequence), (42, 2))
+
+    def test_pending_invalid_generation_does_not_reset_or_consume_key(self):
+        for generation in (0, -1, True, False, 42.0, '42', 1 << 64):
+            with self.subTest(generation=generation):
+                controller, transport = self.fixture()
+                owned = controller.enter_external(.2)
+                command = BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31)))
+                first = controller.publish(command)
+                transport.emit(CONTROL_STATUS_TOPIC, replace(
+                    owned, status_seq=2, generation=generation))
+
+                with self.assertRaises(NotRunningError):
+                    controller.publish(command)
+                self.assertEqual(
+                    [message for topic, message in transport.published
+                     if topic == BODY_CMD_TOPIC], [first])
+
+                transport.emit(CONTROL_STATUS_TOPIC, replace(owned, status_seq=3))
+                resumed = controller.publish(command)
+                self.assertEqual((resumed.session_id, resumed.sequence), (42, 2))
+
+    def test_status_poll_failure_does_not_send_retry_cancel_or_consume_key(self):
+        controller, transport = self.fixture()
+        controller.enter_external(.2)
+        command = BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31)))
+        first = controller.publish(command)
+        sent_before_poll = list(transport.published)
+
+        with patch.object(transport, 'poll_control_status',
+                          side_effect=OSError('status receive failed')) as poll:
+            with self.assertRaisesRegex(OSError, 'status receive failed'):
+                controller.publish(command)
+            self.assertEqual(poll.call_count, 1)
+
+        self.assertEqual(transport.published, sent_before_poll)
+        self.assertEqual(transport.close_count, 0)
+        resumed = controller.publish(command)
+        self.assertEqual((resumed.session_id, resumed.sequence), (42, 2))
+        self.assertEqual(
+            [message for topic, message in transport.published
+             if topic == BODY_CMD_TOPIC], [first, resumed])
 
     def test_publish_and_status_callback_preserve_lock_order(self):
         c,t=self.fixture()
