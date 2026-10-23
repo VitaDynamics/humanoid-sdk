@@ -2,9 +2,10 @@
 import importlib
 from types import SimpleNamespace
 
+from ._body_codec import _decode_gripper_info as decode_info
 from locomotion_aorta._hand_codec import _getter, _table
-from locomotion_aorta.transport import AortaBindingsUnavailableError, _decode_text
-from .gripper_types import GripperCmd, GripperInfo, GripperSample, GripperHostTarget, GripperState
+from locomotion_aorta.transport import AortaBindingsUnavailableError
+from .gripper_types import GripperCmd, GripperSample, GripperHostTarget, GripperState
 
 
 def load_bindings():
@@ -25,11 +26,6 @@ def load_bindings():
     except (ImportError, AttributeError, OSError) as error:
         raise AortaBindingsUnavailableError('matching T027 public gripper bindings are required; '
                                            'no old gripper layout or LowCmd fallback') from error
-
-
-def decode_info(view):
-    return _table(view, GripperInfo, model=_decode_text(view.Model()),
-                  firmware=_decode_text(view.Firmware()))
 
 
 def decode_state(view):

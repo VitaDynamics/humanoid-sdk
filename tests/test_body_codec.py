@@ -242,6 +242,144 @@ class BodyCodecTest(unittest.TestCase):
                 for getter in getters: getattr(view, getter)()
                 self.assertEqual(probe.positions, expected)
 
+    def test_robot_info_nested_decode_does_not_import_online_end_effector_codecs(self):
+        import builtins
+        from unittest.mock import patch
+        from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
+
+        hand = module('HandInfo').HandInfoT(side=1, dof=6, touchEnabled=True)
+        gripper = module('GripperInfo').GripperInfoT(side=2, holdTorqueNm=-.25)
+        for hand_info, gripper_info in ((hand, gripper), (None, None)):
+            with self.subTest(nested_tables=hand_info is not None):
+                info = module('RobotInfo').RobotInfoT(protocolVersion=1, endEffectors=[
+                    module('EndEffectorCapability').EndEffectorCapabilityT(
+                        side=1, kind=EndEffectorKind.HAND, configured=True, hand=hand_info,
+                        ready=False, status=ServiceStatus.UNAVAILABLE, reason='left pending'),
+                    module('EndEffectorCapability').EndEffectorCapabilityT(
+                        side=2, kind=EndEffectorKind.GRIPPER, configured=True, gripper=gripper_info,
+                        ready=False, status=ServiceStatus.PARTIAL_SUCCESS, reason='right diagnostic'),
+                ])
+                reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS,
+                                             info=info, errorMessage='discovery incomplete')
+                builder = flatbuffers.Builder(1)
+                builder.Finish(reply.Pack(builder))
+                wire = GetRobotInfoResponse.GetRootAs(builder.Output())
+                original_import = builtins.__import__
+
+                def data_only_import(name, *args, **kwargs):
+                    if name.rsplit('.', 1)[-1] in ('_hand_codec', '_gripper_codec'):
+                        raise AssertionError('Body discovery imported online codec: ' + name)
+                    return original_import(name, *args, **kwargs)
+
+                with patch('builtins.__import__', side_effect=data_only_import):
+                    result = codec.decode_robot_info_response(wire)
+
+                self.assertEqual(result.status, ServiceStatus.PARTIAL_SUCCESS)
+                self.assertEqual(result.error_message, 'discovery incomplete')
+                self.assertIsNone(result.info.body)
+                left, right = result.info.end_effectors
+                self.assertEqual((left.status, left.reason), (ServiceStatus.UNAVAILABLE, 'left pending'))
+                self.assertEqual((right.status, right.reason),
+                                 (ServiceStatus.PARTIAL_SUCCESS, 'right diagnostic'))
+                if hand_info is None:
+                    self.assertIsNone(left.hand)
+                    self.assertIsNone(right.gripper)
+                else:
+                    self.assertTrue(left.hand.touch_enabled)
+                    self.assertEqual(right.gripper.hold_torque_nm, -.25)
+
+    def test_nested_hand_info_preserves_every_frozen_field_and_public_type(self):
+        from locomotion_aorta import HandInfo
+        from locomotion_aorta.hand_types import HandInfo as InfoDto
+        from locomotion_aorta import _hand_codec
+
+        expected = dict(
+            ts_info_us=2**63+1, hand_type=255, firmware='固件-μ', side=1, dof=6,
+            joint_names=('thumb_pitch', 'thumb_roll', '食指', '', 'ring', 'little'),
+            q_min=(-.5, -0., math.nan, .125, -.25, -1.),
+            q_max=(.5, .625, 1., 1.125, 1.25, math.inf),
+            dq_max=(0., 2., 4., 6., 8., 10.), touch_available=True,
+            touch_enabled=False, touch_fingers=5, touch_words_per_finger=6,
+            ts_state_pub_us=2**64-1,
+        )
+        hand = module('HandInfo').HandInfoT(
+            tsInfoUs=expected['ts_info_us'], handType=255, firmware='固件-μ', side=1, dof=6,
+            jointNames=list(expected['joint_names']), qMin=list(expected['q_min']),
+            qMax=list(expected['q_max']), dqMax=list(expected['dq_max']),
+            touchAvailable=True, touchEnabled=False, touchFingers=5,
+            touchWordsPerFinger=6, tsStatePubUs=expected['ts_state_pub_us'])
+        aggregate = module('RobotInfo').RobotInfoT(protocolVersion=1, endEffectors=[
+            module('EndEffectorCapability').EndEffectorCapabilityT(
+                side=1, kind=EndEffectorKind.HAND, configured=True, hand=hand)])
+        builder = flatbuffers.Builder(1)
+        builder.Finish(aggregate.Pack(builder))
+        wire = module('RobotInfo').RobotInfo.GetRootAs(builder.Output())
+        nested = codec.decode_robot_info(wire).end_effectors[0].hand
+        standalone_builder = flatbuffers.Builder(1)
+        standalone_builder.Finish(hand.Pack(standalone_builder))
+        standalone = _hand_codec.decode_info(
+            module('HandInfo').HandInfo.GetRootAs(standalone_builder.Output()))
+
+        self.assertIs(HandInfo, InfoDto)
+        self.assertEqual(InfoDto.__module__, 'locomotion_aorta.hand_types')
+        self.assertEqual([field.name for field in dataclasses.fields(InfoDto)], list(expected))
+        for result in (nested, standalone):
+            self.assertIs(type(result), InfoDto)
+            for name, value in expected.items():
+                with self.subTest(path='nested' if result is nested else 'standalone', field=name):
+                    actual = getattr(result, name)
+                    if name in ('q_min', 'q_max', 'dq_max'):
+                        self.assertEqual(tuple(struct.pack('<f', item) for item in actual),
+                                         tuple(struct.pack('<f', item) for item in value))
+                    else:
+                        self.assertEqual(actual, value)
+
+    def test_nested_gripper_info_preserves_every_frozen_field_and_public_type(self):
+        from locomotion_aorta import GripperInfo
+        from locomotion_aorta.gripper_types import GripperInfo as InfoDto
+        from locomotion_aorta import _gripper_codec
+
+        expected = dict(
+            ts_info_us=2**63+1, gripper_type=255, model='', firmware='固件-μ', side=2,
+            opening_min_m=-0., opening_max_m=.0625, max_opening_rate_m_s=.015625,
+            hold_torque_nm=-.25, ts_state_pub_us=2**64-1,
+            opening_min_source=255, opening_max_source=1, max_opening_rate_source=2,
+            torque_limit_nm=-0., torque_limit_source=3, hold_torque_source=0,
+        )
+        gripper = module('GripperInfo').GripperInfoT(
+            tsInfoUs=expected['ts_info_us'], gripperType=255, model=None, firmware='固件-μ', side=2,
+            openingMinM=-0., openingMaxM=.0625, maxOpeningRateMS=.015625,
+            holdTorqueNm=-.25, tsStatePubUs=expected['ts_state_pub_us'],
+            openingMinSource=255, openingMaxSource=1, maxOpeningRateSource=2,
+            torqueLimitNm=-0., torqueLimitSource=3, holdTorqueSource=0)
+        aggregate = module('RobotInfo').RobotInfoT(protocolVersion=1, endEffectors=[
+            module('EndEffectorCapability').EndEffectorCapabilityT(
+                side=2, kind=EndEffectorKind.GRIPPER, configured=True, gripper=gripper)])
+        builder = flatbuffers.Builder(1)
+        builder.ForceDefaults(True)
+        builder.Finish(aggregate.Pack(builder))
+        wire = module('RobotInfo').RobotInfo.GetRootAs(builder.Output())
+        nested = codec.decode_robot_info(wire).end_effectors[0].gripper
+        standalone_builder = flatbuffers.Builder(1)
+        standalone_builder.ForceDefaults(True)
+        standalone_builder.Finish(gripper.Pack(standalone_builder))
+        standalone = _gripper_codec.decode_info(
+            module('GripperInfo').GripperInfo.GetRootAs(standalone_builder.Output()))
+
+        self.assertIs(GripperInfo, InfoDto)
+        self.assertEqual(InfoDto.__module__, 'locomotion_aorta.gripper_types')
+        self.assertEqual([field.name for field in dataclasses.fields(InfoDto)], list(expected))
+        for result in (nested, standalone):
+            self.assertIs(type(result), InfoDto)
+            for name, value in expected.items():
+                with self.subTest(path='nested' if result is nested else 'standalone', field=name):
+                    actual = getattr(result, name)
+                    if name in ('opening_min_m', 'opening_max_m', 'max_opening_rate_m_s',
+                                'hold_torque_nm', 'torque_limit_nm'):
+                        self.assertEqual(struct.pack('<f', actual), struct.pack('<f', value))
+                    else:
+                        self.assertEqual(actual, value)
+
     def test_robot_info_preserves_real_body_and_failed_end_effector_in_partial_reply(self):
         # The actual final public object API packs regular tables/vector structs.
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse

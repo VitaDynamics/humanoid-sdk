@@ -3,10 +3,11 @@ from dataclasses import fields
 import importlib
 from types import SimpleNamespace
 
+from ._body_codec import _decode_hand_info as decode_info
 from .hand_types import (
-    FingerTouchMeta, HandCmd, HandInfo, HandJointCmd, HandJointState, HandState, HandTouch,
+    FingerTouchMeta, HandCmd, HandJointCmd, HandJointState, HandState, HandTouch,
 )
-from .transport import AortaBindingsUnavailableError, _decode_text
+from .transport import AortaBindingsUnavailableError
 
 
 def load_bindings():
@@ -33,15 +34,6 @@ def _getter(name):
 def _table(view, cls, **overrides):
     return cls(**{f.name: overrides[f.name] if f.name in overrides
                   else getattr(view, _getter(f.name))() for f in fields(cls)})
-
-
-def decode_info(view):
-    vectors = {name: tuple(getattr(view, getter)(i) for i in
-                          range(getattr(view, getter + 'Length')()))
-               for name, getter in (('q_min', 'QMin'), ('q_max', 'QMax'), ('dq_max', 'DqMax'))}
-    return _table(view, HandInfo, firmware=_decode_text(view.Firmware()),
-                  joint_names=tuple(_decode_text(view.JointNames(i))
-                                    for i in range(view.JointNamesLength())), **vectors)
 
 
 def decode_state(view):
