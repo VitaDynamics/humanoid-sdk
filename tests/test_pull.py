@@ -19,6 +19,38 @@ class Ring:
     def close(self):self.closed=True
 
 class PullTest(unittest.TestCase):
+    def test_rpc_context_drains_outside_shared_lock_and_preserves_motion_sequence(self):
+        c,t=self.fixture();owned=c.enter_external(.2)
+        original=t.poll_control_status
+        def poll():
+            self.assertFalse(c._condition._is_owned())
+            original()
+        with patch.object(t,'poll_control_status',side_effect=poll):
+            before=list(t.published)
+            self.assertEqual(c._control_context().generation,42)
+            self.assertEqual(t.published,before)
+            self.assertEqual(c._next_external_sequence,1)
+            for i,changed in enumerate(({'client_id':'other'},{'lease_id':'other'}),2):
+                t.emit(CONTROL_STATUS_TOPIC,replace(owned,status_seq=i,**changed))
+                with self.assertRaises(NotRunningError):c._control_context()
+                self.assertEqual(c._next_external_sequence,1)
+                self.assertEqual(t.published,before)
+
+    def test_rpc_context_poll_failure_or_close_during_poll_never_returns_old_permission(self):
+        c,t=self.fixture();c.enter_external(.2)
+        before=list(t.published)
+        with patch.object(t,'poll_control_status',side_effect=OSError('drain failed')) as poll:
+            with self.assertRaisesRegex(OSError,'drain failed'):c._control_context()
+            self.assertEqual(poll.call_count,1)
+        self.assertEqual(t.published,before)
+        with patch.object(t,'poll_control_status',side_effect=c.close):
+            with self.assertRaises(ControllerClosedError):c._control_context()
+        sent_at_close=list(t.published)
+        with patch.object(t,'poll_control_status') as poll:
+            with self.assertRaises(ControllerClosedError):c._control_context()
+            poll.assert_not_called()
+        self.assertEqual(t.published,sent_at_close)
+
     def transport(self):
         t=PullTransport.__new__(PullTransport);t._closed=False;t._state_lock=threading.Lock();t._status_lock=threading.RLock();t._status=None;t._latest_state=None;t._latest_sample=None;t._latest_body_state=None
         t._pulls={BODY_STATE_TOPIC:Ring(),CONTROL_STATUS_TOPIC:Ring()};t._callbacks={BODY_STATE_TOPIC:[],CONTROL_STATUS_TOPIC:[]}

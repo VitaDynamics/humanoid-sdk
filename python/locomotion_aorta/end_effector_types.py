@@ -20,6 +20,8 @@ try:
     from lowlevel.ee.SampleStream import SampleStream
     from lowlevel.ee.TorqueDomain import TorqueDomain
     from lowlevel.ee.TouchPayloadType import TouchPayloadType
+    from lowlevel.ee.TouchSetReason import TouchSetReason
+    from aorta.services.common.ServiceStatus import ServiceStatus
 except ImportError as error:
     raise AortaBindingsUnavailableError(
         "new generated EndEffector bindings are required; public 0.1.5 is not "
@@ -250,4 +252,25 @@ class EndEffectorSubmission:
     ts_client_created_us: int = 0
     ts_client_send_us: int = 0
     sdk_time_valid_mask: int = 0
+    protocol_version: int = EE_PROTOCOL_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class EndEffectorSetTouchRequest:
+    descriptor_ref: DescriptorRef
+    layout_id: int
+    side: int
+    control_ref: ControlRef
+    enable: bool
+    protocol_version: int = EE_PROTOCOL_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class EndEffectorSetTouchResponse:
+    descriptor_ref: DescriptorRef
+    side: int
+    status: int
+    reason: int
+    enabled: bool
+    enabled_valid: bool
     protocol_version: int = EE_PROTOCOL_VERSION

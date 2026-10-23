@@ -13,6 +13,7 @@ from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector_types import (
     CommandKey, ControlMode, ControlRef, DescriptorRef, EndEffectorSubmission,
     EndEffectorTarget, Field, PositionDomain, SampleRef, SampleStream, TorqueDomain,
+    EndEffectorSetTouchRequest, ServiceStatus,
 )
 
 
@@ -101,6 +102,50 @@ def target(n=1, *, torque=None):
 
 
 class EndEffectorCodecTest(unittest.TestCase):
+    def test_real_set_touch_request_uses_full_binding_control_ref_and_no_motion_key(self):
+        bindings, service = codec.load_bindings(), codec.load_touch_bindings()
+        for side in (1, 2):
+            request = EndEffectorSetTouchRequest(DescriptorRef(2**64-1, 2**63+1), 2**32-1,
+                                                 side, ControlRef('client-μ', 'lease-λ'), True)
+            builder = flatbuffers.Builder(1)
+            builder.Finish(codec.fill_set_touch(bindings, service, request, builder, 0))
+            wire = service.request.EndEffectorSetTouchRequest.GetRootAs(builder.Output())
+            self.assertEqual((wire.DescriptorRef().RobotRuntimeId(), wire.DescriptorRef().DescriptorEpoch()),
+                             (2**64-1, 2**63+1))
+            self.assertEqual((wire.ProtocolVersion(), wire.LayoutId(), wire.Side(), wire.Enable()), (1, 2**32-1, side, True))
+            self.assertEqual((wire.ControlRef().ClientId(), wire.ControlRef().LeaseId()), ('client-μ'.encode(), 'lease-λ'.encode()))
+            self.assertFalse(hasattr(wire, 'Key'))
+
+    def test_real_set_touch_response_preserves_default_failure_and_unknown_actual_state(self):
+        service = codec.load_touch_bindings()
+        obj = service.response.EndEffectorSetTouchResponseT(protocolVersion=1,
+            descriptorRef=module('DescriptorRef').DescriptorRefT(100, 1), side=1)
+        wire = service.response.EndEffectorSetTouchResponse.GetRootAs(pack(obj))
+        response = codec.decode_set_touch(wire)
+        request = EndEffectorSetTouchRequest(DescriptorRef(100, 1), 7, 1, ControlRef('C', 'L'), False)
+        codec.validate_set_touch_response(request, response)
+        self.assertEqual(response.status, ServiceStatus.INTERNAL_ERROR)
+        self.assertFalse(response.enabled_valid)
+        self.assertFalse(hasattr(response, 'layout_id'))
+        self.assertFalse(hasattr(response, 'key'))
+        for changed in ({'protocol_version': 0}, {'side': 2}, {'descriptor_ref': DescriptorRef(101, 1)},
+                        {'descriptor_ref': DescriptorRef(100, 2)}, {'reason': 65536}, {'status': 128},
+                        {'enabled_valid': 0}):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                codec.validate_set_touch_response(request, dataclasses.replace(response, **changed))
+
+    def test_set_touch_metadata_gate_rejects_wrong_service_namespace_or_hash(self):
+        original = codec.importlib.import_module
+        for root, digest in (('lowlevel.HandCmd', hashlib.sha256(b'wrong').hexdigest()),
+                             ('aorta.services.humanoid_locomotion.EndEffectorSetTouchRequest', '0'*64)):
+            def wrong(name):
+                if name == 'end_effector_set_touch_schema_meta':
+                    return SimpleNamespace(ROOT_TYPE_NAME=root, SCHEMA_BFBS=b'wrong', SCHEMA_HASH_HEX=digest)
+                return original(name)
+            with patch.object(codec.importlib, 'import_module', side_effect=wrong), self.assertRaisesRegex(
+                    RuntimeError, 'set_touch binding'):
+                codec.load_touch_bindings()
+
     def test_actual_generated_info_state_touch_preserve_si_and_complete_identity(self):
         info = decode('info', info_object(n=2, touch=True))
         state = decode('state', state_object(n=2, sample=2**64-1))

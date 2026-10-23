@@ -70,6 +70,16 @@ class _CommandContext:
     sequence: int
 
 
+@dataclass(frozen=True, slots=True)
+class _ControlContext:
+    """Local RPC authorization snapshot; generation/request are never wire credentials."""
+
+    client_id: str
+    lease_id: str
+    generation: int
+    request_id: str
+
+
 class ExternalController:
     def __init__(
         self,
@@ -290,27 +300,11 @@ class ExternalController:
         Call outside _condition so pull reception cannot invert its lock order.
         """
         with self._condition:
-            self._ensure_open()
-            status = self._latest_status
-            if not self._status_allows_publish(status):
-                raise NotRunningError(
-                    "publish requires an owned EXTERNAL RUNNING or "
-                    "TIMEOUT_HOLD session"
-                )
-            assert status is not None
+            status = self._require_owned_status()
             if status.phase == ExternalPhase.RUNNING:
-                if not _valid_generation(status.generation):
-                    raise NotRunningError(
-                        "RUNNING status did not provide a valid generation"
-                    )
                 if status.generation != self._external_session_id:
                     self._external_session_id = status.generation
                     self._next_external_sequence = 1
-            elif status.generation != self._external_session_id:
-                raise NotRunningError(
-                    "TIMEOUT_HOLD status does not match the learned RUNNING "
-                    "generation"
-                )
             if self._next_external_sequence > _MAX_UINT64:
                 raise ExternalControlError("external sequence exhausted")
             context = _CommandContext(
@@ -320,6 +314,37 @@ class ExternalController:
             )
             self._next_external_sequence += 1
             return context
+
+    def _require_owned_status(self) -> ControlStatus:
+        """Original shared admission checks; caller holds _condition."""
+        self._ensure_open()
+        status = self._latest_status
+        if not self._status_allows_publish(status):
+            raise NotRunningError(
+                "publish requires an owned EXTERNAL RUNNING or TIMEOUT_HOLD session"
+            )
+        assert status is not None
+        if status.phase == ExternalPhase.RUNNING:
+            if not _valid_generation(status.generation):
+                raise NotRunningError("RUNNING status did not provide a valid generation")
+        elif status.generation != self._external_session_id:
+            raise NotRunningError(
+                "TIMEOUT_HOLD status does not match the learned RUNNING generation"
+            )
+        return status
+
+    def _control_context(self) -> _ControlContext:
+        """No command allocation, generation learning, publish or heartbeat refresh.
+
+        Call outside _condition: PullController drains status before taking the
+        shared lock. RPC callers must recheck after blocking and in typed fill.
+        """
+        with self._condition:
+            status = self._require_owned_status()
+            if self._cancel_sent:
+                raise NotRunningError("control cancellation has started")
+            return _ControlContext(self.client_id, self._lease_id,
+                                   status.generation, self._request_id)
 
     def exit_external(self, timeout: float) -> ControlStatus:
         deadline = _deadline(timeout)

@@ -8,6 +8,7 @@ import importlib.util
 from pathlib import Path
 import threading
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import flatbuffers
@@ -17,13 +18,14 @@ from test_controller import ControllerHarness, make_command
 from test_end_effector_codec import info_object, state_object, touch_object, pack, target, decode
 from locomotion_aorta import (
     CONTROL_REQUEST_TOPIC, CONTROL_STATUS_TOPIC, ControllerClosedError,
+    ControlOperation,
     ExternalController, ExternalPhase, InvalidCommandError, NotRunningError,
     PullController, PullStateSource,
 )
 from locomotion_aorta import _end_effector_codec as codec
-from locomotion_aorta.end_effector import EndEffectorClient
+from locomotion_aorta.end_effector import EndEffectorClient, TouchSetError
 from locomotion_aorta.end_effector_types import (
-    CommandKey, DescriptorRef, Field, SampleRef, SampleStream,
+    CommandKey, DescriptorRef, Field, SampleRef, SampleStream, ServiceStatus, TouchSetReason,
 )
 
 
@@ -50,6 +52,43 @@ class Publisher(Handle):
             raise self.node.publish_error
 
 
+class TouchRPC(Handle):
+    def __init__(self, node, decoder):
+        super().__init__()
+        self.node, self.decoder = node, decoder
+
+    def raw(self):
+        return self
+
+    def wait_for_matching(self, timeout_ms):
+        self.node.match_timeouts.append(timeout_ms)
+        if self.node.match_hook is not None:
+            self.node.match_hook()
+        return self.node.matching
+
+    def call(self, fill):
+        if self.node.before_fill_hook is not None:
+            self.node.before_fill_hook()
+        builder = flatbuffers.Builder(512)
+        builder.Finish(fill(builder, 0))
+        wire = self.node.touch_bindings.request.EndEffectorSetTouchRequest.GetRootAs(bytes(builder.Output()))
+        self.node.touch_requests.append(wire)
+        if self.node.rpc_hook is not None:
+            self.node.rpc_hook()
+        if self.node.rpc_error is not None:
+            raise self.node.rpc_error
+        response = self.node.touch_bindings.response.EndEffectorSetTouchResponseT(
+            protocolVersion=1,
+            descriptorRef=self.node.bindings.DescriptorRef.DescriptorRefT(
+                wire.DescriptorRef().RobotRuntimeId(), wire.DescriptorRef().DescriptorEpoch()),
+            side=wire.Side(), status=ServiceStatus.SUCCESS, reason=TouchSetReason.NONE,
+            enabled=wire.Enable(), enabledValid=True)
+        if self.node.reply_edit is not None:
+            self.node.reply_edit(response)
+        payload = pack(response)
+        return SimpleNamespace(decode=lambda: self.decoder(payload))
+
+
 class Node:
     def __init__(self):
         self.bindings = codec.load_bindings()
@@ -60,6 +99,11 @@ class Node:
         self.register_hook = None
         self.fail_kind = None
         self.close_count = 0
+        self.touch_requests, self.rpc_options, self.match_timeouts = [], [], []
+        self.touch_bindings = None
+        self.matching = True
+        self.match_hook = self.before_fill_hook = self.rpc_hook = None
+        self.rpc_error = self.reply_edit = self.create_rpc_hook = None
 
     def create_subscriber_typed(self, decoder, topic, handler, *, qos):
         if topic.endswith('/' + str(self.fail_kind)):
@@ -76,6 +120,18 @@ class Node:
             raise AssertionError('wrong wire root')
         handle = Publisher(self, topic)
         self.handles.append(handle)
+        return handle
+
+    def create_client_typed(self, topic, decoder, *, request_schema_meta, options):
+        if request_schema_meta.ROOT_TYPE_NAME != 'aorta.services.humanoid_locomotion.EndEffectorSetTouchRequest':
+            raise AssertionError('wrong service metadata root')
+        if not topic.endswith('/set_touch'):
+            raise AssertionError('wrong service topic')
+        self.touch_bindings = codec.load_touch_bindings()
+        self.rpc_options.append(options)
+        handle = TouchRPC(self, decoder); self.handles.append(handle)
+        if self.create_rpc_hook is not None:
+            self.create_rpc_hook()
         return handle
 
     def emit(self, side, kind, value):
@@ -621,6 +677,300 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertTrue(all('side=left' in lines[i] and 'layout=7' in lines[i] for i in (0, -1)))
         self.assertEqual(node.commands, [])
         self.assertEqual(harness.transport.published, [])
+
+    def test_set_touch_real_typed_calls_keep_motion_keys_heartbeat_and_feedback_unchanged(self):
+        harness, node = self.harness()
+        client = self.client(harness, node, touch=True)
+        first = harness.controller.publish(make_command(0))
+        state, touch = client.state, client.touch
+        traffic = list(harness.transport.published)
+        sequence = harness.controller._next_external_sequence
+        for enable in (True, False):
+            response = client.set_touch(enable, timeout=.125)
+            self.assertEqual((response.status, response.reason, response.enabled, response.enabled_valid),
+                             (ServiceStatus.SUCCESS, TouchSetReason.NONE, enable, True))
+            self.assertEqual(response.descriptor_ref, DescriptorRef(100, 1))
+            self.assertIs(client.state, state)
+            self.assertIs(client.touch, touch)
+            self.assertEqual(harness.transport.published, traffic)
+            self.assertEqual(harness.controller._next_external_sequence, sequence)
+        self.assertEqual(node.match_timeouts, [125, 125])
+        self.assertTrue(all(o.timeout_ms == 125 and o.allow_retry is False for o in node.rpc_options))
+        self.assertEqual([w.Enable() for w in node.touch_requests], [True, False])
+        for wire in node.touch_requests:
+            self.assertEqual((wire.ProtocolVersion(), wire.LayoutId(), wire.Side()), (1, 7, 1))
+            self.assertEqual((wire.DescriptorRef().RobotRuntimeId(), wire.DescriptorRef().DescriptorEpoch()), (100, 1))
+            self.assertEqual((wire.ControlRef().ClientId(), wire.ControlRef().LeaseId()),
+                             (harness.controller.client_id.encode(), harness.lease_id.encode()))
+            self.assertFalse(hasattr(wire, 'Key'))
+        self.assertEqual(node.commands, [])
+        self.assertEqual((first.sequence, client.publish(target()).key.sequence,
+                          harness.controller.publish(make_command(0)).sequence), (1, 2, 3))
+        self.assertTrue(all(h.close_count == 1 for h in node.handles if isinstance(h, TouchRPC)))
+
+    def test_set_touch_local_preconditions_fail_before_service_creation_or_motion_allocation(self):
+        for reason in ('enable', 'timeout', 'read-only', 'closed', 'no-info', 'no-touch', 'wrong-side', 'bad-ref'):
+            with self.subTest(reason=reason):
+                harness, node = self.harness()
+                client = self.client(harness, node, touch=reason != 'no-touch',
+                                     feedback=reason != 'no-info', read_only=reason == 'read-only')
+                if reason == 'closed':
+                    client.close()
+                elif reason == 'wrong-side':
+                    node.emit('left', 'info', info_object(side=2, touch=True))
+                elif reason == 'bad-ref':
+                    node.emit('left', 'info', info_object(runtime=101, touch=True))
+                with self.assertRaises((ValueError, InvalidCommandError, ControllerClosedError)):
+                    client.set_touch(1 if reason == 'enable' else True,
+                                     timeout=0 if reason == 'timeout' else .1)
+                self.assertEqual(node.rpc_options, [])
+                self.assertEqual(node.touch_requests, [])
+                self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+        harness, node = self.harness()
+        client = self.client(harness, node, touch=True)
+        for timeout in (True, -1, float('nan'), float('inf'), '1', 1e300):
+            with self.subTest(timeout=timeout), self.assertRaises(ValueError):
+                client.set_touch(True, timeout=timeout)
+        self.assertEqual(node.rpc_options, [])
+
+    def test_set_touch_rechecks_owner_lease_generation_and_cancel_after_matching(self):
+        for change in ('owner', 'lease', 'generation', 'cancel', 'closed'):
+            with self.subTest(change=change):
+                harness, node = self.harness()
+                client = self.client(harness, node, touch=True)
+                owned = harness.controller.status
+                def change_owner():
+                    if change == 'cancel':
+                        harness.controller._best_effort_cancel()
+                    elif change == 'closed':
+                        harness.controller.close()
+                    else:
+                        changes = {'owner': {'client_id': 'other'}, 'lease': {'lease_id': 'other'},
+                                   'generation': {'generation': 84}}[change]
+                        harness.transport.emit(CONTROL_STATUS_TOPIC, dataclasses.replace(owned, status_seq=2, **changes))
+                node.match_hook = change_owner
+                with self.assertRaises((NotRunningError, ControllerClosedError)):
+                    client.set_touch(True, timeout=.1)
+                self.assertEqual(node.touch_requests, [])
+                self.assertEqual(harness.controller._next_external_sequence, 1)
+                self.assertEqual(node.handles[-1].close_count, 1)
+
+    def test_set_touch_fill_rechecks_permissions_and_descriptor_before_serializing_request(self):
+        for change in ('owner', 'descriptor'):
+            with self.subTest(change=change):
+                harness, node = self.harness()
+                client = self.client(harness, node, touch=True)
+                if change == 'owner':
+                    owned = harness.controller.status
+                    node.before_fill_hook = lambda: harness.transport.emit(CONTROL_STATUS_TOPIC,
+                        dataclasses.replace(owned, status_seq=2, lease_id='other'))
+                else:
+                    node.before_fill_hook = lambda: node.emit('left', 'info', info_object(touch=True, epoch=2))
+                with self.assertRaises((NotRunningError, InvalidCommandError)):
+                    client.set_touch(True, timeout=.1)
+                self.assertEqual(node.touch_requests, [])
+                self.assertEqual(harness.controller._next_external_sequence, 1)
+
+    def test_set_touch_late_response_cannot_survive_new_descriptor_control_generation_or_close(self):
+        for change in ('descriptor', 'generation', 'cancel', 'close'):
+            with self.subTest(change=change):
+                harness, node = self.harness()
+                client = self.client(harness, node, touch=True)
+                old_state, old_touch = client.state, client.touch
+                if change == 'descriptor':
+                    node.rpc_hook = lambda: node.emit('left', 'info', info_object(touch=True, epoch=2))
+                elif change == 'generation':
+                    node.rpc_hook = lambda: harness.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
+                elif change == 'cancel':
+                    node.rpc_hook = harness.controller._best_effort_cancel
+                else:
+                    node.rpc_hook = client.close
+                with self.assertRaises((InvalidCommandError, NotRunningError, ControllerClosedError)):
+                    client.set_touch(True, timeout=.1)
+                self.assertEqual(len(node.touch_requests), 1)
+                self.assertEqual(harness.controller._next_external_sequence, 1)
+                if change == 'generation':
+                    self.assertIs(client.state, old_state)
+                    self.assertIs(client.touch, old_touch)
+                self.assertEqual(node.handles[-1].close_count, 1)
+                self.assertEqual(node.commands, [])
+
+    def test_set_touch_response_requires_exact_request_ref_side_and_version(self):
+        for change in ('runtime', 'epoch', 'side', 'version'):
+            with self.subTest(change=change):
+                harness, node = self.harness()
+                client = self.client(harness, node, touch=True)
+                state, touch = client.state, client.touch
+                def edit(reply):
+                    if change == 'runtime': reply.descriptorRef.robotRuntimeId = 101
+                    elif change == 'epoch': reply.descriptorRef.descriptorEpoch = 2
+                    elif change == 'side': reply.side = 2
+                    else: reply.protocolVersion = 0
+                node.reply_edit = edit
+                with self.assertRaises(ValueError):
+                    client.set_touch(True, timeout=.1)
+                self.assertIs(client.state, state); self.assertIs(client.touch, touch)
+                self.assertEqual(len(node.touch_requests), 1)
+                self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+
+    def test_set_touch_service_failures_unknown_enabled_and_partial_status_preserve_raw_reply(self):
+        # Synthetic returned statuses test preservation, not claims about backend pairings.
+        cases = (
+            (ServiceStatus.TIMEOUT, TouchSetReason.TIMEOUT, False, False),
+            (ServiceStatus.REJECTED, TouchSetReason.UNAUTHORIZED, True, True),
+            (ServiceStatus.PARTIAL_SUCCESS, 0, True, True),
+            (127, 65535, False, False),
+            (-128, 65535, False, False),
+            (ServiceStatus.SUCCESS, 0, False, False),
+            (ServiceStatus.SUCCESS, 0, False, True),
+            (ServiceStatus.SUCCESS, 65535, True, True),
+            (ServiceStatus.INTERNAL_ERROR, 0, False, False),
+        )
+        for status, reason, enabled, valid in cases:
+            with self.subTest(status=status, reason=reason, enabled=enabled, valid=valid):
+                harness, node = self.harness()
+                client = self.client(harness, node, touch=True)
+                state = client.state
+                def edit(reply):
+                    reply.status, reply.reason, reply.enabled, reply.enabledValid = status, reason, enabled, valid
+                node.reply_edit = edit
+                with self.assertRaises(TouchSetError) as caught:
+                    client.set_touch(True, timeout=.1)
+                actual = caught.exception.response
+                self.assertEqual((actual.status, actual.reason, actual.enabled, actual.enabled_valid),
+                                 (status, reason, enabled, valid))
+                self.assertIs(client.state, state)
+                self.assertEqual(len(node.touch_requests), 1)
+                self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+
+    def test_set_touch_matching_core_timeout_cancel_and_transport_errors_are_not_service_replies(self):
+        from aorta.errors import TimeoutError as AortaTimeoutError, CancelledError
+        harness, node = self.harness()
+        client = self.client(harness, node, touch=True)
+        node.matching = False
+        with self.assertRaisesRegex(TimeoutError, 'provider not found') as matching:
+            client.set_touch(True, timeout=.1)
+        self.assertNotIsInstance(matching.exception, TouchSetError)
+        self.assertEqual(node.touch_requests, [])
+        node.matching = True
+        for error in (AortaTimeoutError('core timeout'), CancelledError('core cancelled'), OSError('transport failed')):
+            node.rpc_error = error
+            before = len(node.touch_requests)
+            with self.subTest(error=error), self.assertRaises(type(error)) as caught:
+                client.set_touch(True, timeout=.1)
+            self.assertIs(caught.exception, error)
+            self.assertEqual(len(node.touch_requests), before+1)
+            self.assertFalse(hasattr(caught.exception, 'response'))
+        self.assertTrue(all(o.allow_retry is False for o in node.rpc_options))
+        self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+
+    def test_set_touch_blocking_matching_or_rpc_releases_shared_locks_and_close_has_no_commands(self):
+        for stage in ('matching', 'rpc'):
+            with self.subTest(stage=stage):
+                harness, node = self.harness()
+                client = self.client(harness, node, touch=True)
+                entered, release = threading.Event(), threading.Event()
+                errors = []
+                original_publish = harness.transport.on_publish
+                def accept_leave(topic, request):
+                    if topic == CONTROL_REQUEST_TOPIC and request.operation == ControlOperation.CANCEL:
+                        harness.ack(request)
+                        harness.status(action='PASSIVE', phase=ExternalPhase.IDLE)
+                    else:
+                        original_publish(topic, request)
+                harness.transport.on_publish = accept_leave
+                def block():
+                    entered.set()
+                    if not release.wait(2): raise AssertionError('test did not release RPC')
+                if stage == 'matching': node.match_hook = block
+                else: node.rpc_hook = block
+                def worker():
+                    try: client.set_touch(True, timeout=.1)
+                    except BaseException as error: errors.append(error)
+                thread = threading.Thread(target=worker); thread.start()
+                try:
+                    self.assertTrue(entered.wait(1))
+                    self.assertTrue(harness.controller._condition.acquire(timeout=1))
+                    harness.controller._condition.release()
+                    self.assertEqual(harness.controller.exit_external(.1).phase, ExternalPhase.IDLE)
+                    requests_after_explicit_cancel = list(harness.transport.published)
+                    client.close()
+                    self.assertEqual(harness.transport.published, requests_after_explicit_cancel)
+                    self.assertEqual(harness.transport.close_count, 0)
+                finally:
+                    release.set(); thread.join(2)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(len(errors), 1)
+                self.assertIsInstance(errors[0], (NotRunningError, ControllerClosedError))
+                self.assertEqual(len(node.touch_requests), 0 if stage == 'matching' else 1)
+                self.assertEqual(node.handles[-1].close_count, 1)
+                self.assertEqual(harness.controller._next_external_sequence, 1)
+                self.assertEqual(node.commands, [])
+
+    def test_set_touch_does_not_learn_generation_or_reset_the_motion_stream(self):
+        harness, node = self.harness()
+        client = self.client(harness, node, touch=True)
+        harness.controller.publish(make_command(0))
+        harness.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
+        client.set_touch(True, timeout=.1)
+        self.assertEqual((harness.controller._external_session_id, harness.controller._next_external_sequence), (42, 2))
+        harness.status(action='EXTERNAL', phase=ExternalPhase.TIMEOUT_HOLD, generation=84)
+        with self.assertRaises(NotRunningError): client.set_touch(True, timeout=.1)
+        harness.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
+        self.assertEqual(harness.controller.publish(make_command(0)).session_id, 84)
+        harness.status(action='EXTERNAL', phase=ExternalPhase.TIMEOUT_HOLD, generation=84)
+        client.set_touch(False, timeout=.1)
+        self.assertEqual(client.publish(target()).key, CommandKey(84, 2))
+
+    def test_set_touch_pull_drains_initial_and_post_matching_and_inflight_revocations(self):
+        for stage in ('initial', 'matching', 'fill', 'rpc'):
+            with self.subTest(stage=stage):
+                harness = ControllerHarness(); harness.controller.close()
+                harness.transport = PendingTransport()
+                harness.controller = PullController(client_id='test-client', _transport=harness.transport)
+                self.addCleanup(harness.controller.close)
+                node = Node(); harness.transport.node = node
+                harness.accept_enter(); harness.controller.enter_external(.1)
+                client = self.client(harness, node, touch=True)
+                owned = harness.controller.status
+                def revoke():
+                    harness.transport.pending.append(dataclasses.replace(owned, status_seq=2, client_id='other'))
+                if stage == 'initial': revoke()
+                elif stage == 'matching': node.match_hook = revoke
+                elif stage == 'fill': node.before_fill_hook = revoke
+                else: node.rpc_hook = revoke
+                with self.assertRaises(NotRunningError): client.set_touch(True, timeout=.1)
+                self.assertEqual(len(node.touch_requests), 1 if stage == 'rpc' else 0)
+                self.assertEqual(harness.controller._next_external_sequence, 1)
+
+    def test_set_touch_close_during_client_creation_and_readonly_source_do_not_leak_handles(self):
+        harness, node = self.harness()
+        client = self.client(harness, node, touch=True)
+        node.create_rpc_hook = client.close
+        with self.assertRaises(ControllerClosedError): client.set_touch(True, timeout=.1)
+        self.assertEqual(node.handles[-1].close_count, 1)
+        self.assertEqual(node.touch_requests, [])
+        source = PullStateSource(_transport=harness.transport)
+        with EndEffectorClient('left', connection=source, read_only=True) as readonly:
+            node.emit('left', 'info', info_object(touch=True))
+            before = len(node.rpc_options)
+            with self.assertRaises(InvalidCommandError): readonly.set_touch(False, timeout=.1)
+            self.assertEqual(len(node.rpc_options), before)
+        self.assertEqual(harness.transport.close_count, 0)
+
+    def test_set_touch_unentered_or_initial_foreign_connection_never_creates_rpc(self):
+        for running in (False, True):
+            with self.subTest(running=running):
+                harness, node = self.harness(running=running)
+                client = self.client(harness, node, touch=True)
+                if running:
+                    harness.transport.emit(CONTROL_STATUS_TOPIC,
+                        dataclasses.replace(harness.controller.status, status_seq=2, lease_id='other'))
+                before = list(harness.transport.published)
+                with self.assertRaises(NotRunningError): client.set_touch(True, timeout=.1)
+                self.assertEqual(node.rpc_options, [])
+                self.assertEqual(harness.transport.published, before)
+                self.assertEqual(harness.controller._next_external_sequence, 1)
 
 
 if __name__ == '__main__':

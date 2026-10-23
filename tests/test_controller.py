@@ -96,6 +96,51 @@ def make_command(sequence_hint: int, *, q: float = 0.0) -> BodyCmd:
 
 
 class ExternalControllerTest(unittest.TestCase):
+    def test_rpc_control_context_is_frozen_nonconsuming_and_does_not_learn_generation(self):
+        harness = ControllerHarness()
+        self.addCleanup(harness.controller.close)
+        harness.accept_enter(); harness.controller.enter_external(.1)
+        first = harness.controller.publish(make_command(0))
+        before = list(harness.transport.published)
+        context = harness.controller._control_context()
+        self.assertEqual((context.client_id, context.lease_id, context.generation, context.request_id),
+                         ('test-client', harness.lease_id, 42, harness.controller._request_id))
+        with self.assertRaises(AttributeError): context.lease_id = 'other'
+        self.assertEqual(harness.transport.published, before)
+        harness.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
+        self.assertEqual(harness.controller._control_context().generation, 84)
+        self.assertEqual((harness.controller._external_session_id, harness.controller._next_external_sequence), (42, 2))
+        self.assertEqual(harness.transport.published, before)
+        second = harness.controller.publish(make_command(0))
+        self.assertEqual((first.session_id, first.sequence, second.session_id, second.sequence), (42, 1, 84, 1))
+        harness.controller._next_external_sequence = 1 << 64
+        self.assertEqual(harness.controller._control_context().generation, 84)
+        with self.assertRaises(ExternalControlError): harness.controller.publish(make_command(0))
+
+    def test_rpc_control_context_reuses_owned_status_guards_and_rejects_local_cancel(self):
+        for phase, changed in ((ExternalPhase.RUNNING, {'client_id': 'other'}),
+                               (ExternalPhase.TIMEOUT_HOLD, {'lease_id': 'other'}),
+                               (ExternalPhase.RUNNING, {'generation': 0}),
+                               (ExternalPhase.TIMEOUT_HOLD, {'generation': 84})):
+            with self.subTest(phase=phase, changed=changed):
+                harness = ControllerHarness(); self.addCleanup(harness.controller.close)
+                harness.accept_enter(); owned = harness.controller.enter_external(.1)
+                harness.transport.emit(CONTROL_STATUS_TOPIC, replace(owned, status_seq=2, phase=phase, **changed))
+                before = list(harness.transport.published)
+                with self.assertRaises(NotRunningError): harness.controller._control_context()
+                with self.assertRaises(NotRunningError): harness.controller._reserve_command()
+                self.assertEqual(harness.controller._next_external_sequence, 1)
+                self.assertEqual(harness.transport.published, before)
+        harness = ControllerHarness(); self.addCleanup(harness.controller.close)
+        with self.assertRaises(NotRunningError): harness.controller._control_context()
+        harness.accept_enter(); harness.controller.enter_external(.1)
+        harness.controller._best_effort_cancel()
+        before = list(harness.transport.published)
+        with self.assertRaises(NotRunningError): harness.controller._control_context()
+        self.assertEqual(harness.transport.published, before)
+        harness.controller.close()
+        with self.assertRaises(ControllerClosedError): harness.controller._control_context()
+
     def test_foreign_owner_or_lease_cannot_publish_or_consume_key(self):
         for phase in (ExternalPhase.RUNNING, ExternalPhase.TIMEOUT_HOLD):
             for foreign in ({"client_id": "another-client"},

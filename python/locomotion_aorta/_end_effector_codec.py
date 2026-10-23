@@ -12,7 +12,7 @@ from .end_effector_types import (
     CommandKey, ControlMode, DescriptorRef, EE_PROTOCOL_VERSION, EndEffectorInfo,
     EndEffectorState, EndEffectorTarget, EndEffectorTouch, FeedbackAppliedTarget,
     Field, InhibitReason, LimitSource, PositionDomain, ProgressEntry, RegionStamp,
-    TorqueDomain, TouchPayloadType, TouchRegionInfo,
+    TorqueDomain, TouchPayloadType, TouchRegionInfo, EndEffectorSetTouchResponse,
 )
 
 _COMMAND_FIELDS = Field.POS | Field.VEL | Field.VEL_LIMIT | Field.TAU | Field.CURRENT | Field.MODE
@@ -46,6 +46,13 @@ _STATE_VECTORS = (
 )
 
 
+def _schema_meta(stem, root):
+    meta = importlib.import_module(stem + '_schema_meta')
+    if meta.ROOT_TYPE_NAME != root or hashlib.sha256(meta.SCHEMA_BFBS).hexdigest() != meta.SCHEMA_HASH_HEX:
+        raise ValueError('new EE schema metadata does not match ' + root)
+    return meta
+
+
 def load_bindings():
     try:
         names = ('EndEffectorInfo', 'EndEffectorState', 'EndEffectorTouch',
@@ -53,11 +60,8 @@ def load_bindings():
         modules = {name: importlib.import_module('lowlevel.ee.' + name) for name in names}
         metas = {}
         for kind in ('info', 'state', 'touch', 'cmd'):
-            meta = importlib.import_module('end_effector_' + kind + '_schema_meta')
             root = 'lowlevel.ee.EndEffector' + kind.capitalize()
-            if meta.ROOT_TYPE_NAME != root or hashlib.sha256(meta.SCHEMA_BFBS).hexdigest() != meta.SCHEMA_HASH_HEX:
-                raise ValueError('new EE schema metadata does not match ' + root)
-            metas[kind] = meta
+            metas[kind] = _schema_meta('end_effector_' + kind, root)
         for name in ('EndEffectorInfo', 'EndEffectorState', 'EndEffectorTouch'):
             if not callable(getattr(modules[name], name).GetRootAs):
                 raise ValueError('missing new EE root decoder: ' + name)
@@ -67,6 +71,17 @@ def load_bindings():
             'matching new generated EE roots/schema_meta are required; no public0.1.5 '
             'or legacy Hand/Gripper fallback'
         ) from error
+
+
+def load_touch_bindings():
+    try:
+        namespace = 'aorta.services.humanoid_locomotion.'
+        return SimpleNamespace(
+            request=importlib.import_module(namespace + 'EndEffectorSetTouchRequest'),
+            response=importlib.import_module(namespace + 'EndEffectorSetTouchResponse'),
+            request_meta=_schema_meta('end_effector_set_touch', namespace + 'EndEffectorSetTouchRequest'))
+    except (ImportError, AttributeError, ValueError, OSError) as error:
+        raise AortaBindingsUnavailableError('matching new generated EE set_touch binding/meta required') from error
 
 
 def _vector(view, name):
@@ -370,16 +385,20 @@ def prepare_target(info, target):
     return replace(target, **columns)
 
 
+def _create_control_ref(bindings, builder, ref):
+    control = bindings.ControlRef
+    client = builder.CreateString(ref.client_id)
+    lease = builder.CreateString(ref.lease_id)
+    control.ControlRefStart(builder)
+    control.ControlRefAddClientId(builder, client); control.ControlRefAddLeaseId(builder, lease)
+    return control.ControlRefEnd(builder)
+
+
 def fill_command(bindings, command, builder, header):
     if command.input_observations or command.sdk_time_valid_mask or command.ts_client_created_us or command.ts_client_send_us:
         raise ValueError('this candidate supports K=0 and unverified SDK time only')
     module = bindings.EndEffectorCmd
-    control = bindings.ControlRef
-    client = builder.CreateString(command.control_ref.client_id)
-    lease = builder.CreateString(command.control_ref.lease_id)
-    control.ControlRefStart(builder)
-    control.ControlRefAddClientId(builder, client); control.ControlRefAddLeaseId(builder, lease)
-    control_offset = control.ControlRefEnd(builder)
+    control_offset = _create_control_ref(bindings, builder, command.control_ref)
     vectors = {}
     for name, prepend in [('mode', 'PrependUint16'), ('command_fields', 'PrependUint32')] + [(name, 'PrependFloat32') for name, _ in _COMMAND_COLUMNS]:
         values = getattr(command.target, name)
@@ -401,3 +420,43 @@ def fill_command(bindings, command, builder, header):
     for name, offset in vectors.items():
         getattr(module, 'EndEffectorCmdAdd' + _getter(name))(builder, offset)
     return module.EndEffectorCmdEnd(builder)
+
+
+def fill_set_touch(bindings, service, request, builder, header):
+    _identity(request)
+    if type(request.enable) is not bool:
+        raise ValueError('enable must be boolean')
+    module = service.request
+    control = _create_control_ref(bindings, builder, request.control_ref)
+    module.EndEffectorSetTouchRequestStart(builder)
+    module.EndEffectorSetTouchRequestAddAortaHeader(builder, header)
+    module.EndEffectorSetTouchRequestAddProtocolVersion(builder, request.protocol_version)
+    module.EndEffectorSetTouchRequestAddDescriptorRef(builder, bindings.DescriptorRef.CreateDescriptorRef(
+        builder, request.descriptor_ref.robot_runtime_id, request.descriptor_ref.descriptor_epoch))
+    module.EndEffectorSetTouchRequestAddLayoutId(builder, request.layout_id)
+    module.EndEffectorSetTouchRequestAddSide(builder, request.side)
+    module.EndEffectorSetTouchRequestAddControlRef(builder, control)
+    module.EndEffectorSetTouchRequestAddEnable(builder, request.enable)
+    return module.EndEffectorSetTouchRequestEnd(builder)
+
+
+def decode_set_touch(view):
+    return _dto(view, EndEffectorSetTouchResponse, descriptor_ref=_ref(view.DescriptorRef()))
+
+
+def validate_set_touch_response(request, response):
+    _uint(response.protocol_version, 32, 'protocol_version')
+    if response.protocol_version != EE_PROTOCOL_VERSION:
+        raise ValueError('incompatible set_touch response protocol_version')
+    if not isinstance(response.descriptor_ref, DescriptorRef):
+        raise ValueError('missing set_touch response DescriptorRef')
+    _uint(response.descriptor_ref.robot_runtime_id, 64, 'robot_runtime_id')
+    _uint(response.descriptor_ref.descriptor_epoch, 64, 'descriptor_epoch')
+    if (response.descriptor_ref, response.side) != (request.descriptor_ref, request.side):
+        raise ValueError('set_touch response DescriptorRef/side differs from request')
+    _uint(response.side, 8, 'side')
+    if type(response.status) is not int or not -128 <= response.status < 128:
+        raise ValueError('status must fit shared ServiceStatus int8')
+    _uint(response.reason, 16, 'reason')
+    if type(response.enabled) is not bool or type(response.enabled_valid) is not bool:
+        raise ValueError('invalid set_touch enabled/validity')

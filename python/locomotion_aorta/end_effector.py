@@ -1,19 +1,21 @@
 """New EE development client on one existing EXTERNAL connection.
 
-The current source candidate supports K=0. It does not implement set_touch or
-Body3 observation binding and is not a released replacement for the old API.
+The current source candidate supports K=0 and typed set_touch. It does not
+implement Body3 observations or replace the released old API.
 """
+import math
 import struct
 import threading
 import time
 from dataclasses import fields, is_dataclass, replace
 
 from . import _end_effector_codec as codec
-from .controller import ControllerClosedError, ExternalController, InvalidCommandError, _deadline
+from .controller import ControllerClosedError, ExternalController, InvalidCommandError, NotRunningError, _deadline
 from .pull import PullStateSource
 from .end_effector_types import (
     CommandKey, ControlRef, DescriptorRef, EndEffectorSide, EndEffectorSubmission,
     SampleRef, SampleStream,
+    EndEffectorSetTouchRequest, ServiceStatus, TouchSetReason,
 )
 
 
@@ -42,6 +44,15 @@ def _layout(info):
             info.torque_domain, tuple(len(getattr(info, name)) for name in codec._INFO_VECTORS),
             command_shape, state_shape,
             info.touch_available, _token(info.touch_regions))
+
+
+class TouchSetError(RuntimeError):
+    """An actual service reply did not confirm the request; raw fields retained."""
+
+    def __init__(self, response):
+        self.response = response
+        super().__init__(f'set_touch not confirmed: status={response.status} reason={response.reason} '
+                         f'enabled={response.enabled} enabled_valid={response.enabled_valid}')
 
 
 class EndEffectorClient:
@@ -77,6 +88,7 @@ class EndEffectorClient:
         self._subscriptions = {}
         self._registering = set()
         self._publisher = None
+        self._service_clients = set()
         self._raw_shape = None
         try:
             self._register('info')
@@ -307,15 +319,92 @@ class EndEffectorClient:
                 lambda builder, header: codec.fill_command(self._bindings, submission, builder, header))
             return submission
 
+    def _check_touch_context(self, info, context):
+        # Pull reception and the shared controller lock must stay outside this
+        # client's condition. This is a fresh local check, not backend admission.
+        with self._condition:
+            self._ensure_open()
+        current = self.connection._control_context()
+        with self._condition:
+            self._ensure_open()
+            latest = self._get('info')
+            if latest is None or (latest.descriptor_ref, latest.layout_id, latest.side) != (
+                    info.descriptor_ref, info.layout_id, info.side):
+                raise InvalidCommandError('DescriptorRef changed during set_touch')
+            if current != context:
+                raise NotRunningError('control context changed during set_touch')
+
+    def set_touch(self, enable: bool, timeout: float = 5.0):
+        """Return the actual confirmed reply, never a new State/Touch sample.
+
+        Matching and RPC each have timeout_ms; this is not a combined strict
+        deadline. Core/matching exceptions propagate, while service failures
+        raise TouchSetError carrying the unmodified decoded response.
+        """
+        if type(enable) is not bool:
+            raise ValueError('enable must be boolean')
+        _deadline(timeout)
+        if timeout * 1000 >= 1 << 64:
+            raise ValueError('timeout_ms must fit uint64')
+        timeout_ms = math.ceil(timeout * 1000)
+        codec._uint(timeout_ms, 64, 'timeout_ms')
+        with self._condition:
+            self._ensure_open()
+            if self._read_only:
+                raise InvalidCommandError('read-only EndEffectorClient cannot set_touch')
+            info = self._get('info')
+            if info is None or not info.touch_available:
+                raise InvalidCommandError('validated Info with touch capability is required')
+        context = self.connection._control_context()
+        service = codec.load_touch_bindings()
+        rpc = self._node.create_client_typed(
+            self._topic + '/set_touch', service.response.EndEffectorSetTouchResponse.GetRootAs,
+            request_schema_meta=service.request_meta,
+            options=self._bindings.aorta.ClientOptions(timeout_ms=timeout_ms, allow_retry=False))
+        registered = False
+        try:
+            with self._condition:
+                self._ensure_open()
+                self._service_clients.add(rpc)
+                registered = True
+            self._check_touch_context(info, context)
+            matched = rpc.raw().wait_for_matching(timeout_ms)
+            self._check_touch_context(info, context)
+            if not matched:
+                raise TimeoutError('EE set_touch service provider not found')
+            request = EndEffectorSetTouchRequest(
+                info.descriptor_ref, info.layout_id, info.side,
+                ControlRef(context.client_id, context.lease_id), enable)
+            def fill(builder, header):
+                self._check_touch_context(info, context)
+                return codec.fill_set_touch(self._bindings, service, request, builder, header)
+            reply = codec.decode_set_touch(rpc.call(fill).decode())
+            self._check_touch_context(info, context)
+            codec.validate_set_touch_response(request, reply)
+            if (reply.status != ServiceStatus.SUCCESS or reply.reason != TouchSetReason.NONE
+                    or not reply.enabled_valid or reply.enabled != enable):
+                raise TouchSetError(reply)
+            return reply
+        finally:
+            with self._condition:
+                owned = rpc in self._service_clients
+                self._service_clients.discard(rpc)
+            if owned or not registered:
+                try:
+                    rpc.close()
+                except Exception:
+                    pass
+
     def close(self):
         with self._publish_lock, self._condition:
             if self._closed:
                 return
             self._closed = True
-            handles = [*self._subscriptions.values()]
+            handles = [*self._subscriptions.values(), *self._service_clients]
             if self._publisher is not None:
                 handles.append(self._publisher)
             self._subscriptions.clear()
+            self._service_clients.clear()
             self._publisher = None
             self._callbacks = {'info': None, 'state': None, 'touch': None}
             self._condition.notify_all()

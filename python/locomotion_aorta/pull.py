@@ -218,6 +218,12 @@ class PullController(ExternalController):
         self.transport.poll_control_status()
         return super()._reserve_command()
 
+    def _control_context(self):
+        with self._condition:
+            self._ensure_open()
+        self.transport.poll_control_status()
+        return super()._control_context()
+
     def _wait_for(self, value, deadline, timeout_message):
         while True:
             with self._condition:
