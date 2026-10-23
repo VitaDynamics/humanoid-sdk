@@ -7,6 +7,7 @@ from types import SimpleNamespace as S
 from unittest.mock import patch
 from locomotion_aorta import PullController,PullStateSource,PullTransport,ExternalControlTimeoutError
 from locomotion_aorta import ControlAck,ControlStatus,ControlOperation,ExternalPhase
+from locomotion_aorta import BodyCmd,BodyJointCmd,ControllerClosedError,NotRunningError
 from locomotion_aorta.transport import BODY_STATE_TOPIC,CONTROL_STATUS_TOPIC,CONTROL_REQUEST_TOPIC
 from fake_transport import FakeTransport
 
@@ -119,7 +120,7 @@ class PullTest(unittest.TestCase):
         t.poll_control_status=poll
         t._wait_body_state=lambda timeout:t.wait_state(timeout).body_state()
         def publish(topic,req):
-            self.assertEqual(topic,CONTROL_REQUEST_TOPIC)
+            if topic!=CONTROL_REQUEST_TOPIC:return
             t.emit('/sdk/foot_humanoid/control/ack',ControlAck(request_id=req.request_id,operation=req.operation,accepted=not reject,lease_id='L'))
             if not missing_status and req.operation in(ControlOperation.COMMIT,ControlOperation.CANCEL):
                 cancel=req.operation==ControlOperation.CANCEL
@@ -133,20 +134,120 @@ class PullTest(unittest.TestCase):
         self.assertEqual([r.operation for _,r in t.published],[ControlOperation.PREPARE,ControlOperation.COMMIT,ControlOperation.CANCEL])
 
     def test_reservation_drains_pending_generation_and_revocation(self):
-        from locomotion_aorta import NotRunningError
         c,t=self.fixture()
         c.enter_external(.2)
-        first=c._reserve_command()
+        command=BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31)))
+        first=c.publish(command)
         t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
             status_seq=2,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
             client_id='client',lease_id='L',generation=84))
-        second=c._reserve_command()
+        second=c.publish(command)
         self.assertEqual((first.session_id,first.sequence),(42,1))
         self.assertEqual((second.session_id,second.sequence),(84,1))
         t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
             status_seq=3,current_action='PASSIVE',phase=ExternalPhase.IDLE,
             client_id='client',lease_id='L',generation=84))
-        with self.assertRaises(NotRunningError):c._reserve_command()
+        with self.assertRaises(NotRunningError):c.publish(command)
+        self.assertEqual([m for topic,m in t.published if topic==BODY_CMD_TOPIC],[first,second])
+        t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
+            status_seq=4,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
+            client_id='client',lease_id='L',generation=84))
+        resumed=c.publish(command)
+        self.assertEqual((resumed.session_id,resumed.sequence),(84,2))
+
+    def test_publish_and_status_callback_preserve_lock_order(self):
+        c,t=self.fixture()
+        c.enter_external(.2)
+        pull=self.transport()
+        callback_entered=threading.Event()
+        publish_polling=threading.Event()
+        errors=[]
+        published=[]
+
+        def callback(status):
+            callback_entered.set()
+            if not publish_polling.wait(1.0):
+                raise AssertionError('publish did not reach status drain')
+            if not c._condition.acquire(timeout=1.0):
+                raise AssertionError('publish holds condition while waiting for status lock')
+            try:
+                c._on_status(status)
+            finally:
+                c._condition.release()
+
+        pull._callbacks[CONTROL_STATUS_TOPIC]=[callback]
+        pull._pulls[CONTROL_STATUS_TOPIC].samples.append(S(payload=ControlStatus(
+            status_seq=2,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
+            client_id='client',lease_id='L',generation=84)))
+
+        def poll():
+            publish_polling.set()
+            return pull.poll_control_status()
+
+        t.poll_control_status=poll
+
+        def drain():
+            try:pull.poll_control_status()
+            except BaseException as error:errors.append(error)
+
+        def publish():
+            try:published.append(c.publish(BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31)))))
+            except BaseException as error:errors.append(error)
+
+        receiver=threading.Thread(target=drain,daemon=True)
+        sender=threading.Thread(target=publish,daemon=True)
+        receiver.start()
+        entered=callback_entered.wait(1.0)
+        sender.start()
+        receiver.join(3.0)
+        sender.join(3.0)
+        self.assertTrue(entered)
+        self.assertFalse(receiver.is_alive() or sender.is_alive())
+        self.assertEqual(errors,[])
+        self.assertEqual([(m.session_id,m.sequence) for m in published],[(84,1)])
+
+    def test_close_during_status_drain_rejects_publish_and_late_callback(self):
+        c,t=self.fixture()
+        initial=c.enter_external(.2)
+        pull=self.transport()
+        callback_entered=threading.Event()
+        closed=threading.Event()
+        errors=[]
+
+        def callback(status):
+            callback_entered.set()
+            if not closed.wait(1.0):
+                raise AssertionError('close blocked behind status drain')
+            c._on_status(status)
+
+        pull._callbacks[CONTROL_STATUS_TOPIC]=[callback]
+        pull._pulls[CONTROL_STATUS_TOPIC].samples.append(S(payload=ControlStatus(
+            status_seq=2,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
+            client_id='client',lease_id='L',generation=84)))
+        t.poll_control_status=pull.poll_control_status
+
+        def publish():
+            try:c.publish(BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31))))
+            except BaseException as error:errors.append(error)
+
+        def close():
+            try:c.close()
+            except BaseException as error:errors.append(error)
+            finally:closed.set()
+
+        sender=threading.Thread(target=publish,daemon=True)
+        closer=threading.Thread(target=close,daemon=True)
+        sender.start()
+        entered=callback_entered.wait(1.0)
+        closer.start()
+        sender.join(3.0)
+        closer.join(3.0)
+        self.assertTrue(entered)
+        self.assertFalse(sender.is_alive() or closer.is_alive())
+        self.assertEqual(len(errors),1)
+        self.assertIsInstance(errors[0],ControllerClosedError)
+        self.assertIs(c.status,initial)
+        self.assertFalse(any(topic==BODY_CMD_TOPIC for topic,_ in t.published))
 
     def test_entry_timeout_keeps_deadline_and_best_effort_cancel(self):
         c,t=self.fixture(True)
