@@ -33,8 +33,14 @@ def _description(info):
 
 
 def _layout(info):
+    n = len(info.axis_names)
+    command_shape = tuple(n if any(mask & bit for mask in info.supported_command_fields) else 0
+                          for _, bit in codec._COMMAND_COLUMNS)
+    state_shape = tuple(n if any(mask & bit for mask in info.supported_state_fields) else 0
+                        for _, bit in codec._STATE_COLUMNS)
     return (info.layout_id, info.side, info.axis_names, info.position_domain,
             info.torque_domain, tuple(len(getattr(info, name)) for name in codec._INFO_VECTORS),
+            command_shape, state_shape,
             info.touch_available, _token(info.touch_regions))
 
 

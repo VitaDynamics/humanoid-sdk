@@ -14,7 +14,7 @@ import flatbuffers
 
 from fake_transport import FakeTransport
 from test_controller import ControllerHarness, make_command
-from test_end_effector_codec import info_object, state_object, touch_object, pack, target
+from test_end_effector_codec import info_object, state_object, touch_object, pack, target, decode
 from locomotion_aorta import (
     CONTROL_REQUEST_TOPIC, CONTROL_STATUS_TOPIC, ControllerClosedError,
     ExternalController, ExternalPhase, InvalidCommandError, NotRunningError,
@@ -315,6 +315,88 @@ class EndEffectorClientTest(unittest.TestCase):
                     client.publish(target())
                 self.assertEqual(node.commands, [])
                 self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+
+    def test_new_epoch_changing_any_cmd_or_state_column_between_n_and_zero_requires_recreation(self):
+        cases = (
+            ('supportedCommandFields', 'pos', Field.POS),
+            ('supportedCommandFields', 'vel', Field.VEL),
+            ('supportedCommandFields', 'vel_limit', Field.VEL_LIMIT),
+            ('supportedCommandFields', 'tau_cmd', Field.TAU),
+            ('supportedCommandFields', 'current_cmd', Field.CURRENT),
+            ('supportedStateFields', 'pos', Field.POS),
+            ('supportedStateFields', 'vel', Field.VEL),
+            ('supportedStateFields', 'tau', Field.TAU),
+            ('supportedStateFields', 'current', Field.CURRENT),
+            ('supportedStateFields', 'temperature_c', Field.TEMPERATURE),
+            ('supportedStateFields', 'error_code', Field.ERROR_CODE),
+        )
+        for capability, column, bit in cases:
+            for grows in (False, True):
+                with self.subTest(capability=capability, column=column, grows=grows):
+                    limited, full = info_object(), info_object()
+                    setattr(limited, capability, [getattr(limited, capability)[0] & ~bit])
+                    if bit == Field.VEL_LIMIT:
+                        # VEL_LIMIT has no State capability to retain Info's
+                        # limit vector; all other cases keep every Info length.
+                        limited.validLimits = [limited.validLimits[0] & ~bit]
+                        limited.velLimitMax = []
+                    before, after = (limited, full) if grows else (full, limited)
+                    after.descriptorRef.descriptorEpoch = 2
+                    before_view, after_view = decode('info', before), decode('info', after)
+                    codec.validate_info(before_view)
+                    codec.validate_info(after_view)  # legal Info, not malformed rejection
+                    self.assertEqual(before_view.axis_names, after_view.axis_names)
+                    self.assertEqual(before_view.layout_id, after_view.layout_id)
+                    if bit != Field.VEL_LIMIT:
+                        self.assertEqual(
+                            [len(getattr(before_view, name)) for name in codec._INFO_VECTORS],
+                            [len(getattr(after_view, name)) for name in codec._INFO_VECTORS])
+                    harness, node = self.harness()
+                    client = self.client(harness, node, feedback=False)
+                    node.emit('left', 'info', before)
+                    self.assertEqual(client.wait_info(0).descriptor_ref.descriptor_epoch, 1)
+                    node.emit('left', 'info', after)
+                    with self.assertRaisesRegex(ValueError, 'recreate'):
+                        client.wait_info(0)
+                    with self.assertRaisesRegex(ValueError, 'recreate'):
+                        client.publish(target())
+                    node.emit('left', 'info', before)
+                    with self.assertRaisesRegex(ValueError, 'recreate'):
+                        client.wait_state(0)
+                    self.assertEqual(node.commands, [])
+                    self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+
+    def test_new_epoch_same_column_shapes_allows_per_axis_capability_and_description_updates(self):
+        harness, node = self.harness()
+        client = self.client(harness, node, feedback=False)
+        before = info_object(n=2)
+        before.supportedCommandFields[0] &= ~Field.CURRENT
+        before.supportedStateFields[0] &= ~Field.TEMPERATURE
+        node.emit('left', 'info', before)
+        old_state = state_object(n=2)
+        old_state.validFields[0] &= ~Field.TEMPERATURE
+        node.emit('left', 'state', old_state)
+        previous = client.wait_state(0).sample_ref
+        self.assertEqual(client.publish(target(n=2)).key, CommandKey(42, 1))
+
+        after = info_object(n=2, epoch=2)
+        after.supportedCommandFields[1] &= ~Field.CURRENT
+        after.supportedStateFields[1] &= ~Field.TEMPERATURE
+        after.firmware = 'new-description-same-shape'
+        node.emit('left', 'info', after)
+        self.assertEqual(client.wait_info(0, after_descriptor=previous.descriptor_ref).firmware,
+                         'new-description-same-shape')
+        self.assertIsNone(client.state)
+        node.emit('left', 'state', old_state)
+        self.assertIsNone(client.state)
+        new_state = state_object(n=2, epoch=2)
+        new_state.validFields[1] &= ~Field.TEMPERATURE
+        node.emit('left', 'state', new_state)
+        self.assertEqual(client.wait_state(0, after_sample=previous).descriptor_ref, DescriptorRef(100, 2))
+        self.assertEqual(len(client.state.temperature_c), 2)
+        self.assertEqual(client.publish(target(n=2)).key, CommandKey(42, 2))
+        self.assertEqual(node.commands[-1][1].CurrentCmdLength(), 2)
+        self.assertEqual(harness.controller.publish(make_command(0)).sequence, 3)
 
     def test_wrong_side_malformed_state_and_column_resize_do_not_replace_last_sample(self):
         harness, node = self.harness(running=False)
