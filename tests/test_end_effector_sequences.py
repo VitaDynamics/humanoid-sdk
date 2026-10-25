@@ -57,7 +57,8 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
         payload = (self.root/name).read_bytes()
         self.assertTrue(payload, 'actual committed RobotInfo producer bytes are required')
         reply = decode_robot_info_response(GetRobotInfoResponse.GetRootAs(payload))
-        with patch.object(self.harness.transport, 'get_robot_info', return_value=reply):
+        with patch.object(self.harness.transport, 'get_robot_info', return_value=reply), \
+                patch.object(client._condition, 'wait', side_effect=self.clock.sleep):
             return client.wait_info(.1)
 
     def test_actual_robot_partial_publish_preserves_E1_until_pair_commit(self):
