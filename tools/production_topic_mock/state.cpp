@@ -10,8 +10,12 @@ std::vector<uint8_t> EncodeState(uint64_t id, const Output& output,
                                  uint64_t wall_us) {
   lowlevel::BodyStateT state;
   state.protocol_version = 3;
-  // Synthetic producer: descriptor/association validity remains absent until
-  // supplied by this Mock's own authoritative snapshot, never inferred from keys.
+  // This Mock's own startup/tick snapshot, never inferred from a nonzero key.
+  state.descriptor_ref = std::make_unique<lowlevel::ee::DescriptorRef>(
+      output.runtime, output.descriptor_epoch);
+  state.ts_control_us = output.control_us;
+  state.applied_key_valid = output.applied_key_valid;
+  state.association_source_type = output.association_source_type;
   state.roster_version = 1;
   state.state_id = id;
   state.ts_state_real_us = state.ts_state_pub_us = state.ts_consumed_us =

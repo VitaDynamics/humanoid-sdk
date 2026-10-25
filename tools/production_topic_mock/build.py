@@ -11,7 +11,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-SCHEMAS = ("body_state", "body_cmd", "get_robot_info", "control_request", "control_ack", "control_status")
+SCHEMAS = ("body_state", "body_cmd", "get_robot_info", "control_request", "control_ack", "control_status", "end_effector_info", "end_effector_cmd", "end_effector_state", "end_effector_touch", "end_effector_set_touch")
 
 
 def digest(path):
@@ -59,7 +59,7 @@ def build(args):
             raise ValueError("BFBS mismatch: " + name)
         bfbs = generated / (name + ".bfbs")
         bfbs.write_bytes(data)
-        if name == "get_robot_info":
+        if name in ("get_robot_info", "end_effector_set_touch"):
             (generated / (name + ".sha256")).write_text(sha)
         run([cmake / "flatc", "--cpp", "--gen-object-api", "--gen-all", "--gen-mutable", "-o", generated, bfbs])
     if args.aorta_core:
@@ -81,6 +81,8 @@ def build(args):
     for name, path, macro in [
         ("main", HERE / "mock.cpp", None), ("state", HERE / "state.cpp", None),
         ("protocol", HERE / "protocol.cpp", None),
+        *[("ee_"+key, HERE / "end_effector.cpp", "PRODUCTION_MOCK_EE_"+key.upper()+"_CODEC")
+          for key in ("info", "cmd", "state", "touch", "service")],
         *[(key, HERE / "protocol.cpp", "PRODUCTION_MOCK_" + key.upper() + "_CODEC")
           for key in ("request", "ack", "status", "info")],
     ]:

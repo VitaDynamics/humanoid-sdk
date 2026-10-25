@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -79,6 +80,7 @@ struct Context {
   aorta_pub_t ack = 0;
   uint64_t accepted = 0, rejected = 0, applied = 0, controls = 0;
   uint64_t parse_errors = 0, info_requests = 0, info_errors = 0;
+  uint64_t ee_accepted = 0, ee_rejected = 0, ee_applied = 0, touch_requests = 0;
   uint64_t ack_sequence = 0;
   uint64_t apply_period_ns = 0, pending_tick_ns = 0;
   std::atomic<bool> endpoint_failed{false};
@@ -195,9 +197,63 @@ void ReplyInfo(const aorta_bytes_view_t *view, aorta_service_request_t request,
     ++ctx.info_errors;
   }
 }
+struct EEContext {
+  Context* shared = nullptr;
+  uint8_t side = 0;
+};
+void ReceiveEE(const aorta_bytes_view_t* view, const aorta_schema_hash_view_t*,
+               const aorta_msg_context_t*, void* opaque) noexcept {
+  auto& endpoint = *static_cast<EEContext*>(opaque);
+  auto& ctx = *endpoint.shared;
+  try {
+    const auto command = pm::DecodeEECommand(Copy(view));
+    std::lock_guard<std::mutex> lock(ctx.mutex);
+    if (command.side == endpoint.side && ctx.protocol.AcceptEE(command, Mono(), Wall()/1000))
+      ++ctx.ee_accepted;
+    else ++ctx.ee_rejected;
+  } catch (const std::exception& error) {
+    std::lock_guard<std::mutex> lock(ctx.mutex);
+    ++ctx.parse_errors;
+    std::cerr << "ReceiveEE: " << error.what() << '\n';
+  } catch (...) {
+    std::lock_guard<std::mutex> lock(ctx.mutex);
+    ++ctx.parse_errors;
+  }
+}
+void ReplyTouch(const aorta_bytes_view_t* view, aorta_service_request_t request,
+                void* opaque) noexcept {
+  auto& endpoint = *static_cast<EEContext*>(opaque);
+  auto& ctx = *endpoint.shared;
+  bool consumed = false;
+  try {
+    const auto value = pm::DecodeTouchRequest(Copy(view));
+    pm::TouchReply reply;
+    {
+      std::lock_guard<std::mutex> lock(ctx.mutex);
+      if (value.side == endpoint.side) reply = ctx.protocol.SetTouch(value, Mono());
+      else {reply.runtime=value.runtime;reply.epoch=value.epoch;reply.side=value.side;reply.reason=3;}
+      ++ctx.touch_requests;
+    }
+    // The same Protocol snapshot is updated before responding. A transport
+    // failure does not pretend the already-confirmed synthetic switch undid.
+    const auto bytes = pm::EncodeTouchReply(reply);
+    aorta_owned_bytes_slice_t slice{bytes.data(),bytes.size(),nullptr,nullptr};
+    aorta_owned_bytes_view_t owned{&slice,1,bytes.size()};
+    consumed = true;
+    if (!Checked(aorta_service_request_reply(request,&owned), "set_touch reply")) ctx.endpoint_failed=true;
+  } catch (const std::exception& error) {
+    if (!consumed && !Checked(aorta_service_request_reply_error(request,error.what()),"set_touch error")) ctx.endpoint_failed=true;
+    std::lock_guard<std::mutex> lock(ctx.mutex);
+    ++ctx.parse_errors;
+  } catch (...) {
+    if (!consumed && !Checked(aorta_service_request_reply_error(request,"unknown set_touch error"),"set_touch error")) ctx.endpoint_failed=true;
+    ctx.endpoint_failed=true;
+  }
+}
 struct Resources {
   aorta_node_t node = 0;
   aorta_service_t service = 0;
+  std::vector<aorta_service_t> ee_services;
   std::vector<aorta_sub_t> subscribers;
   std::vector<aorta_pub_t> publishers;
   bool Close() {
@@ -208,6 +264,9 @@ struct Resources {
     if (service)
       ok = Checked(aorta_service_free(service), "aorta_service_free") && ok;
     service = 0;
+    for (auto handle : ee_services)
+      ok = Checked(aorta_service_free(handle), "aorta_service_free(EE)") && ok;
+    ee_services.clear();
     for (auto pub : publishers)
       ok = Checked(aorta_publisher_free(pub), "aorta_publisher_free") && ok;
     publishers.clear();
@@ -232,6 +291,80 @@ aorta_pub_t Publisher(Resources &r, const std::filesystem::path &schemas,
         std::string("aorta_publisher_new(") + topic + ")");
   r.publishers.push_back(pub);
   return pub;
+}
+struct EEStreams {
+  uint8_t side = 0;
+  std::vector<uint8_t> info_bytes, touch_bytes;
+  std::array<aorta_pub_t,3> publishers{};
+  std::array<uint64_t,3> periods{}, next{}, samples{};
+};
+std::vector<EEStreams> ConfigureEE(Context& context,const std::filesystem::path& directory) {
+  std::vector<EEStreams> result;
+  const auto path=directory/"ee-config.txt";
+  if (!std::filesystem::exists(path)) return result;
+  std::ifstream file(path);
+  if (!file) throw std::runtime_error("cannot open EE config");
+  std::string side;
+  while (file >> side) {
+    if (result.size()>=2 || (side!="left" && side!="right")) throw std::runtime_error("EE fixture side/count");
+    EEStreams stream;stream.side=side=="left" ? 1 : 2;
+    stream.info_bytes=Read(directory/("ee-"+side+"-info.bin"));
+    auto info=pm::DecodeEEInfo(stream.info_bytes);
+    if (info.side!=stream.side) throw std::runtime_error("EE fixture topic side mismatch");
+    for (size_t role=0;role<3;++role) {
+      double hz=0;
+      if (!(file>>hz) || !std::isfinite(hz) || hz>2000 || hz<0 || (role<2 && hz==0))
+        throw std::runtime_error("EE explicit fixture frequency");
+      if (hz>0 && (!std::isfinite(1e9/hz) || 1e9/hz >= std::numeric_limits<uint64_t>::max()))
+        throw std::runtime_error("EE fixture period overflow");
+      stream.periods[role]=hz>0 ? static_cast<uint64_t>(1e9/hz) : 0;
+    }
+    if (info.touch_available != (stream.periods[2]!=0)) throw std::runtime_error("EE touch rate/capability mismatch");
+    std::vector<float> initial(info.axes.size());
+    for (auto& value:initial) if (!(file>>value)) throw std::runtime_error("EE initial position absent");
+    size_t count=0;
+    if (!(file>>count) || count>5) throw std::runtime_error("EE fixed K bound");
+    for (size_t i=0;i<count;++i) {
+      unsigned kind=0,where=0;
+      if (!(file>>kind>>where) || kind>255 || where>255) throw std::runtime_error("EE K field");
+      info.observation_sources.emplace_back(kind,where);
+    }
+    context.protocol.ConfigureEE(info,initial);
+    if (info.touch_available) {
+      stream.touch_bytes=Read(directory/("ee-"+side+"-touch.bin"));
+      // Fail a malformed template before creating any Aorta endpoints.
+      (void)pm::EncodeEETouch(stream.touch_bytes,context.protocol.SnapshotEE(stream.side,Mono()),1,Wall()/1000);
+    }
+    result.push_back(std::move(stream));
+  }
+  if (!file.eof()) throw std::runtime_error("truncated EE fixture config");
+  return result;
+}
+void OpenEE(Resources& resources,const std::filesystem::path& schemas,
+            EEStreams& stream,EEContext& context) {
+  const auto prefix=std::string("/sdk/foot_humanoid/end_effector/")+(stream.side==1 ? "left" : "right");
+  const std::array<const char*,3> roles{"state","info","touch"};
+  const std::array<const char*,3> roots{"lowlevel.ee.EndEffectorState","lowlevel.ee.EndEffectorInfo","lowlevel.ee.EndEffectorTouch"};
+  for (size_t role=0;role<3;++role) if (stream.periods[role]) {
+    stream.publishers[role]=Publisher(resources,schemas,"end_effector_"+std::string(roles[role]),
+        (prefix+"/"+roles[role]).c_str(),roots[role],role==1 ? AORTA_QOS_PRESET_STATE_UPDATE : AORTA_QOS_PRESET_SENSOR_DATA);
+  }
+  auto qos=aorta_qos_preset(AORTA_QOS_PRESET_REALTIME_CONTROL);
+  aorta_sub_t sub=0;
+  Check(aorta_subscriber_new(resources.node,(prefix+"/cmd").c_str(),&qos,nullptr,ReceiveEE,&context,&sub),"EE cmd subscriber");
+  resources.subscribers.push_back(sub);
+  const auto bfbs=Read(schemas/"end_effector_set_touch.bfbs");
+  const auto hash=Read(schemas/"end_effector_set_touch.sha256");
+  aorta_service_options_t options{};
+  options.service_schema_hash_hex=hash.data();options.service_schema_hash_len=hash.size();
+  options.service_schema_bfbs=bfbs.data();options.service_schema_bfbs_len=bfbs.size();
+  const std::string request="aorta.services.humanoid_locomotion.EndEffectorSetTouchRequest";
+  const std::string response="aorta.services.humanoid_locomotion.EndEffectorSetTouchResponse";
+  options.request_root_type=request.c_str();options.request_root_type_len=request.size();
+  options.response_root_type=response.c_str();options.response_root_type_len=response.size();
+  aorta_service_t service=0;
+  Check(aorta_service_new_with_options(resources.node,(prefix+"/set_touch").c_str(),&options,ReplyTouch,&context,&service),"typed set_touch service");
+  resources.ee_services.push_back(service);
 }
 void Advance(uint64_t &next, uint64_t period, uint64_t now) {
   next += ((now - next) / period + 1) * period;
@@ -290,6 +423,9 @@ int main(int argc, char **argv) {
     if (imu_file >> trailing)
       throw std::runtime_error("extra initial IMU values");
     context.protocol.SetInitialImu(imu_q);
+    auto ee_streams = ConfigureEE(context,directory);
+    std::array<EEContext,2> ee_contexts{{{&context,1},{&context,2}}};
+    const auto ee_started_us = Wall()/1000;
     // Declare resources after context: callbacks are drained before context
     // dies.
     Resources resources;
@@ -346,6 +482,7 @@ int main(int argc, char **argv) {
               resources.node, "/sdk/foot_humanoid/get_robot_info", &options,
               ReplyInfo, &context, &resources.service),
           "aorta_service_new_with_options(/sdk/foot_humanoid/get_robot_info)");
+      for (auto& stream:ee_streams) OpenEE(resources,schemas,stream,ee_contexts[stream.side-1]);
       std::signal(SIGINT, Stop);
       std::signal(SIGTERM, Stop);
       const auto finish = start + static_cast<uint64_t>(seconds * 1e9);
@@ -365,6 +502,7 @@ int main(int argc, char **argv) {
             ++context.applied;
             context.pending_tick_ns = 0;
           }
+          context.ee_applied += context.protocol.TickEE(Mono(),wall/1000);
           Advance(next_apply, apply_period, now);
         }
         if (now >= next_state) {
@@ -394,9 +532,29 @@ int main(int argc, char **argv) {
                 "aorta_publisher_publish(/sdk/foot_humanoid/control/status)");
           Advance(next_status, 20000000, now);
         }
+        uint64_t next_ee=finish;
+        for (auto& stream:ee_streams) {
+          pm::EESnapshot snapshot;
+          {std::lock_guard<std::mutex> lock(context.mutex);snapshot=context.protocol.SnapshotEE(stream.side,Mono());}
+          for (size_t role=0;role<3;++role) {
+            if (!stream.periods[role]) continue;
+            if (now>=stream.next[role]) {
+              if (role!=2 || snapshot.touch_enabled) {
+                const auto us=Wall()/1000;
+                const auto id=++stream.samples[role];
+                const auto bytes=role==0 ? pm::EncodeEEState(snapshot,id,us) : role==1 ?
+                    pm::EncodeEEInfo(stream.info_bytes,context.protocol.runtime_id(),ee_started_us,us) :
+                    pm::EncodeEETouch(stream.touch_bytes,snapshot,id,us);
+                Check(aorta_publisher_publish(stream.publishers[role],bytes.data(),bytes.size()),"synthetic EE publish");
+              }
+              stream.next[role]=now+stream.periods[role];
+            }
+            next_ee=std::min(next_ee,stream.next[role]);
+          }
+        }
         std::this_thread::sleep_until(
             Clock::time_point(std::chrono::nanoseconds(
-                std::min(next_state, std::min(next_apply, next_status)))));
+                std::min(next_ee,std::min(next_state, std::min(next_apply, next_status))))));
       }
     } catch (const std::exception &e) {
       endpoint_rc = 2;
@@ -406,6 +564,10 @@ int main(int argc, char **argv) {
     if (!resources.Close() || context.endpoint_failed) endpoint_rc = 2;
     std::ofstream result(directory / "mock-result.json");
     result << "{\"synthetic\":true,\"accepted\":" << context.accepted
+           << ",\"ee_accepted\":" << context.ee_accepted
+           << ",\"ee_rejected\":" << context.ee_rejected
+           << ",\"ee_applied\":" << context.ee_applied
+           << ",\"touch_requests\":" << context.touch_requests
            << ",\"rejected\":" << context.rejected
            << ",\"applied\":" << context.applied
            << ",\"controls\":" << context.controls

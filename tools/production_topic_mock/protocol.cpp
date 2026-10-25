@@ -1,5 +1,6 @@
 #include "protocol.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -183,12 +184,13 @@ uint64_t NextApplyTick(uint64_t accepted_wall_ns, uint64_t period_ns) {
 }
 Protocol::Protocol(uint64_t seed, uint64_t stream_timeout,
                    uint64_t prepare_timeout, int reject_operation)
-    : generation_(seed),
+    : runtime_id_(seed), generation_(seed),
       command_timeout_ns_(stream_timeout),
       prepare_timeout_ns_(prepare_timeout),
       reject_operation_(reject_operation) {
   if (!seed || !stream_timeout || !prepare_timeout)
     throw std::invalid_argument("nonzero generation/timeouts required");
+  output_.runtime = runtime_id_;
 }
 Ack Protocol::Reply(const Request& r, int error,
                     const std::string& reason) const {
@@ -205,11 +207,14 @@ void Protocol::Clear() {
   has_pending_ = false;
   prepared_ns_ = 0;
   InvalidateApplied();
+  InvalidateEE();
 }
 void Protocol::InvalidateApplied() {
   // Hold the last synthetic positions, while invalidating evidence of a
   // current command. Cancelling does not teleport the simulated joints.
   output_.session = output_.sequence = output_.first_output_us = 0;
+  output_.applied_key_valid = false;
+  output_.association_source_type = 0;
 }
 void Protocol::Watchdog(uint64_t now) {
   if (status_.phase == 2 && now - prepared_ns_ >= prepare_timeout_ns_) Clear();
@@ -313,8 +318,194 @@ bool Protocol::Tick(uint64_t now, uint64_t wall_us) {
   output_.sequence = pending_.sequence;
   output_.q = pending_.q;
   output_.first_output_us = wall_us;
+  output_.control_us = wall_us;
+  output_.applied_key_valid = true;
+  output_.association_source_type = 1;  // EXTERNAL, from this accepted synthetic frame.
   has_pending_ = false;
   return true;
+}
+
+void Protocol::ConfigureEE(const EEInfo& info, const std::vector<float>& initial) {
+  if (status_.phase != 0 || !status_.client_id.empty() || info.side < 1 || info.side > 2 ||
+      info.axes.empty() || info.axes.size() > 64 || initial.size() != info.axes.size() ||
+      info.device_model < 1 || info.device_model > 3 || !info.layout_id)
+    throw std::invalid_argument("invalid synthetic EE fixture or active owner");
+  auto& endpoint = endpoints_[info.side - 1];
+  if (endpoint.configured) throw std::invalid_argument("EE fixture is fixed at startup");
+  for (size_t i = 0; i < initial.size(); ++i) {
+    const auto& a = info.axes[i];
+    if (!(a.valid_limits & 1) || !(a.state_fields & 1) || !std::isfinite(initial[i]) ||
+        !std::isfinite(a.pos_min) || !std::isfinite(a.pos_max) ||
+        initial[i] < a.pos_min || initial[i] > a.pos_max)
+      throw std::invalid_argument("invalid synthetic measured position");
+  }
+  std::vector<std::pair<uint8_t, uint8_t>> seen;
+  for (const auto& source : info.observation_sources) {
+    const auto [stream, side] = source;
+    if (!((stream == 1 && side == 0) || ((stream == 2 || stream == 3) && (side == 1 || side == 2))) ||
+        std::find(seen.begin(), seen.end(), source) != seen.end())
+      throw std::invalid_argument("invalid or duplicate synthetic observation source");
+    seen.push_back(source);
+  }
+  endpoint.configured = true;
+  endpoint.snapshot.info = info;
+  endpoint.snapshot.position = initial;
+  endpoint.snapshot.output_keys.resize(initial.size());
+  endpoint.snapshot.output_key_valid.assign(initial.size(), false);
+  endpoint.snapshot.runtime = runtime_id_;
+}
+
+bool Protocol::OwnedEE(const std::string& client, const std::string& lease) const {
+  return (status_.phase == 4 || status_.phase == 5) && !client.empty() && !lease.empty() &&
+         client == status_.client_id && lease == status_.lease_id;
+}
+
+void Protocol::InvalidateEE() {
+  for (auto& endpoint : endpoints_) {
+    endpoint.has_pending = false;
+    endpoint.last_valid_ns = 0;
+    endpoint.timed_out = false;
+    auto& s = endpoint.snapshot;
+    s.received_valid = s.accepted_valid = s.applied_valid = false;
+    std::fill(s.output_key_valid.begin(), s.output_key_valid.end(), false);
+    s.output_allowed = false;
+    s.inhibit_reason = 1;
+    s.received = s.accepted = s.applied = {};
+    s.received_us = s.accepted_us = s.output_us = 0;
+  }
+}
+
+bool Protocol::AcceptEE(const EECommand& cmd, uint64_t now, uint64_t wall_us) {
+  Watchdog(now);  // EE traffic never refreshes Body's original watchdog.
+  if (cmd.side < 1 || cmd.side > 2 || !endpoints_[cmd.side - 1].configured) return false;
+  auto& e = endpoints_[cmd.side - 1];
+  auto& s = e.snapshot;
+  s.received = cmd.key;
+  s.received_valid = true;
+  s.received_us = wall_us;
+  auto reject = [&](uint16_t reason) { ++s.reject_count; s.reject_code = reason; return false; };
+  if (cmd.version != 1) return reject(8);
+  if (cmd.runtime != runtime_id_ || cmd.epoch != s.epoch) return reject(9);
+  if (cmd.layout_id != s.info.layout_id) return reject(10);
+  if (!OwnedEE(cmd.client_id, cmd.lease_id) || cmd.key.session != status_.generation || !cmd.key.sequence)
+    return reject(11);
+  // Sequence spaces are per endpoint on receive, since independent topics may
+  // arrive out of order. There is no endpoint session table or second owner.
+  if (s.accepted_valid && cmd.key.sequence <= s.accepted.sequence) return false;
+  const auto n = s.info.axes.size();
+  if (cmd.modes.size() != n || cmd.fields.size() != n ||
+      cmd.observations.size() != s.info.observation_sources.size()) return reject(2);
+  for (size_t i = 0; i < cmd.observations.size(); ++i) {
+    const auto& o = cmd.observations[i];
+    if (o.runtime != runtime_id_ || o.epoch != s.epoch || (o.validity & ~15) ||
+        std::make_pair(o.stream, o.side) != s.info.observation_sources[i]) return reject(9);
+    // Actual IDs/time/validity are preserved, not regenerated or made into a
+    // time/permission gate. Reusing one actual sample is legal.
+  }
+  constexpr std::array<uint32_t, 5> bits{1, 2, 4, 8, 16};
+  bool requested = false;
+  for (size_t i = 0; i < n; ++i) {
+    const auto& a = s.info.axes[i];
+    if ((cmd.modes[i] != 1 && cmd.modes[i] != 2) || !(a.modes & (1u << cmd.modes[i]))) return reject(5);
+    if ((cmd.fields[i] & ~uint32_t{95}) || (cmd.fields[i] & ~a.command_fields)) return reject(12);
+    requested |= cmd.fields[i] != 0;
+  }
+  if (!requested) return reject(12);
+  for (size_t col = 0; col < bits.size(); ++col) {
+    const auto bit = bits[col];
+    const bool supported = std::any_of(s.info.axes.begin(), s.info.axes.end(),
+        [bit](const auto& a) { return a.command_fields & bit; });
+    if (cmd.columns[col].size() != (supported ? n : 0)) return reject(2);
+    for (size_t i = 0; i < cmd.columns[col].size(); ++i) {
+      const auto v = cmd.columns[col][i];
+      if (!std::isfinite(v)) return reject(3);
+      if (!(cmd.fields[i] & bit)) continue;
+      const auto& a = s.info.axes[i];
+      if (!(a.valid_limits & bit)) return reject(4);
+      const std::array<float, 5> minimum{a.pos_min,a.vel_min,0.f,a.tau_min,a.current_min};
+      const std::array<float, 5> maximum{a.pos_max,a.vel_max,a.vel_limit_max,a.tau_max,a.current_max};
+      if (!std::isfinite(minimum[col]) || !std::isfinite(maximum[col]) ||
+          v < minimum[col] || v > maximum[col]) return reject(4);
+    }
+  }
+  if (e.has_pending) ++s.overwritten;
+  e.pending = cmd;
+  e.has_pending = true;
+  e.last_valid_ns = now;
+  e.timed_out = false;
+  s.accepted = cmd.key;
+  s.accepted_valid = true;
+  s.accepted_us = wall_us;
+  s.reject_code = 0;
+  return true;
+}
+
+EESnapshot Protocol::SnapshotEE(uint8_t side, uint64_t now) {
+  Watchdog(now);
+  if (side < 1 || side > 2 || !endpoints_[side - 1].configured)
+    throw std::invalid_argument("unconfigured synthetic endpoint");
+  auto& e = endpoints_[side - 1];
+  if (e.last_valid_ns && now - e.last_valid_ns >= command_timeout_ns_ && !e.timed_out) {
+    e.timed_out = true;
+    e.has_pending = false;
+    e.snapshot.applied_valid = false;
+    std::fill(e.snapshot.output_key_valid.begin(), e.snapshot.output_key_valid.end(), false);
+    ++e.snapshot.timeouts;
+  }
+  auto result = e.snapshot;
+  // Synthetic configured fixtures are ready; this is not hardware discovery.
+  result.output_allowed = status_.phase == 4 || status_.phase == 5;
+  result.inhibit_reason = result.output_allowed ? 0 : 1;
+  return result;
+}
+
+size_t Protocol::TickEE(uint64_t now, uint64_t wall_us) {
+  Watchdog(now);
+  size_t applied = 0;
+  for (size_t side = 1; side <= 2; ++side) {
+    auto& e = endpoints_[side - 1];
+    if (!e.configured) continue;
+    const auto snapshot = SnapshotEE(static_cast<uint8_t>(side), now);
+    if (!snapshot.output_allowed || !e.has_pending) continue;
+    for (size_t i = 0; i < e.snapshot.position.size(); ++i) {
+      if (e.pending.fields[i] & 1) e.snapshot.position[i] = e.pending.columns[0][i];
+      if (e.pending.fields[i]) {
+        e.snapshot.output_keys[i] = e.pending.key;
+        e.snapshot.output_key_valid[i] = true;
+      }
+    }
+    e.snapshot.applied = e.pending.key;
+    e.snapshot.applied_valid = true;
+    e.snapshot.output_us = wall_us;
+    e.has_pending = false;
+    ++applied;
+  }
+  return applied;
+}
+
+TouchReply Protocol::SetTouch(const TouchRequest& request, uint64_t now) {
+  Watchdog(now);
+  TouchReply reply;
+  reply.runtime = request.runtime;  // Reply binding echoes even a rejected request.
+  reply.epoch = request.epoch;
+  reply.side = request.side;
+  if (request.side < 1 || request.side > 2 || !endpoints_[request.side - 1].configured) {
+    reply.reason = 3;
+    return reply;
+  }
+  auto& s = endpoints_[request.side - 1].snapshot;
+  if (request.version != 1 || request.runtime != runtime_id_ || request.epoch != s.epoch ||
+      request.layout_id != s.info.layout_id) reply.reason = 3;
+  else if (!OwnedEE(request.client_id, request.lease_id)) reply.reason = 2;
+  else if (!s.info.touch_available) reply.reason = 1;
+  else {
+    s.touch_enabled = request.enabled;
+    reply.success = true;
+    reply.enabled = s.touch_enabled;
+    reply.enabled_valid = true;
+  }
+  // No motion sequence reservation, pending output or heartbeat update.
+  return reply;
 }
 }  // namespace production_mock
 #endif
