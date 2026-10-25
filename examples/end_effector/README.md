@@ -30,9 +30,12 @@ physical arrival and complete progress cannot be inferred from it.
 The new State has an admission key, not the legacy numeric host-target pose.
 Target-mode `--duration` bounds streaming only. It does not reuse a feedback-
 applied target as the current host target, or claim an arrival duration. Entry
-and return interpolation use saved measured positions and declared command
-slope limits. Each command references the actual endpoint State used for its
-safety checks (fixed K=1). Diagnostic timestamps are not permission gates and
+interpolation starts from a current valid same-descriptor State after ready and
+touch waits; the saved pre-entry measurement remains the separate return target.
+Body and each endpoint retain their absolute send deadlines across all phases;
+the loop wakes at the earliest deadline without replaying missed sends. Entry
+and return use declared command slope limits. Each command references the actual
+endpoint State used for its safety checks (fixed K=1). Diagnostic timestamps are not permission gates and
 are not subtracted from the SDK clock.
 
 `--touch on/off` makes one existing typed RPC under the shared owner. The main

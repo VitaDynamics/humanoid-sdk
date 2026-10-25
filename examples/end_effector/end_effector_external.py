@@ -145,7 +145,8 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
                     or status.reject_count != entered.reject_count):
                 raise RuntimeError(f'body EXTERNAL ownership/phase/reject_count changed: {status!r}')
             if not body_enabled:
-                next_publish = monotonic() + body.PERIOD_S
+                if monotonic() >= next_publish:
+                    next_publish = monotonic() + body.PERIOD_S
                 return None
             state = controller.wait_state(timeout)
             body._validate_body_state(state, body_info=info, require_stationary=False)
@@ -181,6 +182,9 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             next_publish = max(next_publish + body.PERIOD_S, monotonic() + body.PERIOD_S)
             return state
 
+        # Read the existing Body deadline; the EE loop must not restart it on
+        # each endpoint wakeup. Existing single-callback callers stay unchanged.
+        frame.next_deadline = lambda: next_publish
         if plan is not None:
             start = pose
             duration = plan.duration(start)
@@ -480,7 +484,7 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
                 break
             if monotonic() >= deadline:
                 raise TimeoutError('end-effector output did not become ready after EXTERNAL entry')
-            sleep(min(body.PERIOD_S, max(0, deadline-monotonic())))
+            sleep(max(0.0, min(frame.next_deadline(), deadline)-monotonic()))
         if touch != 'keep':
             for client in clients:
                 result = touch_worker.submit(set_touch_and_observe, client, touch == 'on',
@@ -489,10 +493,12 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
                     frame(wait=False)  # Same owner/body watchdog continues during bounded RPC.
                     for guard in guards.values():
                         guard.feedback(True)
-                    sleep(body.PERIOD_S)
+                    sleep(max(0.0, frame.next_deadline()-monotonic()))
                 state, sample = result.result()
                 emit(f'{client.side}: touch_state={state.sample_ref} touch_sample={None if sample is None else sample.sample_ref}')
-        positions = {side: initial.pos for side, initial in initials.items()}
+        # Preparation and RPC may outlive the preflight measurement. Keep the
+        # saved return target, but enter interpolation from current guarded data.
+        positions = {side: guard.feedback(True).pos for side, guard in guards.items()}
 
         def transition(end, minimum=0.0):
             start = dict(positions)
@@ -545,8 +551,8 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
                 if not loop:
                     return
 
+        next_due = {side: monotonic() for side in guards}
         for leg, target_at, seconds in phases():
-            next_due = {side: monotonic() for side in guards}
             began = monotonic()
             deadline, next_print = began+seconds, began
             final_sent = set()
@@ -566,7 +572,9 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
                     for client in clients:
                         print_feedback(client, emit)
                     next_print = now+feedback_interval
-                sleep(max(0.0, min([monotonic()+body.PERIOD_S, *next_due.values(), *([deadline] if now < deadline else [])])-monotonic()))
+                if len(final_sent) != len(guards) or monotonic() < deadline:
+                    sleep(max(0.0, min([frame.next_deadline(), *next_due.values(),
+                        *([deadline] if now < deadline else [])])-monotonic()))
             final_deadline = monotonic()+timeout
             while True:
                 frame(wait=False)
@@ -575,7 +583,7 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
                     break
                 if monotonic() >= final_deadline:
                     raise TimeoutError('final end-effector input admission was not observed')
-                sleep(body.PERIOD_S)
+                sleep(max(0.0, min(frame.next_deadline(), final_deadline)-monotonic()))
     touch_worker = ThreadPoolExecutor(max_workers=1) if touch != 'keep' else None
     try:
         run_external(controller, command_loop, body=body, timeout=timeout, body_enabled=body_enabled,

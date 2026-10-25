@@ -4,6 +4,7 @@ Uses real new DTO/codec fields and the shared controller allocator. This is
 regression source, not measured robot output or proof of transport delivery.
 """
 from dataclasses import replace
+from contextlib import contextmanager
 import io
 import math
 import signal
@@ -163,6 +164,64 @@ class EndEffectorExampleTest(unittest.TestCase):
         self.run_case(c,[e],duration=.2,rates={'right':100.})
         self.assertTrue(all(b-a >= .031 for a,b in zip(e.times,e.times[1:])))
         self.assertEqual(c.calls.count('exit_external'),1)
+
+    def test_trajectory_entry_uses_post_prepare_state_and_keeps_original_return_target(self):
+        for during in ('entry', 'touch'):
+            with self.subTest(during=during):
+                c = self.controller()
+                clients = [Endpoint(c, side, touch=True) for side in ('left', 'right')]
+                saved = {e.side: e._state.pos for e in clients}
+                def changed():
+                    for e in clients:
+                        e._state = replace(e._state, pos=(.07,))
+                original_enter = c.enter_external
+                def enter(timeout):
+                    status = original_enter(timeout)
+                    if during == 'entry':
+                        changed()
+                    return status
+                c.enter_external = enter
+                future = Mock()
+                future.done.return_value = True
+                def reply():
+                    changed()
+                    return clients[0]._state, clients[0].touch
+                future.result.side_effect = reply
+                pool = Mock(); pool.submit.return_value = future
+                with patch.object(demo, 'ThreadPoolExecutor', return_value=pool):
+                    self.run_case(c, clients, pattern='sine', period=1., duration=.12,
+                        sine_min=.01, sine_max=.08, touch='on' if during == 'touch' else 'keep')
+                for e in clients:
+                    self.assertEqual(e.commands[0].target.pos, (.07,))
+                    self.assertNotEqual(e.commands[0].target.pos, saved[e.side])
+                    self.assertEqual(e.commands[-1].target.pos, saved[e.side])
+                    for a, b, t0, t1 in zip(e.commands, e.commands[1:], e.times, e.times[1:]):
+                        self.assertLessEqual(abs(b.target.pos[0]-a.target.pos[0]), (t1-t0)+1e-9)
+                self.assertEqual(c.calls.count('exit_external'), 1)
+
+    def test_nondividing_body_and_endpoint_deadlines_keep_each_cadence(self):
+        c = self.controller()
+        clients = [Endpoint(c, side) for side in ('left', 'right')]
+        self.run_case(c, clients, duration=.12, rates={'left': 1/.015, 'right': 1/.025})
+        for times, period, minimum in ((c.command_times, .02, 7),
+                                       (clients[0].times, .015, 9),
+                                       (clients[1].times, .025, 6)):
+            self.assertGreaterEqual(len(times), minimum)
+            for index, actual in enumerate(times):
+                self.assertAlmostEqual(actual-times[0], index*period, places=9)
+        self.assertEqual(c.calls.count('exit_external'), 1)
+
+    def test_slow_endpoint_deadline_survives_target_to_return_phase(self):
+        c = self.controller(); e = Endpoint(c)
+        saved = e._state.pos
+        self.run_case(c, [e], duration=1., rates={'right': 1.}, return_to_start=True)
+        returning = [i for i, command in enumerate(e.commands) if command.target.pos == saved]
+        self.assertTrue(returning)
+        self.assertGreater(returning[0], 0)
+        self.assertTrue(all(b-a >= 1.-1e-9 for a, b in zip(e.times, e.times[1:])))
+        self.assertGreaterEqual(e.times[returning[0]]-e.times[returning[0]-1], 1.-1e-9)
+        self.assertEqual(e.commands[-1].target.pos, saved)
+        self.assertEqual(c.calls.count('exit_external'), 1)
 
     def test_explicit_units_and_none_zero_signed_torque_remain_distinct(self):
         c = self.controller(); e=Endpoint(c)
@@ -418,6 +477,76 @@ class EndEffectorExampleTest(unittest.TestCase):
                 self.assertEqual(order,[('join',1)])
                 pool.shutdown.assert_called_once_with(wait=True,cancel_futures=True)
                 if failure: self.assertFalse(e.commands)
+
+    def test_pending_service_faults_cancel_then_join_then_close_without_motion_tail(self):
+        for fault in ('revoked', 'stale', 'signal'):
+            with self.subTest(fault=fault):
+                clock = FakeClock()
+                c = RecordingController(clock)
+                e = Endpoint(c, touch=True)
+                order = []
+                pending = False
+                interrupted = False
+                future = Mock(); future.done.return_value = False
+                pool = Mock()
+                def submit(*_args, **_kwargs):
+                    nonlocal pending
+                    pending = True
+                    if fault == 'revoked':
+                        c.fail_phase_after_commands = 1
+                    elif fault == 'stale':
+                        c.advance_lowstate = False
+                    return future
+                pool.submit.side_effect = submit
+                pool.shutdown.side_effect = lambda **_kw: order.append(('join', c.command_count))
+                original_cancel = c.exit_external
+                def cancel(timeout):
+                    result = original_cancel(timeout)
+                    order.append(('cancel', c.command_count))
+                    return result
+                c.exit_external = cancel
+                def sleep(seconds):
+                    nonlocal interrupted
+                    clock.sleep(seconds)
+                    if pending and fault == 'signal' and not interrupted:
+                        interrupted = True
+                        signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+                @contextmanager
+                def controller_factory(**_kwargs):
+                    try:
+                        yield c
+                    finally:
+                        order.append(('controller-close', c.command_count))
+                        c.close()
+                @contextmanager
+                def client_factory(*_args, **_kwargs):
+                    try:
+                        yield e
+                    finally:
+                        order.append(('client-close', c.command_count))
+                original_run = demo.run
+                def run_with_clock(*args, **kwargs):
+                    return original_run(*args, **kwargs, sleep=sleep,
+                                        monotonic=clock.monotonic, emit=self.events.append)
+                argv = ['--confirm-motion', '--side', 'right', '--right-pos', '.0625',
+                        '--right-unit', 'm', '--touch', 'on', '--timeout', '.3']
+                with patch.object(demo, 'ThreadPoolExecutor', return_value=pool), \
+                     patch.object(demo, 'run', side_effect=run_with_clock), patch('builtins.print'):
+                    if fault == 'signal':
+                        demo.main(argv, _controller_factory=controller_factory, _client_factory=client_factory)
+                    else:
+                        message = 'ownership/phase' if fault == 'revoked' else 'lowstate became stale'
+                        with self.assertRaisesRegex(RuntimeError, message):
+                            demo.main(argv, _controller_factory=controller_factory, _client_factory=client_factory)
+                self.assertTrue(pending)
+                self.assertEqual([name for name, _ in order],
+                                 ['cancel', 'join', 'client-close', 'controller-close'])
+                self.assertEqual(len({count for _, count in order}), 1)
+                self.assertEqual(c.calls.count('exit_external'), 1)
+                self.assertFalse(e.commands)
+                future.result.assert_not_called()
+                pool.submit.assert_called_once()
+                pool.shutdown.assert_called_once_with(wait=True, cancel_futures=True)
 
 
 class TouchObservationTest(unittest.TestCase):
