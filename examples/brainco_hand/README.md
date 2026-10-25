@@ -1,5 +1,8 @@
 # 强脑手 demo 与只读采集
 
+当前源码增量：`brainco_capture.py` 已迁到新EE根，JSONL格式为 `end_effector_capture_v4`，类型名 `left_ee_*`/`right_ee_*`，触觉payload为精确uint8列表，metadata绑定新EndEffectorTouch BFBS。历史LowCmd/LowState仅显式离线归档；无旧Hand/Gripper在线fallback。下述旧运动程序尚待单EE CLI替换，不能与此新capture冒充已经成套HIL。合法schema80生成物/安装仍待，勿据旧0.1.5安装说明运行本候选。
+
+
 `brainco_hand_external.py` 控制独立 HandCmd topic，并与本体共用一轮EXTERNAL；`brainco_capture.py` 只读采集/导出，不获取租约。需要真实 BrainCo 末端、匹配 HandInfo/state/touch 与公共31槽本体反馈；不能用 none 设备证明手部动作通过。
 
 ```bash

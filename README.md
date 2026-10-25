@@ -242,12 +242,21 @@ which must confirm PASSIVE. There is no automatic neutral hand trajectory;
 PASSIVE can let loaded body limbs fall. A killed client does not guarantee
 lease release. Hand session/sequence and body EXTERNAL generation are separate.
 
-`examples/brainco_hand/brainco_capture.py` subscribes to independent hand topics plus body
-BodyState/ControlStatus (and historical LowCmd/LowState recordings) and exports MCAP with the optional `hil` extra.
-Missing or nonfinite hand feedback is retained as JSON null, never a synthetic
-zero. Five-stage robot timestamps use Vita host microseconds; zero future stages
-are unmeasured. Public HandState carries these stages; no separate public trace
-root is required. Host tests and packaging do not establish device HIL.
+`examples/brainco_hand/brainco_capture.py` retains its historical filename but
+captures only the new `/sdk/foot_humanoid/end_effector/<side>/{info,state,touch,cmd}`
+and current Body/ControlStatus topics. JSONL uses `end_effector_capture_v4`;
+kind names are `left_ee_*` / `right_ee_*`. It creates no publisher or service
+client. Old Hand/Gripper live decoders are not a fallback.
+
+Touch payload is an exact uint8 list; region stamps, independent sample IDs,
+status/direction/validity, full DescriptorRef and command SampleRef/key are
+preserved. Missing/nonfinite feedback stays JSON null with its original
+validity, never a healthy zero. Queue drops, partial capture and transport loss
+remain separate. The optional `hil` extra exports MCAP in storage order with
+exact topic/root/BFBS and encoding checks, CRC validation and source/payload
+hashes. Historical LowCmd/LowState are explicit offline archive choices only.
+Metadata `schema_sha256` binds the new EndEffectorTouch BFBS for touch export.
+No time mapping, physical completion or device HIL is inferred by capture.
 
 ## Read-only body state
 
