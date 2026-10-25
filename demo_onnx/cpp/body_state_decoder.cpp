@@ -22,7 +22,10 @@ struct Imu {
 struct State {
   uint32_t protocol, roster;
   uint64_t id, real, pub, consumed, session, sequence, output;
-  bool attitude;
+  bool attitude, key_valid;
+  uint64_t control;
+  uint8_t source_type;
+  std::optional<lowlevel::ee::DescriptorRef> descriptor;
   std::vector<lowlevel::BodyJointState> joints;
   std::vector<Imu> imus;
 };
@@ -54,9 +57,9 @@ State ReadState(const uint8_t *data, size_t size, size_t offset) {
       reinterpret_cast<const lowlevel::BodyState *>(data + offset);
   if (!verifier.VerifyTable(view))
     throw std::invalid_argument("invalid BodyState FlatBuffer");
-  if (view->protocol_version() != 2)
+  if (view->protocol_version() != 3)
     throw std::invalid_argument(
-        "incompatible BodyState protocol_version; expected BODY 2");
+        "incompatible BodyState protocol_version; expected BodyState 3");
   result.protocol = view->protocol_version();
   result.roster = view->roster_version();
   result.id = view->state_id();
@@ -67,6 +70,10 @@ State ReadState(const uint8_t *data, size_t size, size_t offset) {
   result.session = view->applied_session_id();
   result.sequence = view->applied_sequence();
   result.output = view->ts_first_output_us();
+  result.control = view->ts_control_us();
+  result.key_valid = view->applied_key_valid();
+  result.source_type = view->association_source_type();
+  if (view->descriptor_ref()) result.descriptor = *view->descriptor_ref();
   if (const auto *joints = view->joints()) {
     if (joints->size() != 31)
       throw std::invalid_argument(
@@ -91,9 +98,15 @@ State ReadState(const uint8_t *data, size_t size, size_t offset) {
   return result;
 }
 
+py::object Descriptor(const State &state, const py::object &descriptor_type) {
+  if (!state.descriptor) return py::none();
+  return descriptor_type(state.descriptor->robot_runtime_id(),
+                         state.descriptor->descriptor_epoch());
+}
+
 py::object Decode(py::buffer input, size_t offset, const py::object &state_type,
                   const py::object &joint_type, const py::object &imu_type,
-                  const py::object &sample_type) {
+                  const py::object &sample_type, const py::object &descriptor_type) {
   // bytes is retained without copying. Mutable/borrowed buffers are copied
   // before decoding, so results never borrow mutable caller storage.
   py::bytes owned =
@@ -125,7 +138,9 @@ py::object Decode(py::buffer input, size_t offset, const py::object &state_type,
   py::object dto =
       state_type(result.id, joints, result.protocol, result.roster, result.real,
                  result.pub, result.consumed, result.attitude, imus,
-                 result.session, result.sequence, result.output);
+                 result.session, result.sequence, result.output,
+                 Descriptor(result, descriptor_type), result.control,
+                 result.key_valid, result.source_type);
   return dto;
 }
 
@@ -155,7 +170,8 @@ py::array View(std::vector<T> &data, py::ssize_t columns,
   return result;
 }
 
-py::dict DecodeArrays(py::buffer input, size_t offset) {
+py::dict DecodeArrays(py::buffer input, size_t offset,
+                      const py::object &descriptor_type) {
   py::bytes owned =
       py::reinterpret_steal<py::bytes>(PyObject_Bytes(input.ptr()));
   if (!owned) throw py::error_already_set();
@@ -228,21 +244,31 @@ py::dict DecodeArrays(py::buffer input, size_t offset) {
   out["applied_session_id"] = v.session;
   out["applied_sequence"] = v.sequence;
   out["ts_first_output_us"] = v.output;
+  out["descriptor_ref"] = Descriptor(v, descriptor_type);
+  out["ts_control_us"] = v.control;
+  out["applied_key_valid"] = v.key_valid;
+  out["association_source_type"] = v.source_type;
   return out;
 }
 }  // namespace
 
 void BindBodyState(py::module_ &module) {
-  module.def("decode_state_arrays", &DecodeArrays, py::arg("payload"),
-             py::arg("table_offset") = 0);
   auto types = py::module_::import("locomotion_aorta.body_types");
+  module.def(
+      "decode_state_arrays",
+      [descriptor = types.attr("DescriptorRef")](py::buffer input, size_t offset) {
+        return DecodeArrays(input, offset, descriptor);
+      },
+      py::arg("payload"), py::arg("table_offset") = 0);
   module.attr("BODY_STATE_SCHEMA_SHA256") = BODY_STATE_SCHEMA_SHA256;
+  module.attr("BODY_STATE_PROTOCOL_VERSION") = 3;
   module.def(
       "decode_state",
       [state = types.attr("BodyState"), joint = types.attr("BodyJointState"),
        imu = types.attr("BodyImuState"),
-       sample = types.attr("BodyImuSample")](py::buffer input, size_t offset) {
-        return Decode(input, offset, state, joint, imu, sample);
+       sample = types.attr("BodyImuSample"),
+       descriptor = types.attr("DescriptorRef")](py::buffer input, size_t offset) {
+        return Decode(input, offset, state, joint, imu, sample, descriptor);
       },
       py::arg("payload"), py::arg("table_offset") = 0);
 }

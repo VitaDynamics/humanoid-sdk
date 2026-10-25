@@ -9,7 +9,9 @@ std::vector<uint8_t> MakeState(uint64_t sequence) {
   const auto wall_us = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
   lowlevel::BodyStateT state;
-  state.protocol_version = 2;
+  state.protocol_version = 3;
+  // Synthetic producer: descriptor/association validity remains absent until
+  // supplied by this Mock's own authoritative snapshot, never inferred from keys.
   state.state_id = sequence;
   state.roster_version = 1;
   state.ts_state_real_us = state.ts_state_pub_us = state.ts_consumed_us = wall_us;

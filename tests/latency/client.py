@@ -83,7 +83,7 @@ def main():
     def callback(state):
         with lock:
             try:
-                if state.protocol_version != 2 or len(state.joints) != 31 or not 0 < state.state_id <= 65000:
+                if state.protocol_version != 3 or len(state.joints) != 31 or not 0 < state.state_id <= 65000:
                     raise ValueError("invalid state slots/sequence")
                 command = BodyCmd(
                     protocol_version=2, action=BodyCmdAction.EXTERNAL,

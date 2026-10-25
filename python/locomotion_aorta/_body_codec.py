@@ -3,12 +3,12 @@ import struct
 from dataclasses import fields
 from typing import Any
 from .body_types import (
-    BODY_SLOTS, BODY_PROTOCOL_VERSION, BodyJointState, BodyImuState, BodyImuSample,
+    BODY_SLOTS, BODY_STATE_PROTOCOL_VERSION, DescriptorRef, BodyJointState, BodyImuState, BodyImuSample,
     BodyState, BodyJointCmd, BodyJointCapability, BodyMotorIdentity, BodyInfo,
     EndEffectorCapability, RobotInfo, GetRobotInfoResponse, HandInfo, GripperInfo,
 )
 
-# Layouts and vector slots from the public 0.1.3 / BODY v2 generated accessors.
+# Frozen joint layouts: BodyCmd2 and BodyState3 retain the same struct strides.
 _COMMAND = struct.Struct("<" + "fffff" * BODY_SLOTS)
 _JOINT_STATE = struct.Struct("<QQQfffI")
 _MOTOR = struct.Struct("<fffff")
@@ -89,8 +89,8 @@ def _text(value: bytes | str | None) -> str:
 
 def decode_body_state(view: Any) -> BodyState:
     # Check the existing BODY revision before interpreting a fixed-stride struct.
-    if view.ProtocolVersion() != BODY_PROTOCOL_VERSION:
-        raise ValueError("incompatible BodyState protocol_version; expected BODY 2")
+    if view.ProtocolVersion() != BODY_STATE_PROTOCOL_VERSION:
+        raise ValueError("incompatible BodyState protocol_version; expected BodyState 3")
     imus = []
     for i in range(view.ImuStatesLength()):
         sample = view.ImuStates(i)
@@ -100,8 +100,10 @@ def decode_body_state(view: Any) -> BodyState:
                         for j in range(getattr(state, _getter(name) + 'Length')()))
             for name in ('quaternion', 'gyroscope', 'accelerometer', 'rpy')})
         imus.append(_dto(sample, BodyImuSample, state=imu))
+    ref = view.DescriptorRef()
     return _dto(view, BodyState, joints=unpack_body_joints(view),
-                imu_states=tuple(imus))
+                imu_states=tuple(imus), descriptor_ref=None if ref is None else
+                DescriptorRef(ref.RobotRuntimeId(), ref.DescriptorEpoch()))
 
 
 _decode_body_state_python = decode_body_state  # Reference for native golden tests.

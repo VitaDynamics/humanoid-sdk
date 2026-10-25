@@ -11,7 +11,15 @@ from aorta.services.common.ServiceStatus import ServiceStatus
 from .hand_types import HandInfo
 
 BODY_SLOTS = 31
-BODY_PROTOCOL_VERSION = 2
+BODY_CMD_PROTOCOL_VERSION = 2
+BODY_STATE_PROTOCOL_VERSION = 3
+
+
+@dataclass(frozen=True, slots=True)
+class DescriptorRef:
+    """Shared Body/EE snapshot identity; both integers retain uint64 width."""
+    robot_runtime_id: int
+    descriptor_epoch: int
 
 @dataclass(frozen=True, slots=True)
 class BodyJointCmd:
@@ -25,7 +33,7 @@ class BodyJointCmd:
 class BodyCmd:
     joints: tuple[BodyJointCmd, ...]
     action: int = BodyCmdAction.EXTERNAL
-    protocol_version: int = BODY_PROTOCOL_VERSION
+    protocol_version: int = BODY_CMD_PROTOCOL_VERSION
     session_id: int = 0
     sequence: int = 0
     input_state_id: int = 0
@@ -63,10 +71,10 @@ class BodyImuSample:
 
 @dataclass(frozen=True, slots=True)
 class BodyState:
-    """uint64 state/correlation IDs; first-output stamp is a control-cycle time."""
+    """All-source association; valid zero keys and unobserved stamps are retained."""
     state_id: int
     joints: tuple[BodyJointState, ...]
-    protocol_version: int = BODY_PROTOCOL_VERSION
+    protocol_version: int = BODY_STATE_PROTOCOL_VERSION
     roster_version: int = 0
     ts_state_real_us: int = 0
     ts_state_pub_us: int = 0
@@ -76,6 +84,10 @@ class BodyState:
     applied_session_id: int = 0
     applied_sequence: int = 0
     ts_first_output_us: int = 0
+    descriptor_ref: DescriptorRef | None = None
+    ts_control_us: int = 0
+    applied_key_valid: bool = False
+    association_source_type: int = 0
 
 @dataclass(frozen=True, slots=True)
 class BodyJointCapability:

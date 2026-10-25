@@ -27,7 +27,7 @@ from .types import (
 )
 
 from .body_types import (
-    BODY_SLOTS, BODY_PROTOCOL_VERSION, BodyState, BodyCmd, BodyJointCmd, BodyCmdAction,
+    BODY_SLOTS, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION, BodyState, BodyCmd, BodyJointCmd, BodyCmdAction,
     BodyInfo, GetRobotInfoResponse,
 )
 
@@ -265,7 +265,7 @@ class ExternalController:
         context = self._reserve_command()
         external_command = replace(
             command,
-            protocol_version=BODY_PROTOCOL_VERSION,
+            protocol_version=BODY_CMD_PROTOCOL_VERSION,
             action=BodyCmdAction.EXTERNAL,
             root_quat=None,
             session_id=context.session_id,
@@ -413,7 +413,7 @@ class ExternalController:
         self.close()
 
     def _on_body_state(self, lowstate: Any) -> None:
-        if not isinstance(lowstate, BodyState) or lowstate.protocol_version != BODY_PROTOCOL_VERSION:
+        if not isinstance(lowstate, BodyState) or lowstate.protocol_version != BODY_STATE_PROTOCOL_VERSION:
             return
         with self._condition:
             if not self._closed:

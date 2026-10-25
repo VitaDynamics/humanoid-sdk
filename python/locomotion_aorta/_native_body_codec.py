@@ -9,10 +9,12 @@ from functools import lru_cache
 def _state_decoder():
     from . import _body_cmd_native
     import body_state_schema_meta as meta
-    if (meta.SCHEMA_HASH_HEX != _body_cmd_native.BODY_STATE_SCHEMA_SHA256
+    from .body_types import BODY_STATE_PROTOCOL_VERSION
+    if (getattr(_body_cmd_native, "BODY_STATE_PROTOCOL_VERSION", None) != BODY_STATE_PROTOCOL_VERSION
+            or meta.SCHEMA_HASH_HEX != _body_cmd_native.BODY_STATE_SCHEMA_SHA256
             or hashlib.sha256(meta.SCHEMA_BFBS).hexdigest()
             != _body_cmd_native.BODY_STATE_SCHEMA_SHA256):
-        raise RuntimeError('native BodyState decoder requires the pinned BODY2 schema')
+        raise RuntimeError('native BodyState decoder requires the pinned BodyState3 schema')
     return _body_cmd_native.decode_state
 
 

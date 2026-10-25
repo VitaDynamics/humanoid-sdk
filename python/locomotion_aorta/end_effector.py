@@ -1,7 +1,7 @@
 """New EE development client on one existing EXTERNAL connection.
 
-The current source candidate supports K=0 and typed set_touch. It does not
-implement Body3 observations or replace the released old API.
+Observation sources are fixed at startup; callers supply the actual sample refs
+used by each invocation. No independent controller or sample synchronizer.
 """
 import math
 import struct
@@ -57,7 +57,9 @@ class TouchSetError(RuntimeError):
 
 class EndEffectorClient:
     def __init__(self, side, *, connection, read_only=False,
-                 on_info=None, on_state=None, on_touch=None):
+                 on_info=None, on_state=None, on_touch=None, observation_sources=()):
+        codec.validate_observation_sources(observation_sources)
+        self._observation_sources = observation_sources
         if side not in ('left', 'right'):
             raise ValueError('side must be left or right')
         if type(read_only) is not bool:
@@ -98,6 +100,10 @@ class EndEffectorClient:
         except BaseException:
             self.close()
             raise
+
+    @property
+    def observation_sources(self):
+        return self._observation_sources
 
     def _ensure_open(self):
         if self._closed:
@@ -282,12 +288,12 @@ class EndEffectorClient:
                 self._ensure_open()
                 if self._read_only:
                     raise InvalidCommandError('read-only EndEffectorClient cannot publish')
-                if not isinstance(input_observations, tuple) or input_observations:
-                    raise InvalidCommandError('only K=0 is supported until the real startup observation binding is supplied')
                 info = self._get('info')
                 if info is None:
                     raise InvalidCommandError('validated EE Info is required before publish')
                 try:
+                    codec.validate_observations(info.descriptor_ref, input_observations,
+                                                sources=self._observation_sources)
                     prepared = codec.prepare_target(info, target)
                 except (ValueError, TypeError, OverflowError) as error:
                     raise InvalidCommandError(str(error)) from error
@@ -314,7 +320,7 @@ class EndEffectorClient:
             submission = EndEffectorSubmission(
                 info.descriptor_ref, info.layout_id, info.side,
                 ControlRef(context.client_id, context.lease_id),
-                CommandKey(context.session_id, context.sequence), prepared)
+                CommandKey(context.session_id, context.sequence), prepared, input_observations)
             self._publisher.publish_typed(
                 lambda builder, header: codec.fill_command(self._bindings, submission, builder, header))
             return submission

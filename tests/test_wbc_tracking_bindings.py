@@ -27,7 +27,7 @@ def encode_state(state):
 
 class WbcTrackingBindingTest(unittest.TestCase):
     def test_disabled_trunk_without_state_does_not_discard_feedback(self):
-        result = encode_state(BodyStateT(protocolVersion=2, joints=[BodyJointStateT() for _ in range(31)],
+        result = encode_state(BodyStateT(protocolVersion=3, joints=[BodyJointStateT() for _ in range(31)],
                               imuStates=[BodyImuSampleT(location=1, status=6)], stateId=2**63))
         self.assertEqual(result.state_id, 2**63)
         self.assertEqual((result.imu_states[0].location, result.imu_states[0].status), (1, 6))
@@ -39,7 +39,7 @@ class WbcTrackingBindingTest(unittest.TestCase):
                     tsIngestedUs=102+location, tsAssembledUs=103+location,
                     state=BodyImuStateT([1.,0.,0.,0.], [1.,2.,3.], [0.,0.,9.8], [0.,0.,0.]))
                 for location in (1,0,2)]
-        raw = BodyStateT(protocolVersion=2, rosterVersion=1, stateId=2**64-1,
+        raw = BodyStateT(protocolVersion=3, rosterVersion=1, stateId=2**64-1,
                 tsStateRealUs=1234567890123456, tsStatePubUs=1234567890123500,
                 tsConsumedUs=1234567890123490, attitudeValid=True, imuStates=imus,
                 joints=[BodyJointStateT(tsAcquiredHwUs=10+i, tsIngestedUs=20+i,

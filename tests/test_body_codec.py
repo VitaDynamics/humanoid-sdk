@@ -88,7 +88,7 @@ def make_state(*, error_codes=None):
         module('BodyJointState').CreateBodyJointState(builder, *values)
     joints = builder.EndVector()
     m.BodyStateStart(builder)
-    m.BodyStateAddProtocolVersion(builder, 2)
+    m.BodyStateAddProtocolVersion(builder, 3)
     m.BodyStateAddStateId(builder, 91)
     m.BodyStateAddTsStateRealUs(builder, 1_234_567)
     m.BodyStateAddTsStatePubUs(builder, 1_234_890)
@@ -183,7 +183,7 @@ class BodyCodecTest(unittest.TestCase):
     def test_v1_is_rejected_before_any_fixed_stride_or_imu_decode(self):
         from types import SimpleNamespace
         # Only protocol_version is safe to read from the incompatible v1 frame.
-        for version in (0, 1, 3):
+        for version in (0, 1, 2, 4, 0xffffffff):
             with self.subTest(version=version), self.assertRaisesRegex(ValueError, 'protocol_version'):
                 builder = flatbuffers.Builder(1)
                 m = module('BodyState')
@@ -235,6 +235,7 @@ class BodyCodecTest(unittest.TestCase):
             ('BodyState', ['JointsLength'], [22]),
             ('BodyImuSample', ['TsSampledUs', 'TsIngestedUs'], [4,8]),
             ('BodyState', ['AppliedSessionId', 'AppliedSequence', 'TsFirstOutputUs'], [24,26,28]),
+            ('BodyState', ['DescriptorRef', 'TsControlUs', 'AppliedKeyValid', 'AssociationSourceType'], [30,32,34,36]),
             ('BodyCmd', ['JointsLength','Action','RootQuat'], [20,22,24]),
         ):
             with self.subTest(table=name, getters=getters):
@@ -465,7 +466,7 @@ class BodyCodecTest(unittest.TestCase):
         for session, sequence, stamp in ((0, 0, 0), (2**64-1, 2**64-2, 99)):
             builder = flatbuffers.Builder(1)
             m.BodyStateStart(builder)
-            m.BodyStateAddProtocolVersion(builder, 2)
+            m.BodyStateAddProtocolVersion(builder, 3)
             m.BodyStateAddAppliedSessionId(builder, session)
             m.BodyStateAddAppliedSequence(builder, sequence)
             m.BodyStateAddTsFirstOutputUs(builder, stamp)
@@ -474,6 +475,31 @@ class BodyCodecTest(unittest.TestCase):
             self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us),
                              (session, sequence, stamp))
             self.assertFalse(hasattr(state, 'applied_cmd'))
+
+    def test_state3_association_preserves_all_sources_zero_keys_and_full_width_ref(self):
+        from locomotion_aorta.body_types import DescriptorRef, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION
+        self.assertEqual((BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION), (2, 3))
+        ref_module = importlib.import_module('lowlevel.ee.DescriptorRef')
+        m = module('BodyState')
+        for source in (0, 1, 2, 3, 4, 5, 6, 255):
+            for key, valid in (((0, 0), True), ((2**64-1, 2**63+3), True), ((99, 101), False)):
+                with self.subTest(source=source, key=key, valid=valid):
+                    obj = m.BodyStateT(protocolVersion=3, stateId=2**64-2,
+                        descriptorRef=ref_module.DescriptorRefT(2**64-1, 2**63+1),
+                        tsControlUs=2**64-3, appliedKeyValid=valid, associationSourceType=source,
+                        appliedSessionId=key[0], appliedSequence=key[1], tsFirstOutputUs=0)
+                    builder = flatbuffers.Builder(1)
+                    builder.Finish(obj.Pack(builder))
+                    state = codec.decode_body_state(m.BodyState.GetRootAs(builder.Output()))
+                    self.assertEqual(state.descriptor_ref, DescriptorRef(2**64-1, 2**63+1))
+                    self.assertEqual((state.ts_control_us, state.applied_key_valid, state.association_source_type),
+                                     (2**64-3, valid, source))
+                    self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us),
+                                     (*key, 0))
+                    self.assertEqual(state.state_id, 2**64-2)
+        state = codec.decode_body_state(make_state()[1])
+        self.assertIsNone(state.descriptor_ref)
+        self.assertEqual((state.ts_control_us, state.applied_key_valid, state.association_source_type), (0, False, 0))
 
     def test_decoder_preserves_real_error_even_with_nonfinite_feedback(self):
         obj = module('BodyState').BodyStateT.InitFromObj(make_state()[1])

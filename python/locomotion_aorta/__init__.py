@@ -65,18 +65,18 @@ __all__ += [
 ]
 
 from .body_types import (
-    BODY_SLOTS, BODY_PROTOCOL_VERSION, BodyJointCmd, BodyCmd, BodyCmdAction,
+    BODY_SLOTS, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION, BodyJointCmd, BodyCmd, BodyCmdAction,
     BodyState, BodyJointState, BodyImuState, BodyImuSample, BodyImuLocation,
     BodySampleStatus, JointError, BodySlotRole, BodyJointCapability,
     BodyMotorIdentity, BodyInfo, RobotInfo, EndEffectorKind, EndEffectorCapability,
-    GripperInfo, GetRobotInfoResponse, ServiceStatus,
+    GripperInfo, GetRobotInfoResponse, ServiceStatus, DescriptorRef,
 )
 __all__ += [
-    "BODY_SLOTS", "BODY_PROTOCOL_VERSION", "BodyJointCmd", "BodyCmd", "BodyCmdAction",
+    "BODY_SLOTS", "BODY_CMD_PROTOCOL_VERSION", "BODY_STATE_PROTOCOL_VERSION", "BodyJointCmd", "BodyCmd", "BodyCmdAction",
     "BodyState", "BodyJointState", "BodyImuState", "BodyImuSample", "BodyImuLocation",
     "BodySampleStatus", "JointError", "BodySlotRole", "BodyJointCapability",
     "BodyMotorIdentity", "BodyInfo", "RobotInfo", "EndEffectorKind", "EndEffectorCapability",
-    "GripperInfo", "GetRobotInfoResponse", "ServiceStatus",
+    "GripperInfo", "GetRobotInfoResponse", "ServiceStatus", "DescriptorRef",
 ]
 
 from .gripper import GRIPPER_TOPIC_PREFIX, GripperClient

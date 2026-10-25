@@ -173,7 +173,7 @@ class AortaBindingContractTest(unittest.TestCase):
         import lowlevel.BodyState as module
         builder = flatbuffers.Builder(128)
         module.BodyStateStart(builder)
-        module.BodyStateAddProtocolVersion(builder, 2)
+        module.BodyStateAddProtocolVersion(builder, 3)
         module.BodyStateAddTsStateRealUs(builder, 1_234_567)
         builder.Finish(module.BodyStateEnd(builder))
         state = transport_module.decode_body_state(module.BodyState.GetRootAs(builder.Output()))

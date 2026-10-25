@@ -337,13 +337,46 @@ class EndEffectorCodecTest(unittest.TestCase):
                     RuntimeError, 'new generated EE'):
                 codec.load_bindings()
 
-    def test_nonempty_observations_or_fabricated_time_are_not_encoded(self):
+    def test_fabricated_sdk_time_is_not_encoded(self):
         bindings = codec.load_bindings()
         info = decode('info', info_object())
         result = EndEffectorSubmission(info.descriptor_ref, 7, 1, ControlRef('C', 'L'),
                                       CommandKey(42, 1), codec.prepare_target(info, target()))
-        sample = SampleRef(info.descriptor_ref, SampleStream.EE_STATE, 1, 1)
-        for changed in ({'input_observations': (sample,)}, {'sdk_time_valid_mask': 1},
+        for changed in ({'sdk_time_valid_mask': 1},
                         {'ts_client_created_us': 1}, {'ts_client_send_us': 1}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 codec.fill_command(bindings, dataclasses.replace(result, **changed), flatbuffers.Builder(1), 0)
+
+    def test_nonempty_observations_use_real_struct_vector_and_roundtrip(self):
+        bindings = codec.load_bindings()
+        info = decode('info', info_object())
+        # Decoded source samples, including genuinely valid zero and wide IDs.
+        observations = tuple(decode('state', state_object(side=side, sample=sample)).sample_ref
+                             for side, sample in ((1, 0), (2, 2**64-1)))
+        observations += (decode('touch', touch_object(sample=2**63+7)).sample_ref,)
+        submission = EndEffectorSubmission(info.descriptor_ref, info.layout_id, 1,
+            ControlRef('C', 'L'), CommandKey(2**64-1, 2**63+9),
+            codec.prepare_target(info, target()), observations)
+        for size in (1, 7, 4096):
+            with self.subTest(builder_size=size):
+                builder = flatbuffers.Builder(size)
+                builder.Finish(codec.fill_command(bindings, submission, builder, 0))
+                wire = bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(builder.Output())
+                self.assertEqual(wire.InputObservationsLength(), 3)
+                self.assertEqual(codec.decode_cmd(wire), submission)
+                self.assertEqual(wire.InputObservations(0).SampleId(), 0)
+                self.assertEqual(wire.InputObservations(1).SampleId(), 2**64-1)
+                self.assertEqual(wire.InputObservations(2).SourceTimeUs(), 0)
+                self.assertEqual((wire.SdkTimeValidMask(), wire.TsClientCreatedUs(), wire.TsClientSendUs()), (0, 0, 0))
+
+    def test_wide_descriptor_and_sample_ref_preserved_by_command_codec(self):
+        bindings = codec.load_bindings()
+        info = decode('info', info_object(runtime=2**64-1, epoch=2**63+1))
+        sample = decode('state', state_object(runtime=2**64-1, epoch=2**63+1, sample=2**64-1)).sample_ref
+        submission = EndEffectorSubmission(info.descriptor_ref, 7, 1, ControlRef('C', 'L'),
+            CommandKey(0, 0), codec.prepare_target(info, target()), (sample,))
+        builder = flatbuffers.Builder(1)
+        builder.Finish(codec.fill_command(bindings, submission, builder, 0))
+        actual = codec.decode_cmd(bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(builder.Output()))
+        self.assertEqual(actual, submission)
+        self.assertEqual(actual.input_observations[0].descriptor_ref, DescriptorRef(2**64-1, 2**63+1))

@@ -6,6 +6,7 @@ not supply them. AortaHeader remains owned by the typed transport.
 from dataclasses import dataclass
 
 from .transport import AortaBindingsUnavailableError
+from .body_types import DescriptorRef
 
 try:
     from lowlevel.ee.ControlMode import ControlMode
@@ -29,12 +30,6 @@ except ImportError as error:
     ) from error
 
 EE_PROTOCOL_VERSION = 1
-
-
-@dataclass(frozen=True, slots=True)
-class DescriptorRef:
-    robot_runtime_id: int
-    descriptor_epoch: int
 
 
 @dataclass(frozen=True, slots=True)

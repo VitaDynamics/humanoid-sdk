@@ -1,13 +1,13 @@
 # Humanoid SDK
 
 SDK **0.2.1** is in preparation; packaging and release are pending.
-This candidate pins the generated public body/EE/Joy schema **0.1.5** and BODY
-protocol 2. The actual generated wheel SHA-256 is
-`9f2949f0f4748554627c624c93cf382159dd6a4fbbd845d7a83ed2af241e2afd`.
-It preserves the prior 17 BFBS contracts and adds Joy as the eighteenth root.
-Schema generation is complete; SDK packaging, full acceptance and release
-publication are pending. Use only the complete wheelhouse and hashes in
-[compatibility.json](compatibility.json), with matching robot software.
+This source increment targets **BodyCmd2 / BodyState3** and the new end-effector
+roots from schema source `80a1542097384b5d276070cbf3f705f27e9c9d53`.
+The matching generated wheel, native headers/BFBS and final dependency pins are
+**pending**. The retained 0.1.5 metadata in [compatibility.json](compatibility.json)
+is the previous dependency record, not an installable combination for this
+increment. Do not build/install this candidate with mixed schema artifacts or
+bypass the native schema guards. No new package or device acceptance is claimed.
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
@@ -19,7 +19,8 @@ aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 Dependencies are pinned to Aorta SDK and messages `2026.10.20` (ABI 13),
 `vbot-humanoid-msgs==0.1.5`, and `flatbuffers==25.12.19`. Verify wheel filenames
 and SHA-256s against [compatibility.json](compatibility.json). The runtime dependency delivery follows the `v0.1.0-rc.4` Release flow.
-Use the official 0.1.5 wheel and dependency pins in compatibility.json.
+These retained dependency values will be updated together only when the actual
+matching schema artifacts are available; they do not satisfy this candidate yet.
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
 The SDK also includes **Velocity mode** (`examples/velocity_mode/velocity_mode.py`) and
@@ -33,12 +34,12 @@ not robot-motion evidence.
 The 0.2.1 Joy input candidate adds `JoyReader`: drain Aorta input snapshots in
 the policy thread and read the latest axes plus accumulated button edge and
 sequence-gap counts. See [the Joy reader contract](examples/velocity_mode/README.md#direction-dependency).
-It uses the official public messages 0.1.5 wheel pinned in compatibility.json.
-SDK release publication remains pending; build/install the complete matching bundle.
+Joy retains its prior public contract. SDK release publication remains pending;
+the complete new matching bundle is not yet available.
 
 Match the robot's public schema hashes and roster to [compatibility.json](compatibility.json).
-Control requests use protocol 2; ACK/Status remain protocol 1; new body roots use
-protocol 2. BodyCmd action is explicitly encoded using the generated EXTERNAL
+Control requests use protocol 2; ACK/Status remain protocol 1. BodyCmd remains
+protocol 2 and BodyState uses protocol 3. BodyCmd action is explicitly encoded using the generated EXTERNAL
 symbol. Entry remains by action name and lease; the command does not activate
 EXTERNAL. Older robots rejecting v2 receive no automatic downgrade or LowCmd
 fallback. Discovery preserves partial body/hand results and actual field/limit
@@ -65,7 +66,8 @@ domains to assess feedback freshness.
 BodyImuSample keeps status and rpy (degrees), and removes temperature,
 valid_fields and duplicate device/host timestamps. BodyCmd, BodyState and
 BodyImuSample have no deprecated placeholders: IDs are renumbered contiguously
-while preserving field order (0..10, 0..12 and 0..6 respectively). There are no
+while preserving field order (0..10 and 0..6 for Cmd and IMU). BodyState3
+retains ids0..12 and appends the association fields at ids13..16. There are no
 external consumers of 0.1.3 yet; older unpublished candidates cannot be mixed.
 Both public and internal IMU locations retain HIP=0/TRUNK=1 (chest), adding
 HEAD=2 as a reserved position. The current public list follows the actual
@@ -78,19 +80,27 @@ contracts remain unchanged.
 BodyCmd has no cmd_id: correlate BODY commands and logs by session_id and
 sequence. ExternalController.publish returns the command with the actual
 assigned session/sequence after its transport publish succeeds.
-BodyState carries applied_session_id, applied_sequence and ts_first_output_us
-instead of a nested 31-joint echo. Only EXTERNAL produces nonzero applied
-associations. EXTERNAL session_id and sequence must be nonzero; the robot
-EXTERNAL ingress rejects either zero key. All three fields zero means no
-EXTERNAL command is affecting the applied output.
-The association records the last successful output send/report. TRACKING
-output clears all three only after its first successful send/report; pauses,
-send failures and the interval before that first success retain the previous
-successful EXTERNAL association. It is not cleared by the action name at
-publication time, and this does not add a nonzero-key check to TRACKING input.
-The timestamp is robot-host Unix epoch microseconds for the control cycle
-when interpolation alpha>0 first affects output, latched only after a
-successful send. It is not hardware send-completion time.
+BodyState3 retains applied_session_id, applied_sequence and ts_first_output_us,
+and adds descriptor_ref, ts_control_us, applied_key_valid and
+association_source_type. These identify the actual same-snapshot association
+across command sources. A valid key may be zero; validity must not be inferred
+from a nonzero number or the current action name. Missing/invalid association
+and unobserved timestamps stay explicit. ts_first_output_us remains a
+control-cycle first-effect timestamp, not hardware send completion.
+
+The new `EndEffectorClient` borrows the existing controller (or a read-only
+`PullStateSource`). Its startup `observation_sources=()` is an ordered immutable
+`(stream, side)` tuple; duplicates are errors and empty K remains legal.
+Pass the actual used State/Touch `.sample_ref` values through
+`publish(..., input_observations=...)` in that order. Reusing the same actual
+sample on consecutive calls does not create a new sensor sample. The client
+does not fetch a replacement latest sample or synchronize independent streams.
+Unknown SDK-to-Vita clock mapping leaves command timestamps invalid/zero.
+
+This first increment covers Body conversion and observation plumbing only.
+The following legacy write examples remain pending migration to the single
+new EE CLI, along with capture and the shared-authority Mock. They are not the
+completed PR2/HIL path; no old online bridge or device readiness is claimed.
 
 Documentation: [Humanoid documentation](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg),
 [SDK guide](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh),

@@ -254,7 +254,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(client.publish(target()).key, CommandKey(84, 1))
         self.assertEqual(client.info.descriptor_ref, DescriptorRef(100, 1))
 
-    def test_invalid_target_empty_info_read_only_closed_and_nonempty_k_never_reserve(self):
+    def test_invalid_target_empty_info_read_only_closed_and_unconfigured_k_never_reserve(self):
         for reason in ('target', 'no-info', 'read-only', 'closed', 'observations'):
             with self.subTest(reason=reason):
                 harness, node = self.harness()
@@ -988,6 +988,108 @@ class EndEffectorClientTest(unittest.TestCase):
                         wait(0, **options)
         self.assertEqual(node.commands, [])
         self.assertEqual(harness.transport.published, [])
+
+
+    def test_startup_observation_tuple_rejects_duplicates_and_bad_streams_before_subscription(self):
+        harness, node = self.harness()
+        invalid = ([], [(SampleStream.EE_STATE, 1)], ((SampleStream.EE_STATE, 1),)*2,
+                   ((SampleStream.BODY_STATE, 1),), ((SampleStream.EE_STATE, 0),),
+                   ((SampleStream.EE_TOUCH, 3),), ((0, 0),), ((255, 1),),
+                   ((True, 0),), ((SampleStream.EE_STATE, True),), ((2,),))
+        for sources in invalid:
+            with self.subTest(sources=sources), self.assertRaises(ValueError):
+                EndEffectorClient('left', connection=harness.controller, observation_sources=sources)
+            self.assertEqual(node.handles, [])
+        client = self.client(harness, node, observation_sources=((SampleStream.EE_STATE, 1),))
+        self.assertEqual(client.observation_sources, ((SampleStream.EE_STATE, 1),))
+        with self.assertRaises(AttributeError):
+            client.observation_sources = ()
+
+    def test_publish_keeps_actual_samples_order_width_and_repeated_use_without_extra_lease(self):
+        harness, node = self.harness()
+        sources = ((SampleStream.EE_STATE, 2), (SampleStream.EE_STATE, 1), (SampleStream.EE_TOUCH, 1))
+        left = self.client(harness, node, feedback=False, observation_sources=sources)
+        node.emit('left', 'info', info_object(touch=True))
+        node.emit('left', 'state', state_object(sample=0))
+        node.emit('left', 'touch', touch_object())
+        right = self.client(harness, node, 'right')
+        node.emit('right', 'state', state_object(side=2, sample=2**64-1))
+        self.assertEqual(left.state.state_id, 0)
+        used = (right.state.sample_ref, left.state.sample_ref, left.touch.sample_ref)
+        before = list(harness.transport.published)
+        for sequence in (1, 2):
+            result = left.publish(target(), input_observations=used)
+            self.assertEqual(result.key, CommandKey(42, sequence))
+            self.assertEqual(result.input_observations, used)
+            wire = node.commands[-1][1]
+            self.assertEqual(codec.decode_cmd(wire), result)
+            self.assertEqual(wire.InputObservations(0).SampleId(), 2**64-1)
+            self.assertEqual((wire.SdkTimeValidMask(), wire.TsClientCreatedUs(), wire.TsClientSendUs()), (0, 0, 0))
+        self.assertEqual(harness.transport.published, before)
+        self.assertEqual(harness.controller.publish(make_command(0)).sequence, 3)
+
+    def test_observation_shape_identity_and_width_fail_before_reservation(self):
+        harness, node = self.harness()
+        sources = ((SampleStream.EE_STATE, 1), (SampleStream.EE_STATE, 2))
+        left = self.client(harness, node, observation_sources=sources)
+        right = self.client(harness, node, 'right')
+        actual = (left.state.sample_ref, right.state.sample_ref)
+        malformed = ((), actual[:1], tuple(reversed(actual)), (actual[0], actual[0]), list(actual),
+            (None, actual[1]),
+            (dataclasses.replace(actual[0], descriptor_ref=DescriptorRef(101, 1)), actual[1]),
+            (dataclasses.replace(actual[0], descriptor_ref=DescriptorRef(100, 2)), actual[1]),
+            (dataclasses.replace(actual[0], sample_id=-1), actual[1]),
+            (dataclasses.replace(actual[0], sample_id=2**64), actual[1]),
+            (dataclasses.replace(actual[0], source_time_us=True), actual[1]),
+            (dataclasses.replace(actual[0], validity=16), actual[1]))
+        for values in malformed:
+            with self.subTest(values=values), self.assertRaises(InvalidCommandError):
+                left.publish(target(), input_observations=values)
+            self.assertEqual(node.commands, [])
+            self.assertEqual(harness.controller._next_external_sequence, 1)
+        self.assertEqual(left.publish(target(), input_observations=actual).key, CommandKey(42, 1))
+
+    def test_missing_diagnostic_time_or_content_does_not_add_motion_permission_gate(self):
+        harness, node = self.harness()
+        client = self.client(harness, node, observation_sources=((SampleStream.EE_STATE, 1),))
+        wire_state = state_object(sample=2)
+        wire_state.timeValidMask = 0
+        wire_state.sampleStatus = 3  # Actual stale sample, not fabricated current content.
+        node.emit('left', 'state', wire_state)
+        sample = client.state.sample_ref
+        self.assertEqual(sample.source_time_us, 0)
+        self.assertEqual(sample.validity, 9)
+        result = client.publish(target(), input_observations=(sample,))
+        self.assertEqual(codec.decode_cmd(node.commands[-1][1]).input_observations, (sample,))
+        self.assertEqual(result.key, CommandKey(42, 1))
+
+    def test_epoch_change_rejects_used_old_samples_without_relabeling_or_consuming_key(self):
+        harness, node = self.harness()
+        client = self.client(harness, node, observation_sources=((SampleStream.EE_STATE, 1),))
+        used = client.state.sample_ref
+        node.emit('left', 'info', info_object(epoch=2))
+        with self.assertRaises(InvalidCommandError):
+            client.publish(target(), input_observations=(used,))
+        self.assertEqual(node.commands, [])
+        self.assertEqual(harness.controller._next_external_sequence, 1)
+        node.emit('left', 'state', state_object(epoch=2, sample=1))
+        actual = client.state.sample_ref
+        self.assertEqual(actual.sample_id, used.sample_id)
+        self.assertNotEqual(actual.descriptor_ref, used.descriptor_ref)
+        self.assertEqual(client.publish(target(), input_observations=(actual,)).key, CommandKey(42, 1))
+
+    def test_nonempty_k_send_failure_consumes_shared_key_without_retry(self):
+        harness, node = self.harness()
+        client = self.client(harness, node, observation_sources=((SampleStream.EE_STATE, 1),))
+        used = (client.state.sample_ref,)
+        node.publish_error = OSError('send failure')
+        with self.assertRaises(OSError):
+            client.publish(target(), input_observations=used)
+        self.assertEqual(len(node.commands), 1)
+        self.assertEqual(codec.decode_cmd(node.commands[0][1]).input_observations, used)
+        node.publish_error = None
+        self.assertEqual(harness.controller.publish(make_command(0)).sequence, 2)
+        self.assertEqual(client.publish(target(), input_observations=used).key, CommandKey(42, 3))
 
 
 if __name__ == '__main__':

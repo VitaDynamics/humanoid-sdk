@@ -13,6 +13,7 @@ from .end_effector_types import (
     EndEffectorState, EndEffectorTarget, EndEffectorTouch, FeedbackAppliedTarget,
     Field, InhibitReason, LimitSource, PositionDomain, ProgressEntry, RegionStamp,
     TorqueDomain, TouchPayloadType, TouchRegionInfo, EndEffectorSetTouchResponse,
+    ControlRef, EndEffectorSubmission, SampleRef, SampleStream,
 )
 
 _COMMAND_FIELDS = Field.POS | Field.VEL | Field.VEL_LIMIT | Field.TAU | Field.CURRENT | Field.MODE
@@ -56,7 +57,7 @@ def _schema_meta(stem, root):
 def load_bindings():
     try:
         names = ('EndEffectorInfo', 'EndEffectorState', 'EndEffectorTouch',
-                 'EndEffectorCmd', 'DescriptorRef', 'CommandKey', 'ControlRef')
+                 'EndEffectorCmd', 'DescriptorRef', 'CommandKey', 'ControlRef', 'SampleRef')
         modules = {name: importlib.import_module('lowlevel.ee.' + name) for name in names}
         metas = {}
         for kind in ('info', 'state', 'touch', 'cmd'):
@@ -394,9 +395,66 @@ def _create_control_ref(bindings, builder, ref):
     return control.ControlRefEnd(builder)
 
 
+def validate_observation_sources(sources):
+    """The startup tuple is ordered and immutable; duplicates are errors."""
+    if not isinstance(sources, tuple):
+        raise ValueError('observation_sources must be a tuple')
+    for source in sources:
+        if not isinstance(source, tuple) or len(source) != 2:
+            raise ValueError('each observation source must be a (stream, side) tuple')
+        stream, side = source
+        _uint(stream, 8, 'observation stream')
+        _uint(side, 8, 'observation side')
+        if not ((stream == SampleStream.BODY_STATE and side == 0) or
+                (stream in (SampleStream.EE_STATE, SampleStream.EE_TOUCH) and side in (1, 2))):
+            raise ValueError('invalid observation stream/side')
+    if len(set(sources)) != len(sources):
+        raise ValueError('duplicate observation source')
+
+
+def validate_observations(descriptor_ref, observations, *, sources=None):
+    if not isinstance(observations, tuple):
+        raise ValueError('input_observations must be a tuple')
+    for sample in observations:
+        if not isinstance(sample, SampleRef) or not isinstance(sample.descriptor_ref, DescriptorRef):
+            raise ValueError('input_observations must contain actual SampleRef values')
+        for name in ('robot_runtime_id', 'descriptor_epoch'):
+            _uint(getattr(sample.descriptor_ref, name), 64, name)
+        for name in ('sample_id', 'source_time_us'):
+            _uint(getattr(sample, name), 64, name)
+        _uint(sample.validity, 8, 'sample validity')
+        if sample.validity & ~15:
+            raise ValueError('unknown SampleRef validity bits')
+        if sample.descriptor_ref != descriptor_ref:
+            raise ValueError('observation DescriptorRef differs from command descriptor')
+    actual = tuple((sample.stream, sample.side) for sample in observations)
+    validate_observation_sources(actual)
+    if sources is not None and actual != sources:
+        raise ValueError('input_observations must match startup K and stream/side order')
+    # No replay table, latest-sample replacement or time/content admission gate:
+    # consecutive calls may actually use the same independent sensor sample.
+
+
+def decode_cmd(view):
+    control = view.ControlRef()
+    if control is None:
+        raise ValueError('missing command ControlRef')
+    observations = []
+    for i in range(view.InputObservationsLength()):
+        sample = view.InputObservations(i)
+        observations.append(SampleRef(_ref(sample.DescriptorRef()), sample.Stream(),
+            sample.Side(), sample.SampleId(), sample.SourceTimeUs(), sample.Validity()))
+    target = EndEffectorTarget(_vector(view, 'mode'), _vector(view, 'command_fields'),
+                              **{name: _vector(view, name) for name, _ in _COMMAND_COLUMNS})
+    return _dto(view, EndEffectorSubmission, descriptor_ref=_ref(view.DescriptorRef()),
+                control_ref=ControlRef(_text(control.ClientId()), _text(control.LeaseId())),
+                key=_key(view.Key()), target=target, input_observations=tuple(observations))
+
+
 def fill_command(bindings, command, builder, header):
-    if command.input_observations or command.sdk_time_valid_mask or command.ts_client_created_us or command.ts_client_send_us:
-        raise ValueError('this candidate supports K=0 and unverified SDK time only')
+    validate_observations(command.descriptor_ref, command.input_observations)
+    if command.sdk_time_valid_mask or command.ts_client_created_us or command.ts_client_send_us:
+        raise ValueError('SDK time remains invalid/zero until a verified Vita mapping exists')
     module = bindings.EndEffectorCmd
     control_offset = _create_control_ref(bindings, builder, command.control_ref)
     vectors = {}
@@ -407,6 +465,13 @@ def fill_command(bindings, command, builder, header):
             for value in reversed(values):
                 getattr(builder, prepend)(value)
             vectors[name] = builder.EndVector()
+    if command.input_observations:
+        module.EndEffectorCmdStartInputObservationsVector(builder, len(command.input_observations))
+        for sample in reversed(command.input_observations):
+            bindings.SampleRef.CreateSampleRef(
+                builder, sample.descriptor_ref.robot_runtime_id, sample.descriptor_ref.descriptor_epoch,
+                sample.stream, sample.side, sample.sample_id, sample.source_time_us, sample.validity)
+        vectors['input_observations'] = builder.EndVector()
     module.EndEffectorCmdStart(builder)
     module.EndEffectorCmdAddAortaHeader(builder, header)
     module.EndEffectorCmdAddProtocolVersion(builder, command.protocol_version)
@@ -417,6 +482,9 @@ def fill_command(bindings, command, builder, header):
     module.EndEffectorCmdAddLayoutId(builder, command.layout_id)
     module.EndEffectorCmdAddSide(builder, command.side)
     module.EndEffectorCmdAddControlRef(builder, control_offset)
+    module.EndEffectorCmdAddTsClientCreatedUs(builder, command.ts_client_created_us)
+    module.EndEffectorCmdAddTsClientSendUs(builder, command.ts_client_send_us)
+    module.EndEffectorCmdAddSdkTimeValidMask(builder, command.sdk_time_valid_mask)
     for name, offset in vectors.items():
         getattr(module, 'EndEffectorCmdAdd' + _getter(name))(builder, offset)
     return module.EndEffectorCmdEnd(builder)

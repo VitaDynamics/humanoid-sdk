@@ -501,6 +501,22 @@ class ExternalControllerTest(unittest.TestCase):
 
         self.assertIs(harness.controller.wait_body_state(timeout=0.01), latest)
 
+    def test_body_state3_keeps_all_source_association_and_cmd_stays2(self):
+        from locomotion_aorta.body_types import DescriptorRef
+        harness = ControllerHarness()
+        self.addCleanup(harness.controller.close)
+        state = BodyState(2**64-1, (), descriptor_ref=DescriptorRef(2**64-1, 2**63+1),
+                          ts_control_us=2**64-2, applied_key_valid=True, association_source_type=2)
+        harness.transport.emit(BODY_STATE_TOPIC, state)
+        self.assertIs(harness.controller.wait_body_state(.01), state)
+        self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us), (0, 0, 0))
+        for protocol in (0, 1, 2, 4, 0xffffffff):
+            harness.transport.emit(BODY_STATE_TOPIC, replace(state, protocol_version=protocol))
+            self.assertIs(harness.controller.wait_body_state(.01), state)
+        harness.accept_enter()
+        harness.controller.enter_external(timeout=.1)
+        self.assertEqual(harness.controller.publish(make_command(0)).protocol_version, 2)
+
     def test_status_cache_does_not_regress_or_replace_a_sequence(self) -> None:
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)

@@ -58,15 +58,33 @@ class NativeStateArraysTest(unittest.TestCase):
         self.assertFalse(np.shares_memory(states[0].q,states[1].q))
 
     def test_protocol_length_truncation_and_schema_guard_errors(self):
-        for kw in ({'protocol':0},{'protocol':3},{'count':30},{'count':32}):
+        for kw in ({'protocol':0},{'protocol':1},{'protocol':2},{'protocol':4},{'count':30},{'count':32}):
             with self.assertRaises(ValueError):decode_body_state_arrays(state_buffer(3,**kw))
         for data in (b'',b'abc',state_buffer(3)[:-1]):
             with self.assertRaises(ValueError):decode_body_state_arrays(data)
         from locomotion_aorta._native_body_codec import _state_decoder
         _state_decoder.cache_clear()
         with mock.patch('body_state_schema_meta.SCHEMA_HASH_HEX','wrong'):
-            with self.assertRaisesRegex(RuntimeError,'pinned BODY2'):decode_body_state_arrays(state_buffer(3))
+            with self.assertRaisesRegex(RuntimeError,'pinned BodyState3'):decode_body_state_arrays(state_buffer(3))
         _state_decoder.cache_clear()
+
+    def test_arrays_roundtrip_retains_valid_zero_key_and_full_descriptor(self):
+        import flatbuffers
+        from lowlevel.ee.DescriptorRef import DescriptorRefT
+        m = module('BodyState')
+        for source in (0, 1, 2, 3, 4, 5, 6, 255):
+            with self.subTest(source=source):
+                obj = m.BodyStateT(protocolVersion=3, descriptorRef=DescriptorRefT(2**64-1, 2**63+7),
+                    tsControlUs=2**64-2, appliedKeyValid=True, associationSourceType=source)
+                b = flatbuffers.Builder(1); b.Finish(obj.Pack(b))
+                arrays = self.compare(bytes(b.Output()))
+                state = arrays.body_state()
+                self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us), (0, 0, 0))
+                self.assertTrue(state.applied_key_valid)
+                self.assertEqual((arrays.association_source_type, state.association_source_type), (source, source))
+                self.assertEqual(arrays.descriptor_ref.robot_runtime_id, 2**64-1)
+                self.assertEqual(arrays.descriptor_ref.descriptor_epoch, 2**63+7)
+                self.assertEqual(arrays.ts_control_us, 2**64-2)
 
     def test_compatibility_materialization_is_lazy(self):
         v=decode_body_state_arrays(state_buffer(3))
