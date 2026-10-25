@@ -20,9 +20,8 @@
     "flatbuffers/vector_downward.h": "7f687fdb661f4c1be09223d6e416e042b139ff1748b5a215cb9864c56f9f3be2",
     "flatbuffers/verifier.h": "d7fbf583019088983af684e7d00cbfda23b759093c6501f850c1c33400559b5a"
   },
-  "generated_source_schema_commit": "22369843d1f712fc35b3a664d681777df6fdd7f1",
-  "generated_source": "official public0.1.4 wheel SHA31fbd1f710a8e92043cc1d0ec80657fc5f76aad4a47e0926d94d70e415185169 actual BFBS->CPP plain generated with actual flatc25.12.19; no object API",
-  "flatc_sha256": "1d89e6ea3d1d28aa03b332f27ca4a89c29db9e1a3b4a58cb6bbb3b1be104c1b4",
+  "generated_source_schema_commit": "80a1542097384b5d276070cbf3f705f27e9c9d53",
+  "generated_source": "REQ228 sealed C carrier: actual candidate wheel BFBS to C++ plain --gen-all; delivered bytes, not author regeneration",
   "flatc_argv": [
     "flatc",
     "--cpp",
@@ -34,6 +33,10 @@
   "license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
   "body_cmd_bfbs_sha256": "c98a531aad2b43206048753b82d0bacec1ad65d2429536432766975cd211e71c",
   "body_cmd_generated_h_sha256": "86d560968788eb19661ca7d3c0f82b4f1cabe5852b3b5f05cfeaa66abb3dec7f",
-  "body_state_bfbs_sha256": "514af044787e6f29789e77359503d9f2d87f29513e4b44bcecdeeabaf1151c2e",
-  "body_state_generated_h_sha256": "92b104d92b1b72914c2c54029ea12b7dcaaaae4999b0aa36084f5491888ab07b"
+  "body_state_bfbs_sha256": "81b2089170a9f392d14fa3fde6de9ee94b7259be09648259435f0daa97a0fdaa",
+  "body_state_generated_h_sha256": "68b94dd412622076f5fd4e05794d359346f035acda5ea775fddd4506b72adeeb",
+  "generated_source_wheel_sha256": "972e7b5cf768caed26cc9f65b60ba8c5198da23ad0330e71913e55fb31a42186",
+  "generated_source_wheel_version": "0.0.0+g80a154209738",
+  "carrier_result_sha256": "9242f94c3478e4355ad5035f1e637f1c2a56aceb0d91c9ec658bbdc1dfa97f8e",
+  "flatc_version_output": "flatc version 25.12.19"
 }

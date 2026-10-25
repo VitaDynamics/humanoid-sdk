@@ -4,8 +4,8 @@
 它不获取租约、不发布运动或触觉写入。运动入口统一为
 [末端 CLI](../end_effector/README.md)，旧 `brainco_hand_external.py` 已移除。
 
-本源码需要匹配的新生成消息与 native BodyState3 产物；当前旧发布 pin 不能
-用作本候选的可运行组合。取得经验证的完整交付后，在已授权连接且配置正确
+本源码已绑定实际 schema 候选 0.0.0+g80a154209738；匹配 native BodyState3、
+完整 SDK/IPC 与机器人组合仍未测。取得经验证的完整交付后，在已授权连接且配置正确
 peer profile/group 的主机上查看：
 
 ```bash

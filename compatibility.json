@@ -18,16 +18,21 @@
     "aorta_sdk-2026.10.20-py3-none-linux_aarch64.whl": "559f8c22871fda131e6d706fa9dd5edc4b07fa3297cf42f51a844318bf9ff7ba",
     "aorta_sdk-2026.10.20-py3-none-linux_x86_64.whl": "e0909b322f20b78a2b043a9605b5f495f8555039480999273fb4e6ad0eb1c5f0",
     "flatbuffers-25.12.19-py2.py3-none-any.whl": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
-    "vbot_humanoid_msgs-0.1.5-py3-none-any.whl": "9f2949f0f4748554627c624c93cf382159dd6a4fbbd845d7a83ed2af241e2afd"
+    "vbot_humanoid_msgs-0.0.0+g80a154209738-py3-none-any.whl": "972e7b5cf768caed26cc9f65b60ba8c5198da23ad0330e71913e55fb31a42186"
   },
-  "dependency_release_tag": "v0.1.0-rc.4",
+  "dependency_release_tag": null,
   "aorta_abi_version": 13,
   "schema_sha256": {
     "body_cmd": "c98a531aad2b43206048753b82d0bacec1ad65d2429536432766975cd211e71c",
-    "body_state": "514af044787e6f29789e77359503d9f2d87f29513e4b44bcecdeeabaf1151c2e",
+    "body_state": "81b2089170a9f392d14fa3fde6de9ee94b7259be09648259435f0daa97a0fdaa",
     "control_ack": "282cb25f8ec719272f37d4e2041a749aa8d32a5022054e3c911e6cba0ff7d1ec",
     "control_request": "4e9009a2487c76e04421761871e6799d98b0b2816217dfe904240afd97eb88cc",
     "control_status": "cc897baf058703077ece4cbdc1f61b7c443905dbe1e24f204451ccf629afebf6",
+    "end_effector_cmd": "2bdedc4d5ef07cf21ad2c6ddc777b11283d9bd1c7f6b685dd93301625bdd6447",
+    "end_effector_info": "b149cf8464970a16d091ed49ffde40258559e3f1b80171e22c85d39b0a67b4ee",
+    "end_effector_set_touch": "b1fdc629a5d7cc559baaee1e4b21ba0939770cddedd25e451d01de6fc8e45fd1",
+    "end_effector_state": "1bf8f979b816014d45de4e0c7dd4eb3631a937f774135845a79e05392508f8fd",
+    "end_effector_touch": "60ccbf48e0f38a42b5b9969a14290eba4ef3096718f032ea4d9a55196e98f747",
     "get_robot_info": "36fe1b2f1fbdccc51236e6df13186a82717fc6e71b242dd00f0443fefdebfca1",
     "gripper_cmd": "8cb945b15d3f2f34d02dbb4db3ff471560ad59be9afd634c1e2d74ba3d683fda",
     "gripper_info": "116c2c227a99868c8080e0366079cf60395841c23e7eaa310fc3fe7d4f0b5564",
@@ -42,7 +47,7 @@
     "low_cmd": "b048ce7f06a560a671565deca3480dd68fc6f16ee60d6c65e99b7dbce8857485",
     "robot_info": "8ad71e50797b8a26d59ccbf9bab481d2dfef62d2443b3b5b26e9130364b0b8f5"
   },
-  "humanoid_msgs_version": "0.1.5",
+  "humanoid_msgs_version": "0.0.0+g80a154209738",
   "control_request_version": 2,
   "body_protocol_version": 2,
   "dependency_release_repository": "VitaDynamics/humanoid-sdk"

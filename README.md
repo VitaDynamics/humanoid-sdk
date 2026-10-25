@@ -3,11 +3,13 @@
 SDK **0.2.1** is in preparation; packaging and release are pending.
 This source increment targets **BodyCmd2 / BodyState3** and the new end-effector
 roots from schema source `80a1542097384b5d276070cbf3f705f27e9c9d53`.
-The matching generated wheel, native headers/BFBS and final dependency pins are
-**pending**. The retained 0.1.5 metadata in [compatibility.json](compatibility.json)
-is the previous dependency record, not an installable combination for this
-increment. Do not build/install this candidate with mixed schema artifacts or
-bypass the native schema guards. No new package or device acceptance is claimed.
+The actual schema candidate `0.0.0+g80a154209738` wheel, public BFBS and
+plain C++ BodyState3 header have been delivered from schema source
+`80a1542097384b5d276070cbf3f705f27e9c9d53`. This branch binds those exact
+candidate bytes in [compatibility.json](compatibility.json); it is **not an
+official schema release or production pin**. Native/installed SDK, full IPC,
+final robot producer integration and HIL acceptance remain pending. Generation
+and schema-carrier checks do not establish this SDK combination as usable.
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
@@ -17,10 +19,12 @@ client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
 aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 
 Dependencies are pinned to Aorta SDK and messages `2026.10.20` (ABI 13),
-`vbot-humanoid-msgs==0.1.5`, and `flatbuffers==25.12.19`. Verify wheel filenames
-and SHA-256s against [compatibility.json](compatibility.json). The runtime dependency delivery follows the `v0.1.0-rc.4` Release flow.
-These retained dependency values will be updated together only when the actual
-matching schema artifacts are available; they do not satisfy this candidate yet.
+`vbot-humanoid-msgs==0.0.0+g80a154209738`, and `flatbuffers==25.12.19`. Verify wheel filenames
+and SHA-256s against [compatibility.json](compatibility.json). The candidate is supplied through the separately
+verified offline wheelhouse; it is not in the historical dependency Release.
+`dependency_release_tag` is null, so the existing release downloader refuses
+before downloading anything. No replacement release, URL or fallback is chosen.
+
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
 The SDK also includes **Velocity mode** (`examples/velocity_mode/velocity_mode.py`) and
@@ -100,8 +104,8 @@ Unknown SDK-to-Vita clock mapping leaves command timestamps invalid/zero.
 The development source includes the shared EE client, one motion/read-only CLI,
 capture and the original protocol Mock. Legacy HandClient/GripperClient and
 their motion entries have been removed; there is no online wire fallback.
-Matching generated schema artifacts, native builds, robot producer integration
-and HIL acceptance remain required before this source can be released.
+The delivered schema candidate is bound below; native builds, final robot
+producer integration and HIL acceptance remain required before release.
 
 Documentation: [Humanoid documentation](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg),
 [SDK guide](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh),
@@ -265,8 +269,9 @@ python examples/body_state_subscriber/body_state_subscriber.py --group default -
 
 ## Development and offline packaging
 
-Install the four pinned runtime dependencies, not the SDK wheel, into a
-separate virtual environment. `make check` sets `PYTHONPATH=python:tests` and
+For a separately authorized candidate validation, supply the exact verified
+offline wheelhouse before installing the four dependencies into a separate
+virtual environment. These commands are not an installation or execution GO. `make check` sets `PYTHONPATH=python:tests` and
 tests the working tree; a pure Python edit does not require a compiler or an
 editable SDK install.
 
@@ -274,18 +279,20 @@ editable SDK install.
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install --no-index --find-links wheelhouse \
-  aorta-sdk==2026.10.20 aorta-msgs==2026.10.20 vbot-humanoid-msgs==0.1.5 flatbuffers==25.12.19
+  aorta-sdk==2026.10.20 aorta-msgs==2026.10.20 vbot-humanoid-msgs==0.0.0+g80a154209738 flatbuffers==25.12.19
 python -m pip install mcap==1.3.1
 make check
 ```
 
-The dependency Release supplies the Aorta/message/FlatBuffers wheels; it does
-not contain this checkout's SDK wheel or the optional MCAP test dependencies.
-`tools/fetch_dependencies.py --output wheelhouse --arch x86_64` (or `aarch64`)
-downloads exactly the four runtime wheels for that architecture and checks every
-pinned SHA. Authenticate `gh` for the SDK repository; CI uses its own
-`GITHUB_TOKEN` as `GH_TOKEN`. Missing release tags, failed downloads and checksum
-mismatches fail explicitly; no validation is skipped.
+This candidate requires its actual schema wheel from the fixed validation
+handoff, alongside the exact Aorta/message/FlatBuffers wheels. Their names and
+SHA-256s are listed in compatibility.json. The existing offline packager accepts
+explicit `--wheelhouse` directories and checks every pinned hash. It does not
+fetch or synthesize missing artifacts. `tools/fetch_dependencies.py` remains a
+published-Release-only downloader and intentionally refuses the null candidate
+tag; do not invent a Release to make it proceed. Published-release CI download
+jobs cannot validate this unpublished candidate without the authorized offline
+inputs. Neither path implies publication or robot acceptance.
 For a fully offline development environment, obtain MCAP and its dependency
 wheels beforehand and add `--no-index --find-links <test-wheelhouse>` to that
 MCAP installation. Without the HIL test dependencies, capture tests are skipped;
@@ -327,8 +334,8 @@ compatibility.
 
 Following SDK #10, fixed `aorta_msgs`, architecture-specific `aorta_sdk`,
 `flatbuffers` and `vbot_humanoid_msgs` wheels for CI and offline bundles live
-in **this repository's dependency prerelease**, currently `v0.1.0-rc.4`
-("dependencies for #10"). CI reads it with this repository's `GITHUB_TOKEN`
+in **this repository's dependency prerelease**. The historical `v0.1.0-rc.4`
+("dependencies for #10") does not contain the current schema candidate. CI reads it with this repository's `GITHUB_TOKEN`
 as `GH_TOKEN`; it does not read the private schema repository or require a
 cross-repository token.
 

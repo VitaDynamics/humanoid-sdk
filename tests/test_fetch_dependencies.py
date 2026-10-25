@@ -28,6 +28,7 @@ class FetchDependenciesTest(unittest.TestCase):
 
     def fixture(self):
         manifest = copy.deepcopy(self.manifest)
+        manifest["dependency_release_tag"] = "fixture-release"
         for name in manifest["wheel_sha256"]:
             manifest["wheel_sha256"][name] = hashlib.sha256(name.encode()).hexdigest()
         return manifest
@@ -38,11 +39,18 @@ class FetchDependenciesTest(unittest.TestCase):
         name = command[command.index("--pattern") + 1]
         (output / name).write_bytes(name.encode())
 
-    def test_official_release_identity(self):
-        self.assertEqual(self.manifest["dependency_release_tag"], "v0.1.0-rc.4")
+    def test_candidate_identity_is_exact_and_not_a_published_dependency_release(self):
+        self.assertIsNone(self.manifest["dependency_release_tag"])
+        self.assertEqual(self.manifest["humanoid_msgs_version"], "0.0.0+g80a154209738")
         self.assertEqual(self.manifest["dependency_release_repository"], "VitaDynamics/humanoid-sdk")
-        self.assertEqual(self.manifest["wheel_sha256"]["vbot_humanoid_msgs-0.1.5-py3-none-any.whl"],
-                         "9f2949f0f4748554627c624c93cf382159dd6a4fbbd845d7a83ed2af241e2afd")
+        self.assertEqual(self.manifest["wheel_sha256"]["vbot_humanoid_msgs-0.0.0+g80a154209738-py3-none-any.whl"],
+                         "972e7b5cf768caed26cc9f65b60ba8c5198da23ad0330e71913e55fb31a42186")
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(fetch_dependencies.subprocess, "run") as run:
+                with self.assertRaisesRegex(ValueError, "dependency_release_tag must be a nonempty string"):
+                    self.fetch(Path(directory), self.manifest)
+                run.assert_not_called()
+            self.assertFalse((Path(directory) / "wheels").exists())
 
     def test_each_architecture_downloads_four_exact_assets_from_the_sdk_release(self):
         for arch in ("x86_64", "aarch64"):
@@ -53,7 +61,7 @@ class FetchDependenciesTest(unittest.TestCase):
                 for call in calls:
                     command = call.args[0]
                     name = command[-1]
-                    self.assertEqual(command[3], "v0.1.0-rc.4")
+                    self.assertEqual(command[3], "fixture-release")
                     self.assertEqual(command[5], "VitaDynamics/humanoid-sdk")
                     self.assertNotIn("env", call.kwargs)
                     self.assertTrue(call.kwargs["check"])
@@ -74,7 +82,7 @@ class FetchDependenciesTest(unittest.TestCase):
 
     def test_incomplete_wheelhouse_is_rejected_before_download(self):
         manifest = self.fixture()
-        del manifest["wheel_sha256"]["vbot_humanoid_msgs-0.1.5-py3-none-any.whl"]
+        del manifest["wheel_sha256"][f"vbot_humanoid_msgs-{manifest['humanoid_msgs_version']}-py3-none-any.whl"]
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "incomplete pinned wheelhouse"):
                 self.fetch(Path(directory), manifest)
@@ -83,7 +91,7 @@ class FetchDependenciesTest(unittest.TestCase):
     def test_missing_release_repository_fails_before_any_download(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "compatibility.json"
-            manifest = copy.deepcopy(self.manifest)
+            manifest = self.fixture()
             del manifest["dependency_release_repository"]
             path.write_text(json.dumps(manifest))
             with mock.patch.object(fetch_dependencies, "MANIFEST", path), mock.patch.object(
@@ -103,15 +111,17 @@ class FetchDependenciesTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "humanoid-sdk#dependency-release-convention") as error:
                 self.fetch(Path(directory), self.fixture(), download=download)
             self.assertIs(error.exception.__cause__, failed)
-            self.assertIn("v0.1.0-rc.4", str(error.exception))
+            self.assertIn("fixture-release", str(error.exception))
             self.assertIn(calls[0][-1], str(error.exception))
             self.assertEqual(len(calls), 1)
 
     def test_corrupt_asset_fails_and_is_retained(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            manifest = copy.deepcopy(self.manifest)
+            manifest["dependency_release_tag"] = "fixture-release"
             with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
-                self.fetch(root, self.manifest, download=self.download)
+                self.fetch(root, manifest, download=self.download)
             self.assertTrue(any((root / "wheels").iterdir()))
 
 

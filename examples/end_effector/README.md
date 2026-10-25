@@ -1,8 +1,8 @@
 # Generic end-effector example (development source)
 
-This entry requires the matching generated schema and native BodyState3 codec.
-The repository's old released pin is not a runnable combination with this
-source increment. No device/HIL result is implied.
+This branch pins the actual schema candidate 0.0.0+g80a154209738. It still
+requires a matching validated native BodyState3 codec and final robot producer;
+no installed/native/IPC or device/HIL result is implied by the schema delivery.
 
 `end_effector_external.py` uses one shared controller for Body and both selected
 end effectors. The default and `--dry-run` use a read-only source: no control

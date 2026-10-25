@@ -133,6 +133,16 @@ class NativeBodyCmdTest(unittest.TestCase):
             'demo_onnx/cpp/body_cmd_vendor/provenance.json').read_text())
         self.assertEqual(native.BODY_SCHEMA_SHA256, provenance['body_cmd_bfbs_sha256'])
         self.assertEqual(native.BODY_STATE_SCHEMA_SHA256, provenance['body_state_bfbs_sha256'])
+        import hashlib
+        root = Path(__file__).resolve().parents[1]
+        compatibility = json.loads((root / 'compatibility.json').read_text())
+        self.assertEqual(provenance['generated_source_wheel_version'], compatibility['humanoid_msgs_version'])
+        wheel = 'vbot_humanoid_msgs-' + compatibility['humanoid_msgs_version'] + '-py3-none-any.whl'
+        self.assertEqual(provenance['generated_source_wheel_sha256'], compatibility['wheel_sha256'][wheel])
+        for stem in ('body_cmd', 'body_state'):
+            header = root / 'demo_onnx/cpp/body_cmd_vendor' / (stem + '_generated.h')
+            self.assertEqual(hashlib.sha256(header.read_bytes()).hexdigest(), provenance[stem + '_generated_h_sha256'])
+            self.assertEqual(provenance[stem + '_bfbs_sha256'], compatibility['schema_sha256'][stem])
 
     def test_controller_validation_population_and_type_rules_retained(self):
         population = tuple(i != 14 for i in range(31))

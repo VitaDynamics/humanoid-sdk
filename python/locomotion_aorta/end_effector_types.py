@@ -1,7 +1,7 @@
 """Development EE views for the fixed e38 contract; SI values, no old-wire adapter.
 
-Requires the actual new generated public bindings. The existing 0.1.5 pin does
-not supply them. AortaHeader remains owned by the typed transport.
+Requires the matching generated public bindings from the dependency manifest.
+AortaHeader remains owned by the typed transport.
 """
 from dataclasses import dataclass
 
