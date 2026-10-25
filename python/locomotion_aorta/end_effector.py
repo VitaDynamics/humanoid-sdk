@@ -139,6 +139,7 @@ class EndEffectorClient:
         self._closed = False
         self._fatal = None
         self._latest = {'info': None, 'state': None, 'touch': None}
+        self._candidate_info = None
         self._errors = {'info': None, 'state': None, 'touch': None}
         self._callbacks = {'info': on_info, 'state': on_state, 'touch': on_touch}
         self._subscriptions = {}
@@ -208,27 +209,21 @@ class EndEffectorClient:
                     codec.validate_info(value)
                     if value.side != self._side:
                         raise ValueError('Info side differs from endpoint')
-                    if info is not None:
-                        old, new = info.descriptor_ref, value.descriptor_ref
-                        if new.robot_runtime_id != old.robot_runtime_id:
-                            self._fatal = ValueError('robot runtime changed')
-                            self._condition.notify_all()
+                    if info is None or value.descriptor_ref != info.descriptor_ref:
+                        if (info is not None and
+                                value.descriptor_ref.robot_runtime_id == info.descriptor_ref.robot_runtime_id and
+                                value.descriptor_ref.descriptor_epoch < info.descriptor_ref.descriptor_epoch):
                             return
-                        if new.descriptor_epoch < old.descriptor_epoch:
-                            return
-                        if new == old and _description(value) != _description(info):
-                            self._fatal = ValueError('immutable Info changed without a new DescriptorRef')
-                            self._condition.notify_all()
-                            return
-                        if new != old:
-                            if _layout(value) != _layout(info):
-                                self._fatal = ValueError('layout/shape changed; no hot resize')
-                                self._condition.notify_all()
-                                return
-                            self._latest['state'] = self._latest['touch'] = None
-                            self._errors['state'] = self._errors['touch'] = None
-                            self._raw_shape = None
-                            self._position = self._fault = self._position_received_at = None
+                        # A successful single-side publication is not a pair commit.
+                        # Keep only one candidate; wait_info can await the committed
+                        # Ref's original repeater even after a later candidate escaped.
+                        self._candidate_info = value
+                        self._condition.notify_all()
+                        return
+                    if _description(value) != _description(info):
+                        self._fatal = ValueError('immutable Info changed without a new DescriptorRef')
+                        self._condition.notify_all()
+                        return
                 else:
                     if info is None or value.descriptor_ref != info.descriptor_ref:
                         return
@@ -265,6 +260,9 @@ class EndEffectorClient:
                     self._errors[kind] = error
                     self._condition.notify_all()
             return
+        self._deliver(kind, value, callback)
+
+    def _deliver(self, kind, value, callback):
         if kind == 'info' and value.touch_available:
             try:
                 self._register('touch')
@@ -334,12 +332,79 @@ class EndEffectorClient:
                 self._condition.wait(remaining)
 
     def wait_info(self, timeout=5.0, *, after_descriptor=None):
+        """Confirm a candidate through at most one existing RobotInfo RPC.
+
+        The transport bounds matching and call separately, not their combined
+        duration. No RPC runs on the subscriber or under this client's locks.
+        A missing/uncommitted reply retains the accepted view; callers may make
+        another explicit request, but this call never retries the service.
+        """
+        deadline = _deadline(timeout)
         if after_descriptor is not None:
             if not isinstance(after_descriptor, DescriptorRef):
                 raise TypeError('after_descriptor must be DescriptorRef')
             codec._uint(after_descriptor.robot_runtime_id, 64, 'robot_runtime_id')
             codec._uint(after_descriptor.descriptor_epoch, 64, 'descriptor_epoch')
-        return self._wait('info', timeout, after_descriptor)
+        with self._condition:
+            self._ensure_open()
+            while self._latest['info'] is None and self._candidate_info is None:
+                self._get('info')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('timed out waiting for EE info candidate')
+                self._condition.wait(remaining)
+                self._ensure_open()
+        reply = self.connection.transport.get_robot_info(timeout)
+        confirmed = None if reply.info is None else reply.info.committed_descriptor_ref
+        if confirmed is not None:
+            if not isinstance(confirmed, DescriptorRef):
+                raise ValueError('invalid committed DescriptorRef')
+            codec._uint(confirmed.robot_runtime_id, 64, 'robot_runtime_id')
+            codec._uint(confirmed.descriptor_epoch, 64, 'descriptor_epoch')
+            if not confirmed.robot_runtime_id or not confirmed.descriptor_epoch:
+                raise ValueError('committed DescriptorRef must be nonzero')
+        while True:
+            adopted = None
+            with self._publish_lock, self._condition:
+                self._ensure_open()
+                info, candidate = self._latest['info'], self._candidate_info
+                if candidate is not None and candidate.descriptor_ref == confirmed and (
+                        info is None or confirmed != info.descriptor_ref and (
+                            confirmed.robot_runtime_id != info.descriptor_ref.robot_runtime_id or
+                            confirmed.descriptor_epoch > info.descriptor_ref.descriptor_epoch)):
+                    if info is not None:
+                        if confirmed.robot_runtime_id != info.descriptor_ref.robot_runtime_id:
+                            self._fatal = ValueError('robot runtime changed')
+                        elif _layout(candidate) != _layout(info):
+                            self._fatal = ValueError('layout/shape changed; no hot resize')
+                        if self._fatal is not None:
+                            self._condition.notify_all()
+                            self._ensure_open()
+                    self._latest['info'] = candidate
+                    self._candidate_info = None
+                    self._errors['info'] = None
+                    self._latest['state'] = self._latest['touch'] = None
+                    self._errors['state'] = self._errors['touch'] = None
+                    self._raw_shape = None
+                    self._position = self._fault = self._position_received_at = None
+                    adopted, callback = candidate, self._callbacks['info']
+                    self._condition.notify_all()
+                value = self._get('info')
+                observed = (value, self._candidate_info, self._errors['info'])
+            if adopted is not None:
+                self._deliver('info', adopted, callback)
+            with self._condition:
+                self._ensure_open()
+                # A callback/another explicit confirmation may have changed the view.
+                value = self._get('info')
+                if value is not None and value.descriptor_ref != after_descriptor:
+                    return value
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('timed out waiting for committed EE info')
+                if all(a is b for a, b in zip(observed, (
+                        value, self._candidate_info, self._errors['info']))):
+                    self._condition.wait(remaining)
 
     def _after_sample(self, sample, stream):
         if sample is not None:
@@ -492,6 +557,7 @@ class EndEffectorClient:
             self._service_clients.clear()
             self._publisher = None
             self._callbacks = {'info': None, 'state': None, 'touch': None}
+            self._candidate_info = None
             self._position = self._fault = self._position_received_at = None
             self._condition.notify_all()
         for handle in handles:

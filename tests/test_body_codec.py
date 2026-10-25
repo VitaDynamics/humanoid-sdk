@@ -101,6 +101,33 @@ def make_state(*, error_codes=None):
 
 
 class BodyCodecTest(unittest.TestCase):
+    def test_robot_info_committed_ref_is_optional_and_preserves_full_uint64(self):
+        from lowlevel.ee.DescriptorRef import DescriptorRefT
+        from locomotion_aorta import DescriptorRef
+        from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
+        for ref in (None, DescriptorRefT(2**64-1, 2**63+7)):
+            with self.subTest(committed=ref is not None):
+                info = module('RobotInfo').RobotInfoT(protocolVersion=1, tsInfoUs=987,
+                    committedDescriptorRef=ref)
+                reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS,
+                    info=info, errorMessage='right unavailable')
+                builder = flatbuffers.Builder(1)
+                builder.Finish(reply.Pack(builder))
+                wire = GetRobotInfoResponse.GetRootAs(builder.Output())
+                result = codec.decode_robot_info_response(wire)
+                self.assertEqual(result.info.committed_descriptor_ref,
+                    None if ref is None else DescriptorRef(2**64-1, 2**63+7))
+                self.assertEqual((result.status, result.error_message, result.info.protocol_version,
+                                  result.info.ts_info_us),
+                    (ServiceStatus.PARTIAL_SUCCESS, 'right unavailable', 1, 987))
+                self.assertEqual(result.info.end_effectors, ())
+                self.assertIsNone(result.info.body)
+
+    def test_robot_info_positional_body_dto_keeps_default_unconfirmed_ref(self):
+        from locomotion_aorta.body_types import RobotInfo
+        info = RobotInfo(1, 23, None, ())
+        self.assertIsNone(info.committed_descriptor_ref)
+
     def test_bulk_is_byte_identical_to_real_factory_with_growth_padding_and_actions(self):
         for size in (1, 7, 64, 4096):
             for prefix in (0, 1, 3, 17):

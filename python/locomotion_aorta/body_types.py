@@ -140,6 +140,7 @@ class RobotInfo:
     ts_info_us: int
     body: BodyInfo | None
     end_effectors: tuple[EndEffectorCapability, ...]
+    committed_descriptor_ref: DescriptorRef | None = None
 
 @dataclass(frozen=True, slots=True)
 class GetRobotInfoResponse:

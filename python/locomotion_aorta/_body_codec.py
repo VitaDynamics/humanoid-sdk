@@ -126,6 +126,7 @@ def _decode_gripper_info(view: Any) -> GripperInfo:
 
 
 def decode_robot_info(view: Any) -> RobotInfo:
+    committed = view.CommittedDescriptorRef()
     body = view.Body()
     body_info = None if body is None else _dto(
         body, BodyInfo,
@@ -142,7 +143,9 @@ def decode_robot_info(view: Any) -> RobotInfo:
         effectors.append(_dto(entry, EndEffectorCapability,
                              hand=None if hand is None else _decode_hand_info(hand),
                              gripper=grip, reason=_text(entry.Reason())))
-    return _dto(view, RobotInfo, body=body_info, end_effectors=tuple(effectors))
+    return _dto(view, RobotInfo, body=body_info, end_effectors=tuple(effectors),
+                committed_descriptor_ref=None if committed is None else DescriptorRef(
+                    committed.RobotRuntimeId(), committed.DescriptorEpoch()))
 
 
 def decode_robot_info_response(view: Any) -> GetRobotInfoResponse:

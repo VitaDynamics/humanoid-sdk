@@ -41,15 +41,72 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
         clock_patch = patch('locomotion_aorta.end_effector.time.monotonic', self.clock.monotonic)
         clock_patch.start(); self.addCleanup(clock_patch.stop)
 
-    def feed(self, kind, name):
+    def feed(self, kind, name, *, client=None):
+        client = self.client if client is None else client
         payload = (self.root/name).read_bytes()  # No fallback or Python re-encoding.
         self.assertTrue(payload)
-        decoder, callback = self.node.subscriptions['/sdk/foot_humanoid/end_effector/left/' + kind]
+        decoder, callback = self.node.subscriptions[
+            '/sdk/foot_humanoid/end_effector/' + client.side + '/' + kind]
         callback(decoder(payload), None)
-        return getattr(self.client, kind)
+        return getattr(client, kind)
+
+    def confirm(self, name, *, client=None):
+        client = self.client if client is None else client
+        from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponse
+        from locomotion_aorta._body_codec import decode_robot_info_response
+        payload = (self.root/name).read_bytes()
+        self.assertTrue(payload, 'actual committed RobotInfo producer bytes are required')
+        reply = decode_robot_info_response(GetRobotInfoResponse.GetRootAs(payload))
+        with patch.object(self.harness.transport, 'get_robot_info', return_value=reply):
+            return client.wait_info(.1)
+
+    def test_actual_robot_partial_publish_preserves_E1_until_pair_commit(self):
+        right = sdk.EndEffectorClient('right', connection=self.harness.controller,
+            observation_sources=((SampleStream.EE_STATE, 2),))
+        self.addCleanup(right.close)
+        for client in (self.client, right):
+            self.feed('info', 'recovery/' + client.side + '_e1_info.fb', client=client)
+            self.confirm('recovery/committed_e1.fb', client=client)
+            self.feed('state', 'recovery/' + client.side + '_e1_state.fb', client=client)
+        info, state, feedback = self.client.info, self.client.state, self.client.motion_feedback()
+        old_ref = info.descriptor_ref
+        old_sample = state.sample_ref
+        self.feed('info', 'recovery/left_e2_candidate.fb')
+        self.assertIs(self.client.info, info)
+        self.assertIs(self.client.state, state)
+        self.assertEqual(self.client.motion_feedback(), feedback)
+        self.assertIs(self.confirm('recovery/partial_committed_e1.fb'), info)
+        continued = self.feed('state', 'recovery/left_e1_next_state.fb')
+        self.assertEqual(continued.descriptor_ref, old_ref)
+        self.assertGreater(continued.state_id, state.state_id)
+        self.feed('state', 'recovery/right_e1_inhibited.fb', client=right)
+        with self.assertRaisesRegex(RuntimeError, 'inhibited|permission|ready'):
+            demo._EndpointGuard(right, right.info, 1., self.clock.monotonic).feedback(True)
+        self.harness.accept_enter(); self.harness.controller.enter_external(timeout=.1)
+        guard = demo._EndpointGuard(self.client, info, 1., self.clock.monotonic)
+        target = demo.position_target(info, continued.pos, unit='rad')
+        command = guard.publish(target, continued)
+        self.assertEqual(command.descriptor_ref, old_ref)
+        sent = len(self.node.commands)
+        for client in (self.client, right):
+            self.feed('info', 'recovery/' + client.side + '_e3_info.fb', client=client)
+            new = self.confirm('recovery/committed_e3.fb', client=client)
+            self.assertEqual(new.descriptor_ref.robot_runtime_id, old_ref.robot_runtime_id)
+            self.assertGreater(new.descriptor_ref.descriptor_epoch, old_ref.descriptor_epoch)
+            self.assertIsNone(client.state)
+            self.feed('state', 'recovery/' + client.side + '_e1_state.fb', client=client)
+            self.assertIsNone(client.state)
+            self.feed('state', 'recovery/' + client.side + '_e3_state.fb', client=client)
+            self.assertEqual(client.state.descriptor_ref, new.descriptor_ref)
+        self.assertEqual(len(self.node.commands), sent)  # No replay on adoption.
+        self.assertEqual(info.descriptor_ref, old_ref)
+        with self.assertRaises(sdk.InvalidCommandError):
+            self.client.publish(target, input_observations=(old_sample,))
+        self.assertEqual(len(self.node.commands), sent)
 
     def linker(self):
         self.feed('info', 'linker/info.fb')
+        self.confirm('linker/robot_info.fb')
         position = self.feed('state', 'linker/position.fb')
         self.assertTrue(all(mask & Field.POS for mask in position.valid_fields))
         return position, demo._EndpointGuard(self.client, self.client.info,
@@ -100,6 +157,7 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
 
     def test_actual_robot_touch_disable_replay_and_true_next_sample(self):
         self.feed('info', 'brainco/info.fb')
+        self.confirm('brainco/robot_info.fb')
         old = self.feed('touch', 'brainco/touch.fb')
         disabled = self.feed('touch', 'brainco/touch_disabled.fb')
         self.assertEqual(disabled.touch_state_id, old.touch_state_id)

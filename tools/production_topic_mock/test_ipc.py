@@ -57,6 +57,8 @@ def ee_client():
             observation_sources=((SampleStream.EE_STATE, number),)))
             for side, number in (('left',1), ('right',2))]
         infos = [endpoint.wait_info(5) for endpoint in endpoints]
+        committed = controller.get_robot_info(5)
+        assert committed.info.committed_descriptor_ref == infos[0].descriptor_ref == infos[1].descriptor_ref
         state = controller.wait_body_state(5)
         assert state.protocol_version == 3
         assert state.descriptor_ref == infos[0].descriptor_ref == infos[1].descriptor_ref

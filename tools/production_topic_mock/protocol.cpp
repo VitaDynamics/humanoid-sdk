@@ -95,7 +95,7 @@ bool ValidInfoRequest(const std::vector<uint8_t>& bytes) {
   return aorta::services::humanoid_locomotion::VerifyGetRobotInfoRequestBuffer(
       verifier);
 }
-std::vector<uint8_t> EncodeInfo() {
+std::vector<uint8_t> EncodeInfo(uint64_t committed_runtime) {
   static const std::array<const char*, kSlots> names{
       "left_hip_pitch_joint",
       "left_hip_roll_joint",
@@ -130,6 +130,10 @@ std::vector<uint8_t> EncodeInfo() {
       "neck_yaw_joint"};
   lowlevel::RobotInfoT info;
   info.protocol_version = 1;
+  if (committed_runtime) {
+    info.committed_descriptor_ref =
+        std::make_unique<lowlevel::ee::DescriptorRef>(committed_runtime, 1);
+  }
   info.body = std::make_unique<lowlevel::BodyInfoT>();
   info.body->slot_count = kSlots;
   info.body->roster_version = 1;

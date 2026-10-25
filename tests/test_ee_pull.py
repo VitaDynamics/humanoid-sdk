@@ -10,7 +10,7 @@ from unittest.mock import patch
 from locomotion_aorta import EndEffectorClient
 from locomotion_aorta.end_effector_types import Field, SampleStream
 from test_controller import ControllerHarness
-from test_end_effector_client import Node
+from test_end_effector_client import Node, confirm_info
 from test_end_effector_codec import info_object, state_object, target
 
 
@@ -26,7 +26,7 @@ class EEPullTest(unittest.TestCase):
         with patch('threading.Thread', side_effect=AssertionError('Python worker created')):
             client = EndEffectorClient(side, connection=owner.controller, **options)
         self.addCleanup(client.close)
-        node.emit(side, 'info', info_object(side=1 if side == 'left' else 2))
+        confirm_info(client, node, info_object(side=1 if side == 'left' else 2))
         return client, node, owner
 
     def test_contending_waiters_sleep_and_receive_same_actual_sample_on_both_sides(self):

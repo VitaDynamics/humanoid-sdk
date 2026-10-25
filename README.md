@@ -11,6 +11,15 @@ official schema release or production pin**. Native/installed SDK, full IPC,
 final robot producer integration and HIL acceptance remain pending. Generation
 and schema-carrier checks do not establish this SDK combination as usable.
 
+The committed-descriptor source increment additionally requires generated
+bindings from schema `1322fda8e342939829ea25866b79919105e27549`.
+Those artifacts and a replacement candidate dependency binding are pending;
+the existing schema80 pin does not supply the new RobotInfo accessor.
+EE `wait_info` explicitly confirms the candidate through RobotInfo once per
+call. An absent committed Ref is unconfirmed, not permission to learn from
+the first topic packet. Service failure preserves accepted feedback and does
+not retry automatically. Matching and RPC have separate transport timeouts.
+
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
 with **CPython 3.10**, glibc **2.35+** and GLIBCXX **3.4.29+**

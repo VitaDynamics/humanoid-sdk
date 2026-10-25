@@ -454,7 +454,7 @@ class EndEffectorExampleTest(unittest.TestCase):
 
     def test_actual_client_publish_writes_new_root_K_and_same_body_allocator(self):
         from locomotion_aorta.end_effector import EndEffectorClient
-        from test_end_effector_client import Node
+        from test_end_effector_client import Node, confirm_info
         clock_patch=patch('locomotion_aorta.end_effector.time.monotonic',self.clock.monotonic)
         clock_patch.start(); self.addCleanup(clock_patch.stop)
         recorded=self.controller()
@@ -466,7 +466,7 @@ class EndEffectorExampleTest(unittest.TestCase):
                 observation_sources=((SampleStream.EE_STATE,wire_side),))
             self.addCleanup(client.close); clients.append(client)
             info=info_object(side=wire_side); info.deviceModel=DeviceModel.AGX
-            node.emit(side,'info',info); node.emit(side,'state',state_object(side=wire_side))
+            confirm_info(client,node,info); node.emit(side,'state',state_object(side=wire_side))
         original_factory=node.create_publisher_typed
         samples={'left':1,'right':1}
         def publisher(*args,**kwargs):
@@ -672,7 +672,7 @@ class TouchObservationTest(unittest.TestCase):
 
 class PartialFeedbackGuardTest(unittest.TestCase):
     def setUp(self):
-        from test_end_effector_client import Node
+        from test_end_effector_client import Node, confirm_info
         from test_controller import ControllerHarness
         from locomotion_aorta.end_effector import EndEffectorClient
         self.clock=FakeClock()
@@ -684,7 +684,7 @@ class PartialFeedbackGuardTest(unittest.TestCase):
         self.clock_patch=patch('locomotion_aorta.end_effector.time.monotonic',self.clock.monotonic)
         self.clock_patch.start(); self.addCleanup(self.clock_patch.stop)
         info=info_object(); info.deviceModel=DeviceModel.LINKER_L6
-        self.node.emit('left','info',info)
+        confirm_info(self.client,self.node,info)
 
     def emit(self,sample,fields,**changes):
         state=state_object(sample=sample); state.validFields=[fields]
@@ -749,7 +749,8 @@ class PartialFeedbackGuardTest(unittest.TestCase):
             self.emit(2,Field.POS)
         position=demo.wait_position(self.client,self.client.info,.03,sleep=sleep,monotonic=self.clock.monotonic)
         self.assertEqual(position.state_id,2)
-        self.node.emit('left','info',info_object(epoch=2))
+        from test_end_effector_client import confirm_info
+        confirm_info(self.client,self.node,info_object(epoch=2))
         with self.assertRaisesRegex(TimeoutError,'position was not observed'):
             demo.wait_position(self.client,self.client.info,.03,sleep=self.clock.sleep,monotonic=self.clock.monotonic)
 
