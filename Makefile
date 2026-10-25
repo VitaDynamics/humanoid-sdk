@@ -11,6 +11,7 @@ check: test
 	$(PYTHON) -m pip check
 	$(PYTHON) examples/body_state_subscriber/body_state_subscriber.py --help
 	$(PYTHON) examples/end_effector_state_subscriber/end_effector_state_subscriber.py --help
+	$(PYTHON) examples/end_effector/end_effector_external.py --help
 	$(PYTHON) examples/external_control/external_control.py --help
 	$(PYTHON) examples/teleop_policy/teleop_policy.py --help
 	$(PYTHON) examples/brainco_hand/brainco_hand_external.py --help
