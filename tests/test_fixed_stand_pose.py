@@ -6,11 +6,11 @@ import unittest
 from body_fixtures import robot_info_reply
 from examples.external_control import external_control as body
 from examples.fixed_stand_pose.fixed_stand_pose import FixedStandPose
-from examples.gripper.gripper_external import run_external
-from examples.gripper import gripper_external as gripper_demo
+from examples.end_effector.end_effector_external import run_external
+from examples.end_effector import end_effector_external as gripper_demo
 from locomotion_aorta import BODY_CMD_TOPIC
 from test_examples import FakeClock, RecordingController
-from test_gripper_external import FakeGripper
+from test_end_effector_external import Endpoint
 from test_teleop_policy import NAMES
 
 
@@ -118,15 +118,16 @@ class ZeroPoseTest(unittest.TestCase):
                         {'drift_command_range': (8, 60), 'drift_position_rad': .2}):
             with self.subTest(options=options):
                 c, clock = self.controller(**options)
-                gripper = FakeGripper()
+                gripper = Endpoint(c)
                 events = []
-                publish = gripper.publish_target
+                publish = gripper.publish
                 def gripper_publish(*args, **kwargs):
                     self.assertNotIn('exit_external', c.calls)
                     self.assertTrue(any('ZERO_DWELL complete observation_only=true' in e for e in events))
                     return publish(*args, **kwargs)
-                gripper.publish_target = gripper_publish
-                gripper_demo.run(c, gripper, q=.075, duration=.08, body_pose='zero',
+                gripper.publish = gripper_publish
+                target = gripper_demo.position_target(gripper.info, (.075,), unit='m')
+                gripper_demo.run(c, [gripper], {gripper.side: target}, duration=.08, body_pose='zero',
                                  timeout=1, sleep=clock.sleep, monotonic=clock.monotonic, emit=events.append)
                 self.assertTrue(gripper.commands)
                 complete = [e for e in events if 'ZERO_DWELL complete observation_only=true' in e]
@@ -164,16 +165,17 @@ class ZeroPoseTest(unittest.TestCase):
 
     def test_zero_pose_round_trip_keeps_one_external_session(self):
         c, clock = self.controller()
-        g = FakeGripper()
-        initial = g.state.sample.q
-        publish = g.publish_target
+        g = Endpoint(c)
+        initial = g.state.pos[0]
+        publish = g.publish
         def checked_publish(*args, **kwargs):
             self.assertTrue(all(j.q == 0 for j in self.commands(c)[-1].joints))
             return publish(*args, **kwargs)
-        g.publish_target = checked_publish
-        gripper_demo.run(c, g, q=.075, duration=.08, body_pose='zero', return_to_start=True,
+        g.publish = checked_publish
+        target = gripper_demo.position_target(g.info, (.075,), unit='m')
+        gripper_demo.run(c, [g], {g.side: target}, duration=.08, body_pose='zero', return_to_start=True,
                          timeout=1, sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
-        self.assertEqual(list(dict.fromkeys(cmd.q for cmd in g.commands)), [.075, initial])
+        self.assertEqual(list(dict.fromkeys(cmd.target.pos[0] for cmd in g.commands)), [.075, initial])
         self.assertEqual(c.calls.count('enter_external'), 1)
         self.assertEqual(c.calls.count('exit_external'), 1)
 

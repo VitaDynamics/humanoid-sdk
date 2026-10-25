@@ -292,7 +292,7 @@ class BodyCodecTest(unittest.TestCase):
     def test_nested_hand_info_preserves_every_frozen_field_and_public_type(self):
         from locomotion_aorta import HandInfo
         from locomotion_aorta.hand_types import HandInfo as InfoDto
-        from locomotion_aorta import _hand_codec
+        from locomotion_aorta._body_codec import _decode_hand_info
 
         expected = dict(
             ts_info_us=2**63+1, hand_type=255, firmware='固件-μ', side=1, dof=6,
@@ -318,7 +318,7 @@ class BodyCodecTest(unittest.TestCase):
         nested = codec.decode_robot_info(wire).end_effectors[0].hand
         standalone_builder = flatbuffers.Builder(1)
         standalone_builder.Finish(hand.Pack(standalone_builder))
-        standalone = _hand_codec.decode_info(
+        standalone = _decode_hand_info(
             module('HandInfo').HandInfo.GetRootAs(standalone_builder.Output()))
 
         self.assertIs(HandInfo, InfoDto)
@@ -338,7 +338,7 @@ class BodyCodecTest(unittest.TestCase):
     def test_nested_gripper_info_preserves_every_frozen_field_and_public_type(self):
         from locomotion_aorta import GripperInfo
         from locomotion_aorta.gripper_types import GripperInfo as InfoDto
-        from locomotion_aorta import _gripper_codec
+        from locomotion_aorta._body_codec import _decode_gripper_info
 
         expected = dict(
             ts_info_us=2**63+1, gripper_type=255, model='', firmware='固件-μ', side=2,
@@ -364,7 +364,7 @@ class BodyCodecTest(unittest.TestCase):
         standalone_builder = flatbuffers.Builder(1)
         standalone_builder.ForceDefaults(True)
         standalone_builder.Finish(gripper.Pack(standalone_builder))
-        standalone = _gripper_codec.decode_info(
+        standalone = _decode_gripper_info(
             module('GripperInfo').GripperInfo.GetRootAs(standalone_builder.Output()))
 
         self.assertIs(GripperInfo, InfoDto)

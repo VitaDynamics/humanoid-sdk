@@ -4,12 +4,11 @@ import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import Mock
 
-from examples.brainco_hand import brainco_hand_external
+from examples.end_effector import end_effector_external
 from examples.external_control import external_control
-from examples.gripper import gripper_external
 from examples.teleop_policy import teleop_policy
 from locomotion_aorta import BODY_CMD_TOPIC
-from test_brainco_hand_external import FakeHand
+from test_end_effector_external import Endpoint
 from test_examples import FakeClock, RecordingController
 from test_teleop_policy import API, CONTRACT, METADATA, fixture
 
@@ -67,14 +66,17 @@ class TimedDemoTests(unittest.TestCase):
         def loop(frame):
             for _ in range(10):
                 frame()
-        self.assert_body_timer(lambda c, clock: gripper_external.run_external(
+        self.assert_body_timer(lambda c, clock: end_effector_external.run_external(
             c, loop, body=external_control, timeout=1, sleep=clock.sleep,
             monotonic=clock.monotonic, emit=lambda _: None))
 
     def test_hand_body_hold_keeps_timer_with_400hz_state(self):
-        self.assert_body_timer(lambda c, clock: brainco_hand_external.run(
-            c, [FakeHand()], timeout=1, sleep=clock.sleep,
-            monotonic=clock.monotonic, emit=lambda _: None))
+        def run(c, clock):
+            hand = Endpoint(c, hand=True)
+            target = end_effector_external.position_target(hand.info, (.25,)*6, unit='rad')
+            end_effector_external.run(c, [hand], {hand.side: target}, duration=.12,
+                timeout=1, sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
+        self.assert_body_timer(run)
 
     def test_teleop_50hz_logs_actual_keys_and_keeps_timer_with_400hz_state(self):
         body, state = fixture()

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import unittest
 
-from locomotion_aorta._hand_codec import load_bindings
+from locomotion_aorta._end_effector_codec import load_bindings, load_touch_bindings
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,12 +38,15 @@ class PublicEeBindingTest(unittest.TestCase):
                 meta = importlib.import_module(stem + '_schema_meta')
                 self.assertEqual(hashlib.sha256(meta.SCHEMA_BFBS).hexdigest(), expected)
 
-    def test_hand_topics_and_touch_control_are_generated(self):
+    def test_generic_topics_and_touch_control_are_generated(self):
         bindings = load_bindings()
-        for name in ('HandCmd', 'HandState', 'HandTouch', 'HandInfo',
-                     'HandSetTouchRequest', 'HandSetTouchResponse'):
+        for name in ('EndEffectorCmd', 'EndEffectorState', 'EndEffectorTouch', 'EndEffectorInfo'):
             with self.subTest(name=name):
                 self.assertTrue(callable(getattr(getattr(bindings, name), name).GetRootAs))
+        service = load_touch_bindings()
+        for module, name in ((service.request, 'EndEffectorSetTouchRequest'),
+                             (service.response, 'EndEffectorSetTouchResponse')):
+            self.assertTrue(callable(getattr(module, name).GetRootAs))
         for name in ('hand_cmd_trace',):
             with self.subTest(removed_root=name), self.assertRaises(ImportError):
                 importlib.import_module(name + '_schema_meta')

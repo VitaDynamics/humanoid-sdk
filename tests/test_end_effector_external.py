@@ -355,6 +355,47 @@ class EndEffectorExampleTest(unittest.TestCase):
             self.run_case(c,[e],feedback_interval=.5)
         self.assertNotIn('enter_external',c.calls)
 
+    def test_fraction_loop_repeats_then_signal_cancels_without_a_tail_target(self):
+        for pattern in ('simultaneous', 'sequential'):
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                with self.subTest(pattern=pattern, signum=signum):
+                    c = self.controller(); e = Endpoint(c, hand=True)
+                    previous_handlers = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+                    high_visits, previous_high, stopped = 0, False, []
+                    def stop_in_second_round(command):
+                        nonlocal high_visits, previous_high
+                        high = command.target.pos[0] == .75
+                        if high and not previous_high:
+                            high_visits += 1
+                        previous_high = high
+                        if high_visits == 2:
+                            stopped.append(len(e.commands))
+                            signal.getsignal(signum)(signum, None)
+                    e.after_publish = stop_in_second_round
+                    original_exit = c.exit_external
+                    def cancel(timeout):
+                        self.assertEqual(signal.getsignal(signal.SIGINT), signal.SIG_IGN)
+                        self.assertEqual(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
+                        return original_exit(timeout)
+                    with patch.object(c, 'exit_external', side_effect=cancel):
+                        with self.assertRaises(KeyboardInterrupt):
+                            self.run_case(c, [e], pattern=pattern, loop=True)
+                    self.assertEqual(high_visits, 2)
+                    self.assertEqual(stopped, [len(e.commands)])
+                    self.assertEqual(c.calls.count('enter_external'), 1)
+                    self.assertEqual(c.calls.count('exit_external'), 1)
+                    self.assertEqual(c.status.current_action, 'PASSIVE')
+                    self.assertEqual({s: signal.getsignal(s) for s in previous_handlers}, previous_handlers)
+
+    def test_failed_entry_attempts_cancel_once_before_any_ee_target(self):
+        c = self.controller(); e = Endpoint(c, hand=True)
+        with patch.object(c, 'enter_external', side_effect=RuntimeError('entry failed')), \
+             patch.object(c, 'exit_external', return_value=Mock(current_action='PASSIVE')) as cancel:
+            with self.assertRaisesRegex(RuntimeError, 'entry failed'):
+                self.run_case(c, [e])
+            cancel.assert_called_once()
+        self.assertEqual(e.commands, [])
+
     def test_feedback_preserves_distinct_keys_validity_raw_and_incomplete_progress(self):
         c=self.controller(); e=Endpoint(c)
         e._state=replace(e._state,received_key=CommandKey(17,9),host_target_key=CommandKey(17,8),

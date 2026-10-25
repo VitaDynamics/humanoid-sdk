@@ -1,164 +1,123 @@
-"""Real EE wire bytes over keep-last rings; no Node or Python RX worker."""
-from collections import deque
+"""Shared-connection EE feedback callers after retiring the old pull clients.
+
+The EE client uses typed callbacks and a bounded latest-value cache. Body remains
+pull based. These synthetic callback tests do not prove native scheduling/GIL.
+"""
 import threading
-import time
-from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
-from locomotion_aorta import GripperClient, HandClient
-from test_hand import FakeNode as HandNode, pack, info_obj, state_obj
-from test_gripper_codec import RealPacketNode
-from lowlevel.GripperInfo import GripperInfoT
-from lowlevel.GripperState import GripperStateT
-from lowlevel.GripperSample import GripperSampleT
-
-
-class Ring:
-    def __init__(self):
-        self.queue = deque(maxlen=1)
-        self.closed = False
-
-    def put(self, payload):
-        self.queue.append(NS(payload=payload))
-
-    def try_recv(self):
-        return self.queue.popleft() if self.queue else None
-
-    def recv(self, timeout):
-        sample = self.try_recv()
-        if sample is None:
-            time.sleep(timeout)
-        return sample
-
-    def close(self):
-        self.closed = True
-
-
-class PullNode:
-    def create_subscriber_pull(self, topic, *, depth, qos):
-        if depth != 1:
-            raise AssertionError('feedback ring must keep only latest')
-        ring = Ring()
-        self.rings[topic] = ring
-        self.handles.append(ring)
-        return ring
-
-    def create_subscriber_typed(self, *args, **kwargs):
-        raise AssertionError('pull feedback must not create a callback subscriber')
-
-
-class PullHandNode(PullNode, HandNode):
-    def __init__(self):
-        super().__init__()
-        self.rings = {}
-
-
-class PullGripperNode(PullNode, RealPacketNode):
-    def __init__(self):
-        super().__init__()
-        self.rings = {}
+from locomotion_aorta import EndEffectorClient
+from locomotion_aorta.end_effector_types import Field, SampleStream
+from test_controller import ControllerHarness
+from test_end_effector_client import Node
+from test_end_effector_codec import info_object, state_object, target
 
 
 class EEPullTest(unittest.TestCase):
-    def test_contending_waiters_sleep_on_condition_for_both_clients(self):
-        for factory, node in ((HandClient, PullHandNode()),
-                              (GripperClient, PullGripperNode())):
-            with self.subTest(client=factory.__name__):
-                client = factory('left', node=node, pull_feedback=True, read_only=True)
-                self.addCleanup(client.close)
-                pulls = client._pulls
-                owner = client
-                locked, release = threading.Event(), threading.Event()
-                def hold():
-                    with pulls._lock:
-                        locked.set()
-                        release.wait(1)
-                thread = threading.Thread(target=hold)
-                thread.start()
-                self.assertTrue(locked.wait(.5))
-                expected = NS(state_id=7)
-                def received(_timeout):
-                    owner._latest['state'] = expected
-                try:
-                    with patch.object(owner._condition, 'wait', side_effect=received) as wait:
-                        self.assertIs(client.wait_state(.1), expected)
-                    wait.assert_called_once()
-                    self.assertLessEqual(wait.call_args.args[0], .05)
-                finally:
-                    release.set()
-                    thread.join(1)
-                self.assertFalse(thread.is_alive())
-
-    def hand(self, **kw):
-        node = PullHandNode()
+    def client(self, side='left', **options):
+        owner = ControllerHarness()
+        self.addCleanup(owner.controller.close)
+        node = Node()
+        owner.transport.node = node
+        owner.accept_enter()
+        owner.controller.enter_external(timeout=.1)
+        # Construction must not add a Python receiver/polling thread.
         with patch('threading.Thread', side_effect=AssertionError('Python worker created')):
-            client = HandClient('left', node=node, pull_feedback=True, **kw)
+            client = EndEffectorClient(side, connection=owner.controller, **options)
         self.addCleanup(client.close)
-        node.rings[client.topic+'/info'].put(pack(info_obj()))
-        return client, node
+        node.emit(side, 'info', info_object(side=1 if side == 'left' else 2))
+        return client, node, owner
 
-    def test_hand_latest_info_state_publish_and_inline_callback(self):
-        calls = []
-        client, node = self.hand(on_state=lambda value: calls.append((threading.get_ident(), value.state_id)))
+    def test_contending_waiters_sleep_and_receive_same_actual_sample_on_both_sides(self):
+        for side, wire_side in (('left', 1), ('right', 2)):
+            with self.subTest(side=side):
+                client, node, _ = self.client(side, read_only=True)
+                waiting = threading.Event()
+                calls, values, errors = [], [], []
+                original_wait = client._condition.wait
+                def wait(timeout):
+                    calls.append(timeout)
+                    if len(calls) == 2:
+                        waiting.set()
+                    return original_wait(timeout)
+                def reader():
+                    try:
+                        values.append(client.wait_state(2))
+                    except BaseException as error:
+                        errors.append(error)
+                with patch.object(client._condition, 'wait', side_effect=wait):
+                    threads = [threading.Thread(target=reader) for _ in range(2)]
+                    for thread in threads:
+                        thread.start()
+                    try:
+                        self.assertTrue(waiting.wait(1))
+                        node.emit(side, 'state', state_object(side=wire_side))
+                        for thread in threads:
+                            thread.join(1)
+                    finally:
+                        client.close()
+                        for thread in threads:
+                            thread.join(1)
+                self.assertFalse(any(thread.is_alive() for thread in threads))
+                self.assertEqual(errors, [])
+                self.assertEqual(len(values), 2)
+                self.assertIs(values[0], values[1])
+                self.assertEqual(values[0].side, wire_side)
+                self.assertTrue(all(0 < timeout <= 2 for timeout in calls))
+                self.assertEqual(node.commands, [])
+                self.assertEqual(node.close_count, 0)
+
+    def test_latest_state_and_explicit_sample_ref_survive_feedback_burst(self):
+        observed = []
+        client, node, owner = self.client(
+            observation_sources=((SampleStream.EE_STATE, 1),),
+            on_state=lambda value: observed.append(value.state_id))
         for state_id in range(1, 401):
-            obj = state_obj(); obj.stateId = state_id
-            node.rings[client.topic+'/state'].put(pack(obj))
-        self.assertEqual(client.wait_info(.1).dof, 6)
+            state = state_object()
+            state.stateId = state_id
+            node.emit('left', 'state', state)
         self.assertEqual(client.wait_state(.1).state_id, 400)
-        self.assertEqual(calls, [(threading.get_ident(), 400)])
-        newer = state_obj(); newer.stateId = 401
-        node.rings[client.topic+'/state'].put(pack(newer))
-        self.assertEqual(client.wait_state(.1).state_id, 401)
-        self.assertEqual(len(node.rings), 3)
-        cmd = client.publish([.01]*6)
-        self.assertEqual(cmd.input_state_id, 401)
-        actual = node.commands[-1][1]
-        self.assertEqual((actual.session_id, actual.sequence, actual.input_state_id),
-                         (cmd.session_id, cmd.sequence, 401))
-        for joint in actual.joints:
-            self.assertAlmostEqual(joint.q, .01)
-        before = client.info
-        node.rings[client.topic+'/info'].put(pack(info_obj()))
-        self.assertIsNot(client.wait_info(.1, after_info=before), before)
+        self.assertEqual(observed, list(range(1, 401)))
+        self.assertEqual(node.commands, [])
+        sample = client.state.sample_ref
+        sent = client.publish(target(), input_observations=(sample,))
+        wire = node.commands[-1][1]
+        self.assertEqual((sent.input_observations[0].sample_id,
+                          wire.InputObservations(0).SampleId()), (400, 400))
+        self.assertEqual(sent.descriptor_ref, sample.descriptor_ref)
+        # No independently generated session/clock and no polling-thread burst.
+        self.assertEqual(sent.key.session_id, owner.generation)
+        self.assertEqual((sent.sdk_time_valid_mask, sent.ts_client_send_us), (0, 0))
+        handles = list(node.handles)
         client.close()
-        self.assertTrue(all(r.closed for r in node.rings.values()))
-        self.assertFalse(node.closed)  # Shared Node lifetime stays with caller.
+        self.assertTrue(all(handle.close_count == 1 for handle in handles))
+        self.assertEqual((node.close_count, owner.transport.close_count), (0, 0))
 
-    def test_hand_wrong_side_still_poisoned_and_timeout_does_not_publish(self):
-        client, node = self.hand()
+    def test_wrong_side_feedback_and_wait_timeout_never_publish(self):
+        client, node, _ = self.client()
         with self.assertRaises(TimeoutError):
             client.wait_state(.002)
-        self.assertEqual(node.commands, [])
-        node.rings[client.topic+'/state'].put(pack(state_obj(2)))
-        with self.assertRaisesRegex(RuntimeError, 'invalid hand feedback'):
+        node.emit('left', 'state', state_object(side=2))
+        with self.assertRaisesRegex(ValueError, 'invalid EE state'):
             client.wait_state(.1)
+        self.assertEqual(node.commands, [])
 
-    def test_gripper_latest_state_nullable_command_and_readonly_guard(self):
-        node = PullGripperNode()
-        with patch('threading.Thread', side_effect=AssertionError('Python worker created')):
-            client = GripperClient('left', node=node, pull_feedback=True)
-        self.addCleanup(client.close)
-        obj = GripperInfoT(side=1, gripperType=1, openingMinM=0., openingMaxM=.1,
-            maxOpeningRateMS=.1, holdTorqueNm=.2, torqueLimitNm=.5,
-            openingMinSource=1, openingMaxSource=1, maxOpeningRateSource=1,
-            holdTorqueSource=1, torqueLimitSource=1)
-        node.rings[client.topic+'/info'].put(pack(obj))
-        for state_id in range(1, 401):
-            node.rings[client.topic+'/state'].put(pack(GripperStateT(
-                stateId=state_id, side=1, gripperType=1, sampleValid=True,
-                sample=GripperSampleT(q=.05, reportedTorqueNm=-.25, statusRaw=0x40))))
-        self.assertEqual(client.wait_info(.1).side, 1)
-        self.assertEqual(client.wait_state(.1).state_id, 400)
-        from lowlevel.GripperCmd import GripperCmd
+    def test_nullable_command_intent_and_readonly_guard_use_shared_owner(self):
+        client, node, _ = self.client()
+        state = state_object(); state.stateId = 400
+        node.emit('left', 'state', state)
         for torque in (None, 0., -.25):
-            client.publish_target(.0625, torque_cmd_nm=torque)
-            wire = GripperCmd.GetRootAs(node.payloads[-1])
-            self.assertEqual(wire.TorqueCmdNm(), torque)
-            self.assertEqual(wire.InputStateId(), 400)
-        client.close()
-        self.assertTrue(all(r.closed for r in node.rings.values()))
-        readonly = GripperClient('left', node=PullGripperNode(), pull_feedback=True, read_only=True)
-        self.addCleanup(readonly.close)
+            sent = client.publish(target(torque=torque))
+            wire = node.commands[-1][1]
+            self.assertEqual(bool(wire.CommandFields(0) & Field.TAU), torque is not None)
+            self.assertEqual(wire.TauCmd(0), 0. if torque is None else torque)
+            self.assertEqual(sent.target.tau_cmd, (0. if torque is None else torque,))
+        readonly, readonly_node, owner = self.client(read_only=True)
+        node_before = len(readonly_node.handles)
+        requests_before = list(owner.transport.published)
         with self.assertRaisesRegex(RuntimeError, 'read-only'):
-            readonly.publish_target(.05)
+            readonly.publish(target())
+        self.assertEqual(readonly_node.commands, [])
+        self.assertEqual(len(readonly_node.handles), node_before)
+        self.assertEqual(owner.transport.published, requests_before)
