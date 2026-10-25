@@ -1270,7 +1270,13 @@ class EndEffectorClientTest(unittest.TestCase):
         partial_zero = state_object(n=2, sample=4); partial_zero.validFields = [0, Field.ERROR_CODE]
         node.emit('left', 'state', partial_zero)
         self.assertIs(client.motion_feedback()[2], fault_view)
-        clear = state_object(n=2, sample=5); clear.validFields = [Field.ERROR_CODE]*2
+        other_fault = state_object(n=2, sample=5); other_fault.validFields = [0, Field.ERROR_CODE]
+        other_fault.errorCode = [0, 8]
+        node.emit('left', 'state', other_fault)
+        first_axis_clear = state_object(n=2, sample=6); first_axis_clear.validFields = [Field.ERROR_CODE, 0]
+        node.emit('left', 'state', first_axis_clear)
+        self.assertIs(client.motion_feedback()[2], fault_view)
+        clear = state_object(n=2, sample=7); clear.validFields = [Field.ERROR_CODE]*2
         node.emit('left', 'state', clear)
         self.assertEqual(client.motion_feedback()[2].error_code, (0, 0))
         node.emit('left', 'info', info_object(n=2, epoch=2))

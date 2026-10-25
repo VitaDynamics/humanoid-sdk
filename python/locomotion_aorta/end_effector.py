@@ -247,15 +247,13 @@ class EndEffectorClient:
                             self._position = value
                             self._position_received_at = time.monotonic()
                         if any(mask & Field.ERROR_CODE for mask in value.valid_fields):
-                            # A partial zero diagnosis cannot erase a fault on
-                            # another axis. Keep one original DTO, never merge.
+                            # A partial diagnosis cannot clear a known fault:
+                            # another partial fault may have arrived meanwhile.
+                            # Retain one original DTO until all axes are diagnosed.
                             if (self._fault is None or
-                                    any(mask & Field.ERROR_CODE and code for mask, code in
-                                        zip(value.valid_fields, value.error_code)) or
-                                    all(not (mask & Field.ERROR_CODE and code) or
-                                        value.valid_fields[i] & Field.ERROR_CODE
-                                        for i, (mask, code) in enumerate(zip(
-                                            self._fault.valid_fields, self._fault.error_code)))):
+                                    not any(mask & Field.ERROR_CODE and code for mask, code in
+                                            zip(self._fault.valid_fields, self._fault.error_code)) or
+                                    all(mask & Field.ERROR_CODE for mask in value.valid_fields)):
                                 self._fault = value
                 self._latest[kind] = value
                 self._errors[kind] = None
