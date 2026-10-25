@@ -14,7 +14,7 @@ from .controller import ControllerClosedError, ExternalController, InvalidComman
 from .pull import PullStateSource
 from .end_effector_types import (
     CommandKey, ControlRef, DescriptorRef, EndEffectorSide, EndEffectorSubmission,
-    SampleRef, SampleStream,
+    SampleRef, SampleStream, Field, SampleStatus,
     EndEffectorSetTouchRequest, ServiceStatus, TouchSetReason,
 )
 
@@ -44,6 +44,60 @@ def _layout(info):
             info.torque_domain, tuple(len(getattr(info, name)) for name in codec._INFO_VECTORS),
             command_shape, state_shape,
             info.touch_available, _token(info.touch_regions))
+
+
+def _publication_time(kind, value):
+    valid = value.time_valid_mask & 2 if kind == 'state' else value.publish_time_valid
+    return value.ts_state_pub_us if valid and value.ts_state_pub_us else None
+
+
+def _same_sample(kind, old, new):
+    """A publication may revoke validity, never supply a new measurement."""
+    if kind == 'touch':
+        if old.payload != new.payload:
+            raise ValueError('same Touch sample changed payload')
+        for a, b in zip(old.region_stamps, new.region_stamps):
+            # Payload availability/staleness vary; native region identity does not.
+            if (replace(a, validity=a.validity & ~65) != replace(b, validity=b.validity & ~65)
+                    or b.validity & 1 and not a.validity & 1):
+                raise ValueError('same Touch sample changed source or restored validity')
+        return
+    source = ('ts_state_real_us', 'ts_acquired_hw_us', 'ts_ingested_us', 'is_mock')
+    if (any(getattr(old, name) != getattr(new, name) for name in source)
+            or old.time_valid_mask & 13 != new.time_valid_mask & 13
+            or old.sample_status != SampleStatus.OK and new.sample_status == SampleStatus.OK):
+        raise ValueError('same State sample changed source or restored validity')
+    for masks, columns in (
+            ('valid_fields', codec._STATE_COLUMNS),
+            ('raw_valid_fields', (('raw_pos', 1), ('raw_vel', 2),
+                                  ('raw_current', 4), ('raw_status', 8)))):
+        for index, (a, b) in enumerate(zip(getattr(old, masks), getattr(new, masks))):
+            if b & ~a:
+                raise ValueError('same State sample restored measurement validity')
+            for name, bit in columns:
+                if b & bit and _token(getattr(old, name)[index]) != _token(getattr(new, name)[index]):
+                    raise ValueError('same State sample changed measurement')
+
+
+def _new_publication(kind, old, new):
+    old_id, new_id = old.sample_ref.sample_id, new.sample_ref.sample_id
+    if new_id < old_id:
+        return False
+    before, after = _publication_time(kind, old), _publication_time(kind, new)
+    if new_id > old_id:
+        if before is not None and after is not None and after < before:
+            raise ValueError('new sample publication clock regressed')
+        return True
+    if before is None or after is None:
+        raise ValueError('same sample publication ordering is unavailable')
+    if after < before:
+        return False
+    if after == before:
+        if _token(old) != _token(new):
+            raise ValueError('conflicting same sample publication')
+        return False
+    _same_sample(kind, old, new)
+    return True
 
 
 class TouchSetError(RuntimeError):
@@ -92,6 +146,7 @@ class EndEffectorClient:
         self._publisher = None
         self._service_clients = set()
         self._raw_shape = None
+        self._position = self._fault = self._position_received_at = None
         try:
             self._register('info')
             self._register('state')
@@ -173,21 +228,35 @@ class EndEffectorClient:
                             self._latest['state'] = self._latest['touch'] = None
                             self._errors['state'] = self._errors['touch'] = None
                             self._raw_shape = None
+                            self._position = self._fault = self._position_received_at = None
                 else:
                     if info is None or value.descriptor_ref != info.descriptor_ref:
                         return
                     getattr(codec, 'validate_' + kind)(info, value)
                     previous = self._latest[kind]
-                    identity = value.state_id if kind == 'state' else value.touch_state_id
-                    previous_id = None if previous is None else (
-                        previous.state_id if kind == 'state' else previous.touch_state_id)
-                    if previous_id is not None and identity <= previous_id:
+                    if previous is not None and not _new_publication(kind, previous, value):
                         return
                     if kind == 'state':
                         shape = tuple(len(getattr(value, n)) for n in ('raw_pos', 'raw_vel', 'raw_current', 'raw_status'))
                         if self._raw_shape is not None and shape != self._raw_shape:
                             raise ValueError('raw columns resized within a DescriptorRef')
                         self._raw_shape = shape
+                        if self._position is not None and value.state_id == self._position.state_id:
+                            self._position = value  # Includes same-sample validity revocation.
+                        elif value.state_id and all(mask & Field.POS for mask in value.valid_fields):
+                            self._position = value
+                            self._position_received_at = time.monotonic()
+                        if any(mask & Field.ERROR_CODE for mask in value.valid_fields):
+                            # A partial zero diagnosis cannot erase a fault on
+                            # another axis. Keep one original DTO, never merge.
+                            if (self._fault is None or
+                                    any(mask & Field.ERROR_CODE and code for mask, code in
+                                        zip(value.valid_fields, value.error_code)) or
+                                    all(not (mask & Field.ERROR_CODE and code) or
+                                        value.valid_fields[i] & Field.ERROR_CODE
+                                        for i, (mask, code) in enumerate(zip(
+                                            self._fault.valid_fields, self._fault.error_code)))):
+                                self._fault = value
                 self._latest[kind] = value
                 self._errors[kind] = None
                 callback = self._callbacks[kind]
@@ -233,6 +302,15 @@ class EndEffectorClient:
     def touch(self):
         return self._get('touch')
 
+    def motion_feedback(self):
+        """Atomic original DTOs: latest status, position, fault, position receipt.
+
+        No fields or source timestamps are merged. Receipt is local monotonic
+        time of the new position sample, not of later diagnostic publications.
+        """
+        with self._condition:
+            return self._get('state'), self._position, self._fault, self._position_received_at
+
     def _wait(self, kind, timeout, after):
         deadline = _deadline(timeout)
         with self._condition:
@@ -243,12 +321,15 @@ class EndEffectorClient:
                 if value is not None:
                     identity = value.descriptor_ref if kind == 'info' else value.sample_ref
                     if kind != 'info' and after is not None:
-                        identity = (identity.descriptor_ref, identity.stream, identity.side, identity.sample_id)
-                        after_identity = (after.descriptor_ref, after.stream, after.side, after.sample_id)
+                        changed = identity.descriptor_ref != after.descriptor_ref
+                        if changed and (identity.descriptor_ref.robot_runtime_id != after.descriptor_ref.robot_runtime_id
+                                or identity.descriptor_ref.descriptor_epoch <= after.descriptor_ref.descriptor_epoch):
+                            raise ValueError('after_sample is not from this or a prior descriptor epoch')
+                        if identity.sample_id > 0 and (changed or identity.sample_id > after.sample_id):
+                            return value
                     else:
-                        after_identity = after
-                    if after is None or identity != after_identity:
-                        return value
+                        if after is None or identity != after:
+                            return value
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError('timed out waiting for EE ' + kind)
@@ -413,6 +494,7 @@ class EndEffectorClient:
             self._service_clients.clear()
             self._publisher = None
             self._callbacks = {'info': None, 'state': None, 'touch': None}
+            self._position = self._fault = self._position_received_at = None
             self._condition.notify_all()
         for handle in handles:
             try:

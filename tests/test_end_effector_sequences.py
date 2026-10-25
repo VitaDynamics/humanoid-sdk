@@ -5,8 +5,10 @@ These exercise the actual CLI and shared Body allocator on synthetic feedback.
 """
 from dataclasses import replace
 import importlib.util
+import os
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import locomotion_aorta as sdk
 from locomotion_aorta import BODY_CMD_TOPIC
@@ -16,6 +18,104 @@ from test_examples import FakeClock, RecordingController
 from test_end_effector_external import Endpoint
 from test_fixed_stand_pose import body_info
 from body_fixtures import robot_info_reply
+
+
+class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
+    """Pkg supplies actual C++ capture/typed-serializer outputs; never synthesize.
+
+    Missing inputs are a failure, including in source discovery. This contract
+    is deliberately limited to the C2i named sequences, not a fixture runner.
+    """
+    def setUp(self):
+        from test_controller import ControllerHarness
+        from test_end_effector_client import Node
+        self.root = Path(os.environ['PR2_C2I_PRODUCER_FIXTURES'])
+        self.assertTrue(self.root.is_dir(), 'actual robot producer input directory is required')
+        self.clock = FakeClock()
+        self.harness = ControllerHarness()
+        self.addCleanup(self.harness.controller.close)
+        self.node = Node(); self.harness.transport.node = self.node
+        self.client = sdk.EndEffectorClient('left', connection=self.harness.controller,
+            observation_sources=((SampleStream.EE_STATE, 1),))
+        self.addCleanup(self.client.close)
+        clock_patch = patch('locomotion_aorta.end_effector.time.monotonic', self.clock.monotonic)
+        clock_patch.start(); self.addCleanup(clock_patch.stop)
+
+    def feed(self, kind, name):
+        payload = (self.root/name).read_bytes()  # No fallback or Python re-encoding.
+        self.assertTrue(payload)
+        decoder, callback = self.node.subscriptions['/sdk/foot_humanoid/end_effector/left/' + kind]
+        callback(decoder(payload), None)
+        return getattr(self.client, kind)
+
+    def linker(self):
+        self.feed('info', 'linker/info.fb')
+        position = self.feed('state', 'linker/position.fb')
+        self.assertTrue(all(mask & Field.POS for mask in position.valid_fields))
+        return position, demo._EndpointGuard(self.client, self.client.info,
+                                             1., self.clock.monotonic)
+
+    def test_actual_robot_linker_position_diagnostics_and_fault_reach_guard(self):
+        position, guard = self.linker()
+        zero = self.feed('state', 'linker/zero_fault.fb')
+        temp = self.feed('state', 'linker/temperature.fb')
+        self.assertTrue(all(mask & Field.ERROR_CODE and not mask & Field.POS for mask in zero.valid_fields))
+        self.assertTrue(all(mask & Field.TEMPERATURE and not mask & Field.POS for mask in temp.valid_fields))
+        self.assertIs(guard.feedback(True), position)
+        self.harness.accept_enter(); self.harness.controller.enter_external(timeout=.1)
+        target = demo.position_target(self.client.info, position.pos, unit='rad')
+        command = guard.publish(target, position)
+        self.assertEqual(command.input_observations, (position.sample_ref,))
+        newer = self.feed('state', 'linker/next_position.fb')
+        self.assertGreater(newer.state_id, temp.state_id)
+        self.assertIs(guard.feedback(True), newer)
+        self.feed('state', 'linker/nonzero_fault.fb')
+        self.feed('state', 'linker/temperature_after_fault.fb')
+        with self.assertRaisesRegex(RuntimeError, 'nonzero|inhibited'):
+            guard.feedback(True)
+
+    def test_actual_robot_diagnostics_cannot_extend_position_receipt_deadline(self):
+        position, guard = self.linker()
+        self.clock.sleep(demo.body.LOWSTATE_WINDOW_S / 2)
+        self.feed('state', 'linker/zero_fault.fb')
+        self.feed('state', 'linker/temperature.fb')
+        self.clock.sleep(demo.body.LOWSTATE_WINDOW_S / 2)
+        with self.assertRaisesRegex(RuntimeError, 'position became stale'):
+            guard.feedback(True)
+        self.assertEqual(self.client.motion_feedback()[1].sample_ref, position.sample_ref)
+
+    def test_actual_robot_same_sample_permission_and_stale_are_consumed(self):
+        position, guard = self.linker()
+        revoked = self.feed('state', 'linker/permission_revoked.fb')
+        self.assertEqual(revoked.state_id, position.state_id)
+        self.assertEqual(revoked.ts_ingested_us, position.ts_ingested_us)
+        with self.assertRaisesRegex(RuntimeError, 'inhibited|permission'):
+            guard.feedback(True)
+        self.feed('state', 'linker/position.fb')
+        self.assertIs(self.client.state, revoked)
+        stale = self.feed('state', 'linker/position_stale.fb')
+        self.assertEqual(stale.state_id, position.state_id)
+        self.assertFalse(stale.sample_ref.validity & 4)
+        self.assertIs(self.client.motion_feedback()[1], stale)
+
+    def test_actual_robot_touch_disable_replay_and_true_next_sample(self):
+        self.feed('info', 'brainco/info.fb')
+        old = self.feed('touch', 'brainco/touch.fb')
+        disabled = self.feed('touch', 'brainco/touch_disabled.fb')
+        self.assertEqual(disabled.touch_state_id, old.touch_state_id)
+        self.assertEqual(disabled.payload, old.payload)
+        self.assertFalse(disabled.sample_ref.validity & 4)
+        self.feed('touch', 'brainco/touch.fb')
+        self.assertIs(self.client.touch, disabled)
+        # A deterministic condition seam advances only the wait deadline. The
+        # consumer and actual serialized samples remain production code/data.
+        with patch.object(self.client._condition, 'wait', side_effect=self.clock.sleep):
+            with self.assertRaises(TimeoutError):
+                self.client.wait_touch(.01, after_sample=old.sample_ref)
+        newer = self.feed('touch', 'brainco/touch_new.fb')
+        self.assertGreater(newer.touch_state_id, old.touch_state_id)
+        self.assertTrue(newer.sample_ref.validity & 4)
+        self.assertIs(self.client.wait_touch(.01, after_sample=old.sample_ref), newer)
 
 
 class EndEffectorSequenceTest(unittest.TestCase):

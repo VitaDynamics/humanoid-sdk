@@ -42,6 +42,7 @@ class Endpoint:
         self.commands, self.times, self.observations = [], [], []
         self.echo, self.stale, self.reject, self.inhibited = echo, stale, reject, inhibited
         self.after_publish = None
+        self._position_received_at = connection.clock.monotonic()
 
     @property
     def state(self):
@@ -54,6 +55,13 @@ class Endpoint:
     @property
     def touch(self):
         return self._touch
+
+    def motion_feedback(self):
+        previous = self._state.state_id
+        state = self.state
+        if state.state_id != previous:
+            self._position_received_at = self.connection.clock.monotonic()
+        return state, state, state, self._position_received_at
 
     def wait_info(self, timeout):
         return self.info
@@ -447,6 +455,8 @@ class EndEffectorExampleTest(unittest.TestCase):
     def test_actual_client_publish_writes_new_root_K_and_same_body_allocator(self):
         from locomotion_aorta.end_effector import EndEffectorClient
         from test_end_effector_client import Node
+        clock_patch=patch('locomotion_aorta.end_effector.time.monotonic',self.clock.monotonic)
+        clock_patch.start(); self.addCleanup(clock_patch.stop)
         recorded=self.controller()
         controller=recorded.controller
         node=Node(); recorded.transport.node=node
@@ -599,41 +609,149 @@ class TouchObservationTest(unittest.TestCase):
 
     def test_rpc_success_waits_new_valid_state_then_real_touch_not_info(self):
         c=self.make_client(); initial=c.state; old=c.touch
-        c.wait_state.side_effect=[replace(initial,state_id=2,status_valid_mask=7,touch_enabled=True),
-                                 replace(initial,state_id=3,touch_enabled=True)]
+        clock=FakeClock()
+        c.set_touch.side_effect=lambda *_a,**_k: setattr(c,'state',replace(
+            initial,ts_state_pub_us=120,status_valid_mask=7,touch_enabled=True))
+        def sleep(seconds):
+            clock.sleep(seconds)
+            c.state=replace(initial,ts_state_pub_us=130,touch_enabled=True)
         c.wait_touch.return_value=replace(old,touch_state_id=2)
-        state,touch=demo.set_touch_and_observe(c,True,1.)
+        state,touch=demo.set_touch_and_observe(c,True,1.,monotonic=clock.monotonic,sleep=sleep)
         c.set_touch.assert_called_once_with(True,timeout=1.)
-        self.assertEqual(state.state_id,3); self.assertEqual(touch.touch_state_id,2)
-        self.assertEqual(c.wait_state.call_args_list[0].kwargs['after_sample'],initial.sample_ref)
+        self.assertEqual(state.sample_ref,initial.sample_ref); self.assertEqual(touch.touch_state_id,2)
+        self.assertEqual(state.ts_state_pub_us,130)
+        c.wait_state.assert_not_called()
         self.assertEqual(c.wait_touch.call_args.kwargs['after_sample'],old.sample_ref)
         c.wait_info.assert_not_called()
 
     def test_off_requires_state_confirmation_but_not_an_impossible_new_touch(self):
-        c=self.make_client(); c.wait_state.return_value=replace(c.state,state_id=2,touch_enabled=False)
+        c=self.make_client(); initial=c.state
+        c.set_touch.side_effect=lambda *_a,**_k:setattr(c,'state',replace(initial,ts_state_pub_us=120,touch_enabled=False))
         _,touch=demo.set_touch_and_observe(c,False,1.)
         self.assertIsNone(touch); c.wait_touch.assert_not_called()
         c.set_touch.assert_called_once()
 
     def test_wrong_touch_or_state_ref_and_rpc_failure_do_not_retry(self):
         for failure in ('state','touch','rpc'):
-            c=self.make_client(); c.wait_state.return_value=replace(c.state,state_id=2,touch_enabled=True)
+            c=self.make_client(); updated=replace(c.state,ts_state_pub_us=120,touch_enabled=True)
             c.wait_touch.return_value=replace(c.touch,touch_state_id=2)
-            if failure=='state': c.wait_state.return_value=replace(c.wait_state.return_value,descriptor_ref=DescriptorRef(1,2))
+            if failure=='state': updated=replace(updated,descriptor_ref=DescriptorRef(1,2))
             elif failure=='touch': c.wait_touch.return_value=replace(c.touch,descriptor_ref=DescriptorRef(1,2))
-            else: c.set_touch.side_effect=OSError('RPC failure')
+            c.set_touch.side_effect=(OSError('RPC failure') if failure=='rpc' else
+                                    lambda *_a,**_k:setattr(c,'state',updated))
             with self.assertRaises((ValueError,OSError)): demo.set_touch_and_observe(c,True,1.)
             c.set_touch.assert_called_once()
 
     def test_rpc_consumes_the_same_budget_no_full_timeout_restart(self):
         clock=FakeClock(); c=self.make_client()
-        c.set_touch.side_effect=lambda *_a,**_k:clock.sleep(.8)
-        c.wait_state.return_value=replace(c.state,state_id=2,touch_enabled=True)
+        def rpc(*_a,**_k):
+            clock.sleep(.8)
+            c.state=replace(c.state,ts_state_pub_us=120,touch_enabled=True)
+        c.set_touch.side_effect=rpc
         c.wait_touch.side_effect=TimeoutError('no Touch')
         with self.assertRaises(TimeoutError): demo.set_touch_and_observe(c,True,1.,monotonic=clock.monotonic)
-        self.assertAlmostEqual(c.wait_state.call_args.args[0],.2)
+        c.wait_state.assert_not_called()
         self.assertAlmostEqual(c.wait_touch.call_args.args[0],.2)
         c.set_touch.assert_called_once()
+
+    def test_touch_confirmation_cannot_use_old_publication_or_invalid_new_touch(self):
+        clock=FakeClock(); c=self.make_client()
+        initial=c.state
+        c.set_touch.side_effect=lambda *_a,**_k:setattr(c,'state',replace(initial,touch_enabled=True))
+        with self.assertRaises(TimeoutError):
+            demo.set_touch_and_observe(c,True,.03,monotonic=clock.monotonic,sleep=clock.sleep)
+        c.wait_touch.assert_not_called()
+        c=self.make_client(); old=c.touch
+        c.set_touch.side_effect=lambda *_a,**_k:setattr(c,'state',replace(c.state,ts_state_pub_us=120,touch_enabled=True))
+        invalid=replace(old,touch_state_id=2,region_stamps=tuple(replace(r,validity=64) for r in old.region_stamps))
+        c.wait_touch.side_effect=[invalid,TimeoutError('no actual new valid Touch')]
+        with self.assertRaises(TimeoutError):
+            demo.set_touch_and_observe(c,True,1.,monotonic=clock.monotonic)
+        self.assertEqual(c.wait_touch.call_args.kwargs['after_sample'],invalid.sample_ref)
+
+
+class PartialFeedbackGuardTest(unittest.TestCase):
+    def setUp(self):
+        from test_end_effector_client import Node
+        from test_controller import ControllerHarness
+        from locomotion_aorta.end_effector import EndEffectorClient
+        self.clock=FakeClock()
+        self.harness=ControllerHarness(); self.addCleanup(self.harness.controller.close)
+        self.node=Node(); self.harness.transport.node=self.node
+        self.client=EndEffectorClient('left',connection=self.harness.controller,
+            observation_sources=((SampleStream.EE_STATE,1),))
+        self.addCleanup(self.client.close)
+        self.clock_patch=patch('locomotion_aorta.end_effector.time.monotonic',self.clock.monotonic)
+        self.clock_patch.start(); self.addCleanup(self.clock_patch.stop)
+        info=info_object(); info.deviceModel=DeviceModel.LINKER_L6
+        self.node.emit('left','info',info)
+
+    def emit(self,sample,fields,**changes):
+        state=state_object(sample=sample); state.validFields=[fields]
+        for name,value in changes.items(): setattr(state,name,value)
+        self.node.emit('left','state',state)
+        return self.client.state
+
+    def guard(self):
+        return demo._EndpointGuard(self.client,self.client.info,1.,self.clock.monotonic)
+
+    def test_partial_diagnosis_keeps_position_ref_and_latest_admission(self):
+        position=self.emit(1,Field.POS)
+        guard=self.guard()
+        self.clock.sleep(.01)
+        self.emit(2,Field.ERROR_CODE)
+        self.emit(3,Field.TEMPERATURE)
+        self.assertIs(guard.feedback(True),position)
+        self.harness.accept_enter(); self.harness.controller.enter_external(timeout=.1)
+        command=guard.publish(demo.position_target(self.client.info,(.05,),unit='m'),position)
+        from test_end_effector_codec import module
+        self.emit(4,Field.TEMPERATURE,keyValidMask=2,
+            hostTargetKey=module('CommandKey').CommandKeyT(command.key.session_id,command.key.sequence))
+        self.assertIs(guard.feedback(True),position)
+        self.assertTrue(guard.admitted(guard.latest))
+        self.assertEqual(command.input_observations,(position.sample_ref,))
+        newer=self.emit(5,Field.POS,pos=[.04])
+        self.assertIs(guard.feedback(True),newer)
+
+    def test_diagnostics_and_same_sample_publications_never_extend_position_deadline(self):
+        position=self.emit(1,Field.POS)
+        guard=self.guard()
+        self.clock.sleep(demo.body.LOWSTATE_WINDOW_S/2)
+        self.emit(2,Field.TEMPERATURE)
+        self.emit(2,Field.TEMPERATURE,tsStatePubUs=120)
+        self.clock.sleep(demo.body.LOWSTATE_WINDOW_S/2)
+        with self.assertRaisesRegex(RuntimeError,'position became stale'):
+            guard.feedback(True)
+
+    def test_fault_is_not_hidden_by_temperature_or_new_position(self):
+        position=self.emit(1,Field.POS)
+        guard=self.guard()
+        self.emit(2,Field.ERROR_CODE,errorCode=[17])
+        self.emit(3,Field.TEMPERATURE)
+        self.emit(4,Field.POS)
+        with self.assertRaisesRegex(RuntimeError,'nonzero'):
+            guard.feedback(True)
+
+    def test_same_id_permission_revocation_and_producer_stale_stop_immediately(self):
+        position=self.emit(1,Field.POS)
+        guard=self.guard()
+        self.emit(1,Field.POS,tsStatePubUs=120,outputAllowed=False,inhibitReason=InhibitReason.DOMAIN_FAULT)
+        with self.assertRaisesRegex(RuntimeError,'inhibited'):
+            guard.feedback(True)
+        self.emit(2,Field.POS,sampleStatus=SampleStatus.STALE)
+        with self.assertRaisesRegex(ValueError,'measured position'):
+            guard.feedback(True)
+
+    def test_preflight_waits_only_original_deadline_for_real_position(self):
+        self.emit(1,Field.TEMPERATURE)
+        def sleep(seconds):
+            self.clock.sleep(seconds)
+            self.emit(2,Field.POS)
+        position=demo.wait_position(self.client,self.client.info,.03,sleep=sleep,monotonic=self.clock.monotonic)
+        self.assertEqual(position.state_id,2)
+        self.node.emit('left','info',info_object(epoch=2))
+        with self.assertRaisesRegex(TimeoutError,'position was not observed'):
+            demo.wait_position(self.client,self.client.info,.03,sleep=self.clock.sleep,monotonic=self.clock.monotonic)
 
 
 if __name__=='__main__':

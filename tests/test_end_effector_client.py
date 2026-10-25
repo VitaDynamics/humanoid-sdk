@@ -318,8 +318,12 @@ class EndEffectorClientTest(unittest.TestCase):
         repeated = state_object(); repeated.tsStatePubUs = 999
         node.emit('left', 'state', repeated)
         node.emit('left', 'state', state_object(sample=0))
-        self.assertIs(client.state, first)
-        node.emit('left', 'state', state_object(sample=2**64-1))
+        self.assertEqual(client.state.sample_ref, first.sample_ref)
+        self.assertEqual(client.state.ts_state_pub_us, 999)
+        with self.assertRaises(TimeoutError):
+            client.wait_state(0.01, after_sample=first.sample_ref)
+        next_value = state_object(sample=2**64-1); next_value.tsStatePubUs = 1000
+        node.emit('left', 'state', next_value)
         latest = client.wait_state(0.01, after_sample=first.sample_ref)
         self.assertEqual(latest.state_id, 2**64-1)
         self.assertIsNot(latest, first)
@@ -491,10 +495,12 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(first.payload[-2:], b'\xff\xff')
         duplicate = touch_object(); duplicate.tsStatePubUs = 999
         node.emit('left', 'touch', duplicate)
-        self.assertIs(client.touch, first)
+        self.assertEqual(client.touch.sample_ref, first.sample_ref)
+        self.assertEqual(client.touch.ts_state_pub_us, 999)
         with self.assertRaises(TimeoutError):
             client.wait_touch(0.01, after_sample=first.sample_ref)
         next_value = touch_object(sample=2**63+1); next_value.regionStamps[1].validity = 64
+        next_value.tsStatePubUs = 1000
         node.emit('left', 'touch', next_value)
         latest = client.wait_touch(0.01, after_sample=first.sample_ref)
         self.assertEqual(latest.touch_state_id, 2**63+1)
@@ -1147,6 +1153,140 @@ class EndEffectorClientTest(unittest.TestCase):
         client.close()
         self.assertEqual(calls, list(range(len(node.handles))))
         self.assertEqual((node.close_count, harness.transport.close_count), (0, 0))
+
+
+    def test_same_sample_publication_revokes_permission_without_changing_sample_or_age(self):
+        harness, node = self.harness(running=False)
+        seen = []
+        with patch('locomotion_aorta.end_effector.time.monotonic', return_value=10.):
+            client = self.client(harness, node, on_state=seen.append)
+        first = client.state
+        revised = state_object(); revised.tsStatePubUs = 120
+        revised.outputAllowed = False; revised.inhibitReason = 1
+        revised.rejectCount = 7; revised.diagnosticValidMask = 4
+        node.emit('left', 'state', revised)
+        self.assertEqual(client.state.sample_ref, first.sample_ref)
+        self.assertFalse(client.state.output_allowed)
+        self.assertEqual(client.state.reject_count, 7)
+        self.assertIs(seen[-1], client.state)
+        self.assertEqual(client.motion_feedback()[3], 10.)
+        node.emit('left', 'state', state_object())
+        self.assertFalse(client.state.output_allowed)
+        self.assertEqual(len(seen), 2)
+        with self.assertRaises(TimeoutError):
+            client.wait_state(.001, after_sample=first.sample_ref)
+
+    def test_same_sample_stale_revokes_retained_position_and_keeps_first_receipt(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node)
+        first_time = client.motion_feedback()[3]
+        stale = state_object(); stale.tsStatePubUs = 120; stale.sampleStatus = 3
+        stale.validFields = [0]; stale.pos = [0.]; stale.rawValidFields = [0]
+        node.emit('left', 'state', stale)
+        latest, position, _, received = client.motion_feedback()
+        self.assertIs(position, latest)
+        self.assertEqual(position.valid_fields, (0,))
+        self.assertEqual(received, first_time)
+        restored = state_object(); restored.tsStatePubUs = 130
+        node.emit('left', 'state', restored)
+        with self.assertRaisesRegex(ValueError, 'invalid EE state'):
+            client.motion_feedback()
+
+    def test_publication_conflicts_unknown_time_and_source_changes_are_not_samples(self):
+        changes = (
+            {'tsStatePubUs': 110, 'rejectCount': 1},
+            {'tsStatePubUs': 120, 'timeValidMask': 29},
+            {'tsStatePubUs': 120, 'tsIngestedUs': 999},
+            {'tsStatePubUs': 120, 'pos': [.05]},
+            {'tsStatePubUs': 120, 'rawCurrent': [-2]},
+        )
+        for change in changes:
+            with self.subTest(change=change):
+                harness, node = self.harness(running=False)
+                client = self.client(harness, node)
+                previous = client.state
+                obj = state_object()
+                for name, value in change.items():
+                    setattr(obj, name, value)
+                node.emit('left', 'state', obj)
+                with self.assertRaisesRegex(ValueError, 'invalid EE state'):
+                    client.state
+                self.assertIs(client._latest['state'], previous)
+
+    def test_touch_disable_publication_is_visible_but_replay_and_restore_cannot_revive_it(self):
+        harness, node = self.harness(running=False)
+        seen = []
+        client = self.client(harness, node, touch=True, on_touch=seen.append)
+        original = client.touch
+        disabled = touch_object(); disabled.tsStatePubUs = 220
+        for region in disabled.regionStamps:
+            region.validity = (region.validity & ~1) | 64
+        node.emit('left', 'touch', disabled)
+        self.assertFalse(client.touch.sample_ref.validity & 4)
+        self.assertEqual(client.touch.payload, original.payload)
+        self.assertEqual(client.touch.touch_state_id, original.touch_state_id)
+        self.assertIs(seen[-1], client.touch)
+        node.emit('left', 'touch', touch_object())
+        self.assertEqual(client.touch.ts_state_pub_us, 220)
+        with self.assertRaises(TimeoutError):
+            client.wait_touch(.001, after_sample=original.sample_ref)
+        restored = touch_object(); restored.tsStatePubUs = 230
+        node.emit('left', 'touch', restored)
+        with self.assertRaisesRegex(ValueError, 'invalid EE touch'):
+            client.touch
+        new = touch_object(sample=2); new.tsStatePubUs = 240
+        node.emit('left', 'touch', new)
+        self.assertEqual(client.wait_touch(.001, after_sample=original.sample_ref).touch_state_id, 2)
+
+    def test_after_sample_future_id_and_repeated_publication_never_satisfy_wait(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, touch=True)
+        for kind in ('state', 'touch'):
+            with self.subTest(kind=kind):
+                current = getattr(client, kind)
+                future = dataclasses.replace(current.sample_ref, sample_id=100)
+                with self.assertRaises(TimeoutError):
+                    getattr(client, 'wait_' + kind)(.001, after_sample=future)
+                future_ref = dataclasses.replace(current.sample_ref, descriptor_ref=DescriptorRef(100, 2))
+                with self.assertRaisesRegex(ValueError, 'prior descriptor'):
+                    getattr(client, 'wait_' + kind)(.001, after_sample=future_ref)
+
+    def test_diagnostic_samples_do_not_replace_position_or_hide_partial_nonzero_fault(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, feedback=False)
+        node.emit('left', 'info', info_object(n=2))
+        with patch('locomotion_aorta.end_effector.time.monotonic', return_value=10.):
+            node.emit('left', 'state', state_object(n=2))
+        position = client.state
+        fault = state_object(n=2, sample=2); fault.validFields = [Field.ERROR_CODE]*2
+        fault.errorCode = [9, 0]
+        node.emit('left', 'state', fault)
+        fault_view = client.state
+        temp = state_object(n=2, sample=3); temp.validFields = [Field.TEMPERATURE]*2
+        node.emit('left', 'state', temp)
+        latest, retained, retained_fault, receipt = client.motion_feedback()
+        self.assertIs(retained, position); self.assertIs(retained_fault, fault_view)
+        self.assertEqual((latest.state_id, receipt), (3, 10.))
+        partial_zero = state_object(n=2, sample=4); partial_zero.validFields = [0, Field.ERROR_CODE]
+        node.emit('left', 'state', partial_zero)
+        self.assertIs(client.motion_feedback()[2], fault_view)
+        clear = state_object(n=2, sample=5); clear.validFields = [Field.ERROR_CODE]*2
+        node.emit('left', 'state', clear)
+        self.assertEqual(client.motion_feedback()[2].error_code, (0, 0))
+        node.emit('left', 'info', info_object(n=2, epoch=2))
+        self.assertEqual(client.motion_feedback(), (None, None, None, None))
+
+    def test_duplicate_callback_and_new_sample_with_regressing_pub_clock_are_rejected(self):
+        harness, node = self.harness(running=False)
+        seen = []
+        client = self.client(harness, node, on_state=seen.append)
+        node.emit('left', 'state', state_object())
+        self.assertEqual(len(seen), 1)
+        older_clock = state_object(sample=2); older_clock.tsStatePubUs = 109
+        node.emit('left', 'state', older_clock)
+        with self.assertRaisesRegex(ValueError, 'invalid EE state'):
+            client.state
+        self.assertEqual(len(seen), 1)
 
 
 if __name__ == '__main__':

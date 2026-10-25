@@ -231,7 +231,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
                     trace.close()
 
 
-def validate_state(info, state, *, require_output=False):
+def validate_position(info, state):
     codec.validate_info(info)
     if info.device_model not in (DeviceModel.AGX, DeviceModel.LINKER_L6, DeviceModel.BRAINCO_REVO2):
         raise ValueError('this demo requires actual AGX/Linker/BrainCo capability; OP3 is not enabled')
@@ -244,6 +244,12 @@ def validate_state(info, state, *, require_output=False):
         raise ValueError('end-effector measured position is unavailable or outside proven limits')
     if not all(mask & Field.POS for mask in info.valid_limits):
         raise ValueError('position limits are unavailable')
+
+
+def validate_status(info, state, *, require_output=False):
+    if state is None:
+        raise ValueError('end-effector feedback is absent')
+    codec.validate_state(info, state)
     if state.status_valid_mask & 4 and state.inhibit_reason in (
             InhibitReason.EMERGENCY, InhibitReason.DOMAIN_FAULT, InhibitReason.NOT_READY):
         raise RuntimeError(f'end-effector inhibited: {state.inhibit_reason}')
@@ -251,6 +257,35 @@ def validate_state(info, state, *, require_output=False):
         raise RuntimeError('end-effector reports a valid nonzero error code')
     if require_output and not output_ready(state):
         raise RuntimeError('end-effector output was inhibited or permission is unavailable')
+
+
+def motion_feedback(client, info, moving, monotonic):
+    latest, position, fault, received_at = client.motion_feedback()
+    if latest is not None:
+        validate_status(info, latest, require_output=moving)
+    if fault is not None:
+        codec.validate_state(info, fault)
+        if any(mask & Field.ERROR_CODE and code for mask, code in zip(fault.valid_fields, fault.error_code)):
+            raise RuntimeError('end-effector reports a valid nonzero error code')
+    if position is not None:
+        # Status/admission belong to latest; these checks use only this original
+        # position sample's measurement and source validity.
+        validate_position(info, position)
+        if received_at is None or not 0 <= monotonic() - received_at < body.LOWSTATE_WINDOW_S:
+            raise RuntimeError('end-effector position became stale')
+    return latest, position
+
+
+def wait_position(client, info, timeout, *, sleep, monotonic):
+    deadline = monotonic() + timeout
+    while True:
+        _, position = motion_feedback(client, info, False, monotonic)
+        if position is not None:
+            return position
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError('end-effector measured position was not observed')
+        sleep(min(.01, remaining))
 
 
 def output_ready(state):
@@ -317,7 +352,7 @@ def observe(clients, *, timeout, emit=print):
             emit(f'{client.side}: Touch={client.touch}')
 
 
-def set_touch_and_observe(client, enabled, timeout, *, monotonic=time.monotonic):
+def set_touch_and_observe(client, enabled, timeout, *, monotonic=time.monotonic, sleep=time.sleep):
     """Confirm via new State/Touch within the remaining observation budget.
 
     The existing synchronous set_touch API separately bounds matching and RPC;
@@ -328,47 +363,55 @@ def set_touch_and_observe(client, enabled, timeout, *, monotonic=time.monotonic)
     if before_state is None:
         raise ValueError('touch change requires an actual State snapshot')
     deadline = monotonic() + timeout
+    if not before_state.time_valid_mask & 2 or not before_state.ts_state_pub_us:
+        raise ValueError('touch confirmation requires a valid State publication time')
     client.set_touch(enabled, timeout=timeout)
-    previous = before_state.sample_ref
     while True:
         remaining = deadline - monotonic()
         if remaining <= 0:
             raise TimeoutError('touch switch not confirmed by a new State')
-        state = client.wait_state(remaining, after_sample=previous)
+        state = client.state
+        if state is None:
+            raise ValueError('State disappeared while confirming touch switch')
         if state.descriptor_ref != before_state.descriptor_ref:
             raise ValueError('descriptor changed while confirming touch switch')
-        previous = state.sample_ref
-        if state.status_valid_mask & 8 and state.touch_enabled == enabled:
+        if (state.time_valid_mask & 2 and state.ts_state_pub_us > before_state.ts_state_pub_us
+                and state.status_valid_mask & 8 and state.touch_enabled == enabled):
             break
+        sleep(min(.01, remaining))
     if not enabled:
         return state, None  # Disabling cannot require a sample that must stop arriving.
-    remaining = deadline - monotonic()
-    if remaining <= 0:
-        raise TimeoutError('touch enabled but no new Touch was observed')
-    touch = client.wait_touch(remaining, after_sample=None if before_touch is None else before_touch.sample_ref)
-    if touch.descriptor_ref != state.descriptor_ref:
-        raise ValueError('Touch belongs to another descriptor')
-    return state, touch
+    previous = None if before_touch is None else before_touch.sample_ref
+    while True:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError('touch enabled but no new valid Touch was observed')
+        touch = client.wait_touch(remaining, after_sample=previous)
+        if touch.descriptor_ref != state.descriptor_ref:
+            raise ValueError('Touch belongs to another descriptor')
+        previous = touch.sample_ref
+        if touch.touch_state_id and touch.region_stamps and all(
+                region.validity & 1 and not region.validity & 64 for region in touch.region_stamps):
+            return state, touch
 
 
 class _EndpointGuard:
-    def __init__(self, client, info, initial, timeout, monotonic):
+    def __init__(self, client, info, timeout, monotonic):
         self.client, self.info = client, info
         self.timeout, self.monotonic = timeout, monotonic
-        self.previous_id, self.changed = initial.state_id, monotonic()
-        self.rejects = initial.reject_count if initial.diagnostic_valid_mask & 4 else None
+        self.latest = client.motion_feedback()[0]
+        self.rejects = (self.latest.reject_count if self.latest is not None and
+                        self.latest.diagnostic_valid_mask & 4 else None)
         self.submitted = None
         self.echoed = None
         self.progress_time = monotonic()
 
     def feedback(self, moving):
-        state = self.client.state
-        validate_state(self.info, state, require_output=moving)
+        state, position = motion_feedback(self.client, self.info, moving, self.monotonic)
+        if state is None or position is None:
+            raise ValueError('end-effector measured position is unavailable')
+        self.latest = state
         now = self.monotonic()
-        if state.state_id != self.previous_id:
-            self.previous_id, self.changed = state.state_id, now
-        elif now - self.changed >= body.LOWSTATE_WINDOW_S:
-            raise RuntimeError('end-effector state became stale')
         if state.diagnostic_valid_mask & 4:
             if self.rejects is not None and state.reject_count != self.rejects:
                 raise RuntimeError('end-effector reject_count changed')
@@ -382,7 +425,7 @@ class _EndpointGuard:
                     self.echoed, self.progress_time = accepted.sequence, now
             if not self.admitted(state) and now - self.progress_time >= self.timeout:
                 raise TimeoutError('end-effector input admission did not advance')
-        return state
+        return position
 
     def admitted(self, state):
         return self.submitted is None or (state.key_valid_mask & 2 and state.host_target_key == self.submitted.key)
@@ -437,15 +480,18 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
     rates = {c.side: 50.0 for c in clients} if rates is None else rates
     if set(rates) != set(targets) or any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0 for v in rates.values()):
         raise ValueError('one finite positive command rate per endpoint required')
-    infos, initials, prepared, returns, limits = {}, {}, {}, {}, {}
+    infos, prepared, returns, limits = {}, {}, {}, {}
     for client in clients:
-        info, state = client.wait_info(timeout), client.wait_state(timeout)
-        validate_state(info, state)
+        info = client.wait_info(timeout)
+        codec.validate_info(info)
+        if info.device_model not in (DeviceModel.AGX, DeviceModel.LINKER_L6, DeviceModel.BRAINCO_REVO2):
+            raise ValueError('this demo requires actual AGX/Linker/BrainCo capability; OP3 is not enabled')
+        state = wait_position(client, info, timeout, sleep=sleep, monotonic=monotonic)
         if client.observation_sources != ((SampleStream.EE_STATE, info.side),):
             raise ValueError('demo requires its actual endpoint State as fixed K=1 input')
         if touch != 'keep' and not info.touch_available:
             raise ValueError('selected endpoint has no touch capability')
-        infos[client.side], initials[client.side] = info, state
+        infos[client.side] = info
         prepared[client.side] = codec.prepare_target(info, targets[client.side])
         returns[client.side] = codec.prepare_target(info, replace(targets[client.side], pos=state.pos))
         if pattern == 'sine' and (info.device_model != DeviceModel.AGX or len(info.axis_names) != 1
@@ -475,12 +521,13 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
         raise ValueError('hand feedback interval must be at least 1 second')
 
     def command_loop(frame):
-        guards = {c.side: _EndpointGuard(c, infos[c.side], initials[c.side], timeout, monotonic) for c in clients}
+        guards = {c.side: _EndpointGuard(c, infos[c.side], timeout, monotonic) for c in clients}
         deadline = monotonic() + timeout
         while True:
             frame(wait=False)
-            states = {side: g.feedback(False) for side, g in guards.items()}
-            if all(output_ready(s) for s in states.values()):
+            for guard in guards.values():
+                guard.feedback(False)
+            if all(output_ready(g.latest) for g in guards.values()):
                 break
             if monotonic() >= deadline:
                 raise TimeoutError('end-effector output did not become ready after EXTERNAL entry')
@@ -578,8 +625,9 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
             final_deadline = monotonic()+timeout
             while True:
                 frame(wait=False)
-                states = {side: g.feedback(True) for side, g in guards.items()}
-                if all(g.admitted(states[side]) for side, g in guards.items()):
+                for guard in guards.values():
+                    guard.feedback(True)
+                if all(g.admitted(g.latest) for g in guards.values()):
                     break
                 if monotonic() >= final_deadline:
                     raise TimeoutError('final end-effector input admission was not observed')
