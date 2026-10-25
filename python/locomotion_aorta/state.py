@@ -60,7 +60,7 @@ class BodyStateSource:
 
     def snapshot(self, timeout: float = 5.0, *,
                  after: BodyStateSnapshot | None = None) -> BodyStateSnapshot:
-        """Wait for a received object other than after, as HandClient.wait_info does."""
+        """Wait for a received object other than after."""
         deadline = _deadline(timeout)
         with self._condition:
             while True:

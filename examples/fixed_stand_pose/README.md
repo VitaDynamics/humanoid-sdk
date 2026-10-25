@@ -1,13 +1,13 @@
 # FIXED_STAND 姿态辅助模块
 
-这是供夹爪demo调用的 `FixedStandPose`，**没有独立CLI，也不会自己连接/进入EXTERNAL**。`fixed_stand_profile.json` 保存已有机器人零姿态增益/过渡合同，不修改设备或动作号；不能用它替代机器人现有FIXED_STAND动作。
+这是供统一末端 demo调用的 `FixedStandPose`，**没有独立CLI，也不会自己连接/进入EXTERNAL**。`fixed_stand_profile.json` 保存已有机器人零姿态增益/过渡合同，不修改设备或动作号；不能用它替代机器人现有FIXED_STAND动作。
 
 ```bash
 python -c 'from examples.fixed_stand_pose.fixed_stand_pose import FixedStandPose; print(FixedStandPose.__name__)'
-python examples/gripper/gripper_external.py --help
+python examples/end_effector/end_effector_external.py --help
 ```
 
-使用方必须传实际BodyInfo，核公共31个唯一名字、populated关节有效q范围且零姿态在范围内。`measured/check/duration/position/command` 辅助测量姿态与零姿态之间的既有插值；不新增范围或标定。它没有独立日志/退出命令；实际运动入口、日志、急停与CANCEL→PASSIVE由gripper demo管理。
+使用方必须传实际BodyInfo，核公共31个唯一名字、populated关节有效q范围且零姿态在范围内。`measured/check/duration/position/command` 辅助测量姿态与零姿态之间的既有插值；不新增范围或标定。它没有独立日志/退出命令；实际运动入口、日志、急停与CANCEL→PASSIVE由统一末端 demo管理。
 
 ## 环境与安全
 

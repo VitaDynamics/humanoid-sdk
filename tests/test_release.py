@@ -111,7 +111,8 @@ class ReleaseTest(unittest.TestCase):
                 self.assertEqual((output / relative).read_bytes(), (ROOT / relative).read_bytes())
                 self.assertEqual(manifest["files"][relative],
                                  hashlib.sha256((ROOT / relative).read_bytes()).hexdigest())
-            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py"):
+            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py",
+                            "brainco_hand/brainco_hand_external.py", "gripper/gripper_external.py"):
                 self.assertFalse((output / "examples" / retired).exists())
                 self.assertNotIn("examples/" + retired, manifest["files"])
             self.assertEqual(sorted(p.name for p in (output / "wheelhouse").glob("locomotion_aorta-*.whl")),

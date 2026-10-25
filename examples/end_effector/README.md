@@ -48,7 +48,22 @@ once before joining the service worker. No retry, second lease, autonomous
 heartbeat or neutral end-effector target is sent. An unconfirmed CANCEL is an
 error; PASSIVE may let unsupported limbs fall.
 
-Old online callers remain temporarily while their safety regressions are
-migrated. They are not a wire fallback for this entry, and will be removed in
-the final source closure. Historical capture files are handled only by the
-explicit offline capture/archive path.
+The old HandClient/GripperClient, their online DTOs/codecs and separate motion
+entries are removed. RobotInfo's nested HandInfo/GripperInfo and the explicit
+LowState offline path remain. Migrate callers to EndEffectorClient with the
+existing connection; legacy private sequence counters, numeric host-target
+poses and `pull_feedback` are not adapters to the new contract.
+
+The common streaming duration defaults to 1 second; select `--duration 30
+--period-s 10` explicitly for three sine periods (transitions add time).
+Unlike the retired gripper entry, target-mode duration does not infer travel
+from a numeric host target. Retained historic capture/trajectory fixtures do
+not assert old wire parity for the new protocol. A later valid Info with the
+same immutable descriptor is not a touch-state acknowledgement; touch changes
+are confirmed by State and, when enabled, an actual Touch sample.
+
+Closing an endpoint attempts every owned handle and preserves the shared
+connection; it does not send cancellation or retry failed cleanup. The enclosing
+motion lifecycle remains responsible for CANCEL and for joining its service
+worker before closing the connection. Historical recordings require their
+explicit matching archive path; they are never decoded as live fallback data.

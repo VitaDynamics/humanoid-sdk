@@ -380,3 +380,21 @@ class EndEffectorCodecTest(unittest.TestCase):
         actual = codec.decode_cmd(bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(builder.Output()))
         self.assertEqual(actual, submission)
         self.assertEqual(actual.input_observations[0].descriptor_ref, DescriptorRef(2**64-1, 2**63+1))
+
+    def test_diagnostic_counters_unknown_times_and_signed_raw_keep_full_received_values(self):
+        wire = state_object(sample=2**64-1)
+        wire.lastValidAgeUs, wire.estimatedInputPeriodUs = 2**64-1, 2**63+1
+        wire.rejectCount, wire.ingressDropCount, wire.timeoutCount, wire.crcErrorCount = 2, 3, 4, 5
+        wire.lastRejectCode = 65535
+        wire.timeValidMask = wire.diagnosticValidMask = 0
+        actual = decode('state', wire)
+        self.assertEqual(actual.state_id, 2**64-1)
+        self.assertEqual((actual.last_valid_age_us, actual.estimated_input_period_us), (2**64-1, 2**63+1))
+        self.assertEqual((actual.reject_count, actual.ingress_drop_count, actual.timeout_count,
+                          actual.crc_error_count, actual.last_reject_code), (2, 3, 4, 5, 65535))
+        self.assertEqual((actual.raw_pos, actual.raw_vel, actual.raw_current, actual.raw_status),
+                         ((-32768,), (32767,), (-1,), (0xffffffff,)))
+        self.assertEqual((actual.time_valid_mask, actual.diagnostic_valid_mask), (0, 0))
+        self.assertEqual(actual.ts_state_real_us, 100)
+        self.assertEqual(actual.sample_ref.source_time_us, 0)
+        self.assertFalse(actual.sample_ref.validity & 2)

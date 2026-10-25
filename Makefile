@@ -14,9 +14,7 @@ check: test
 	$(PYTHON) examples/end_effector/end_effector_external.py --help
 	$(PYTHON) examples/external_control/external_control.py --help
 	$(PYTHON) examples/teleop_policy/teleop_policy.py --help
-	$(PYTHON) examples/brainco_hand/brainco_hand_external.py --help
 	$(PYTHON) examples/brainco_hand/brainco_capture.py --help
-	$(PYTHON) examples/gripper/gripper_external.py --help
 	$(PYTHON) examples/velocity_mode/velocity_mode.py --help
 	$(PYTHON) examples/wbc_tracking_mode/wbc_tracking_mode.py --help
 	test -L CLAUDE.md

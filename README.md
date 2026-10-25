@@ -74,8 +74,8 @@ HEAD=2 as a reserved position. The current public list follows the actual
 configured HIP and TRUNK locations. Public state_id and BodyCmd.input_state_id
 remain full uint64 values.
 Command validation uses learned BodyInfo population; until discovery it
-validates all 31 command slots. RobotInfo and independent hand/gripper
-contracts remain unchanged.
+validates all 31 command slots. RobotInfo and its nested HandInfo/GripperInfo
+descriptions remain frozen; online end-effector commands use the new contract.
 
 BodyCmd has no cmd_id: correlate BODY commands and logs by session_id and
 sequence. ExternalController.publish returns the command with the actual
@@ -97,10 +97,11 @@ sample on consecutive calls does not create a new sensor sample. The client
 does not fetch a replacement latest sample or synchronize independent streams.
 Unknown SDK-to-Vita clock mapping leaves command timestamps invalid/zero.
 
-This first increment covers Body conversion and observation plumbing only.
-The following legacy write examples remain pending migration to the single
-new EE CLI, along with capture and the shared-authority Mock. They are not the
-completed PR2/HIL path; no old online bridge or device readiness is claimed.
+The development source includes the shared EE client, one motion/read-only CLI,
+capture and the original protocol Mock. Legacy HandClient/GripperClient and
+their motion entries have been removed; there is no online wire fallback.
+Matching generated schema artifacts, native builds, robot producer integration
+and HIL acceptance remain required before this source can be released.
 
 Documentation: [Humanoid documentation](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg),
 [SDK guide](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh),
@@ -110,8 +111,8 @@ and [PC networking and Zenoh configuration](https://vitadynamics.feishu.cn/wiki/
 
 | Main demo | Behavior already implemented |
 |---|---|
-| `examples/gripper/gripper_external.py` | One entry for read-only gripper info/state, single-side target/return and dual-side sine; motion shares body zero/hold and one EXTERNAL lifecycle. |
-| `examples/brainco_hand/brainco_hand_external.py` | Independent hand info/state/touch and authorized hand motion; `examples/brainco_hand/brainco_capture.py` records/exports feedback. |
+| `examples/end_effector/end_effector_external.py` | Generic read-only or explicitly authorized motion entry; Body and both endpoints share one EXTERNAL lifecycle and allocator. |
+| `examples/brainco_hand/brainco_capture.py` | Read-only new EE/Body capture and explicit offline archive export; no control ownership. |
 | `examples/teleop_policy/teleop_policy.py` | PC-local ONNX inference and Aorta Joy input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
 
 Basic examples remain `examples/external_control/external_control.py` for body EXTERNAL,
@@ -183,64 +184,20 @@ can let loaded limbs fall. Client failure does not automatically release
 ownership. Command watchdogs and validation remain active. Use compatible robot
 software supporting unlimited control; an older server rejection is an error.
 
-## Independent Revo2 hands
+## End effectors and read-only capture
 
-Use the public EE wheel pinned in [compatibility.json](compatibility.json).
-The distribution is `vbot-humanoid-msgs`; generated imports retain `lowlevel`,
-`locomotion_sdk`, `aorta.services.humanoid_locomotion` and `*_schema_meta`.
-Do not install the full private `vita-msgs` wheel or a temporary HIL wheel.
-The pinned public `0.1.5` wheel provides the new hand roots; the older
-`0.1.0` public wheel does not.
+See [the single EE entry](examples/end_effector/README.md) for explicit per-side
+units, rates and actual descriptor limits. Default and `--dry-run` are read-only.
+Authorized motion borrows the original Body owner/lease/allocator; left and right
+have no private control session. Body freshness, ownership and CANCEL→PASSIVE
+remain mandatory. PASSIVE may let unsupported limbs fall.
 
-With connection authorization and the configured peer profile, read both hands:
-
-```bash
-python examples/brainco_hand/brainco_hand_external.py --dry-run --side both --group default --timeout 5
-```
-
-The default entry is also read-only: no lease, hand command or touch write.
-`HandClient` reads info/state/touch topics; `wait_info(timeout=5)` waits for the
-first info sample or returns its cache. HandInfo is published about once a second;
-late subscribers wait for a subsequent sample, with no historical replay promise.
-Only the typed `set_touch` control RPC remains. After that control call, the demo
-waits for a later info event with the acknowledged `touch_enabled` value;
-`ts_info_us` need not change. `wait_info(after_info=client.info)` can request a
-later event without clearing the info cache used by command publication.
-Left/right wire values are 1/2; they differ from the device register numbering.
-
-HandState uses the T021 public EE layout. It stores the three
-sample timestamps once per message and exposes five `ts_cmd_*` stages; zero
-future stages remain unmeasured. Touch uses `state_id`, `ts_state_pub_us` and
-`raw_words`, with geometry from HandInfo. Old candidate recordings require their
-matching SDK; the MCAP exporter refuses BFBS that differ from loaded bindings.
-`HandJointState` 的 `*_raw` 字段仅供诊断，含义随设备型号变化，不应依赖。
-Examples use normalized feedback and do not depend on these raw fields.
-
-After separate on-site motion authorization, support, an attendant and an
-emergency stop, a right-hand sequential round can be run with:
-
-```bash
-python examples/brainco_hand/brainco_hand_external.py --side right --group default --timeout 5 --body-gains zero --pattern sequential --confirm-motion
-```
-
-The default speed is **20 degrees/s**, converted to float32 rad/s and checked
-against every joint's advertised `dq_max`. The default fractions remain
-25% -> 75% -> 25%; `--low-frac 0 --high-frac 1` selects declared endpoints.
-`--pattern sequential` moves one joint at a time, keeping other targets low;
-`--loop` repeats until SIGINT/SIGTERM or a safety failure. No automatic retry is
-performed.
-
-The body receives measured-pose 31-slot BodyCmd frames; hand commands use only
-`/sdk/foot_humanoid/hand/<side>/cmd`. `--body-gains zero` selects kp=kd=dq=tau=0,
-with q still measured; it does not support the body or instantly zero gains
-during EXTERNAL entry. The default `hold` gains reuse `external_control.py`.
-The existing 0.05 rad body drift guard, freshness, ownership, sequence and
-hand-limit checks remain active.
-
-Normal exit, faults and SIGINT/SIGTERM stop new targets and attempt CANCEL,
-which must confirm PASSIVE. There is no automatic neutral hand trajectory;
-PASSIVE can let loaded body limbs fall. A killed client does not guarantee
-lease release. Hand session/sequence and body EXTERNAL generation are separate.
+Angular fraction/sequential patterns keep the 25%/75% fractions and float32
+20 deg/s default; LINKER support is determined by its actual descriptor.
+AGX target/sine modes use total opening in metres. Missing torque intent,
+explicit zero and signed torque are distinct. There is no fabricated numeric
+host-target pose or arrival guarantee in new State. See the entry documentation
+for migration differences and the separate on-site motion requirements.
 
 `examples/brainco_hand/brainco_capture.py` retains its historical filename but
 captures only the new `/sdk/foot_humanoid/end_effector/<side>/{info,state,touch,cmd}`
@@ -399,68 +356,6 @@ at 50–1000 Hz for at least 60 seconds per rate. See the
 [benchmark documentation](tests/latency/README.md) for its measurement boundary
 and reports. It does not establish robot performance or motion acceptance.
 
-## Independent AGX grippers (in preparation)
-
-The single `examples/gripper/gripper_external.py` entry contains the EXTERNAL lifecycle,
-body zero/hold, single-side targets/return and optional dual-side sine mode.
-`GripperClient` uses `/sdk/foot_humanoid/gripper/<left|right>/{cmd,state,info}`.
-It shares the same `GripperInfo` DTO with `get_robot_info`; there is no per-side
-info RPC and no gripper slot in the 31-joint BodyCmd. The default example and
-`--dry-run` only subscribe, without ownership or command publication:
-
-```bash
-python examples/gripper/gripper_external.py --side right --dry-run --group default --timeout 5
-```
-
-`publish_target(q, dq=0, torque_cmd_nm=None)` uses absolute **total opening in m**
-and a host speed cap in **m/s**. It preserves dq=0 for the robot's configured
-default; it does not interpolate a second SDK opening trajectory. Values beyond
-the advertised ranges are rejected before publishing. Unknown limit sources
-remain readable diagnostics and cannot authorize a target.
-
-Torque is a signed software motor-side command in N·m: None uses configured
-hold torque; explicit 0 sends 0. Its absolute bound and hold default come from
-CONFIG. It is not gripping force in N or a device limit; device interpretation
-is governed by the vendor. Acceleration/deceleration are not first-release fields.
-
-After explicit on-site authorization, suspension/support, an attendant and an
-emergency stop, choose a target from the actual Info limits and run:
-
-```bash
-python examples/gripper/gripper_external.py --side right --target-m "$TARGET_OPENING_M" --confirm-motion
-```
-
-The example enters EXTERNAL through the existing body preflight/PREPARE/COMMIT,
-holds the measured 31-slot body pose and exits through CANCEL to PASSIVE.
-In target mode, each leg streams for at least `max(duration, abs(target-start)/rate)`:
-`rate` is positive `--speed-m-s`, or Info's configured `max_opening_rate_m_s`
-when speed is 0. The segment starts at the robot's published `host_target.q`
-when valid, otherwise its measured opening. `--return-to-start` streams one
-return to the entry measured opening under the same rule. Sine return also
-starts from the latest valid robot host target, with measured fallback.
-This budgets command travel time; it does not infer physical device arrival.
-`--body-pose zero --body-gains hold` instead ramps to zero using the recorded
-robot FIXED_STAND profile, then holds zero in the same EXTERNAL session.
-Zero-settle error/speed/dwell and this gripper example's body hold drift are
-observation only; they do not trigger CANCEL. Entry stationary, state validity,
-freshness, ownership, phase, rejection and CANCEL-confirmation guards remain active.
-`BodyState.applied_cmd` is currently always None on the matching robot runtime;
-it cannot be used as execution evidence. The gripper sample, host target and
-latest-received trace keys stay separate; a host echo is
-not proof of device execution or arrival. Zero trace timestamps remain unknown,
-including AGX write_ack. No robot connection or motion has been tested here.
-
-After the same on-site authorization, `--side both --pattern sine` uses one
-EXTERNAL session for body zero/hold, simultaneous-phase gripper targets,
-return to the entry openings, then CANCEL. Defaults are 0.01–0.08 m, a 10 s
-period and 30 s of sine streaming; transitions add to the total runtime.
-`--speed-m-s 0` keeps the robot configuration default. The two topic writes
-share one time phase but do not promise atomic device output or arrival.
-
-```bash
-python examples/gripper/gripper_external.py --side both --pattern sine --body-pose zero --body-gains hold --period-s 10 --duration 30 --confirm-motion
-```
-
 ## PC policy example (in preparation)
 
 `examples/teleop_policy/teleop_policy.py` subscribes to BodyState, discovers the actual body
@@ -502,7 +397,7 @@ existing on-site authorization and emergency-stop requirements above.
 - [wbc_tracking_mode](examples/wbc_tracking_mode/README.md)
 - [teleop_policy](examples/teleop_policy/README.md)
 - [brainco_hand](examples/brainco_hand/README.md)
-- [gripper](examples/gripper/README.md)
+- [end_effector](examples/end_effector/README.md)
 - [external_control](examples/external_control/README.md)
 - [fixed_stand_pose](examples/fixed_stand_pose/README.md)
 - [body_state_subscriber](examples/body_state_subscriber/README.md)
@@ -511,17 +406,17 @@ Teleop input and the deployed action 17 mapping are documented in
 [examples/teleop_policy/README.md](examples/teleop_policy/README.md). Live input comes from
 the robot's Aorta Joy publisher, using the same JoyReader as velocity mode.
 
-Hand and gripper examples select `pull_feedback=True` on their clients. State,
-info and touch are decoded on the polling caller; no Python receive worker is
-created. The optional user callbacks then run on that caller. The default
-client mode remains compatible with existing asynchronous callback users.
-Each pull client has one polling consumer and retains only the latest sample
-per topic. Independent EE payloads still use the generated Python codecs;
-BodyState/BodyCmd use the native codecs. `PullController.wait_body_state()`
-uses the native DTO decoder; `wait_state()` retains native arrays. `brainco_capture live` uses its bounded callback queue for all topics, including
+The generic EE client decodes typed callbacks into a latest immutable cache.
+Its positive-timeout waits can require a different full SampleRef; it does not
+create a Python polling worker or its own Node. It has no legacy `pull_feedback`
+option. User callbacks run on the transport callback path, outside SDK locks,
+and must not block; their exceptions are not malformed-wire feedback.
+BodyState/BodyCmd retain native codecs and the original pull rings.
+`PullController.wait_body_state()` uses native DTOs; `wait_state()` uses native
+arrays. `brainco_capture live` retains its bounded callback queue, including
 commands, and reports queue drops explicitly. Transport loss remains unmeasured.
 
-Pull feedback is a latest-state snapshot, not a policy clock. `wait_state(timeout)`
+Body pull feedback is a latest-state snapshot, not a policy clock. `wait_state(timeout)`
 waits for a first frame, then polls the depth=1 ring and otherwise returns the
 previous immutable snapshot with unchanged receipt timestamps; timeout=0 does
 not block. Live policy demos retain their configured 50 Hz timer, independently
