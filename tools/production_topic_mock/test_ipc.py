@@ -201,6 +201,29 @@ class MockIpcTest(unittest.TestCase):
             self.assertEqual(result['control_phase_at_stop'],0)
             self.assertFalse((output/'auxiliary.json').exists())
 
+    def test_real_typed_waits_keep_body_live_then_cancel_join_and_close(self):
+        from . import run
+        for mode in ('late_reply', 'no_reply', 'no_provider'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); output = root/'run'; evidence = root/'touch-wait.json'
+                args = run.parser().parse_args(['--mode','production-topics','--build-dir',
+                    str(Path(os.environ['MOCK_BUILD_DIR']).resolve()), '--output',str(output),
+                    '--seconds','15','--allow-client','--client-command',sys.executable,
+                    str(Path(__file__).with_name('test_touch_wait_ipc.py').resolve()),'--client',mode,str(evidence)])
+                rc = run.run(args)
+                logs = '\n'.join(p.read_text() for p in output.glob('*.log'))
+                # Keep partial source-specific evidence even when this case fails.
+                if evidence.is_file():
+                    print('TOUCH_WAIT_IPC '+evidence.read_text(), flush=True)
+                self.assertEqual(rc,0,logs)
+                report = json.loads(evidence.read_text())
+                self.assertEqual(report['outcome'],'ASSERTIONS_COMPLETED')
+                result = json.loads((output/'mock-result.json').read_text())
+                self.assertEqual(result['endpoint_rc'],0)
+                self.assertEqual(result['parse_errors'],0)
+                self.assertGreaterEqual(result['accepted'],3)
+                self.assertEqual(result['control_phase_at_stop'],0)
+
 
 if __name__ == '__main__':
     if sys.argv[1:2] == ['--client']:

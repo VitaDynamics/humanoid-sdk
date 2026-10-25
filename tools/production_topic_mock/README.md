@@ -108,3 +108,18 @@ MOCK_BUILD_DIR=/tmp/sdk-mock-build \
 
 This is host-only functional coverage. ARM execution, hardware timing, physical
 stability and robot motion are not measured.
+
+`test_ipc` includes three synthetic service cases from `test_touch_wait_ipc.py` on the same actual SDK
+connection: deferred reply after CANCEL, no reply until native timeout, and no
+provider during matching. It invokes the real CLI, executor, typed RPC and C-ABI;
+only observation wrappers record calls. The original compiled Mock owns Body
+and EXTERNAL. The test peer supplies explicitly synthetic EE descriptions/state
+and retains native service responder handles; it adds no production fault flag.
+
+The test requires Body publications and distinct Body samples during the native
+wait, CANCEL before that wait completes, and no EE motion. A late successful
+reply must be rejected by the SDK's current ownership guard. The per-call RPC
+client is freed by `set_touch` after its call ends; the real worker then joins
+before EE client and shared connection close. JSON timing/order evidence goes
+into the captured test log. These are regression sources until separately run;
+no strict total timeout/free bound, hardware response or HIL result is implied.

@@ -70,7 +70,7 @@ class OfflineInstallTest(unittest.TestCase):
             for example in ("body_state_subscriber/body_state_subscriber.py",
                             "external_control/external_control.py",
                             "end_effector/end_effector_external.py",
-                            "end_effector/end_effector_subscriber.py",
+                            "end_effector_state_subscriber/end_effector_state_subscriber.py",
                             "brainco_hand/brainco_capture.py",
                             "teleop_policy/teleop_policy.py"):
                 subprocess.run(

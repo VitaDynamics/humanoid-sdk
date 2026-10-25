@@ -62,7 +62,7 @@ class ReleaseTest(unittest.TestCase):
                 'brainco_hand/brainco_capture.py',
                 'end_effector/README.md',
                 'end_effector/end_effector_external.py',
-                'end_effector/end_effector_subscriber.py',
+                'end_effector_state_subscriber/end_effector_state_subscriber.py',
                 'external_control/README.md',
                 'external_control/external_control.py',
                 'fixed_stand_pose/README.md',
