@@ -173,6 +173,78 @@ class PendingTransport(FakeTransport):
 
 
 class EndEffectorClientTest(unittest.TestCase):
+    def test_teleop_real_ee_commands_and_touch_share_one_confirmed_controller(self):
+        harness, node = self.harness(running=False)
+        left = self.client(harness, node, touch=True)
+        right = self.client(harness, node, 'right')
+        harness.accept_enter(action='HUMANOID_TELEOP')
+        active = harness.controller.enter_control('HUMANOID_TELEOP', .1)
+        first = left.publish(target())
+        before = list(harness.transport.published)
+        with self.assertRaises(NotRunningError):
+            harness.controller.publish(make_command(0))
+        self.assertEqual(harness.transport.published, before)
+        self.assertEqual(harness.controller._next_external_sequence, 2)
+        self.assertTrue(left.set_touch(True, .1).enabled)
+        self.assertEqual(harness.controller._next_external_sequence, 2)
+        second = right.publish(target())
+        self.assertEqual((first.key.sequence, second.key.sequence), (1, 2))
+        self.assertEqual((first.key.session_id, second.key.session_id), (active.generation,) * 2)
+        for (_, wire), expected in zip(node.commands, (first, second)):
+            self.assertEqual((wire.Key().SessionId(), wire.Key().Sequence()),
+                             (expected.key.session_id, expected.key.sequence))
+            self.assertEqual((wire.ControlRef().ClientId(), wire.ControlRef().LeaseId()),
+                             (harness.controller.client_id.encode(), harness.lease_id.encode()))
+        touch = node.touch_requests[0]
+        self.assertEqual((touch.ControlRef().ClientId(), touch.ControlRef().LeaseId()),
+                         (harness.controller.client_id.encode(), harness.lease_id.encode()))
+        self.assertIs(left.connection, right.connection)
+        harness.controller._best_effort_cancel()
+        before = (len(node.commands), len(node.touch_requests), harness.controller._next_external_sequence)
+        with self.assertRaises(NotRunningError):
+            left.publish(target())
+        with self.assertRaises(NotRunningError):
+            left.set_touch(False, .1)
+        self.assertEqual((len(node.commands), len(node.touch_requests),
+                          harness.controller._next_external_sequence), before)
+
+    def test_teleop_actual_ee_client_cannot_send_before_commit_and_activation_confirm(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, touch=True)
+        before_ack_checked = []
+
+        def publish(topic, request):
+            if topic != CONTROL_REQUEST_TOPIC:
+                return
+            if request.operation == ControlOperation.COMMIT:
+                harness.status(action='HUMANOID_TELEOP', phase=ExternalPhase.RUNNING)
+                with self.assertRaises(NotRunningError):
+                    client.publish(target())
+                with self.assertRaises(NotRunningError):
+                    client.set_touch(True, .1)
+                self.assertEqual((node.commands, node.touch_requests), ([], []))
+                self.assertEqual(harness.controller._next_external_sequence, 1)
+                before_ack_checked.append(True)
+            harness.ack(request)
+
+        harness.transport.on_publish = publish
+        harness.controller.enter_control('HUMANOID_TELEOP', .1)
+        self.assertEqual(before_ack_checked, [True])
+        self.assertEqual(client.publish(target()).key.sequence, 1)
+
+    def test_teleop_touch_cancel_during_matching_prevents_rpc_without_consuming_key(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, touch=True)
+        harness.accept_enter(action='HUMANOID_TELEOP')
+        harness.controller.enter_control('HUMANOID_TELEOP', .1)
+        node.match_hook = harness.controller._best_effort_cancel
+        with self.assertRaises(NotRunningError):
+            client.set_touch(True, .1)
+        self.assertEqual(node.touch_requests, [])
+        self.assertEqual(node.commands, [])
+        self.assertEqual(harness.controller._next_external_sequence, 1)
+        self.assertEqual(node.handles[-1].close_count, 1)
+
     def harness(self, *, running=True):
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)

@@ -49,7 +49,7 @@ class InvalidCommandError(ExternalControlError, ValueError):
 
 
 class NotRunningError(ExternalControlError):
-    """Raised when publishing without an owned EXTERNAL session."""
+    """Raised when an operation lacks a confirmed, owned control session."""
 
 
 class ControllerClosedError(ExternalControlError):
@@ -111,6 +111,7 @@ class ExternalController:
         self._latest_status: ControlStatus | None = None
         self._acks: dict[tuple[str, ControlOperation], ControlAck] = {}
         self._request_id: str | None = None
+        self._request_action: str | None = None
         self._lease_id = ""
         self._external_session_id = 0
         self._next_external_sequence = 1
@@ -172,21 +173,34 @@ class ExternalController:
         timeout bounds entry only. Call exit_external() to release control;
         command-stream timeout and safety checks remain active.
         """
+        return self.enter_control("EXTERNAL", timeout)
+
+    def enter_control(self, action_name: str, timeout: float) -> ControlStatus:
+        """Bind this connection to EXTERNAL or the robot's HUMANOID_TELEOP.
+
+        Return only after accepted COMMIT and actual matching RUNNING status.
+        timeout bounds entry, not ownership. Release with exit_control().
+        HUMANOID_TELEOP accepts EE input; BodyCmd remains EXTERNAL-only.
+        """
+        if (not isinstance(action_name, str)
+                or action_name not in ("EXTERNAL", "HUMANOID_TELEOP")):
+            raise ValueError("action_name must be EXTERNAL or HUMANOID_TELEOP")
         deadline = _deadline(timeout)
         with self._condition:
             self._ensure_open()
             if self._request_id is not None:
-                raise ExternalControlError("an EXTERNAL request is already active")
+                raise ExternalControlError("a control request is already active")
             request_id = str(uuid.uuid4())
             self._request_id = request_id
+            self._request_action = action_name
             self._lease_id = ""
             self._external_session_id = 0
             self._next_external_sequence = 1
             self._cancel_sent = False
             self._acks.clear()
+            prepare = self._request(ControlOperation.PREPARE)
 
         try:
-            prepare = self._request(ControlOperation.PREPARE)
             self.transport.publish(CONTROL_REQUEST_TOPIC, prepare)
             prepare_ack = self._wait_for_ack(
                 request_id, ControlOperation.PREPARE, deadline
@@ -197,10 +211,13 @@ class ExternalController:
                     "PREPARE was accepted without a lease_id"
                 )
             with self._condition:
+                self._ensure_open()
+                if self._request_id != request_id or self._cancel_sent:
+                    raise NotRunningError("control entry was cancelled or replaced")
                 self._lease_id = prepare_ack.lease_id
                 status_before_commit = self._latest_status
+                commit = self._request(ControlOperation.COMMIT)
 
-            commit = self._request(ControlOperation.COMMIT)
             self.transport.publish(CONTROL_REQUEST_TOPIC, commit)
             commit_ack = self._wait_for_ack(
                 request_id, ControlOperation.COMMIT, deadline
@@ -211,17 +228,25 @@ class ExternalController:
                     "COMMIT acknowledgement changed the prepared lease_id"
                 )
 
-            status = self._wait_for(
-                lambda: self._owned_running_status_after(status_before_commit),
+            def activate() -> ControlStatus | None:
+                # _wait_for calls this under the original condition, including
+                # PullController. Never reopen permission after CANCEL/close.
+                self._ensure_open()
+                if self._request_id != request_id or self._cancel_sent:
+                    raise NotRunningError("control entry was cancelled or replaced")
+                status = self._owned_running_status_after(status_before_commit)
+                if status is not None:
+                    self._external_session_id = status.generation
+                    self._next_external_sequence = 1
+                return status
+
+            return self._wait_for(
+                activate,
                 deadline,
-                "timed out waiting for owned EXTERNAL/RUNNING status",
+                f"timed out waiting for owned {action_name}/RUNNING status",
             )
-            with self._condition:
-                self._external_session_id = status.generation
-                self._next_external_sequence = 1
-            return status
         except BaseException:
-            self._best_effort_cancel()
+            self._best_effort_cancel(request_id=request_id)
             raise
 
     def publish(self, command: BodyCmd) -> BodyCmd:
@@ -262,7 +287,7 @@ class ExternalController:
                 if trace is not None:
                     trace['validation_ns'] = time.perf_counter_ns() - validation
         preparing = time.perf_counter_ns() if trace is not None else 0
-        context = self._reserve_command()
+        context = self._reserve_command(for_body=True)
         external_command = replace(
             command,
             protocol_version=BODY_CMD_PROTOCOL_VERSION,
@@ -291,16 +316,18 @@ class ExternalController:
                         trace['timing_error_type'] = type(error).__name__
         return external_command
 
-    def _reserve_command(self) -> _CommandContext:
+    def _reserve_command(self, *, for_body: bool = False) -> _CommandContext:
         """Reserve from the connection's stream for a validated BODY/EE call.
 
-        This never enters EXTERNAL or publishes. Failed sends consume their key;
+        This never enters control or publishes. Failed sends consume their key;
         callers must not replay a reservation after a reconnect or lease change.
         This local snapshot does not replace robot admission.
         Call outside _condition so pull reception cannot invert its lock order.
         """
         with self._condition:
             status = self._require_owned_status()
+            if for_body and self._request_action != "EXTERNAL":
+                raise NotRunningError("BodyCmd requires an owned EXTERNAL session")
             if status.phase == ExternalPhase.RUNNING:
                 if status.generation != self._external_session_id:
                     self._external_session_id = status.generation
@@ -318,10 +345,12 @@ class ExternalController:
     def _require_owned_status(self) -> ControlStatus:
         """Original shared admission checks; caller holds _condition."""
         self._ensure_open()
+        if self._external_session_id == 0 or self._cancel_sent:
+            raise NotRunningError("control entry is unconfirmed or cancellation has started")
         status = self._latest_status
         if not self._status_allows_publish(status):
             raise NotRunningError(
-                "publish requires an owned EXTERNAL RUNNING or TIMEOUT_HOLD session"
+                "publish requires the bound action in owned RUNNING or TIMEOUT_HOLD"
             )
         assert status is not None
         if status.phase == ExternalPhase.RUNNING:
@@ -341,20 +370,24 @@ class ExternalController:
         """
         with self._condition:
             status = self._require_owned_status()
-            if self._cancel_sent:
-                raise NotRunningError("control cancellation has started")
             return _ControlContext(self.client_id, self._lease_id,
                                    status.generation, self._request_id)
 
     def exit_external(self, timeout: float) -> ControlStatus:
+        """Release the current connection; retained for existing callers."""
+        return self.exit_control(timeout)
+
+    def exit_control(self, timeout: float) -> ControlStatus:
+        """CANCEL once and wait for the bound action's completed exit."""
         deadline = _deadline(timeout)
         with self._condition:
             self._ensure_open()
             if self._request_id is None:
-                raise NotRunningError("no EXTERNAL request is active")
+                raise NotRunningError("no control request is active")
             request_id = self._request_id
+            action_name = self._request_action
 
-        self._best_effort_cancel()
+        self._best_effort_cancel(request_id=request_id)
         cancel_ack = self._wait_for_ack(
             request_id, ControlOperation.CANCEL, deadline
         )
@@ -363,16 +396,17 @@ class ExternalController:
             lambda: (
                 self._latest_status
                 if self._latest_status is not None
-                and self._latest_status.current_action != "EXTERNAL"
+                and self._latest_status.current_action != action_name
                 and self._latest_status.phase
                 in (ExternalPhase.IDLE, ExternalPhase.EMERGENCY)
                 else None
             ),
             deadline,
-            "timed out waiting for EXTERNAL to exit",
+            f"timed out waiting for {action_name} to exit",
         )
         with self._condition:
-            self._clear_session()
+            if self._request_id == request_id:
+                self._clear_session()
         return status
 
     def close(self) -> None:
@@ -475,18 +509,21 @@ class ExternalController:
                 self._condition.wait(remaining)
 
     def _request(self, operation: ControlOperation) -> ControlRequest:
-        if self._request_id is None:
+        if self._request_id is None or self._request_action is None:
             raise ExternalControlError("no active request identity")
         return ControlRequest(
             request_id=self._request_id,
             client_id=self.client_id,
             operation=operation,
+            action_name=self._request_action,
             lease_id=self._lease_id,
             requested_lease_ms=0,
         )
 
-    def _best_effort_cancel(self) -> None:
+    def _best_effort_cancel(self, *, request_id: str | None = None) -> None:
         with self._condition:
+            if request_id is not None and self._request_id != request_id:
+                return
             if self._request_id is None or self._cancel_sent:
                 return
             self._cancel_sent = True
@@ -515,7 +552,7 @@ class ExternalController:
             self._request_id is not None
             and self._lease_id
             and status is not None
-            and status.current_action == "EXTERNAL"
+            and status.current_action == self._request_action
             and status.phase in (ExternalPhase.RUNNING, ExternalPhase.TIMEOUT_HOLD)
             and status.client_id == self.client_id
             and status.lease_id == self._lease_id
@@ -531,6 +568,7 @@ class ExternalController:
 
     def _clear_session(self) -> None:
         self._request_id = None
+        self._request_action = None
         self._lease_id = ""
         self._external_session_id = 0
         self._next_external_sequence = 1

@@ -16,6 +16,26 @@ from locomotion_aorta import (
 
 
 class AortaBindingContractTest(unittest.TestCase):
+    def test_real_control_codec_preserves_both_bound_actions_for_every_operation(self):
+        import flatbuffers
+
+        bindings = transport_module._load_aorta_bindings()
+        for action in ('EXTERNAL', 'HUMANOID_TELEOP'):
+            for operation in ControlOperation:
+                with self.subTest(action=action, operation=operation):
+                    request = ControlRequest(request_id='bound-request', client_id='client-1',
+                                             operation=operation, action_name=action, lease_id='lease-1')
+                    builder = flatbuffers.Builder(256)
+                    builder.Finish(transport_module._fill_control_request(bindings, request, builder, 0))
+                    view = bindings.control_request_module.ControlRequest.GetRootAs(builder.Output())
+                    self.assertEqual(view.ActionName(), action.encode())
+                    self.assertEqual(view.RequestId(), b'bound-request')
+                    self.assertEqual(view.ClientId(), b'client-1')
+                    self.assertEqual(view.LeaseId(), b'lease-1')
+                    self.assertEqual(view.RequestedLeaseMs(), 0)
+                    self.assertEqual(view.ProtocolVersion(), 2)
+                    self.assertEqual(view.Operation(), list(ControlOperation).index(operation) + 1)
+
     def test_real_aorta_and_generated_control_bindings_are_available(self) -> None:
         required_modules = (
             "aorta",

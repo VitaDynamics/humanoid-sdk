@@ -19,6 +19,50 @@ class Ring:
     def close(self):self.closed=True
 
 class PullTest(unittest.TestCase):
+    def test_teleop_pull_entry_and_body_rejection_keep_original_lock_order(self):
+        c, t = self.fixture(action='HUMANOID_TELEOP')
+        original = t.poll_control_status
+        polls = []
+
+        def poll():
+            self.assertFalse(c._condition._is_owned())
+            polls.append(True)
+            original()
+
+        with patch.object(t, 'poll_control_status', side_effect=poll):
+            active = c.enter_control('HUMANOID_TELEOP', .2)
+            before = list(t.published)
+            with self.assertRaises(NotRunningError):
+                c.publish(BodyCmd(tuple(BodyJointCmd() for _ in range(31))))
+            self.assertEqual(t.published, before)
+            self.assertEqual(c._next_external_sequence, 1)
+            self.assertEqual(c._control_context().generation, active.generation)
+            self.assertEqual(c._next_external_sequence, 1)
+            self.assertEqual(c._reserve_command().sequence, 1)
+            self.assertEqual(c.exit_control(.2).phase, ExternalPhase.IDLE)
+        self.assertTrue(polls)
+        self.assertEqual([r.action_name for t, r in t.published], ['HUMANOID_TELEOP'] * 3)
+
+    def test_teleop_pull_foreign_action_or_cancel_rejects_ee_context(self):
+        c, t = self.fixture(action='HUMANOID_TELEOP')
+        owned = c.enter_control('HUMANOID_TELEOP', .2)
+        t.emit(CONTROL_STATUS_TOPIC, replace(owned, status_seq=2, current_action='EXTERNAL'))
+        with self.assertRaises(NotRunningError):
+            c._reserve_command()
+        with self.assertRaises(NotRunningError):
+            c._control_context()
+        self.assertEqual(c._next_external_sequence, 1)
+        t.emit(CONTROL_STATUS_TOPIC, replace(owned, status_seq=3))
+        self.assertEqual(c._reserve_command().sequence, 1)
+        c._best_effort_cancel()
+        # An already queued RUNNING does not reopen locally cancelled control.
+        t.emit(CONTROL_STATUS_TOPIC, replace(owned, status_seq=4))
+        with self.assertRaises(NotRunningError):
+            c._reserve_command()
+        with self.assertRaises(NotRunningError):
+            c._control_context()
+        self.assertEqual(c._next_external_sequence, 2)
+
     def test_rpc_context_drains_outside_shared_lock_and_preserves_motion_sequence(self):
         c,t=self.fixture();owned=c.enter_external(.2)
         original=t.poll_control_status
@@ -142,7 +186,7 @@ class PullTest(unittest.TestCase):
         t._closed=True;closed.set();thread.join(.5)
         self.assertFalse(thread.is_alive());self.assertIsInstance(errors[0],RuntimeError)
 
-    def fixture(self,missing_status=False,reject=False):
+    def fixture(self,missing_status=False,reject=False,action='EXTERNAL'):
         t=FakeTransport();pending=[];original=t.emit
         def emit(topic,message):
             if topic==CONTROL_STATUS_TOPIC:pending.append(message)
@@ -157,7 +201,7 @@ class PullTest(unittest.TestCase):
             t.emit('/sdk/foot_humanoid/control/ack',ControlAck(request_id=req.request_id,operation=req.operation,accepted=not reject,lease_id='L'))
             if not missing_status and req.operation in(ControlOperation.COMMIT,ControlOperation.CANCEL):
                 cancel=req.operation==ControlOperation.CANCEL
-                t.emit(CONTROL_STATUS_TOPIC,ControlStatus(status_seq=2 if cancel else 1,current_action='PASSIVE'if cancel else'EXTERNAL',phase=ExternalPhase.IDLE if cancel else ExternalPhase.RUNNING,client_id='client',lease_id='L',generation=42))
+                t.emit(CONTROL_STATUS_TOPIC,ControlStatus(status_seq=2 if cancel else 1,current_action='PASSIVE'if cancel else action,phase=ExternalPhase.IDLE if cancel else ExternalPhase.RUNNING,client_id='client',lease_id='L',generation=42))
         t.on_publish=publish;c=PullController(client_id='client',_transport=t);self.addCleanup(c.close);return c,t
 
     def test_enter_cancel_original_ack_lease_generation_no_body_callback(self):

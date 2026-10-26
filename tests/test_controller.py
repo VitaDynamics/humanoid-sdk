@@ -75,7 +75,7 @@ class ControllerHarness:
         self.transport.emit(CONTROL_STATUS_TOPIC, status)
         return status
 
-    def accept_enter(self, *, publish_running: bool = True) -> None:
+    def accept_enter(self, *, publish_running: bool = True, action: str = "EXTERNAL") -> None:
         def on_publish(topic, request) -> None:
             if topic != CONTROL_REQUEST_TOPIC:
                 return
@@ -84,7 +84,7 @@ class ControllerHarness:
             elif request.operation == ControlOperation.COMMIT:
                 self.ack(request)
                 if publish_running:
-                    self.status(action="EXTERNAL", phase=ExternalPhase.RUNNING)
+                    self.status(action=action, phase=ExternalPhase.RUNNING)
 
         self.transport.on_publish = on_publish
 
@@ -96,6 +96,231 @@ def make_command(sequence_hint: int, *, q: float = 0.0) -> BodyCmd:
 
 
 class ExternalControllerTest(unittest.TestCase):
+    def test_bound_action_accepts_both_ack_status_orders_without_early_permission(self):
+        for action in ("EXTERNAL", "HUMANOID_TELEOP"):
+            for status_first in (False, True):
+                with self.subTest(action=action, status_first=status_first):
+                    h = ControllerHarness()
+                    self.addCleanup(h.controller.close)
+
+                    def publish(topic, request):
+                        if topic != CONTROL_REQUEST_TOPIC:
+                            return
+                        self.assertEqual(request.action_name, action)
+                        if request.operation == ControlOperation.COMMIT:
+                            if not status_first:
+                                h.ack(request)
+                            h.status(action=action, phase=ExternalPhase.RUNNING)
+                            for operation in (h.controller._reserve_command,
+                                              h.controller._control_context):
+                                with self.assertRaises(NotRunningError):
+                                    operation()
+                            if status_first:
+                                h.ack(request)
+                        else:
+                            h.ack(request)
+                            if request.operation == ControlOperation.CANCEL:
+                                h.status(action="PASSIVE", phase=ExternalPhase.IDLE)
+
+                    h.transport.on_publish = publish
+                    active = h.controller.enter_control(action, .1)
+                    self.assertEqual((active.current_action, active.generation), (action, 42))
+                    self.assertEqual(h.controller._reserve_command().sequence, 1)
+                    self.assertEqual(h.controller.exit_control(.1).phase, ExternalPhase.IDLE)
+                    requests = [r for t, r in h.transport.published if t == CONTROL_REQUEST_TOPIC]
+                    self.assertEqual([r.operation for r in requests], list(ControlOperation))
+                    self.assertEqual(len({r.request_id for r in requests}), 1)
+                    self.assertTrue(all(r.action_name == action for r in requests))
+                    self.assertIsNone(h.controller._request_action)
+
+    def test_action_validation_and_active_request_do_not_rewrite_session(self):
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+        for action in (None, True, "", "TELEOP", "PASSIVE", " HUMANOID_TELEOP", []):
+            with self.subTest(action=action), self.assertRaises(ValueError):
+                h.controller.enter_control(action, .1)
+        self.assertEqual(h.transport.published, [])
+        self.assertIsNone(h.controller._request_id)
+        h.accept_enter(action="HUMANOID_TELEOP")
+        h.controller.enter_control("HUMANOID_TELEOP", .1)
+        identity = (h.controller._request_id, h.controller._lease_id)
+        before = list(h.transport.published)
+        for action in ("EXTERNAL", "HUMANOID_TELEOP"):
+            with self.assertRaises(ExternalControlError):
+                h.controller.enter_control(action, .1)
+        self.assertEqual(h.transport.published, before)
+        self.assertEqual((h.controller._request_id, h.controller._lease_id), identity)
+        self.assertEqual(h.controller._request_action, "HUMANOID_TELEOP")
+
+    def test_teleop_entry_requires_fresh_matching_running_not_only_commit_ack(self):
+        for change in (None, {"current_action": "EXTERNAL"}, {"client_id": "other"},
+                       {"lease_id": "other"}, {"generation": 0},
+                       {"phase": ExternalPhase.TIMEOUT_HOLD}, {"status_seq": 1}):
+            with self.subTest(change=change):
+                h = ControllerHarness()
+                self.addCleanup(h.controller.close)
+                previous = h.status(action="HUMANOID_TELEOP", phase=ExternalPhase.RUNNING)
+
+                def publish(topic, request):
+                    if topic == CONTROL_REQUEST_TOPIC:
+                        h.ack(request)
+                        if request.operation == ControlOperation.COMMIT and change is not None:
+                            h.transport.emit(CONTROL_STATUS_TOPIC,
+                                             replace(previous, **({"status_seq": 2} | change)))
+
+                h.transport.on_publish = publish
+                with self.assertRaises(ExternalControlTimeoutError):
+                    h.controller.enter_control("HUMANOID_TELEOP", .01)
+                self.assertEqual(h.controller._external_session_id, 0)
+                self.assertEqual(h.controller._next_external_sequence, 1)
+                self.assertEqual([r.operation for t, r in h.transport.published],
+                                 [ControlOperation.PREPARE, ControlOperation.COMMIT, ControlOperation.CANCEL])
+
+    def test_running_before_rejected_commit_does_not_activate(self):
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+
+        def publish(topic, request):
+            if topic != CONTROL_REQUEST_TOPIC:
+                return
+            if request.operation == ControlOperation.COMMIT:
+                h.status(action="HUMANOID_TELEOP", phase=ExternalPhase.RUNNING)
+                h.ack(request, accepted=False, reason="activation refused")
+            else:
+                h.ack(request)
+
+        h.transport.on_publish = publish
+        with self.assertRaisesRegex(ControlRejectedError, "activation refused"):
+            h.controller.enter_control("HUMANOID_TELEOP", .1)
+        self.assertEqual(h.controller._external_session_id, 0)
+        with self.assertRaises(NotRunningError):
+            h.controller._reserve_command()
+
+    def test_cancel_or_close_before_activation_cannot_reopen_permission(self):
+        for close in (False, True):
+            with self.subTest(close=close):
+                h = ControllerHarness()
+                self.addCleanup(h.controller.close)
+                h.accept_enter(action="HUMANOID_TELEOP")
+                original_wait = h.controller._wait_for
+
+                def wait(value, deadline, message):
+                    if message.endswith("/RUNNING status"):
+                        if close:
+                            h.controller.close()
+                        else:
+                            h.controller._best_effort_cancel()
+                    return original_wait(value, deadline, message)
+
+                with mock.patch.object(h.controller, "_wait_for", side_effect=wait):
+                    with self.assertRaises(ControllerClosedError if close else NotRunningError):
+                        h.controller.enter_control("HUMANOID_TELEOP", .1)
+                self.assertEqual(h.controller._external_session_id, 0)
+                self.assertEqual(h.controller._next_external_sequence, 1)
+                self.assertEqual(sum(r.operation == ControlOperation.CANCEL
+                                     for _, r in h.transport.published), 1)
+
+    def test_cancelled_enter_cannot_cancel_a_replacement_request(self):
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+        waiting, resume = threading.Event(), threading.Event()
+        failures = []
+        original_wait = h.controller._wait_for
+
+        def wait(value, deadline, message):
+            if message == "timed out waiting for owned HUMANOID_TELEOP/RUNNING status":
+                waiting.set()
+                if not resume.wait(1):
+                    raise AssertionError("test did not release old entry")
+            return original_wait(value, deadline, message)
+
+        def publish(topic, request):
+            if topic == CONTROL_REQUEST_TOPIC:
+                h.ack(request)
+                if request.operation in (ControlOperation.COMMIT, ControlOperation.CANCEL):
+                    cancel = request.operation == ControlOperation.CANCEL
+                    h.status(action="PASSIVE" if cancel else request.action_name,
+                             phase=ExternalPhase.IDLE if cancel else ExternalPhase.RUNNING)
+
+        def enter():
+            try:
+                h.controller.enter_control("HUMANOID_TELEOP", 1)
+            except BaseException as error:
+                failures.append(error)
+
+        h.transport.on_publish = publish
+        with mock.patch.object(h.controller, "_wait_for", side_effect=wait):
+            thread = threading.Thread(target=enter)
+            thread.start()
+            try:
+                self.assertTrue(waiting.wait(.5))
+                h.controller.exit_control(.1)
+                active = h.controller.enter_external(.1)
+                new_request = h.controller._request_id
+            finally:
+                resume.set()
+                thread.join(1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], NotRunningError)
+        self.assertEqual(h.controller._request_id, new_request)
+        self.assertFalse(h.controller._cancel_sent)
+        self.assertEqual(h.controller._control_context().generation, active.generation)
+        self.assertEqual(sum(r.operation == ControlOperation.CANCEL
+                             for _, r in h.transport.published), 1)
+
+    def test_teleop_body_rejection_precedes_generation_learning_and_key_allocation(self):
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+        h.accept_enter(action="HUMANOID_TELEOP")
+        h.controller.enter_control("HUMANOID_TELEOP", .1)
+        first = h.controller._reserve_command()
+        h.status(action="HUMANOID_TELEOP", phase=ExternalPhase.RUNNING, generation=84)
+        before = list(h.transport.published)
+        with self.assertRaisesRegex(NotRunningError, "BodyCmd"):
+            h.controller.publish(make_command(0))
+        self.assertEqual(h.transport.published, before)
+        self.assertEqual((h.controller._external_session_id, h.controller._next_external_sequence), (42, 2))
+        second = h.controller._reserve_command()
+        self.assertEqual((first.session_id, first.sequence, second.session_id, second.sequence), (42, 1, 84, 1))
+        h.controller._best_effort_cancel()
+        for operation in (h.controller._reserve_command, h.controller._control_context):
+            with self.assertRaises(NotRunningError):
+                operation()
+        self.assertEqual(h.controller._next_external_sequence, 2)
+
+    def test_teleop_exit_requires_leaving_bound_action_and_completed_cleanup(self):
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+        h.accept_enter(action="HUMANOID_TELEOP")
+        h.controller.enter_control("HUMANOID_TELEOP", .1)
+        original_wait = h.controller._wait_for
+        checked = []
+
+        def publish(topic, request):
+            if topic == CONTROL_REQUEST_TOPIC:
+                h.ack(request)
+
+        def wait(value, deadline, message):
+            if message == "timed out waiting for HUMANOID_TELEOP to exit":
+                with h.controller._condition:
+                    for action, phase in (("HUMANOID_TELEOP", ExternalPhase.IDLE),
+                                          ("PASSIVE", ExternalPhase.CANCELLED)):
+                        h.status(action=action, phase=phase)
+                        self.assertIsNone(value())
+                        checked.append((action, phase))
+                h.status(action="PASSIVE", phase=ExternalPhase.IDLE)
+            return original_wait(value, deadline, message)
+
+        h.transport.on_publish = publish
+        with mock.patch.object(h.controller, "_wait_for", side_effect=wait):
+            exited = h.controller.exit_control(.1)
+        self.assertEqual(len(checked), 2)
+        self.assertEqual(exited.phase, ExternalPhase.IDLE)
+        self.assertIsNone(h.controller._request_action)
+        self.assertEqual(h.controller._external_session_id, 0)
+        self.assertEqual(h.transport.published[-1][1].action_name, "HUMANOID_TELEOP")
+
     def test_rpc_control_context_is_frozen_nonconsuming_and_does_not_learn_generation(self):
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)

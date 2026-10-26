@@ -212,11 +212,11 @@ class PullController(ExternalController):
             self.transport.poll_control_status()
         return super().status
 
-    def _reserve_command(self):
+    def _reserve_command(self, *, for_body=False):
         with self._condition:
             self._ensure_open()
         self.transport.poll_control_status()
-        return super()._reserve_command()
+        return super()._reserve_command(for_body=for_body)
 
     def _control_context(self):
         with self._condition:

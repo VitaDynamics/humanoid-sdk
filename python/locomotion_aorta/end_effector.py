@@ -1,4 +1,4 @@
-"""New EE development client on one existing EXTERNAL connection.
+"""EE development client on one confirmed EXTERNAL/HUMANOID_TELEOP connection.
 
 Observation sources are fixed at startup; callers supply the actual sample refs
 used by each invocation. No independent controller or sample synchronizer.

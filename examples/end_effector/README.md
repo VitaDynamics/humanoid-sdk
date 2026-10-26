@@ -67,3 +67,42 @@ connection; it does not send cancellation or retry failed cleanup. The enclosing
 motion lifecycle remains responsible for CANCEL and for joining its service
 worker before closing the connection. Historical recordings require their
 explicit matching archive path; they are never decoded as live fallback data.
+
+## Robot-local TELEOP balance with remote EE input (source candidate)
+
+The Python controller also exposes `enter_control("HUMANOID_TELEOP", timeout)`
+and `exit_control(timeout)`. These use the same request/lease/COMMIT connection
+as EXTERNAL. Entry returns only after both accepted COMMIT and a fresh matching
+RUNNING status with a valid generation; ACK and status can arrive in either
+order. An already running robot action does not authorize this connection.
+`enter_external(timeout)` still selects EXTERNAL, and `exit_external(timeout)`
+remains a release wrapper for existing callers.
+
+For an independently authorized motion session with a matching robot build:
+
+1. Create one `PullController`, and lend it to both `EndEffectorClient` objects
+   using `connection=controller`. Supply the actual startup observation-source
+   tuples. Use the existing `wait_info` committed-Ref confirmation and real
+   feedback; do not infer Ref, observations or ownership from the first packet.
+2. Call `active = controller.enter_control("HUMANOID_TELEOP", timeout)` and
+   wait for it to return before sending EE input. The robot runs its local Body
+   balance model. The SDK must not send BodyCmd PD, empty Body commands or a
+   separate Body heartbeat; `controller.publish(BodyCmd(...))` is rejected
+   before allocating a sequence in this mode.
+3. Send targets with the existing `left.publish(target,
+   input_observations=actual_refs)` / right equivalent. Both sides use the one
+   controller's sequence and confirmed remote generation. Preserve the real
+   descriptor, sample identities, limits and timeout rules. A returned
+   submission identifies network input, not completed native output. It is not
+   the robot's local inference/output-generation key.
+4. Use the existing `set_touch` only under that same confirmed owner. It neither
+   consumes a motion sequence nor renews a heartbeat. On stop/error, attempt
+   `controller.exit_control(timeout)` before joining any existing service work;
+   then close the EE clients and connection. An exit timeout is unconfirmed,
+   and `close()` alone is only best-effort CANCEL, not proof of robot cleanup.
+
+The CLI above, including `--ee-only`, still selects EXTERNAL. The separate
+`teleop_policy.py` demo still runs a client-side Body policy through EXTERNAL;
+neither entry silently changes into robot-local TELEOP. This Python addition
+requires the corresponding robot action binding and schema1322 committed-Ref
+bindings; final candidate packaging, combined execution and HIL are pending.
