@@ -116,11 +116,16 @@ def decode_info(view):
 
 
 def decode_state(view):
+    from lowlevel.ee.CommandKey import CommandKey as WireCommandKey
+
     target = view.FeedbackAppliedTarget()
     target = None if target is None else _dto(
         target, FeedbackAppliedTarget, **{name: _vector(target, name) for name in ('pos', 'vel_limit', 'fields')})
-    progress = tuple(_dto(view.Progress(i), ProgressEntry, key=_key(view.Progress(i).Key()))
-                     for i in range(view.ProgressLength()))
+    progress = []
+    for i in range(view.ProgressLength()):
+        entry = view.Progress(i)
+        progress.append(_dto(entry, ProgressEntry, key=_key(entry.Key(WireCommandKey()))))
+    progress = tuple(progress)
     return _dto(view, EndEffectorState, descriptor_ref=_ref(view.DescriptorRef()),
                 received_key=_key(view.ReceivedKey()), host_target_key=_key(view.HostTargetKey()),
                 feedback_applied_key=_key(view.FeedbackAppliedKey()), feedback_applied_target=target,
@@ -438,13 +443,15 @@ def validate_observations(descriptor_ref, observations, *, sources=None):
 
 
 def decode_cmd(view):
+    from lowlevel.ee.DescriptorRef import DescriptorRef as WireDescriptorRef
+
     control = view.ControlRef()
     if control is None:
         raise ValueError('missing command ControlRef')
     observations = []
     for i in range(view.InputObservationsLength()):
         sample = view.InputObservations(i)
-        observations.append(SampleRef(_ref(sample.DescriptorRef()), sample.Stream(),
+        observations.append(SampleRef(_ref(sample.DescriptorRef(WireDescriptorRef())), sample.Stream(),
             sample.Side(), sample.SampleId(), sample.SourceTimeUs(), sample.Validity()))
     target = EndEffectorTarget(_vector(view, 'mode'), _vector(view, 'command_fields'),
                               **{name: _vector(view, name) for name, _ in _COMMAND_COLUMNS})

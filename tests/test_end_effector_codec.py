@@ -243,6 +243,7 @@ class EndEffectorCodecTest(unittest.TestCase):
         self.assertEqual(state.feedback_applied_target.pos, (.015625, .03125))
         self.assertEqual(state.feedback_applied_target.fields, (Field.POS, Field.POS | Field.VEL_LIMIT))
         self.assertEqual((state.progress[0].ts_received_us, state.progress[0].stage_valid_mask), (0, 1))
+        self.assertEqual(state.progress[0].key, CommandKey(9, 1))
         with self.assertRaises(ValueError):
             codec.validate_state(info, dataclasses.replace(state, progress=state.progress*2))
 
