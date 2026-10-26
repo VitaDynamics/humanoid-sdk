@@ -730,7 +730,7 @@ class ExternalControllerTest(unittest.TestCase):
         from locomotion_aorta.body_types import DescriptorRef
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)
-        state = BodyState(2**64-1, (), descriptor_ref=DescriptorRef(2**64-1, 2**63+1),
+        state = BodyState(2**64-1, (), descriptor_ref=DescriptorRef(2**64-1),
                           ts_control_us=2**64-2, applied_key_valid=True, association_source_type=2)
         harness.transport.emit(BODY_STATE_TOPIC, state)
         self.assertIs(harness.controller.wait_body_state(.01), state)

@@ -93,7 +93,7 @@ def _vector(view, name):
 def _ref(view):
     if view is None:
         raise ValueError('missing DescriptorRef')
-    return DescriptorRef(view.RobotRuntimeId(), view.DescriptorEpoch())
+    return DescriptorRef(view.RobotRuntimeId())
 
 
 def _key(view):
@@ -162,7 +162,8 @@ def _identity(value):
     if not isinstance(value.descriptor_ref, DescriptorRef):
         raise ValueError('missing DescriptorRef')
     _uint(value.descriptor_ref.robot_runtime_id, 64, 'robot_runtime_id')
-    _uint(value.descriptor_ref.descriptor_epoch, 64, 'descriptor_epoch')
+    if not value.descriptor_ref.robot_runtime_id:
+        raise ValueError('robot_runtime_id must be nonzero')
     _uint(value.layout_id, 32, 'layout_id')
     if value.side not in (1, 2) or type(value.side) is not int:
         raise ValueError('invalid EE side')
@@ -418,8 +419,9 @@ def validate_observations(descriptor_ref, observations, *, sources=None):
     for sample in observations:
         if not isinstance(sample, SampleRef) or not isinstance(sample.descriptor_ref, DescriptorRef):
             raise ValueError('input_observations must contain actual SampleRef values')
-        for name in ('robot_runtime_id', 'descriptor_epoch'):
-            _uint(getattr(sample.descriptor_ref, name), 64, name)
+        _uint(sample.descriptor_ref.robot_runtime_id, 64, 'robot_runtime_id')
+        if not sample.descriptor_ref.robot_runtime_id:
+            raise ValueError('robot_runtime_id must be nonzero')
         for name in ('sample_id', 'source_time_us'):
             _uint(getattr(sample, name), 64, name)
         _uint(sample.validity, 8, 'sample validity')
@@ -469,14 +471,14 @@ def fill_command(bindings, command, builder, header):
         module.EndEffectorCmdStartInputObservationsVector(builder, len(command.input_observations))
         for sample in reversed(command.input_observations):
             bindings.SampleRef.CreateSampleRef(
-                builder, sample.descriptor_ref.robot_runtime_id, sample.descriptor_ref.descriptor_epoch,
+                builder, sample.descriptor_ref.robot_runtime_id,
                 sample.stream, sample.side, sample.sample_id, sample.source_time_us, sample.validity)
         vectors['input_observations'] = builder.EndVector()
     module.EndEffectorCmdStart(builder)
     module.EndEffectorCmdAddAortaHeader(builder, header)
     module.EndEffectorCmdAddProtocolVersion(builder, command.protocol_version)
     module.EndEffectorCmdAddDescriptorRef(builder, bindings.DescriptorRef.CreateDescriptorRef(
-        builder, command.descriptor_ref.robot_runtime_id, command.descriptor_ref.descriptor_epoch))
+        builder, command.descriptor_ref.robot_runtime_id))
     module.EndEffectorCmdAddKey(builder, bindings.CommandKey.CreateCommandKey(
         builder, command.key.session_id, command.key.sequence))
     module.EndEffectorCmdAddLayoutId(builder, command.layout_id)
@@ -500,7 +502,7 @@ def fill_set_touch(bindings, service, request, builder, header):
     module.EndEffectorSetTouchRequestAddAortaHeader(builder, header)
     module.EndEffectorSetTouchRequestAddProtocolVersion(builder, request.protocol_version)
     module.EndEffectorSetTouchRequestAddDescriptorRef(builder, bindings.DescriptorRef.CreateDescriptorRef(
-        builder, request.descriptor_ref.robot_runtime_id, request.descriptor_ref.descriptor_epoch))
+        builder, request.descriptor_ref.robot_runtime_id))
     module.EndEffectorSetTouchRequestAddLayoutId(builder, request.layout_id)
     module.EndEffectorSetTouchRequestAddSide(builder, request.side)
     module.EndEffectorSetTouchRequestAddControlRef(builder, control)
@@ -519,7 +521,8 @@ def validate_set_touch_response(request, response):
     if not isinstance(response.descriptor_ref, DescriptorRef):
         raise ValueError('missing set_touch response DescriptorRef')
     _uint(response.descriptor_ref.robot_runtime_id, 64, 'robot_runtime_id')
-    _uint(response.descriptor_ref.descriptor_epoch, 64, 'descriptor_epoch')
+    if not response.descriptor_ref.robot_runtime_id:
+        raise ValueError('robot_runtime_id must be nonzero')
     if (response.descriptor_ref, response.side) != (request.descriptor_ref, request.side):
         raise ValueError('set_touch response DescriptorRef/side differs from request')
     _uint(response.side, 8, 'side')

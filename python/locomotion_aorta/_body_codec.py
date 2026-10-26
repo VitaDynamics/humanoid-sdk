@@ -101,9 +101,12 @@ def decode_body_state(view: Any) -> BodyState:
             for name in ('quaternion', 'gyroscope', 'accelerometer', 'rpy')})
         imus.append(_dto(sample, BodyImuSample, state=imu))
     ref = view.DescriptorRef()
+    runtime = None if ref is None else ref.RobotRuntimeId()
+    if runtime == 0:
+        raise ValueError("BodyState DescriptorRef requires nonzero robot_runtime_id")
     return _dto(view, BodyState, joints=unpack_body_joints(view),
                 imu_states=tuple(imus), descriptor_ref=None if ref is None else
-                DescriptorRef(ref.RobotRuntimeId(), ref.DescriptorEpoch()))
+                DescriptorRef(runtime))
 
 
 _decode_body_state_python = decode_body_state  # Reference for native golden tests.
@@ -126,7 +129,6 @@ def _decode_gripper_info(view: Any) -> GripperInfo:
 
 
 def decode_robot_info(view: Any) -> RobotInfo:
-    committed = view.CommittedDescriptorRef()
     body = view.Body()
     body_info = None if body is None else _dto(
         body, BodyInfo,
@@ -143,9 +145,7 @@ def decode_robot_info(view: Any) -> RobotInfo:
         effectors.append(_dto(entry, EndEffectorCapability,
                              hand=None if hand is None else _decode_hand_info(hand),
                              gripper=grip, reason=_text(entry.Reason())))
-    return _dto(view, RobotInfo, body=body_info, end_effectors=tuple(effectors),
-                committed_descriptor_ref=None if committed is None else DescriptorRef(
-                    committed.RobotRuntimeId(), committed.DescriptorEpoch()))
+    return _dto(view, RobotInfo, body=body_info, end_effectors=tuple(effectors))
 
 
 def decode_robot_info_response(view: Any) -> GetRobotInfoResponse:

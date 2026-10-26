@@ -1,8 +1,9 @@
 # Generic end-effector example (development source)
 
-This branch pins the actual schema candidate 0.0.0+g80a154209738. It still
-requires a matching validated native BodyState3 codec and final robot producer;
-no installed/native/IPC or device/HIL result is implied by the schema delivery.
+The fixed parent pins schema80. This successor source requires regenerated
+runtime-only static-descriptor bindings, so the parent pin is provenance only,
+not an executable combination. Native/IPC, final robot integration and HIL are
+all pending.
 
 `end_effector_external.py` uses one shared controller for Body and both selected
 end effectors. The default and `--dry-run` use a read-only source: no control
@@ -82,8 +83,10 @@ For an independently authorized motion session with a matching robot build:
 
 1. Create one `PullController`, and lend it to both `EndEffectorClient` objects
    using `connection=controller`. Supply the actual startup observation-source
-   tuples. Use the existing `wait_info` committed-Ref confirmation and real
-   feedback; do not infer Ref, observations or ownership from the first packet.
+   tuples. `wait_info` accepts one immutable startup Info for the connection's
+   nonzero runtime; it does not query RobotInfo. A runtime change invalidates
+   the client, so reconnect and reacquire control before creating a new client.
+   Do not infer observations or ownership from Info alone.
 2. Call `active = controller.enter_control("HUMANOID_TELEOP", timeout)` and
    wait for it to return before sending EE input. The robot runs its local Body
    balance model. The SDK must not send BodyCmd PD, empty Body commands or a
@@ -104,5 +107,5 @@ For an independently authorized motion session with a matching robot build:
 The CLI above, including `--ee-only`, still selects EXTERNAL. The separate
 `teleop_policy.py` demo still runs a client-side Body policy through EXTERNAL;
 neither entry silently changes into robot-local TELEOP. This Python addition
-requires the corresponding robot action binding and schema1322 committed-Ref
+requires the corresponding robot action binding and regenerated static-Ref
 bindings; final candidate packaging, combined execution and HIL are pending.

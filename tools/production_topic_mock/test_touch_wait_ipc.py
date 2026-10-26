@@ -82,7 +82,7 @@ def touch_wait_client(mode, output):
         ref = actual_body.descriptor_ref
         assert actual_body.protocol_version == 3
         bindings, rpc_bindings = codec.load_bindings(), codec.load_touch_bindings()
-        wire_ref = module('DescriptorRef').DescriptorRefT(ref.robot_runtime_id, ref.descriptor_epoch)
+        wire_ref = module('DescriptorRef').DescriptorRefT(ref.robot_runtime_id)
         info = module('EndEffectorInfo').EndEffectorInfoT(protocolVersion=1, descriptorRef=wire_ref,
             layoutId=7, side=1, deviceModel=DeviceModel.AGX, firmware='synthetic', serial='synthetic',
             axisNames=['synthetic'], positionDomain=[PositionDomain.TOTAL_OPENING], torqueDomain=[0], supportedModes=[1 << ControlMode.POSITION],
@@ -129,7 +129,7 @@ def touch_wait_client(mode, output):
         def observed_rpc(*args, **kwargs):
             rpc = create_rpc(*args, **kwargs)
             if args[0] != topic+'/set_touch':
-                return rpc  # Original RobotInfo RPC is outside the touch wait observation.
+                return rpc
             raw, call, free = rpc.raw(), rpc.call, rpc.close
             matching = raw.wait_for_matching
             def wait_matching(timeout):

@@ -83,7 +83,6 @@ struct Context {
   uint64_t ee_accepted = 0, ee_rejected = 0, ee_applied = 0, touch_requests = 0;
   uint64_t ack_sequence = 0;
   uint64_t apply_period_ns = 0, pending_tick_ns = 0;
-  uint8_t configured_ee_mask = 0, published_ee_mask = 0;
   std::atomic<bool> endpoint_failed{false};
   Context(uint64_t seed, uint64_t timeout, uint64_t prepare, int reject)
       : protocol(seed, timeout, prepare, reject) {}
@@ -173,13 +172,7 @@ void ReplyInfo(const aorta_bytes_view_t *view, aorta_service_request_t request,
   try {
     if (!pm::ValidInfoRequest(Copy(view)))
       throw std::runtime_error("invalid info request");
-    uint64_t committed_runtime = 0;
-    {
-      std::lock_guard<std::mutex> lock(ctx.mutex);
-      if (ctx.published_ee_mask == ctx.configured_ee_mask)
-        committed_runtime = ctx.protocol.runtime_id();
-    }
-    const auto bytes = pm::EncodeInfo(committed_runtime);
+    const auto bytes = pm::EncodeInfo();
     aorta_owned_bytes_slice_t slice{bytes.data(), bytes.size(), nullptr,
                                     nullptr};
     aorta_owned_bytes_view_t owned{&slice, 1, bytes.size()};
@@ -238,7 +231,7 @@ void ReplyTouch(const aorta_bytes_view_t* view, aorta_service_request_t request,
     {
       std::lock_guard<std::mutex> lock(ctx.mutex);
       if (value.side == endpoint.side) reply = ctx.protocol.SetTouch(value, Mono());
-      else {reply.runtime=value.runtime;reply.epoch=value.epoch;reply.side=value.side;reply.reason=3;}
+      else {reply.runtime=value.runtime;reply.side=value.side;reply.reason=3;}
       ++ctx.touch_requests;
     }
     // The same Protocol snapshot is updated before responding. A transport
@@ -431,8 +424,6 @@ int main(int argc, char **argv) {
       throw std::runtime_error("extra initial IMU values");
     context.protocol.SetInitialImu(imu_q);
     auto ee_streams = ConfigureEE(context,directory);
-    for (const auto& stream : ee_streams)
-      context.configured_ee_mask |= 1u << (stream.side - 1);
     std::array<EEContext,2> ee_contexts{{{&context,1},{&context,2}}};
     const auto ee_started_us = Wall()/1000;
     // Declare resources after context: callbacks are drained before context
@@ -555,10 +546,6 @@ int main(int argc, char **argv) {
                     pm::EncodeEEInfo(stream.info_bytes,context.protocol.runtime_id(),ee_started_us,us) :
                     pm::EncodeEETouch(stream.touch_bytes,snapshot,id,us);
                 Check(aorta_publisher_publish(stream.publishers[role],bytes.data(),bytes.size()),"synthetic EE publish");
-                if (role == 1) {
-                  std::lock_guard<std::mutex> lock(context.mutex);
-                  context.published_ee_mask |= 1u << (stream.side - 1);
-                }
               }
               stream.next[role]=now+stream.periods[role];
             }

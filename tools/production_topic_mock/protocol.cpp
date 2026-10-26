@@ -95,7 +95,7 @@ bool ValidInfoRequest(const std::vector<uint8_t>& bytes) {
   return aorta::services::humanoid_locomotion::VerifyGetRobotInfoRequestBuffer(
       verifier);
 }
-std::vector<uint8_t> EncodeInfo(uint64_t committed_runtime) {
+std::vector<uint8_t> EncodeInfo() {
   static const std::array<const char*, kSlots> names{
       "left_hip_pitch_joint",
       "left_hip_roll_joint",
@@ -130,10 +130,6 @@ std::vector<uint8_t> EncodeInfo(uint64_t committed_runtime) {
       "neck_yaw_joint"};
   lowlevel::RobotInfoT info;
   info.protocol_version = 1;
-  if (committed_runtime) {
-    info.committed_descriptor_ref =
-        std::make_unique<lowlevel::ee::DescriptorRef>(committed_runtime, 1);
-  }
   info.body = std::make_unique<lowlevel::BodyInfoT>();
   info.body->slot_count = kSlots;
   info.body->roster_version = 1;
@@ -389,7 +385,7 @@ bool Protocol::AcceptEE(const EECommand& cmd, uint64_t now, uint64_t wall_us) {
   s.received_us = wall_us;
   auto reject = [&](uint16_t reason) { ++s.reject_count; s.reject_code = reason; return false; };
   if (cmd.version != 1) return reject(8);
-  if (cmd.runtime != runtime_id_ || cmd.epoch != s.epoch) return reject(9);
+  if (cmd.runtime != runtime_id_) return reject(9);
   if (cmd.layout_id != s.info.layout_id) return reject(10);
   if (!OwnedEE(cmd.client_id, cmd.lease_id) || cmd.key.session != status_.generation || !cmd.key.sequence)
     return reject(11);
@@ -401,7 +397,7 @@ bool Protocol::AcceptEE(const EECommand& cmd, uint64_t now, uint64_t wall_us) {
       cmd.observations.size() != s.info.observation_sources.size()) return reject(2);
   for (size_t i = 0; i < cmd.observations.size(); ++i) {
     const auto& o = cmd.observations[i];
-    if (o.runtime != runtime_id_ || o.epoch != s.epoch || (o.validity & ~15) ||
+    if (o.runtime != runtime_id_ || (o.validity & ~15) ||
         std::make_pair(o.stream, o.side) != s.info.observation_sources[i]) return reject(9);
     // Actual IDs/time/validity are preserved, not regenerated or made into a
     // time/permission gate. Reusing one actual sample is legal.
@@ -491,14 +487,13 @@ TouchReply Protocol::SetTouch(const TouchRequest& request, uint64_t now) {
   Watchdog(now);
   TouchReply reply;
   reply.runtime = request.runtime;  // Reply binding echoes even a rejected request.
-  reply.epoch = request.epoch;
   reply.side = request.side;
   if (request.side < 1 || request.side > 2 || !endpoints_[request.side - 1].configured) {
     reply.reason = 3;
     return reply;
   }
   auto& s = endpoints_[request.side - 1].snapshot;
-  if (request.version != 1 || request.runtime != runtime_id_ || request.epoch != s.epoch ||
+  if (request.version != 1 || request.runtime != runtime_id_ ||
       request.layout_id != s.info.layout_id) reply.reason = 3;
   else if (!OwnedEE(request.client_id, request.lease_id)) reply.reason = 2;
   else if (!s.info.touch_available) reply.reason = 1;

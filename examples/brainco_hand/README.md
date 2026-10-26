@@ -15,7 +15,7 @@ python examples/brainco_hand/brainco_capture.py --metadata /path/to/capture-meta
 
 metadata 与字段约束见根 README；输出路径必须新建。JSONL 使用
 `end_effector_capture_v4`、`left_ee_*`/`right_ee_*`，触觉 payload 是精确
-uint8 列表。全 DescriptorRef、SampleRef、时间/有效位、raw 与控制关联键保留；
+uint8 列表。runtime-only DescriptorRef、SampleRef、时间/有效位、raw 与控制关联键保留；
 缺失/非有限值不伪造健康零值，queue drop 与 transport loss 分开。
 
 MCAP 导出核真实 root/BFBS、编码、CRC 和源/payload 哈希。历史 LowCmd/LowState

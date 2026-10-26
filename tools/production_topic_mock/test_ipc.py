@@ -57,8 +57,9 @@ def ee_client():
             observation_sources=((SampleStream.EE_STATE, number),)))
             for side, number in (('left',1), ('right',2))]
         infos = [endpoint.wait_info(5) for endpoint in endpoints]
-        committed = controller.get_robot_info(5)
-        assert committed.info.committed_descriptor_ref == infos[0].descriptor_ref == infos[1].descriptor_ref
+        assert infos[0].descriptor_ref == infos[1].descriptor_ref
+        roster = controller.get_robot_info(5)
+        assert roster.info is not None and roster.info.body.slot_count == 31
         state = controller.wait_body_state(5)
         assert state.protocol_version == 3
         assert state.descriptor_ref == infos[0].descriptor_ref == infos[1].descriptor_ref
@@ -169,7 +170,7 @@ class MockIpcTest(unittest.TestCase):
                     frame='synthetic', sensorType=1, shape=[1], components=['raw'], dtype=1,
                     unit='1', payloadOffset=0, payloadBytes=2, encodingVersion=1)
                 info = module('EndEffectorInfo').EndEffectorInfoT(protocolVersion=1,
-                    descriptorRef=module('DescriptorRef').DescriptorRefT(100,1), layoutId=7, side=number,
+                    descriptorRef=module('DescriptorRef').DescriptorRefT(100), layoutId=7, side=number,
                     deviceModel=DeviceModel.BRAINCO_REVO2 if number==1 else DeviceModel.AGX,
                     axisNames=['synthetic'+str(i) for i in range(n)],
                     positionDomain=[PositionDomain.JOINT_ANGLE if number==1 else PositionDomain.TOTAL_OPENING]*n,
@@ -182,7 +183,7 @@ class MockIpcTest(unittest.TestCase):
                     state_hz=100, info_hz=10, observation_sources=[[2,number]])
                 if number == 1:
                     touch = module('EndEffectorTouch').EndEffectorTouchT(protocolVersion=1,
-                        descriptorRef=module('DescriptorRef').DescriptorRefT(100,1), layoutId=7, side=1,
+                        descriptorRef=module('DescriptorRef').DescriptorRefT(100), layoutId=7, side=1,
                         touchStateId=1, regionStamps=[module('RegionStamp').RegionStampT(validity=1)],
                         payload=[128,255])
                     write(root/'left-touch.bin', touch)

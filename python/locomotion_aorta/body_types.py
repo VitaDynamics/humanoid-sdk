@@ -17,9 +17,8 @@ BODY_STATE_PROTOCOL_VERSION = 3
 
 @dataclass(frozen=True, slots=True)
 class DescriptorRef:
-    """Shared Body/EE snapshot identity; both integers retain uint64 width."""
+    """Shared Body/EE identity for one immutable robot process."""
     robot_runtime_id: int
-    descriptor_epoch: int
 
 @dataclass(frozen=True, slots=True)
 class BodyJointCmd:
@@ -140,7 +139,6 @@ class RobotInfo:
     ts_info_us: int
     body: BodyInfo | None
     end_effectors: tuple[EndEffectorCapability, ...]
-    committed_descriptor_ref: DescriptorRef | None = None
 
 @dataclass(frozen=True, slots=True)
 class GetRobotInfoResponse:

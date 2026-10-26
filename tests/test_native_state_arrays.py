@@ -74,7 +74,7 @@ class NativeStateArraysTest(unittest.TestCase):
         m = module('BodyState')
         for source in (0, 1, 2, 3, 4, 5, 6, 255):
             with self.subTest(source=source):
-                obj = m.BodyStateT(protocolVersion=3, descriptorRef=DescriptorRefT(2**64-1, 2**63+7),
+                obj = m.BodyStateT(protocolVersion=3, descriptorRef=DescriptorRefT(2**64-1),
                     tsControlUs=2**64-2, appliedKeyValid=True, associationSourceType=source)
                 b = flatbuffers.Builder(1); b.Finish(obj.Pack(b))
                 arrays = self.compare(bytes(b.Output()))
@@ -83,7 +83,6 @@ class NativeStateArraysTest(unittest.TestCase):
                 self.assertTrue(state.applied_key_valid)
                 self.assertEqual((arrays.association_source_type, state.association_source_type), (source, source))
                 self.assertEqual(arrays.descriptor_ref.robot_runtime_id, 2**64-1)
-                self.assertEqual(arrays.descriptor_ref.descriptor_epoch, 2**63+7)
                 self.assertEqual(arrays.ts_control_us, 2**64-2)
 
     def test_compatibility_materialization_is_lazy(self):

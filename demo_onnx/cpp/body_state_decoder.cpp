@@ -100,8 +100,11 @@ State ReadState(const uint8_t *data, size_t size, size_t offset) {
 
 py::object Descriptor(const State &state, const py::object &descriptor_type) {
   if (!state.descriptor) return py::none();
-  return descriptor_type(state.descriptor->robot_runtime_id(),
-                         state.descriptor->descriptor_epoch());
+  const auto runtime = state.descriptor->robot_runtime_id();
+  if (!runtime)
+    throw std::invalid_argument(
+        "BodyState DescriptorRef requires nonzero robot_runtime_id");
+  return descriptor_type(runtime);
 }
 
 py::object Decode(py::buffer input, size_t offset, const py::object &state_type,

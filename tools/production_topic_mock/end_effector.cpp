@@ -80,7 +80,7 @@ std::vector<uint8_t> EncodeEEInfo(const std::vector<uint8_t>& fixture,
     uint64_t runtime,uint64_t startup_us,uint64_t wall_us) {
   (void)DecodeEEInfo(fixture);
   std::unique_ptr<lowlevel::ee::EndEffectorInfoT> info(lowlevel::ee::GetEndEffectorInfo(fixture.data())->UnPack());
-  info->descriptor_ref=std::make_unique<lowlevel::ee::DescriptorRef>(runtime,1);
+  info->descriptor_ref=std::make_unique<lowlevel::ee::DescriptorRef>(runtime);
   info->firmware="SYNTHETIC_NO_DEVICE"; info->serial="SYNTHETIC_NO_DEVICE"; info->identity_valid_mask=0;
   info->ts_descriptor_acquired_us=startup_us; info->ts_state_pub_us=wall_us; info->time_valid_mask=3;
   info->aorta_header=Header(0,wall_us);
@@ -94,7 +94,7 @@ EECommand DecodeEECommand(const std::vector<uint8_t>& bytes) {
   if (!w->descriptor_ref() || !w->control_ref() || !w->key()) throw std::invalid_argument("missing EE identity");
   EECommand out;
   out.version=w->protocol_version(); out.layout_id=w->layout_id(); out.side=w->side();
-  out.runtime=w->descriptor_ref()->robot_runtime_id(); out.epoch=w->descriptor_ref()->descriptor_epoch();
+  out.runtime=w->descriptor_ref()->robot_runtime_id();
   const auto* c=w->control_ref();
   if (!c->client_id() || !c->lease_id() || c->client_id()->size()>256 || c->lease_id()->size()>256)
     throw std::invalid_argument("invalid EE control identity");
@@ -108,7 +108,7 @@ EECommand DecodeEECommand(const std::vector<uint8_t>& bytes) {
     if (w->input_observations()->size()>5) throw std::invalid_argument("EE observation bound");
     for (const auto* o:*w->input_observations()) {
       const auto& ref=o->descriptor_ref();
-      out.observations.push_back({ref.robot_runtime_id(),ref.descriptor_epoch(),o->sample_id(),o->source_time_us(),o->stream(),o->side(),o->validity()});
+      out.observations.push_back({ref.robot_runtime_id(),o->sample_id(),o->source_time_us(),o->stream(),o->side(),o->validity()});
     }
   }
   return out;
@@ -116,7 +116,7 @@ EECommand DecodeEECommand(const std::vector<uint8_t>& bytes) {
 #elif defined(PRODUCTION_MOCK_EE_STATE_CODEC)
 std::vector<uint8_t> EncodeEEState(const EESnapshot& s,uint64_t id,uint64_t us) {
   lowlevel::ee::EndEffectorStateT out;
-  out.protocol_version=1; out.descriptor_ref=std::make_unique<lowlevel::ee::DescriptorRef>(s.runtime,s.epoch);
+  out.protocol_version=1; out.descriptor_ref=std::make_unique<lowlevel::ee::DescriptorRef>(s.runtime);
   out.layout_id=s.info.layout_id; out.side=s.info.side; out.state_id=id;
   out.ts_state_real_us=out.ts_state_pub_us=out.ts_ingested_us=out.ts_assembled_us=us;
   out.time_valid_mask=27; // Host synthetic sample, not a hardware acquisition clock.
@@ -157,7 +157,7 @@ std::vector<uint8_t> EncodeEETouch(const std::vector<uint8_t>& bytes,
   std::unique_ptr<lowlevel::ee::EndEffectorTouchT> out(lowlevel::ee::GetEndEffectorTouch(bytes.data())->UnPack());
   if (out->protocol_version!=1 || out->side!=s.info.side || out->layout_id!=s.info.layout_id)
     throw std::invalid_argument("synthetic Touch fixture identity");
-  out->descriptor_ref=std::make_unique<lowlevel::ee::DescriptorRef>(s.runtime,s.epoch);
+  out->descriptor_ref=std::make_unique<lowlevel::ee::DescriptorRef>(s.runtime);
   out->touch_state_id=id;out->ts_state_pub_us=us;out->publish_time_valid=true;
   for (auto& stamp:out->region_stamps) {
     // Keep payload validity only. Re-emitting a synthetic sample cannot create
@@ -178,12 +178,12 @@ TouchRequest DecodeTouchRequest(const std::vector<uint8_t>& bytes) {
   const auto* control=w->control_ref();
   if (control->client_id()->size()>256 || control->lease_id()->size()>256) throw std::invalid_argument("set_touch identity size");
   return {w->protocol_version(),w->layout_id(),w->descriptor_ref()->robot_runtime_id(),
-          w->descriptor_ref()->descriptor_epoch(),w->side(),control->client_id()->str(),control->lease_id()->str(),w->enable()};
+          w->side(),control->client_id()->str(),control->lease_id()->str(),w->enable()};
 }
 std::vector<uint8_t> EncodeTouchReply(const TouchReply& value) {
   aorta::services::humanoid_locomotion::EndEffectorSetTouchResponseT out;
   out.protocol_version=1;
-  out.descriptor_ref=std::make_unique<lowlevel::ee::DescriptorRef>(value.runtime,value.epoch);
+  out.descriptor_ref=std::make_unique<lowlevel::ee::DescriptorRef>(value.runtime);
   out.side=value.side;out.reason=value.reason;
   out.status=value.success ? aorta::services::common::ServiceStatus_SUCCESS : aorta::services::common::ServiceStatus_INTERNAL_ERROR;
   out.enabled=value.enabled;out.enabled_valid=value.enabled_valid;

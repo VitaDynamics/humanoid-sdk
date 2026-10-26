@@ -246,7 +246,7 @@ class EndEffectorExampleTest(unittest.TestCase):
     def test_unknown_faulted_nonfinite_wrong_ref_and_bad_target_fail_before_prepare(self):
         for changes,target_options in (({'sample_status':SampleStatus.NO_SNAPSHOT},{}),
                 ({'valid_fields':(0,)},{}),({'pos':(math.nan,)},{}),
-                ({'descriptor_ref':DescriptorRef(100,2)},{}),
+                ({'descriptor_ref':DescriptorRef(101)},{}),
                 ({'error_code':(1,)},{}),({}, {'positions':(.2,)})):
             with self.subTest(changes=changes):
                 c=self.controller(); e=Endpoint(c); e._state=replace(e._state,**changes)
@@ -276,7 +276,7 @@ class EndEffectorExampleTest(unittest.TestCase):
 
     def test_descriptor_change_after_first_send_stops_and_cancels(self):
         c=self.controller(); e=Endpoint(c)
-        e.after_publish=lambda _: setattr(e,'_state',replace(e._state,descriptor_ref=DescriptorRef(999,1)))
+        e.after_publish=lambda _: setattr(e,'_state',replace(e._state,descriptor_ref=DescriptorRef(999)))
         with self.assertRaises(ValueError): self.run_case(c,[e])
         self.assertEqual(len(e.commands),1)
         self.assertEqual(c.calls.count('exit_external'),1)
@@ -635,8 +635,8 @@ class TouchObservationTest(unittest.TestCase):
         for failure in ('state','touch','rpc'):
             c=self.make_client(); updated=replace(c.state,ts_state_pub_us=120,touch_enabled=True)
             c.wait_touch.return_value=replace(c.touch,touch_state_id=2)
-            if failure=='state': updated=replace(updated,descriptor_ref=DescriptorRef(1,2))
-            elif failure=='touch': c.wait_touch.return_value=replace(c.touch,descriptor_ref=DescriptorRef(1,2))
+            if failure=='state': updated=replace(updated,descriptor_ref=DescriptorRef(2))
+            elif failure=='touch': c.wait_touch.return_value=replace(c.touch,descriptor_ref=DescriptorRef(2))
             c.set_touch.side_effect=(OSError('RPC failure') if failure=='rpc' else
                                     lambda *_a,**_k:setattr(c,'state',updated))
             with self.assertRaises((ValueError,OSError)): demo.set_touch_and_observe(c,True,1.)
@@ -750,8 +750,9 @@ class PartialFeedbackGuardTest(unittest.TestCase):
         position=demo.wait_position(self.client,self.client.info,.03,sleep=sleep,monotonic=self.clock.monotonic)
         self.assertEqual(position.state_id,2)
         from test_end_effector_client import confirm_info
-        confirm_info(self.client,self.node,info_object(epoch=2))
-        with self.assertRaisesRegex(TimeoutError,'position was not observed'):
+        with self.assertRaises(ValueError):
+            confirm_info(self.client,self.node,info_object(runtime=101))
+        with self.assertRaises(ValueError):
             demo.wait_position(self.client,self.client.info,.03,sleep=self.clock.sleep,monotonic=self.clock.monotonic)
 
 

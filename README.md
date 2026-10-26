@@ -1,24 +1,21 @@
 # Humanoid SDK
 
 SDK **0.2.1** is in preparation; packaging and release are pending.
-This source increment targets **BodyCmd2 / BodyState3** and the new end-effector
-roots from schema source `80a1542097384b5d276070cbf3f705f27e9c9d53`.
-The actual schema candidate `0.0.0+g80a154209738` wheel, public BFBS and
-plain C++ BodyState3 header have been delivered from schema source
-`80a1542097384b5d276070cbf3f705f27e9c9d53`. This branch binds those exact
-candidate bytes in [compatibility.json](compatibility.json); it is **not an
-official schema release or production pin**. Native/installed SDK, full IPC,
-final robot producer integration and HIL acceptance remain pending. Generation
-and schema-carrier checks do not establish this SDK combination as usable.
+The fixed parent carries the schema80 candidate recorded in
+[compatibility.json](compatibility.json). This successor source changes the
+end-effector contract to a runtime-only static descriptor and therefore needs a
+new generated wheel/BFBS/native header set. Those bytes and the replacement pin
+are pending; schema80 is not a runnable binding for this revision. Native SDK,
+IPC, robot integration and HIL remain NOT_RUN.
 
-The committed-descriptor source increment additionally requires generated
-bindings from schema `1322fda8e342939829ea25866b79919105e27549`.
-Those artifacts and a replacement candidate dependency binding are pending;
-the existing schema80 pin does not supply the new RobotInfo accessor.
-EE `wait_info` explicitly confirms the candidate through RobotInfo once per
-call. An absent committed Ref is unconfirmed, not permission to learn from
-the first topic packet. Service failure preserves accepted feedback and does
-not retry automatically. Matching and RPC have separate transport timeouts.
+The static-descriptor source increment additionally requires regenerated
+bindings in which `DescriptorRef` contains only the nonzero startup
+`robot_runtime_id` and RobotInfo has no descriptor-confirmation field. Those
+artifacts and a replacement dependency binding are pending; the existing
+schema80 pin is not compatible. `wait_info` accepts the first complete Info for
+that process without a RobotInfo RPC. Static semantic changes are fatal; a
+different runtime requires a new connection, control context and EE client.
+Publication timestamp/valid-bit changes alone are normal republishes.
 
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
@@ -113,8 +110,9 @@ Unknown SDK-to-Vita clock mapping leaves command timestamps invalid/zero.
 The development source includes the shared EE client, one motion/read-only CLI,
 capture and the original protocol Mock. Legacy HandClient/GripperClient and
 their motion entries have been removed; there is no online wire fallback.
-The delivered schema candidate is bound below; native builds, final robot
-producer integration and HIL acceptance remain required before release.
+The parent schema candidate remains documented below for provenance only. A
+new exact static-descriptor binding, native build, final robot producer
+integration and HIL acceptance are required before release.
 
 Documentation: [Humanoid documentation](https://vitadynamics.feishu.cn/wiki/Mu1hw8wcSiKw3ykDGtAcvgXpnAg),
 [SDK guide](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh),
@@ -219,7 +217,7 @@ kind names are `left_ee_*` / `right_ee_*`. It creates no publisher or service
 client. Old Hand/Gripper live decoders are not a fallback.
 
 Touch payload is an exact uint8 list; region stamps, independent sample IDs,
-status/direction/validity, full DescriptorRef and command SampleRef/key are
+status/direction/validity, runtime-only DescriptorRef and command SampleRef/key are
 preserved. Missing/nonfinite feedback stays JSON null with its original
 validity, never a healthy zero. Queue drops, partial capture and transport loss
 remain separate. The optional `hil` extra exports MCAP in storage order with

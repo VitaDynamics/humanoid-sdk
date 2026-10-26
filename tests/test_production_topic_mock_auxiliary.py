@@ -172,7 +172,7 @@ class AuxiliaryWireTest(unittest.TestCase):
                 if failure == 'side': info.side = 2
                 elif failure == 'position': spec['left']['initial_pos'] = [.1]
                 elif failure == 'shape': info.supportedStateFields = []
-                elif failure == 'touch_ref': touch.descriptorRef.descriptorEpoch = 2
+                elif failure == 'touch_ref': touch.descriptorRef.robotRuntimeId = 101
                 elif failure == 'touch_length': touch.payload = [0]
                 else: info.deviceModel = DeviceModel.AGILINK_OP3
                 (root/'info.bin').write_bytes(pack(info)); (root/'touch.bin').write_bytes(pack(touch))

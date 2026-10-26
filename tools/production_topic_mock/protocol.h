@@ -59,12 +59,12 @@ struct EEKey {
   uint64_t session = 0, sequence = 0;
 };
 struct EEObservation {
-  uint64_t runtime = 0, epoch = 0, sample_id = 0, source_us = 0;
+  uint64_t runtime = 0, sample_id = 0, source_us = 0;
   uint8_t stream = 0, side = 0, validity = 0;
 };
 struct EECommand {
   uint32_t version = 0, layout_id = 0;
-  uint64_t runtime = 0, epoch = 0;
+  uint64_t runtime = 0;
   uint8_t side = 0, sdk_time_valid_mask = 0;
   uint64_t client_created_us = 0, client_send_us = 0;
   std::string client_id, lease_id;
@@ -87,23 +87,23 @@ struct EESnapshot {
   uint16_t reject_code = 0;
   uint64_t reject_count = 0, overwritten = 0, timeouts = 0;
   uint64_t received_us = 0, accepted_us = 0, output_us = 0;
-  uint64_t runtime = 0, epoch = 1;
+  uint64_t runtime = 0;
 };
 struct TouchRequest {
   uint32_t version = 0, layout_id = 0;
-  uint64_t runtime = 0, epoch = 0;
+  uint64_t runtime = 0;
   uint8_t side = 0;
   std::string client_id, lease_id;
   bool enabled = false;
 };
 struct TouchReply {
-  uint64_t runtime = 0, epoch = 1;
+  uint64_t runtime = 0;
   uint8_t side = 0;
   uint16_t reason = 0;
   bool success = false, enabled = false, enabled_valid = false;
 };
 struct Output {
-  uint64_t runtime = 0, descriptor_epoch = 1, control_us = 0;
+  uint64_t runtime = 0, control_us = 0;
   bool applied_key_valid = false;
   uint8_t association_source_type = 0;
   uint64_t session = 0, sequence = 0, first_output_us = 0;
@@ -162,7 +162,7 @@ std::vector<uint8_t> EncodeAck(const Ack&, uint64_t wall_ns,
                                uint64_t publication_id);
 std::vector<uint8_t> EncodeStatus(const Status&, uint64_t now_ns,
                                   uint64_t wall_ns, uint64_t publication_id);
-std::vector<uint8_t> EncodeInfo(uint64_t committed_runtime);
+std::vector<uint8_t> EncodeInfo();
 bool ValidInfoRequest(const std::vector<uint8_t>&);
 std::vector<uint8_t> EncodeState(uint64_t state_id, const Output&,
                                  uint64_t wall_us);

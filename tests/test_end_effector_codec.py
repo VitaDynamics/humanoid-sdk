@@ -29,7 +29,7 @@ def pack(value):
     return bytes(builder.Output())
 
 
-def info_object(*, side=1, n=1, touch=False, epoch=1, runtime=100):
+def info_object(*, side=1, n=1, touch=False, runtime=100):
     # Deliberately synthetic, with every generic quantity, so tests can check
     # SI/masks independently. This does not declare real AGX/BrainCo support.
     cmd = Field.POS | Field.VEL | Field.VEL_LIMIT | Field.TAU | Field.CURRENT | Field.MODE
@@ -42,7 +42,7 @@ def info_object(*, side=1, n=1, touch=False, epoch=1, runtime=100):
             payloadOffset=i*4, payloadBytes=4, encodingVersion=1,
             geometry=[], geometryValid=False) for i in range(2)]
     return module('EndEffectorInfo').EndEffectorInfoT(
-        protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(runtime, epoch),
+        protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(runtime),
         layoutId=7, side=side, deviceModel=0, firmware='synthetic-μ', serial='fixture',
         identityValidMask=0, axisNames=['axis'+str(i) for i in range(n)],
         positionDomain=[PositionDomain.TOTAL_OPENING]*n,
@@ -57,10 +57,10 @@ def info_object(*, side=1, n=1, touch=False, epoch=1, runtime=100):
         tsDescriptorAcquiredUs=10, tsStatePubUs=20, timeValidMask=3)
 
 
-def state_object(*, side=1, n=1, sample=1, epoch=1, runtime=100):
+def state_object(*, side=1, n=1, sample=1, runtime=100):
     field = Field.POS | Field.VEL | Field.TAU | Field.CURRENT | Field.TEMPERATURE | Field.ERROR_CODE
     return module('EndEffectorState').EndEffectorStateT(
-        protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(runtime, epoch),
+        protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(runtime),
         layoutId=7, side=side, stateId=sample, tsStateRealUs=100, tsStatePubUs=110,
         tsAcquiredHwUs=5, tsIngestedUs=101, tsAssembledUs=102, timeValidMask=31,
         sampleStatus=1, validFields=[field]*n, pos=[.03125]*n, vel=[-.015625]*n,
@@ -76,9 +76,9 @@ def state_object(*, side=1, n=1, sample=1, epoch=1, runtime=100):
         rawValidFields=[15]*n)
 
 
-def touch_object(*, side=1, sample=1, epoch=1, runtime=100):
+def touch_object(*, side=1, sample=1, runtime=100):
     return module('EndEffectorTouch').EndEffectorTouchT(
-        protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(runtime, epoch),
+        protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(runtime),
         layoutId=7, side=side, touchStateId=sample, tsStatePubUs=200, publishTimeValid=True,
         regionStamps=[module('RegionStamp').RegionStampT(
             sampleSeq=i+1, tsRequestUs=100+i, tsAcquiredHwUs=3+i,
@@ -105,13 +105,12 @@ class EndEffectorCodecTest(unittest.TestCase):
     def test_real_set_touch_request_uses_full_binding_control_ref_and_no_motion_key(self):
         bindings, service = codec.load_bindings(), codec.load_touch_bindings()
         for side in (1, 2):
-            request = EndEffectorSetTouchRequest(DescriptorRef(2**64-1, 2**63+1), 2**32-1,
+            request = EndEffectorSetTouchRequest(DescriptorRef(2**64-1), 2**32-1,
                                                  side, ControlRef('client-μ', 'lease-λ'), True)
             builder = flatbuffers.Builder(1)
             builder.Finish(codec.fill_set_touch(bindings, service, request, builder, 0))
             wire = service.request.EndEffectorSetTouchRequest.GetRootAs(builder.Output())
-            self.assertEqual((wire.DescriptorRef().RobotRuntimeId(), wire.DescriptorRef().DescriptorEpoch()),
-                             (2**64-1, 2**63+1))
+            self.assertEqual(wire.DescriptorRef().RobotRuntimeId(), 2**64-1)
             self.assertEqual((wire.ProtocolVersion(), wire.LayoutId(), wire.Side(), wire.Enable()), (1, 2**32-1, side, True))
             self.assertEqual((wire.ControlRef().ClientId(), wire.ControlRef().LeaseId()), ('client-μ'.encode(), 'lease-λ'.encode()))
             self.assertFalse(hasattr(wire, 'Key'))
@@ -119,17 +118,17 @@ class EndEffectorCodecTest(unittest.TestCase):
     def test_real_set_touch_response_preserves_default_failure_and_unknown_actual_state(self):
         service = codec.load_touch_bindings()
         obj = service.response.EndEffectorSetTouchResponseT(protocolVersion=1,
-            descriptorRef=module('DescriptorRef').DescriptorRefT(100, 1), side=1)
+            descriptorRef=module('DescriptorRef').DescriptorRefT(100), side=1)
         wire = service.response.EndEffectorSetTouchResponse.GetRootAs(pack(obj))
         response = codec.decode_set_touch(wire)
-        request = EndEffectorSetTouchRequest(DescriptorRef(100, 1), 7, 1, ControlRef('C', 'L'), False)
+        request = EndEffectorSetTouchRequest(DescriptorRef(100), 7, 1, ControlRef('C', 'L'), False)
         codec.validate_set_touch_response(request, response)
         self.assertEqual(response.status, ServiceStatus.INTERNAL_ERROR)
         self.assertFalse(response.enabled_valid)
         self.assertFalse(hasattr(response, 'layout_id'))
         self.assertFalse(hasattr(response, 'key'))
-        for changed in ({'protocol_version': 0}, {'side': 2}, {'descriptor_ref': DescriptorRef(101, 1)},
-                        {'descriptor_ref': DescriptorRef(100, 2)}, {'reason': 65536}, {'status': 128},
+        for changed in ({'protocol_version': 0}, {'side': 2}, {'descriptor_ref': DescriptorRef(101)},
+                        {'reason': 65536}, {'status': 128},
                         {'enabled_valid': 0}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 codec.validate_set_touch_response(request, dataclasses.replace(response, **changed))
@@ -151,7 +150,7 @@ class EndEffectorCodecTest(unittest.TestCase):
         state = decode('state', state_object(n=2, sample=2**64-1))
         touch = decode('touch', touch_object(sample=2**63+1))
         codec.validate_info(info); codec.validate_state(info, state); codec.validate_touch(info, touch)
-        self.assertEqual(info.descriptor_ref, DescriptorRef(100, 1))
+        self.assertEqual(info.descriptor_ref, DescriptorRef(100))
         self.assertEqual((info.firmware, info.axis_names), ('synthetic-μ', ('axis0', 'axis1')))
         self.assertEqual((state.pos, state.current, state.temperature_c), ((.03125,)*2, (.125,)*2, (25.,)*2))
         self.assertEqual((state.sample_ref.stream, state.sample_ref.side, state.sample_ref.sample_id),
@@ -174,7 +173,7 @@ class EndEffectorCodecTest(unittest.TestCase):
                 builder.Finish(codec.fill_command(bindings, result, builder, 0))
                 wire = bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(builder.Output())
                 self.assertEqual((wire.Key().SessionId(), wire.Key().Sequence()), (2**64-1, 2**64-2))
-                self.assertEqual((wire.DescriptorRef().RobotRuntimeId(), wire.DescriptorRef().DescriptorEpoch()), (100, 1))
+                self.assertEqual(wire.DescriptorRef().RobotRuntimeId(), 100)
                 self.assertEqual((wire.ControlRef().ClientId(), wire.ControlRef().LeaseId()), ('client-μ'.encode(), b'lease'))
                 self.assertEqual((wire.Pos(0), wire.VelLimit(0)), (.03125, 0.))
                 self.assertEqual(wire.TauCmd(0), torque or 0.)
@@ -251,7 +250,7 @@ class EndEffectorCodecTest(unittest.TestCase):
         info = decode('info', info_object())
         state = decode('state', state_object())
         for changed in ({'side': 2}, {'layout_id': 8}, {'protocol_version': 0},
-                        {'descriptor_ref': DescriptorRef(100, 2)}, {'pos': ()},
+                        {'descriptor_ref': DescriptorRef(101)}, {'pos': ()},
                         {'actual_output_key_valid': ()}, {'output_allowed': False}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 codec.validate_state(info, dataclasses.replace(state, **changed))
@@ -371,15 +370,15 @@ class EndEffectorCodecTest(unittest.TestCase):
 
     def test_wide_descriptor_and_sample_ref_preserved_by_command_codec(self):
         bindings = codec.load_bindings()
-        info = decode('info', info_object(runtime=2**64-1, epoch=2**63+1))
-        sample = decode('state', state_object(runtime=2**64-1, epoch=2**63+1, sample=2**64-1)).sample_ref
+        info = decode('info', info_object(runtime=2**64-1))
+        sample = decode('state', state_object(runtime=2**64-1, sample=2**64-1)).sample_ref
         submission = EndEffectorSubmission(info.descriptor_ref, 7, 1, ControlRef('C', 'L'),
             CommandKey(0, 0), codec.prepare_target(info, target()), (sample,))
         builder = flatbuffers.Builder(1)
         builder.Finish(codec.fill_command(bindings, submission, builder, 0))
         actual = codec.decode_cmd(bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(builder.Output()))
         self.assertEqual(actual, submission)
-        self.assertEqual(actual.input_observations[0].descriptor_ref, DescriptorRef(2**64-1, 2**63+1))
+        self.assertEqual(actual.input_observations[0].descriptor_ref, DescriptorRef(2**64-1))
 
     def test_diagnostic_counters_unknown_times_and_signed_raw_keep_full_received_values(self):
         wire = state_object(sample=2**64-1)

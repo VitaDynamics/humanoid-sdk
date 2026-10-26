@@ -5,9 +5,9 @@ It does not connect to a robot or simulate actuator dynamics. Use `tests/latency
 for transport latency measurements; this Mock produces counters, not latency
 reports or per-frame evidence.
 
-This source increment requires actual schema1322 generated bindings for the
-committed RobotInfo Ref and the matching BodyState3 native codec/pins. These
-new generated inputs are pending; the fixed schema80 package is insufficient;
+This source increment requires regenerated bindings for the runtime-only
+DescriptorRef and the matching BodyState3 native codec/pins. These new
+generated inputs are pending; the fixed schema80 package is insufficient;
 the commands below are not evidence of a completed build or run.
 
 Build with the pinned runtime wheels installed and the official FlatBuffers
@@ -49,10 +49,9 @@ cooperative CANCEL; remaining owned children are then terminated and reaped.
   `--state-hz` and `--apply-hz` select synthetic rates; they are not timing SLAs.
 - The body has 31 slots; slot 14 is uninstalled. `get_robot_info` describes the
   synthetic roster and limits. `--initial-q` accepts 31 finite JSON values.
-- The Mock returns its fixed runtime/epoch1 committed Ref after every configured
-  EE Info has actually been published successfully; it does not model recovery.
-  The no-EE roster needs no EE publication. This is synthetic IPC evidence, not
-  proof of the robot's descriptor commit transaction.
+- The Mock assigns one nonzero startup runtime to Body and every configured EE
+  stream. Info is immutable for that process; RobotInfo remains the independent
+  roster/availability query and is not a descriptor confirmation transaction.
 - `--initial-imu` accepts two normalized WXYZ quaternions for HIP and TRUNK.
   These are constant synthetic attitudes, not reconstructed sensor data.
 - PREPARE/COMMIT/CANCEL use the public protocol, with identity/lease/version
@@ -82,8 +81,8 @@ Stream/side meanings are the actual schema enums; unsupported OP3 is rejected.
 For example, a right endpoint consuming its own State uses `[[2, 2]]`.
 
 The runner validates actual Info/Touch shape, limits and identity before any
-child starts. The main process assigns one new startup runtime/epoch to Body
-and every EE stream. Each endpoint has one pending command and independent
+child starts. The main process assigns one new startup runtime to Body and
+every EE stream. Each endpoint has one pending command and independent
 receive sequence checks because separate topics may arrive out of order.
 State contains synthetic position and actual simulated output keys; other
 measurements remain invalid, no feedback-carried applied key or complete

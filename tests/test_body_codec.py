@@ -101,32 +101,21 @@ def make_state(*, error_codes=None):
 
 
 class BodyCodecTest(unittest.TestCase):
-    def test_robot_info_committed_ref_is_optional_and_preserves_full_uint64(self):
-        from lowlevel.ee.DescriptorRef import DescriptorRefT
-        from locomotion_aorta import DescriptorRef
+    def test_robot_info_preserves_service_status_without_descriptor_confirmation(self):
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
-        for ref in (None, DescriptorRefT(2**64-1, 2**63+7)):
-            with self.subTest(committed=ref is not None):
-                info = module('RobotInfo').RobotInfoT(protocolVersion=1, tsInfoUs=987,
-                    committedDescriptorRef=ref)
-                reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS,
-                    info=info, errorMessage='right unavailable')
-                builder = flatbuffers.Builder(1)
-                builder.Finish(reply.Pack(builder))
-                wire = GetRobotInfoResponse.GetRootAs(builder.Output())
-                result = codec.decode_robot_info_response(wire)
-                self.assertEqual(result.info.committed_descriptor_ref,
-                    None if ref is None else DescriptorRef(2**64-1, 2**63+7))
-                self.assertEqual((result.status, result.error_message, result.info.protocol_version,
-                                  result.info.ts_info_us),
-                    (ServiceStatus.PARTIAL_SUCCESS, 'right unavailable', 1, 987))
-                self.assertEqual(result.info.end_effectors, ())
-                self.assertIsNone(result.info.body)
-
-    def test_robot_info_positional_body_dto_keeps_default_unconfirmed_ref(self):
-        from locomotion_aorta.body_types import RobotInfo
-        info = RobotInfo(1, 23, None, ())
-        self.assertIsNone(info.committed_descriptor_ref)
+        info = module('RobotInfo').RobotInfoT(protocolVersion=1, tsInfoUs=987)
+        reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS,
+            info=info, errorMessage='right unavailable')
+        builder = flatbuffers.Builder(1)
+        builder.Finish(reply.Pack(builder))
+        wire = GetRobotInfoResponse.GetRootAs(builder.Output())
+        result = codec.decode_robot_info_response(wire)
+        self.assertFalse(hasattr(result.info, 'committed_descriptor_ref'))
+        self.assertEqual((result.status, result.error_message, result.info.protocol_version,
+                          result.info.ts_info_us),
+            (ServiceStatus.PARTIAL_SUCCESS, 'right unavailable', 1, 987))
+        self.assertEqual(result.info.end_effectors, ())
+        self.assertIsNone(result.info.body)
 
     def test_bulk_is_byte_identical_to_real_factory_with_growth_padding_and_actions(self):
         for size in (1, 7, 64, 4096):
@@ -512,13 +501,13 @@ class BodyCodecTest(unittest.TestCase):
             for key, valid in (((0, 0), True), ((2**64-1, 2**63+3), True), ((99, 101), False)):
                 with self.subTest(source=source, key=key, valid=valid):
                     obj = m.BodyStateT(protocolVersion=3, stateId=2**64-2,
-                        descriptorRef=ref_module.DescriptorRefT(2**64-1, 2**63+1),
+                        descriptorRef=ref_module.DescriptorRefT(2**64-1),
                         tsControlUs=2**64-3, appliedKeyValid=valid, associationSourceType=source,
                         appliedSessionId=key[0], appliedSequence=key[1], tsFirstOutputUs=0)
                     builder = flatbuffers.Builder(1)
                     builder.Finish(obj.Pack(builder))
                     state = codec.decode_body_state(m.BodyState.GetRootAs(builder.Output()))
-                    self.assertEqual(state.descriptor_ref, DescriptorRef(2**64-1, 2**63+1))
+                    self.assertEqual(state.descriptor_ref, DescriptorRef(2**64-1))
                     self.assertEqual((state.ts_control_us, state.applied_key_valid, state.association_source_type),
                                      (2**64-3, valid, source))
                     self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us),
@@ -527,6 +516,15 @@ class BodyCodecTest(unittest.TestCase):
         state = codec.decode_body_state(make_state()[1])
         self.assertIsNone(state.descriptor_ref)
         self.assertEqual((state.ts_control_us, state.applied_key_valid, state.association_source_type), (0, False, 0))
+
+    def test_state3_rejects_present_zero_runtime_descriptor(self):
+        ref_module = importlib.import_module('lowlevel.ee.DescriptorRef')
+        obj = module('BodyState').BodyStateT(protocolVersion=3,
+            descriptorRef=ref_module.DescriptorRefT(0))
+        builder = flatbuffers.Builder(1)
+        builder.Finish(obj.Pack(builder))
+        with self.assertRaisesRegex(ValueError, 'nonzero robot_runtime_id'):
+            codec.decode_body_state(module('BodyState').BodyState.GetRootAs(builder.Output()))
 
     def test_decoder_preserves_real_error_even_with_nonfinite_feedback(self):
         obj = module('BodyState').BodyStateT.InitFromObj(make_state()[1])

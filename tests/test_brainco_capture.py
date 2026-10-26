@@ -23,7 +23,7 @@ def touch_payload(side=1, length=5):
     # Real new generated objects; preserve independent regions and exact bytes.
     from test_end_effector_codec import module, pack
     touch = module('EndEffectorTouch').EndEffectorTouchT(
-        protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(2**64-1, 2**63+1),
+        protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(2**64-1),
         layoutId=7, side=side, touchStateId=2**64-1, tsStatePubUs=1000, publishTimeValid=True,
         regionStamps=[module('RegionStamp').RegionStampT(
             sampleSeq=1, tsRequestUs=990+i, tsAcquiredHwUs=50, tsSourceUs=0,
@@ -87,7 +87,7 @@ class BrainCoCaptureTest(unittest.TestCase):
             self.assertEqual([f["ts_request_us"] for f in row["region_stamps"]], [990, 991, 992, 993, 994])
             self.assertEqual([f["direction_flags"] for f in row["region_stamps"]], [0, 1, 0, 1, 0])
             self.assertEqual([f["validity"] for f in row["region_stamps"]], [23]*5)
-            self.assertEqual(row['descriptor_ref'], dict(robot_runtime_id=2**64-1, descriptor_epoch=2**63+1))
+            self.assertEqual(row['descriptor_ref'], dict(robot_runtime_id=2**64-1))
             self.assertEqual(row['touch_state_id'], 2**64-1)
 
     def test_bad_vectors_side_truncation_and_oversized_payload(self):
@@ -317,17 +317,17 @@ class BrainCoCaptureTest(unittest.TestCase):
         self.assertEqual(row['valid_fields'], [0])
         self.assertEqual(row['raw_current'], [-1250])
         self.assertEqual(row['diagnostic_valid_mask'], 0)
-        self.assertEqual(row['descriptor_ref'], dict(robot_runtime_id=100, descriptor_epoch=1))
+        self.assertEqual(row['descriptor_ref'], dict(robot_runtime_id=100))
 
     def test_new_ee_cmd_capture_keeps_k_keys_and_original_time_validity(self):
         from test_end_effector_codec import module, pack
         obj = module('EndEffectorCmd').EndEffectorCmdT(
-            protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(2**64-1, 2**63+1),
+            protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(2**64-1),
             layoutId=7, side=1, controlRef=module('ControlRef').ControlRefT('C', 'L'),
             key=module('CommandKey').CommandKeyT(2**64-1, 0), mode=[2], commandFields=[5],
             pos=[.03125], vel=[], velLimit=[0.], tauCmd=[], currentCmd=[],
             inputObservations=[module('SampleRef').SampleRefT(
-                module('DescriptorRef').DescriptorRefT(2**64-1, 2**63+1), 2, 2, 2**64-1, 0, 9)],
+                module('DescriptorRef').DescriptorRefT(2**64-1), 2, 2, 2**64-1, 0, 9)],
             tsClientCreatedUs=0, tsClientSendUs=0, sdkTimeValidMask=0)
         row = capture.decode('left_ee_cmd', pack(obj), capture.load_bindings())
         self.assertEqual(row['key'], dict(session_id=2**64-1, sequence=0))

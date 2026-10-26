@@ -115,6 +115,11 @@ class ExternalController:
         self._lease_id = ""
         self._external_session_id = 0
         self._next_external_sequence = 1
+        # A connection is bound to one immutable robot process as soon as an
+        # EndEffectorClient accepts Info. Never transfer an old lease/control
+        # context to a restarted robot process.
+        self._end_effector_runtime_id: int | None = None
+        self._end_effector_runtime_failed = False
         self._cancel_sent = False
         self._closed = False
         self._subscriptions: list[Any] = []
@@ -372,6 +377,27 @@ class ExternalController:
             status = self._require_owned_status()
             return _ControlContext(self.client_id, self._lease_id,
                                    status.generation, self._request_id)
+
+    def _bind_end_effector_runtime(self, robot_runtime_id: int) -> None:
+        """Bind this connection to one robot process for all EE clients."""
+        if (type(robot_runtime_id) is not int or
+                not 0 < robot_runtime_id <= _MAX_UINT64):
+            raise ValueError("robot_runtime_id must be a nonzero uint64")
+        with self._condition:
+            self._ensure_open()
+            if self._end_effector_runtime_failed:
+                raise ValueError(
+                    "robot runtime changed; create a new connection, acquire a "
+                    "new control context, and recreate EndEffectorClient"
+                )
+            if self._end_effector_runtime_id is None:
+                self._end_effector_runtime_id = robot_runtime_id
+            elif self._end_effector_runtime_id != robot_runtime_id:
+                self._end_effector_runtime_failed = True
+                raise ValueError(
+                    "robot runtime changed; create a new connection, acquire a "
+                    "new control context, and recreate EndEffectorClient"
+                )
 
     def exit_external(self, timeout: float) -> ControlStatus:
         """Release the current connection; retained for existing callers."""

@@ -12,7 +12,7 @@ std::vector<uint8_t> EncodeState(uint64_t id, const Output& output,
   state.protocol_version = 3;
   // This Mock's own startup/tick snapshot, never inferred from a nonzero key.
   state.descriptor_ref = std::make_unique<lowlevel::ee::DescriptorRef>(
-      output.runtime, output.descriptor_epoch);
+      output.runtime);
   state.ts_control_us = output.control_us;
   state.applied_key_valid = output.applied_key_valid;
   state.association_source_type = output.association_source_type;

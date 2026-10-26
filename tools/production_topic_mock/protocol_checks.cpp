@@ -172,16 +172,16 @@ int main() {
   owner.operation = 2; owner.lease_id = armed.lease_id;
   assert(shared.RequestControl(owner, 1001).accepted);
   EECommand ec;
-  ec.version = 1; ec.runtime = shared.runtime_id(); ec.epoch = 1;
+  ec.version = 1; ec.runtime = shared.runtime_id();
   ec.layout_id = 7; ec.side = 1; ec.client_id = owner.client_id; ec.lease_id = owner.lease_id;
   ec.key = {shared.status().generation, 1}; ec.modes = {2}; ec.fields = {1 | 4 | 8};
   ec.columns = {std::vector<float>{.25f}, {}, std::vector<float>{0.f},
                 std::vector<float>{-.5f}, {}};
-  ec.observations = {{shared.runtime_id(),1,30,100,2,1,7}};
+  ec.observations = {{shared.runtime_id(),30,100,2,1,7}};
   auto bad = ec;
   bad.lease_id = "another-lease";
   assert(!shared.AcceptEE(bad,1002,100));
-  bad = ec; bad.epoch = 2;
+  bad = ec; bad.runtime += 1;
   assert(!shared.AcceptEE(bad,1003,100));
   bad = ec; bad.observations[0].side = 2;
   assert(!shared.AcceptEE(bad,1004,100));
@@ -210,7 +210,7 @@ int main() {
   assert(!shared.AcceptEE(ec,1014,204));
   // set_touch changes the same published snapshot without consuming a key,
   // changing pending motion, or refreshing the original Body heartbeat.
-  TouchRequest tr{1,7,shared.runtime_id(),1,1,owner.client_id,owner.lease_id,true};
+  TouchRequest tr{1,7,shared.runtime_id(),1,owner.client_id,owner.lease_id,true};
   auto rejected_touch = tr; rejected_touch.runtime += 1;
   auto rejected_reply = shared.SetTouch(rejected_touch,1015);
   assert(!rejected_reply.success && rejected_reply.runtime == rejected_touch.runtime);

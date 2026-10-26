@@ -162,6 +162,8 @@ class PullStateSource:
         self.transport = _transport if _transport is not None else PullTransport(
             node_name=node_name or 'body-pull-'+uuid.uuid4().hex,
             group=group, publishers=False)
+        self._end_effector_runtime_id = None
+        self._end_effector_runtime_lock = threading.Lock()
 
     @property
     def group(self):
@@ -173,6 +175,17 @@ class PullStateSource:
     @property
     def control_status(self):
         return self.transport.control_status
+
+    def _bind_end_effector_runtime(self, robot_runtime_id: int) -> None:
+        if type(robot_runtime_id) is not int or not 0 < robot_runtime_id < 2**64:
+            raise ValueError('robot_runtime_id must be a nonzero uint64')
+        with self._end_effector_runtime_lock:
+            self.transport._ensure_open()
+            if self._end_effector_runtime_id is None:
+                self._end_effector_runtime_id = robot_runtime_id
+            elif self._end_effector_runtime_id != robot_runtime_id:
+                raise ValueError(
+                    'robot runtime changed; create a new connection and recreate EndEffectorClient')
 
     def close(self):
         self.transport.close()
