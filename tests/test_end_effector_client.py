@@ -440,11 +440,8 @@ class EndEffectorClientTest(unittest.TestCase):
 
         same_node = Node()
         harness.transport.node = same_node
-        same_connection = EndEffectorClient('left', connection=harness.controller)
-        self.addCleanup(same_connection.close)
-        same_node.emit('left', 'info', info_object(runtime=101))
-        with self.assertRaisesRegex(ValueError, 'lifecycle'):
-            same_connection.wait_info(0.01)
+        with self.assertRaisesRegex(ValueError, 'new connection'):
+            EndEffectorClient('left', connection=harness.controller)
 
         fresh, fresh_node = self.harness()
         fresh_client = self.client(fresh, fresh_node, feedback=False)
@@ -452,6 +449,145 @@ class EndEffectorClientTest(unittest.TestCase):
                          DescriptorRef(101))
         fresh_node.emit('left', 'state', state_object(runtime=101))
         self.assertEqual(fresh_client.publish(target()).key, CommandKey(42, 1))
+
+    def test_runtime_poison_linearizes_before_reservation_and_final_typed_fill(self):
+        for stage, method_name, allocated_before_poison in (
+                ('reservation', '_reserve_end_effector_command', False),
+                ('typed-fill', '_run_end_effector_gate', True)):
+            with self.subTest(stage=stage):
+                harness, node = self.harness()
+                left = self.client(harness, node)
+                right = self.client(harness, node, 'right')
+                right.publish(target())
+                sent = len(node.commands)
+                before = harness.controller._next_external_sequence
+                entered, release = threading.Event(), threading.Event()
+                errors = []
+                original = getattr(harness.controller, method_name)
+
+                def block(*args, **kwargs):
+                    entered.set()
+                    if not release.wait(2):
+                        raise AssertionError('runtime poison barrier was not released')
+                    return original(*args, **kwargs)
+
+                def publish():
+                    try:
+                        right.publish(target())
+                    except BaseException as error:
+                        errors.append(error)
+
+                with patch.object(harness.controller, method_name, side_effect=block):
+                    thread = threading.Thread(target=publish)
+                    thread.start()
+                    try:
+                        self.assertTrue(entered.wait(1))
+                        node.emit('left', 'info', info_object(runtime=101))
+                    finally:
+                        release.set()
+                        thread.join(2)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(len(errors), 1)
+                self.assertIsInstance(errors[0], ValueError)
+                self.assertEqual(len(node.commands), sent)
+                after_poison = harness.controller._next_external_sequence
+                self.assertEqual(after_poison, before + int(allocated_before_poison))
+                with self.assertRaises(ValueError):
+                    right.publish(target())
+                self.assertEqual(harness.controller._next_external_sequence, after_poison)
+
+                body = harness.controller.publish(make_command(0))
+                self.assertEqual(body.sequence, after_poison)
+                previous_publish = harness.transport.on_publish
+
+                def accept_cancel(topic, request):
+                    if (topic == CONTROL_REQUEST_TOPIC and
+                            request.operation == ControlOperation.CANCEL):
+                        harness.ack(request)
+                        harness.status(action='PASSIVE', phase=ExternalPhase.IDLE)
+                    else:
+                        previous_publish(topic, request)
+
+                harness.transport.on_publish = accept_cancel
+                self.assertEqual(
+                    harness.controller.exit_external(.1).phase, ExternalPhase.IDLE
+                )
+                self.assertTrue(left._fatal is right._fatal)
+
+    def test_runtime_poison_retires_sibling_publisher_and_inflight_rpc_once(self):
+        harness, node = self.harness()
+        left = self.client(harness, node, touch=True)
+        right = self.client(harness, node, 'right', touch=True)
+        right.publish(target())
+        publisher = right._publisher
+        entered, release = threading.Event(), threading.Event()
+        errors = []
+
+        def block():
+            entered.set()
+            if not release.wait(2):
+                raise AssertionError('RPC retirement barrier was not released')
+
+        def call():
+            try:
+                right.set_touch(True, .1)
+            except BaseException as error:
+                errors.append(error)
+
+        node.match_hook = block
+        thread = threading.Thread(target=call)
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            rpc = next(handle for handle in reversed(node.handles)
+                       if isinstance(handle, TouchRPC))
+            node.emit('left', 'info', info_object(touch=True, runtime=101))
+            self.assertEqual((publisher.close_count, rpc.close_count), (1, 1))
+        finally:
+            release.set()
+            thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], ValueError)
+        self.assertEqual(node.touch_requests, [])
+        right.close()
+        self.assertEqual((publisher.close_count, rpc.close_count), (1, 1))
+
+    def test_closed_info_callback_cannot_bind_or_poison_shared_runtime(self):
+        harness, node = self.harness(running=False)
+        left = self.client(harness, node, feedback=False)
+        left_handles = list(node.handles)
+        right = self.client(harness, node, 'right', feedback=False)
+        entered, release = threading.Event(), threading.Event()
+        original_decode = codec.decode_info
+
+        def decode(view):
+            entered.set()
+            if not release.wait(2):
+                raise AssertionError('decode retirement barrier was not released')
+            return original_decode(view)
+
+        with patch.object(codec, 'decode_info', side_effect=decode):
+            thread = threading.Thread(
+                target=node.emit,
+                args=('left', 'info', info_object(runtime=101)),
+            )
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                left.close()
+            finally:
+                release.set()
+                thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(all(handle.close_count == 1 for handle in left_handles))
+        self.assertIsNone(harness.controller._end_effector_runtime_id)
+        self.assertIsNone(harness.controller._end_effector_runtime_error)
+        self.assertEqual(
+            confirm_info(right, node, info_object(side=2)).descriptor_ref,
+            DescriptorRef(100),
+        )
+        self.assertIsNone(harness.controller._end_effector_runtime_error)
 
     def test_read_only_clients_on_one_source_share_one_runtime_binding(self):
         harness, node = self.harness(running=False)
@@ -466,6 +602,16 @@ class EndEffectorClientTest(unittest.TestCase):
         node.emit('right', 'info', info_object(side=2, runtime=101))
         with self.assertRaisesRegex(ValueError, 'lifecycle'):
             right.wait_info(0.01)
+
+    def test_read_only_fake_transport_enforces_the_real_closed_gate(self):
+        harness, node = self.harness(running=False)
+        source = PullStateSource(_transport=harness.transport)
+        client = EndEffectorClient('left', connection=source, read_only=True)
+        self.addCleanup(client.close)
+        source.close()
+        node.emit('left', 'info', info_object())
+        with self.assertRaisesRegex(ValueError, 'lifecycle'):
+            client.wait_info(.01)
 
     def test_same_runtime_publication_metadata_may_change_but_static_semantics_may_not(self):
         harness, node = self.harness()

@@ -17,6 +17,12 @@ class FakeTransport:
         self.published: list[tuple[str, Any]] = []
         self.on_publish: Callable[[str, Any], None] | None = None
         self.close_count = 0
+        self.closed = False
+
+    def _ensure_open(self) -> None:
+        if self.closed:
+            from locomotion_aorta import ControllerClosedError
+            raise ControllerClosedError('Aorta transport is closed')
 
     def subscribe(
         self, topic: str, callback: Callable[[Any], None]
@@ -40,4 +46,5 @@ class FakeTransport:
         return robot_info_reply()
 
     def close(self) -> None:
+        self.closed = True
         self.close_count += 1

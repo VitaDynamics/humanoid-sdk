@@ -136,6 +136,7 @@ class EndEffectorClient:
         self._raw_shape = None
         self._position = self._fault = self._position_received_at = None
         try:
+            self.connection._register_end_effector_client(self)
             self._register('info')
             self._register('state')
             with self._condition:
@@ -177,11 +178,26 @@ class EndEffectorClient:
                 pass
 
     def _fail_descriptor(self, error):
-        with self._publish_lock, self._condition:
+        with self._condition:
             if self._closed or self._fatal is not None:
                 return
             handles = self._retire_descriptor_locked(error)
         self._close_handles(handles)
+
+    def _close_locked(self):
+        if self._closed:
+            return []
+        self._closed = True
+        handles = [*self._subscriptions.values(), *self._service_clients]
+        if self._publisher is not None:
+            handles.append(self._publisher)
+        self._subscriptions.clear()
+        self._service_clients.clear()
+        self._publisher = None
+        self._callbacks = {'info': None, 'state': None, 'touch': None}
+        self._position = self._fault = self._position_received_at = None
+        self._condition.notify_all()
+        return handles
 
     def _register(self, kind):
         with self._condition:
@@ -221,13 +237,13 @@ class EndEffectorClient:
                 codec.validate_info(value)
                 if value.side != self._side:
                     raise ValueError('Info side differs from endpoint')
-                bind_runtime = getattr(self.connection, '_bind_end_effector_runtime', None)
-                if bind_runtime is not None:
-                    try:
-                        bind_runtime(value.descriptor_ref.robot_runtime_id)
-                    except (ValueError, ControllerClosedError) as error:
-                        self._fail_descriptor(error)
-                        return
+                try:
+                    self.connection._bind_end_effector_runtime(
+                        self, value.descriptor_ref.robot_runtime_id
+                    )
+                except (ValueError, ControllerClosedError) as error:
+                    self._fail_descriptor(error)
+                    return
             retired = None
             with self._publish_lock, self._condition:
                 if self._closed or self._fatal is not None:
@@ -388,57 +404,62 @@ class EndEffectorClient:
                 info = self._get('info')
                 if info is None:
                     raise InvalidCommandError('validated EE Info is required before publish')
-                self.connection._bind_end_effector_runtime(
-                    info.descriptor_ref.robot_runtime_id)
                 try:
                     codec.validate_observations(info.descriptor_ref, input_observations,
                                                 sources=self._observation_sources)
                     prepared = codec.prepare_target(info, target)
                 except (ValueError, TypeError, OverflowError) as error:
                     raise InvalidCommandError(str(error)) from error
-            if self._publisher is None:
-                publisher = self._node.create_publisher_typed(
-                    self._bindings.metas['cmd'], self._topic + '/cmd',
-                    qos=self._bindings.aorta.QoS.realtime_control())
-                with self._condition:
-                    discard = self._closed
-                    if not discard:
-                        self._publisher = publisher
-                if discard:
-                    publisher.close()
-                    raise ControllerClosedError('end-effector client closed during publisher creation')
-            with self._condition:
+
+            def prepare_send():
                 self._ensure_open()
                 if self._latest['info'].descriptor_ref != info.descriptor_ref:
                     raise InvalidCommandError('DescriptorRef changed before reservation')
-            context = self.connection._reserve_command()
-            with self._condition:
-                self._ensure_open()
-                if self._latest['info'].descriptor_ref != info.descriptor_ref:
-                    raise InvalidCommandError('DescriptorRef changed during reservation')
+                if self._publisher is None:
+                    self._publisher = self._node.create_publisher_typed(
+                        self._bindings.metas['cmd'], self._topic + '/cmd',
+                        qos=self._bindings.aorta.QoS.realtime_control())
+                return self._publisher
+
+            runtime_id = info.descriptor_ref.robot_runtime_id
+            context, publisher = self.connection._reserve_end_effector_command(
+                self, runtime_id, prepare_send
+            )
             submission = EndEffectorSubmission(
                 info.descriptor_ref, info.layout_id, info.side,
                 ControlRef(context.client_id, context.lease_id),
                 CommandKey(context.session_id, context.sequence), prepared, input_observations)
-            self._publisher.publish_typed(
-                lambda builder, header: codec.fill_command(self._bindings, submission, builder, header))
+
+            def submit():
+                self._ensure_open()
+                latest = self._latest['info']
+                if latest is None or latest.descriptor_ref != info.descriptor_ref:
+                    raise InvalidCommandError('DescriptorRef changed during reservation')
+                if self._publisher is not publisher:
+                    raise InvalidCommandError('EE publisher retired before submission')
+                publisher.publish_typed(
+                    lambda builder, header: codec.fill_command(
+                        self._bindings, submission, builder, header
+                    )
+                )
+
+            self.connection._run_end_effector_gate(self, runtime_id, submit)
             return submission
 
-    def _check_touch_context(self, info, context):
-        # Pull reception and the shared controller lock must stay outside this
-        # client's condition. This is a fresh local check, not backend admission.
-        with self._condition:
-            self._ensure_open()
-        self.connection._bind_end_effector_runtime(info.descriptor_ref.robot_runtime_id)
-        current = self.connection._control_context()
-        with self._condition:
+    def _check_touch_context(self, info, context=None, operation=None):
+        def check(current):
             self._ensure_open()
             latest = self._get('info')
             if latest is None or (latest.descriptor_ref, latest.layout_id, latest.side) != (
                     info.descriptor_ref, info.layout_id, info.side):
                 raise InvalidCommandError('DescriptorRef changed during set_touch')
-            if current != context:
+            if context is not None and current != context:
                 raise NotRunningError('control context changed during set_touch')
+            return operation() if operation is not None else current
+
+        return self.connection._end_effector_control_context(
+            self, info.descriptor_ref.robot_runtime_id, check
+        )
 
     def set_touch(self, enable: bool, timeout: float = 5.0):
         """Return the actual confirmed reply, never a new State/Touch sample.
@@ -461,7 +482,7 @@ class EndEffectorClient:
             info = self._get('info')
             if info is None or not info.touch_available:
                 raise InvalidCommandError('validated Info with touch capability is required')
-        context = self.connection._control_context()
+        context = self._check_touch_context(info)
         service = codec.load_touch_bindings()
         rpc = self._node.create_client_typed(
             self._topic + '/set_touch', service.response.EndEffectorSetTouchResponse.GetRootAs,
@@ -482,8 +503,13 @@ class EndEffectorClient:
                 info.descriptor_ref, info.layout_id, info.side,
                 ControlRef(context.client_id, context.lease_id), enable)
             def fill(builder, header):
-                self._check_touch_context(info, context)
-                return codec.fill_set_touch(self._bindings, service, request, builder, header)
+                return self._check_touch_context(
+                    info,
+                    context,
+                    lambda: codec.fill_set_touch(
+                        self._bindings, service, request, builder, header
+                    ),
+                )
             reply = codec.decode_set_touch(rpc.call(fill).decode())
             self._check_touch_context(info, context)
             codec.validate_set_touch_response(request, reply)
@@ -502,24 +528,8 @@ class EndEffectorClient:
                     pass
 
     def close(self):
-        with self._publish_lock, self._condition:
-            if self._closed:
-                return
-            self._closed = True
-            handles = [*self._subscriptions.values(), *self._service_clients]
-            if self._publisher is not None:
-                handles.append(self._publisher)
-            self._subscriptions.clear()
-            self._service_clients.clear()
-            self._publisher = None
-            self._callbacks = {'info': None, 'state': None, 'touch': None}
-            self._position = self._fault = self._position_received_at = None
-            self._condition.notify_all()
-        for handle in handles:
-            try:
-                handle.close()
-            except Exception:
-                pass
+        handles = self.connection._close_end_effector_client(self)
+        self._close_handles(handles)
 
     def __enter__(self):
         with self._condition:

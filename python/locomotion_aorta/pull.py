@@ -176,16 +176,27 @@ class PullStateSource:
     def control_status(self):
         return self.transport.control_status
 
-    def _bind_end_effector_runtime(self, robot_runtime_id: int) -> None:
+    def _register_end_effector_client(self, client) -> None:
+        with self._end_effector_runtime_lock:
+            self.transport._ensure_open()
+
+    def _close_end_effector_client(self, client):
+        with self._end_effector_runtime_lock:
+            with client._condition:
+                return client._close_locked()
+
+    def _bind_end_effector_runtime(self, client, robot_runtime_id: int) -> None:
         if type(robot_runtime_id) is not int or not 0 < robot_runtime_id < 2**64:
             raise ValueError('robot_runtime_id must be a nonzero uint64')
         with self._end_effector_runtime_lock:
             self.transport._ensure_open()
-            if self._end_effector_runtime_id is None:
-                self._end_effector_runtime_id = robot_runtime_id
-            elif self._end_effector_runtime_id != robot_runtime_id:
-                raise ValueError(
-                    'robot runtime changed; create a new connection and recreate EndEffectorClient')
+            with client._condition:
+                client._ensure_open()
+                if self._end_effector_runtime_id is None:
+                    self._end_effector_runtime_id = robot_runtime_id
+                elif self._end_effector_runtime_id != robot_runtime_id:
+                    raise ValueError(
+                        'robot runtime changed; create a new connection and recreate EndEffectorClient')
 
     def close(self):
         self.transport.close()
@@ -231,11 +242,27 @@ class PullController(ExternalController):
         self.transport.poll_control_status()
         return super()._reserve_command(for_body=for_body)
 
+    def _reserve_end_effector_command(self, client, robot_runtime_id, prepare):
+        with self._condition:
+            self._ensure_open()
+        self.transport.poll_control_status()
+        return super()._reserve_end_effector_command(
+            client, robot_runtime_id, prepare
+        )
+
     def _control_context(self):
         with self._condition:
             self._ensure_open()
         self.transport.poll_control_status()
         return super()._control_context()
+
+    def _end_effector_control_context(self, client, robot_runtime_id, operation):
+        with self._condition:
+            self._ensure_open()
+        self.transport.poll_control_status()
+        return super()._end_effector_control_context(
+            client, robot_runtime_id, operation
+        )
 
     def _wait_for(self, value, deadline, timeout_message):
         while True:

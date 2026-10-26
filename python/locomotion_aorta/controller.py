@@ -119,7 +119,8 @@ class ExternalController:
         # EndEffectorClient accepts Info. Never transfer an old lease/control
         # context to a restarted robot process.
         self._end_effector_runtime_id: int | None = None
-        self._end_effector_runtime_failed = False
+        self._end_effector_runtime_error: str | None = None
+        self._end_effector_clients: set[Any] = set()
         self._cancel_sent = False
         self._closed = False
         self._subscriptions: list[Any] = []
@@ -330,22 +331,26 @@ class ExternalController:
         Call outside _condition so pull reception cannot invert its lock order.
         """
         with self._condition:
-            status = self._require_owned_status()
-            if for_body and self._request_action != "EXTERNAL":
-                raise NotRunningError("BodyCmd requires an owned EXTERNAL session")
-            if status.phase == ExternalPhase.RUNNING:
-                if status.generation != self._external_session_id:
-                    self._external_session_id = status.generation
-                    self._next_external_sequence = 1
-            if self._next_external_sequence > _MAX_UINT64:
-                raise ExternalControlError("external sequence exhausted")
-            context = _CommandContext(
-                client_id=self.client_id, lease_id=self._lease_id,
-                session_id=self._external_session_id,
-                sequence=self._next_external_sequence,
-            )
-            self._next_external_sequence += 1
-            return context
+            return self._reserve_command_locked(for_body=for_body)
+
+    def _reserve_command_locked(self, *, for_body: bool = False) -> _CommandContext:
+        """Reserve one key while the caller holds the connection condition."""
+        status = self._require_owned_status()
+        if for_body and self._request_action != "EXTERNAL":
+            raise NotRunningError("BodyCmd requires an owned EXTERNAL session")
+        if status.phase == ExternalPhase.RUNNING:
+            if status.generation != self._external_session_id:
+                self._external_session_id = status.generation
+                self._next_external_sequence = 1
+        if self._next_external_sequence > _MAX_UINT64:
+            raise ExternalControlError("external sequence exhausted")
+        context = _CommandContext(
+            client_id=self.client_id, lease_id=self._lease_id,
+            session_id=self._external_session_id,
+            sequence=self._next_external_sequence,
+        )
+        self._next_external_sequence += 1
+        return context
 
     def _require_owned_status(self) -> ControlStatus:
         """Original shared admission checks; caller holds _condition."""
@@ -378,26 +383,100 @@ class ExternalController:
             return _ControlContext(self.client_id, self._lease_id,
                                    status.generation, self._request_id)
 
-    def _bind_end_effector_runtime(self, robot_runtime_id: int) -> None:
-        """Bind this connection to one robot process for all EE clients."""
+    @staticmethod
+    def _end_effector_runtime_changed() -> ValueError:
+        return ValueError(
+            "robot runtime changed; create a new connection, acquire a "
+            "new control context, and recreate EndEffectorClient"
+        )
+
+    def _register_end_effector_client(self, client: Any) -> None:
+        """Attach one EE client to this connection's existing lifecycle."""
+        with self._condition:
+            self._ensure_open()
+            if self._end_effector_runtime_error is not None:
+                raise ValueError(self._end_effector_runtime_error)
+            self._end_effector_clients.add(client)
+
+    def _close_end_effector_client(self, client: Any) -> list[Any]:
+        """Detach and retire one client; returned handles close without locks."""
+        with self._condition:
+            self._end_effector_clients.discard(client)
+            with client._condition:
+                return client._close_locked()
+
+    def _require_end_effector_runtime_locked(
+        self, client: Any, robot_runtime_id: int
+    ) -> None:
+        """Check one live registered EE client while both conditions are held."""
+        self._ensure_open()
+        client._ensure_open()
+        if client not in self._end_effector_clients:
+            raise ControllerClosedError("end-effector client is detached")
+        if self._end_effector_runtime_error is not None:
+            raise ValueError(self._end_effector_runtime_error)
+        if self._end_effector_runtime_id != robot_runtime_id:
+            raise self._end_effector_runtime_changed()
+
+    def _bind_end_effector_runtime(self, client: Any, robot_runtime_id: int) -> None:
+        """Bind one live EE client and retire every EE writer on mismatch."""
         if (type(robot_runtime_id) is not int or
                 not 0 < robot_runtime_id <= _MAX_UINT64):
             raise ValueError("robot_runtime_id must be a nonzero uint64")
+        handles: list[Any] = []
+        failure = None
         with self._condition:
             self._ensure_open()
-            if self._end_effector_runtime_failed:
-                raise ValueError(
-                    "robot runtime changed; create a new connection, acquire a "
-                    "new control context, and recreate EndEffectorClient"
-                )
-            if self._end_effector_runtime_id is None:
+            with client._condition:
+                client._ensure_open()
+                if client not in self._end_effector_clients:
+                    raise ControllerClosedError("end-effector client is detached")
+            if self._end_effector_runtime_error is not None:
+                failure = ValueError(self._end_effector_runtime_error)
+            elif self._end_effector_runtime_id is None:
                 self._end_effector_runtime_id = robot_runtime_id
             elif self._end_effector_runtime_id != robot_runtime_id:
-                self._end_effector_runtime_failed = True
-                raise ValueError(
-                    "robot runtime changed; create a new connection, acquire a "
-                    "new control context, and recreate EndEffectorClient"
+                failure = self._end_effector_runtime_changed()
+                self._end_effector_runtime_error = str(failure)
+                for attached in tuple(self._end_effector_clients):
+                    with attached._condition:
+                        if not attached._closed and attached._fatal is None:
+                            handles.extend(attached._retire_descriptor_locked(failure))
+        client._close_handles(handles)
+        if failure is not None:
+            raise failure
+
+    def _run_end_effector_gate(
+        self, client: Any, robot_runtime_id: int, operation: Callable[[], _T]
+    ) -> _T:
+        """Linearize an EE-only operation with shared runtime invalidation."""
+        with self._condition:
+            with client._condition:
+                self._require_end_effector_runtime_locked(client, robot_runtime_id)
+                return operation()
+
+    def _reserve_end_effector_command(
+        self, client: Any, robot_runtime_id: int, prepare: Callable[[], _T]
+    ) -> tuple[_CommandContext, _T]:
+        """Validate/prepare an EE send, then allocate under the runtime gate."""
+        with self._condition:
+            with client._condition:
+                self._require_end_effector_runtime_locked(client, robot_runtime_id)
+                prepared = prepare()
+                return self._reserve_command_locked(), prepared
+
+    def _end_effector_control_context(
+        self, client: Any, robot_runtime_id: int, operation: Callable[[_ControlContext], _T]
+    ) -> _T:
+        """Run one EE RPC check/fill under the runtime and control gates."""
+        with self._condition:
+            with client._condition:
+                self._require_end_effector_runtime_locked(client, robot_runtime_id)
+                status = self._require_owned_status()
+                context = _ControlContext(
+                    self.client_id, self._lease_id, status.generation, self._request_id
                 )
+                return operation(context)
 
     def exit_external(self, timeout: float) -> ControlStatus:
         """Release the current connection; retained for existing callers."""
