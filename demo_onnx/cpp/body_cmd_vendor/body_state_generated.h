@@ -1031,25 +1031,19 @@ FLATBUFFERS_STRUCT_END(CommandKey, 16);
 FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(8) DescriptorRef FLATBUFFERS_FINAL_CLASS {
  private:
   uint64_t robot_runtime_id_;
-  uint64_t descriptor_epoch_;
 
  public:
   DescriptorRef()
-      : robot_runtime_id_(0),
-        descriptor_epoch_(0) {
+      : robot_runtime_id_(0) {
   }
-  DescriptorRef(uint64_t _robot_runtime_id, uint64_t _descriptor_epoch)
-      : robot_runtime_id_(::flatbuffers::EndianScalar(_robot_runtime_id)),
-        descriptor_epoch_(::flatbuffers::EndianScalar(_descriptor_epoch)) {
+  DescriptorRef(uint64_t _robot_runtime_id)
+      : robot_runtime_id_(::flatbuffers::EndianScalar(_robot_runtime_id)) {
   }
   uint64_t robot_runtime_id() const {
     return ::flatbuffers::EndianScalar(robot_runtime_id_);
   }
-  uint64_t descriptor_epoch() const {
-    return ::flatbuffers::EndianScalar(descriptor_epoch_);
-  }
 };
-FLATBUFFERS_STRUCT_END(DescriptorRef, 16);
+FLATBUFFERS_STRUCT_END(DescriptorRef, 8);
 
 FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(8) ProgressEntry FLATBUFFERS_FINAL_CLASS {
  private:
@@ -1257,7 +1251,7 @@ FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(8) SampleRef FLATBUFFERS_FINAL_CLASS {
     return ::flatbuffers::EndianScalar(validity_);
   }
 };
-FLATBUFFERS_STRUCT_END(SampleRef, 48);
+FLATBUFFERS_STRUCT_END(SampleRef, 40);
 
 }  // namespace ee
 }  // namespace lowlevel
