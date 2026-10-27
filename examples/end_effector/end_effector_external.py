@@ -417,17 +417,17 @@ def _agx_source_step(previous, desired, rate, elapsed, native_hz):
     """Limit one source step; this does not establish native admission."""
     if elapsed < 0:
         raise RuntimeError('source monotonic clock moved backwards')
-    desired = _float32(desired)
+    previous, desired, rate = _float32(previous), _float32(desired), _float32(rate)
     budget = rate * min(elapsed, 1.0 / native_hz)
     bounded = max(previous - budget, min(previous + budget, desired))
     value = _float32(bounded)
     # The AGX opening is nonnegative. If float32 rounding crosses the budget,
     # choose the adjacent representable float towards the previous value.
-    if abs(value - previous) > budget:
+    if abs(_float32(value - previous)) > budget:
         bits = struct.unpack('<I', struct.pack('<f', value))[0]
         bits += -1 if value > previous else 1
         value = struct.unpack('<f', struct.pack('<I', bits))[0]
-    if abs(value - previous) > budget:
+    if abs(_float32(value - previous)) > budget:
         raise RuntimeError('AGX float32 source step exceeds native budget')
     return value
 
@@ -505,6 +505,13 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
         # or evidence of physical arrival. Explicit zero intent remains zero.
         speed = tuple(v if v > 0 else maximum for v,maximum in
                       zip(prepared[client.side].vel_limit or (0.0,)*len(info.axis_names), info.vel_limit_max))
+        if info.device_model == DeviceModel.AGX:
+            # Native sees float32 on the wire; a positive Python value may
+            # encode as zero, for which native uses its configured maximum.
+            speed = tuple(_float32(value) or _float32(maximum)
+                          for value, maximum in zip(
+                              prepared[client.side].vel_limit or (0.0,)*len(info.axis_names),
+                              info.vel_limit_max))
         if (pattern != 'target' or info.device_model == DeviceModel.AGX) and (len(speed) != len(info.axis_names) or any(v <= 0 for v in speed)):
             raise ValueError('a proven positive speed limit is required for a trajectory')
         limits[client.side] = (lows, highs, speed)
@@ -550,12 +557,13 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
         requested_motion = {side: [0.0, 0.0] for side in cursor}
         observed_motion = {side: [0.0, 0.0] for side in cursor}
         motion_start_id = {side: None for side in cursor}
+        motion_start_position = {side: None for side in cursor}
 
         def check_motion(states):
             for side in cursor:
                 state = states[side]
                 if motion_start_id[side] is not None and state.state_id > motion_start_id[side]:
-                    delta = state.pos[0] - initial_position[side][0]
+                    delta = state.pos[0] - motion_start_position[side]
                     observed_motion[side][0] = max(observed_motion[side][0], delta)
                     observed_motion[side][1] = max(observed_motion[side][1], -delta)
 
@@ -644,11 +652,12 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
                             target = codec.prepare_target(infos[side], replace(target, pos=(value,)))
                         command = guard.publish(target, states[side])
                         if side in cursor:
+                            if motion_start_id[side] is None and target.pos[0] != cursor[side]:
+                                motion_start_id[side] = states[side].state_id
+                                motion_start_position[side] = states[side].pos[0]
                             cursor[side], cursor_time[side] = target.pos[0], now
-                            delta = target.pos[0] - initial_position[side][0]
-                            if delta:
-                                if motion_start_id[side] is None:
-                                    motion_start_id[side] = states[side].state_id
+                            if motion_start_id[side] is not None:
+                                delta = target.pos[0] - motion_start_position[side]
                                 requested_motion[side][0] = max(requested_motion[side][0], delta)
                                 requested_motion[side][1] = max(requested_motion[side][1], -delta)
                         emit(f'EE leg={leg} side={side} submitted={command.key} observations={command.input_observations}; admission/arrival not inferred')

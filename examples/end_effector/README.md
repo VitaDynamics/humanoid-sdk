@@ -62,7 +62,8 @@ endpoint State used for its safety checks (fixed K=1). Diagnostic timestamps are
 are not subtracted from the SDK clock.
 
 For a requested nonzero AGX movement the example also waits a bounded time for
-fresh feedback showing some movement. Its observation threshold is at most one
+fresh feedback showing some movement after the first nonzero local submission,
+relative to the position in that submission's input sample. Its observation threshold is at most one
 micrometre, the AGX wire opening representation; this does not claim device
 accuracy or provide per-command admission, output or arrival confirmation. A
 silent loss, busy path or stalled device may therefore end as unconfirmed

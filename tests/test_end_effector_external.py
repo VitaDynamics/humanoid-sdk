@@ -231,6 +231,73 @@ class EndEffectorExampleTest(unittest.TestCase):
         self.assertTrue(any('fresh feedback observed movement' in line and 'unconfirmed' in line
                             for line in self.events))
 
+    def test_agx_entry_budget_uses_encoded_nonbinary_rate_and_native_float_difference(self):
+        import flatbuffers
+        import struct
+
+        def f32(value):
+            return struct.unpack('<f', struct.pack('<f', value))[0]
+
+        c = self.controller(); e = Endpoint(c)
+        e._state = replace(e._state, pos=(0.0,))
+        e.info = replace(e.info, vel_limit_max=(f32(.03),))
+        rate = .005000001008738764
+        target = self.target(e, positions=(.0003,), vel_limit=(rate,))
+        bindings = codec.load_bindings()
+        encoded = []
+
+        def capture(submission):
+            builder = flatbuffers.Builder(128)
+            builder.Finish(codec.fill_command(bindings, submission, builder, 0))
+            wire = bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(builder.Output())
+            encoded.append((e.times[-1], wire.Pos(0), wire.VelLimit(0)))
+
+        e.after_publish = capture
+        self.run_case(c, [e], targets={'right': target}, body_enabled=False,
+                      duration=.02, timeout=1., rates={'right':50.}, native_hz={'right':50})
+        self.assertGreater(len(encoded), 2)
+        self.assertEqual(encoded[1][2], f32(rate))
+        self.assertGreater(encoded[1][1], encoded[0][1])
+        for (t0, previous, _), (t1, position, wire_rate) in zip(encoded, encoded[1:]):
+            native_difference = abs(f32(position - previous))
+            self.assertLessEqual(native_difference, wire_rate * min(t1-t0, 1/50))
+
+    def test_agx_first_nonzero_submission_pairs_feedback_baseline_and_sample(self):
+        import struct
+
+        def f32(value):
+            return struct.unpack('<f', struct.pack('<f', value))[0]
+
+        for post_submit_move in (False, True):
+            with self.subTest(post_submit_move=post_submit_move):
+                event_start = len(self.events)
+                c = self.controller(); e = Endpoint(c, feedback_moves=False)
+                drift = f32(e._state.pos[0] + .00001)
+                first_used = []
+
+                def feedback(submission):
+                    if len(e.commands) == 1:
+                        # Real pre-submission drift; later samples retain this value.
+                        e._state = replace(e._state, pos=(drift,))
+                    elif len(e.commands) == 2:
+                        first_used.append((e._state.pos[0], submission.input_observations[0].sample_id))
+                        if post_submit_move:
+                            e._state = replace(e._state, pos=(f32(drift + .00002),))
+
+                e.after_publish = feedback
+                options = dict(body_enabled=False, timeout=.3)
+                if post_submit_move:
+                    self.run_case(c, [e], **options)
+                    self.assertTrue(any('fresh feedback observed movement' in line and 'unconfirmed' in line
+                                        for line in self.events[event_start:]))
+                else:
+                    with self.assertRaisesRegex(TimeoutError, 'movement not observed'):
+                        self.run_case(c, [e], **options)
+                    self.assertFalse(any('fresh feedback observed movement' in line for line in self.events[event_start:]))
+                self.assertEqual(first_used[0][0], drift)
+                self.assertGreater(e._state.state_id, first_used[0][1])
+                self.assertEqual(c.calls.count('exit_external'), 1)
+
     def test_agx_source_clock_rollback_stops_before_next_target(self):
         c = self.controller(); e = Endpoint(c)
         e.after_publish = lambda _: setattr(self.clock, 'now', self.clock.now - .1)
