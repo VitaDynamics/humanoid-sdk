@@ -1,18 +1,13 @@
 # Humanoid SDK
 
 SDK **0.2.1** is in preparation; packaging and release are pending.
-The fixed parent carries the schema80 candidate recorded in
-[compatibility.json](compatibility.json). This successor source changes the
-end-effector contract to a runtime-only static descriptor and therefore needs a
-new generated wheel/BFBS/native header set. Those bytes and the replacement pin
-are pending; schema80 is not a runnable binding for this revision. Native SDK,
-IPC, robot integration and HIL remain NOT_RUN.
+This source binds the actual S91220 candidate wheel/BFBS/native headers recorded
+in [compatibility.json](compatibility.json), version
+`0.0.0+g91220d520cd0`. That source binding is not an SDK build, native/IPC,
+robot integration or HIL pass; those validations and final packaging remain pending.
 
-The static-descriptor source increment additionally requires regenerated
-bindings in which `DescriptorRef` contains only the nonzero startup
-`robot_runtime_id` and RobotInfo has no descriptor-confirmation field. Those
-artifacts and a replacement dependency binding are pending; the existing
-schema80 pin is not compatible. `wait_info` accepts the first complete Info for
+`DescriptorRef` contains only the nonzero startup `robot_runtime_id`, and
+RobotInfo has no descriptor-confirmation field. `wait_info` accepts the first complete Info for
 that process without a RobotInfo RPC. Static semantic changes are fatal; a
 different runtime requires a new connection, control context and EE client.
 Publication timestamp/valid-bit changes alone are normal republishes.
@@ -25,7 +20,7 @@ client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
 aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 
 Dependencies are pinned to Aorta SDK and messages `2026.10.20` (ABI 13),
-`vbot-humanoid-msgs==0.0.0+g80a154209738`, and `flatbuffers==25.12.19`. Verify wheel filenames
+`vbot-humanoid-msgs==0.0.0+g91220d520cd0`, and `flatbuffers==25.12.19`. Verify wheel filenames
 and SHA-256s against [compatibility.json](compatibility.json). The candidate is supplied through the separately
 verified offline wheelhouse; it is not in the historical dependency Release.
 `dependency_release_tag` is null, so the existing release downloader refuses
@@ -123,6 +118,9 @@ and [PC networking and Zenoh configuration](https://vitadynamics.feishu.cn/wiki/
 | Main demo | Behavior already implemented |
 |---|---|
 | `examples/end_effector/end_effector_external.py` | Generic read-only or explicitly authorized motion entry; Body and both endpoints share one EXTERNAL lifecycle and allocator. |
+| `examples/end_effector/brainco_revo2.py` | BrainCo Revo2: verified six-axis angular endpoint; explicit target or original fraction patterns. |
+| `examples/end_effector/agx_gripper.py` | AGX: verified one-axis total opening in metres; target or original dual-AGX sine. |
+| `examples/end_effector/linker_l6.py` | LINKER_L6: verified six-axis angular endpoint; explicit POS-only target, no speed/trajectory claim. |
 | `examples/brainco_hand/brainco_capture.py` | Read-only new EE/Body capture and explicit offline archive export; no control ownership. |
 | `examples/teleop_policy/teleop_policy.py` | PC-local ONNX inference and Aorta Joy input; live mode publishes through EXTERNAL, while `--dry-run` processes offline BodyState records without transport. A model must be supplied explicitly. |
 
@@ -197,14 +195,17 @@ software supporting unlimited control; an older server rejection is an error.
 
 ## End effectors and read-only capture
 
-See [the single EE entry](examples/end_effector/README.md) for explicit per-side
+See [the shared and three vendor EE entries](examples/end_effector/README.md) for explicit per-side
 units, rates and actual descriptor limits. Default and `--dry-run` are read-only.
 Authorized motion borrows the original Body owner/lease/allocator; left and right
 have no private control session. Body freshness, ownership and CANCEL→PASSIVE
 remain mandatory. PASSIVE may let unsupported limbs fall.
 
-Angular fraction/sequential patterns keep the 25%/75% fractions and float32
-20 deg/s default; LINKER support is determined by its actual descriptor.
+BrainCo angular fraction/sequential patterns keep the 25%/75% fractions and
+float32 20 deg/s default, subject to actual proven limits. The LINKER_L6 example
+uses explicit POS-only targets; it does not invent a velocity limit or interpolation.
+Full-N commands and sequential patterns are not first single-axis HIL: sequential
+first moves every selected axis to its low target and keeps other POS fields selected.
 AGX target/sine modes use total opening in metres. Missing torque intent,
 explicit zero and signed torque are distinct. There is no fabricated numeric
 host-target pose or arrival guarantee in new State. See the entry documentation
@@ -286,7 +287,7 @@ editable SDK install.
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install --no-index --find-links wheelhouse \
-  aorta-sdk==2026.10.20 aorta-msgs==2026.10.20 vbot-humanoid-msgs==0.0.0+g80a154209738 flatbuffers==25.12.19
+  aorta-sdk==2026.10.20 aorta-msgs==2026.10.20 vbot-humanoid-msgs==0.0.0+g91220d520cd0 flatbuffers==25.12.19
 python -m pip install mcap==1.3.1
 make check
 ```

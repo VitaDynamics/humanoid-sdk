@@ -15,7 +15,7 @@ from examples.end_effector import end_effector_external as demo
 from locomotion_aorta import BODY_CMD_TOPIC
 from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector_types import (
-    CommandKey, ControlRef, DescriptorRef, DeviceModel, EndEffectorSubmission,
+    CommandKey, ControlMode, ControlRef, DescriptorRef, DeviceModel, EndEffectorSubmission,
     FeedbackAppliedTarget, Field, InhibitReason, PositionDomain, SampleStatus,
     SampleStream,
 )
@@ -754,6 +754,213 @@ class PartialFeedbackGuardTest(unittest.TestCase):
             confirm_info(self.client,self.node,info_object(runtime=101))
         with self.assertRaises(ValueError):
             demo.wait_position(self.client,self.client.info,.03,sleep=self.clock.sleep,monotonic=self.clock.monotonic)
+
+
+class VendorExamplesTest(unittest.TestCase):
+    """Real shared entry/run with synthetic transport, not device evidence."""
+    def setup_case(self):
+        self.clock = FakeClock()
+        self.control = RecordingController(self.clock)
+        self.addCleanup(self.control.close)
+        self.endpoints, self.factories, self.events = {}, [], []
+
+    def endpoint(self, side, model):
+        endpoint = Endpoint(self.control, side, hand=model != DeviceModel.AGX)
+        n = len(endpoint.info.axis_names)
+        commands = Field.POS
+        states = Field.POS | Field.TEMPERATURE | Field.ERROR_CODE
+        limits = Field.POS
+        if model == DeviceModel.BRAINCO_REVO2:
+            commands |= Field.VEL_LIMIT
+            states = Field.POS | Field.VEL | Field.CURRENT
+            limits |= Field.VEL_LIMIT
+        elif model == DeviceModel.AGX:
+            commands |= Field.VEL_LIMIT | Field.TAU
+            states = Field.POS | Field.TAU | Field.ERROR_CODE
+            limits |= Field.VEL_LIMIT | Field.TAU
+        endpoint.info = replace(endpoint.info, device_model=model,
+            supported_modes=((1 << ControlMode.POSITION) |
+                ((1 << ControlMode.POSITION_TORQUE) if model == DeviceModel.AGX else 0),) * n,
+            supported_command_fields=(commands,) * n, supported_state_fields=(states,) * n,
+            valid_limits=(limits,) * n,
+            vel_min=endpoint.info.vel_min if states & Field.VEL else (),
+            vel_max=endpoint.info.vel_max if states & Field.VEL else (),
+            vel_limit_max=endpoint.info.vel_limit_max if commands & Field.VEL_LIMIT else (),
+            tau_min=endpoint.info.tau_min if commands & Field.TAU else (),
+            tau_max=endpoint.info.tau_max if commands & Field.TAU else (),
+            current_min=endpoint.info.current_min if states & Field.CURRENT else (),
+            current_max=endpoint.info.current_max if states & Field.CURRENT else (),
+            limit_source=tuple(value for _ in range(n) for value in
+                (1, 0, int(bool(limits & Field.VEL_LIMIT)), int(bool(limits & Field.TAU)), 0)))
+        endpoint._state = replace(endpoint._state, valid_fields=(states,) * n,
+            vel=endpoint._state.vel if states & Field.VEL else (),
+            tau=endpoint._state.tau if states & Field.TAU else (),
+            current=endpoint._state.current if states & Field.CURRENT else (),
+            temperature_c=endpoint._state.temperature_c if states & Field.TEMPERATURE else (),
+            error_code=endpoint._state.error_code if states & Field.ERROR_CODE else ())
+        codec.validate_info(endpoint.info)
+        codec.validate_state(endpoint.info, endpoint._state)
+        endpoint.set_touch = Mock(side_effect=AssertionError('unexpected Touch RPC'))
+        return endpoint
+
+    def motion_flags(self, model, side='right'):
+        sides = ('left', 'right') if side == 'both' else (side,)
+        flags = ['--side', side, '--ee-only', '--confirm-motion', '--timeout', '.2', '--duration', '.04']
+        for selected in sides:
+            flags += ['--' + selected + '-unit', 'm' if model == DeviceModel.AGX else 'rad',
+                      '--' + selected + '-pos'] + ['.0625'] * (1 if model == DeviceModel.AGX else 6)
+        return flags
+
+    def invoke(self, expected, flags, *, models=None, mutate=None):
+        models = {} if models is None else models
+
+        @contextmanager
+        def connection(kind, **options):
+            self.factories.append(kind)
+            yield self.control
+
+        @contextmanager
+        def client(side, *, connection, read_only, observation_sources):
+            self.assertIs(connection, self.control)
+            endpoint = self.endpoint(side, models.get(side, expected))
+            self.endpoints[side] = endpoint
+            self.assertEqual(() if read_only else endpoint.observation_sources, observation_sources)
+            if mutate is not None:
+                mutate(endpoint)
+            yield endpoint
+
+        actual_run = demo.run
+        def run(*args, **kwargs):
+            kwargs.update(sleep=self.clock.sleep, monotonic=self.clock.monotonic, emit=self.events.append)
+            return actual_run(*args, **kwargs)
+
+        with patch.object(demo, 'run', side_effect=run) as executed, patch('sys.stdout', new_callable=io.StringIO) as output:
+            self.executed = executed
+            try:
+                demo.main(flags, _expected_device_model=expected, _client_factory=client,
+                          _controller_factory=lambda **kw: connection('controller', **kw),
+                          _state_source_factory=lambda **kw: connection('source', **kw))
+            finally:
+                self.output = output.getvalue()
+
+    def assert_no_control(self):
+        self.assertEqual([], self.control.calls)
+        self.assertEqual(0, self.control.command_count)
+        self.assertEqual(1, self.control.controller._next_external_sequence)
+        for endpoint in self.endpoints.values():
+            self.assertEqual([], endpoint.commands)
+            endpoint.set_touch.assert_not_called()
+
+    def test_vendor_models_reach_shared_main_and_original_run(self):
+        for model in (DeviceModel.BRAINCO_REVO2, DeviceModel.AGX, DeviceModel.LINKER_L6):
+            with self.subTest(model=model):
+                self.setup_case()
+                self.invoke(model, self.motion_flags(model))
+                self.executed.assert_called_once()
+                self.assertEqual(['controller'], self.factories)
+                self.assertEqual(1, self.control.calls.count('enter_external'))
+                self.assertEqual(1, self.control.calls.count('exit_external'))
+                self.assertEqual(0, self.control.command_count)
+                endpoint = self.endpoints['right']
+                self.assertTrue(endpoint.commands)
+                if model == DeviceModel.LINKER_L6:
+                    self.assertEqual((Field.POS,) * 6, endpoint.info.supported_command_fields)
+                    self.assertEqual((), endpoint.info.vel_limit_max)
+                    self.assertEqual((), endpoint.info.tau_min)
+                    self.assertTrue(all(command.target.vel_limit == () and command.target.tau_cmd == ()
+                                        for command in endpoint.commands))
+
+    def test_vendor_default_and_dry_run_keep_readonly_diagnostics(self):
+        for model in (DeviceModel.BRAINCO_REVO2, DeviceModel.AGX, DeviceModel.LINKER_L6):
+            for option in ([], ['--dry-run']):
+                with self.subTest(model=model, option=option):
+                    self.setup_case()
+                    def unavailable(endpoint):
+                        endpoint.info = replace(endpoint.info, valid_limits=(0,) * len(endpoint.info.axis_names))
+                        endpoint._state = replace(endpoint._state, ready=False, output_allowed=False,
+                            inhibit_reason=InhibitReason.NOT_READY)
+                    self.invoke(model, ['--side', 'right'] + option, mutate=unavailable)
+                    self.assertEqual(['source'], self.factories)
+                    self.executed.assert_not_called()
+                    self.assertIn('Info=', self.output)
+                    self.assert_no_control()
+
+    def test_vendor_side_model_shape_and_domain_fail_before_control(self):
+        for fault in ('side', 'model', 'shape', 'domain'):
+            with self.subTest(fault=fault):
+                self.setup_case()
+                def wrong(endpoint):
+                    if fault == 'side':
+                        endpoint.info = replace(endpoint.info, side=1)
+                    elif fault == 'domain':
+                        endpoint.info = replace(endpoint.info, position_domain=(PositionDomain.TOTAL_OPENING,) * 6)
+                    elif fault == 'shape':
+                        endpoint.info = replace(endpoint.info, device_model=DeviceModel.BRAINCO_REVO2)
+                models = {'right': DeviceModel.AGX} if fault in ('model', 'shape') else None
+                with self.assertRaises(ValueError):
+                    self.invoke(DeviceModel.BRAINCO_REVO2, self.motion_flags(DeviceModel.BRAINCO_REVO2),
+                                models=models, mutate=wrong)
+                self.executed.assert_not_called()
+                self.assert_no_control()
+
+    def test_vendor_both_checks_second_before_first_takes_control(self):
+        self.setup_case()
+        with self.assertRaises(ValueError):
+            self.invoke(DeviceModel.AGX, self.motion_flags(DeviceModel.AGX, 'both'),
+                        models={'left': DeviceModel.AGX, 'right': DeviceModel.BRAINCO_REVO2})
+        self.assertEqual(['left', 'right'], list(self.endpoints))
+        self.executed.assert_not_called()
+        self.assert_no_control()
+
+    def test_vendor_motion_limits_units_and_unsupported_fields_fail_before_control(self):
+        for fault in ('unproven', 'outside', 'unit', 'l6_velocity', 'l6_torque'):
+            with self.subTest(fault=fault):
+                self.setup_case()
+                model = DeviceModel.LINKER_L6 if fault.startswith('l6') else DeviceModel.AGX
+                flags = self.motion_flags(model)
+                if fault == 'outside':
+                    flags[-1] = '.25'
+                elif fault == 'unit':
+                    flags[flags.index('--right-unit') + 1] = 'rad'
+                elif fault.startswith('l6'):
+                    flags += ['--right-vel-limit' if fault == 'l6_velocity' else '--right-torque-nm'] + ['0'] * 6
+                def unproven(endpoint):
+                    if fault == 'unproven':
+                        endpoint.info = replace(endpoint.info, valid_limits=(Field.VEL_LIMIT | Field.TAU,))
+                with self.assertRaises(ValueError):
+                    self.invoke(model, flags, mutate=unproven)
+                self.executed.assert_not_called()
+                self.assert_no_control()
+
+    def test_vendor_none_and_unsupported_patterns_fail_before_factories(self):
+        cases = ((DeviceModel.BRAINCO_REVO2, ['--side', 'none']),
+                 (DeviceModel.BRAINCO_REVO2, ['--pattern', 'sine']),
+                 (DeviceModel.AGX, ['--pattern', 'sequential']),
+                 (DeviceModel.LINKER_L6, ['--pattern', 'simultaneous']),
+                 (DeviceModel.LINKER_L6, ['--pattern', 'sine']))
+        for model, flags in cases:
+            with self.subTest(model=model, flags=flags), patch('sys.stderr', new_callable=io.StringIO):
+                client, controller, source = Mock(), Mock(), Mock()
+                with self.assertRaises(SystemExit):
+                    demo.main(flags, _expected_device_model=model, _client_factory=client,
+                              _controller_factory=controller, _state_source_factory=source)
+                client.assert_not_called(); controller.assert_not_called(); source.assert_not_called()
+
+    def test_vendor_unselected_side_is_not_created(self):
+        self.setup_case()
+        self.invoke(DeviceModel.AGX, ['--side', 'left', '--dry-run'])
+        self.assertEqual(['left'], list(self.endpoints))
+        self.assert_no_control()
+
+    def test_vendor_same_model_both_share_original_allocator(self):
+        self.setup_case()
+        self.invoke(DeviceModel.AGX, self.motion_flags(DeviceModel.AGX, 'both'))
+        sequences = [command.key.sequence for endpoint in self.endpoints.values() for command in endpoint.commands]
+        self.assertTrue(self.endpoints['left'].commands and self.endpoints['right'].commands)
+        self.assertEqual(list(range(1, len(sequences) + 1)), sorted(sequences))
+        self.assertEqual(1, self.control.calls.count('enter_external'))
+        self.assertEqual(1, self.control.calls.count('exit_external'))
+        self.assertEqual(0, self.control.command_count)
 
 
 if __name__=='__main__':

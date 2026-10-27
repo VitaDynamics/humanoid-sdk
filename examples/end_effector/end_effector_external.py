@@ -14,7 +14,7 @@ from locomotion_aorta import PullController, PullStateSource
 from locomotion_aorta.end_effector import EndEffectorClient
 from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector_types import (
-    ControlMode, DeviceModel, EndEffectorTarget, Field, InhibitReason,
+    ControlMode, DeviceModel, EndEffectorSide, EndEffectorTarget, Field, InhibitReason,
     PositionDomain, SampleStatus, SampleStream,
 )
 
@@ -646,10 +646,31 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
     emit('Target streaming ended; physical completion and hold remain NOT_MEASURED')
 
 
-def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_source_factory=None):
+def _require_vendor_info(info, side, expected_model):
+    codec.validate_info(info)
+    expected_side = EndEffectorSide.LEFT if side == 'left' else EndEffectorSide.RIGHT
+    if info.side != expected_side or info.device_model != expected_model:
+        raise ValueError('selected endpoint side/model differs from this vendor example')
+    count, domain = ((1, PositionDomain.TOTAL_OPENING) if expected_model == DeviceModel.AGX
+                     else (6, PositionDomain.JOINT_ANGLE))
+    if len(info.axis_names) != count or info.position_domain != (domain,) * count:
+        raise ValueError('selected endpoint axis count/position domain differs from this vendor example')
+
+
+def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_source_factory=None,
+         _expected_device_model=None):
+    patterns = ('target', 'sine', 'simultaneous', 'sequential')
+    if _expected_device_model == DeviceModel.BRAINCO_REVO2:
+        patterns = ('target', 'simultaneous', 'sequential')
+    elif _expected_device_model == DeviceModel.AGX:
+        patterns = ('target', 'sine')
+    elif _expected_device_model == DeviceModel.LINKER_L6:
+        patterns = ('target',)
+    elif _expected_device_model is not None:
+        raise ValueError('vendor example requires BrainCo Revo2, AGX or Linker L6')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--side', choices=('none', 'left', 'right', 'both'), default='both')
-    parser.add_argument('--pattern', choices=('target', 'sine', 'simultaneous', 'sequential'), default='target')
+    parser.add_argument('--pattern', choices=patterns, default='target')
     parser.add_argument('--period-s', type=float, default=10.0)
     parser.add_argument('--sine-min-m', type=float, default=.01)
     parser.add_argument('--sine-max-m', type=float, default=.08)
@@ -674,6 +695,8 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         parser.add_argument('--'+side+'-torque-nm', type=float, nargs='+', help='declared torque domain; omit means no intent, explicit zero remains zero')
         parser.add_argument('--'+side+'-hz', type=float, default=50.0)
     args = parser.parse_args(argv)
+    if _expected_device_model is not None and args.side == 'none':
+        parser.error('vendor example requires a selected endpoint')
     readonly = args.dry_run or not args.confirm_motion
     sides = () if args.side == 'none' else ('left', 'right') if args.side == 'both' else (args.side,)
     if args.pattern != 'target' and not sides:
@@ -715,6 +738,9 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         connection = stack.enter_context((state_factory if readonly else controller_factory)(group=args.group))
         clients = [stack.enter_context(client_factory(side, connection=connection, read_only=readonly,
             observation_sources=() if readonly else ((SampleStream.EE_STATE, 1 if side == 'left' else 2),))) for side in sides]
+        if _expected_device_model is not None:
+            for client in clients:
+                _require_vendor_info(client.wait_info(args.timeout), client.side, _expected_device_model)
         if readonly:
             if clients:
                 observe(clients, timeout=args.timeout)

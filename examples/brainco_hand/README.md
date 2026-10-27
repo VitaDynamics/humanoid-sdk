@@ -1,10 +1,11 @@
 # 只读末端采集与离线导出
 
 `brainco_capture.py` 保留历史文件名，只订阅新 EE 和当前 Body/ControlStatus。
-它不获取租约、不发布运动或触觉写入。运动入口统一为
-[末端 CLI](../end_effector/README.md)，旧 `brainco_hand_external.py` 已移除。
+它不获取租约、不发布运动或触觉写入。独立运动示例为
+`examples/end_effector/brainco_revo2.py`，复用同一
+[末端 CLI 与控制循环](../end_effector/README.md)；旧 `brainco_hand_external.py` 已移除。
 
-本源码已绑定实际 schema 候选 0.0.0+g80a154209738；匹配 native BodyState3、
+本源码已绑定实际 S91220 schema 候选 0.0.0+g91220d520cd0；匹配 native BodyState3、
 完整 SDK/IPC 与机器人组合仍未测。取得经验证的完整交付后，在已授权连接且配置正确
 peer profile/group 的主机上查看：
 

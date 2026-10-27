@@ -1,9 +1,9 @@
 # Generic end-effector example (development source)
 
-The fixed parent pins schema80. This successor source requires regenerated
-runtime-only static-descriptor bindings, so the parent pin is provenance only,
-not an executable combination. Native/IPC, final robot integration and HIL are
-all pending.
+This source binds the actual runtime-only static-descriptor S91220 candidate
+`0.0.0+g91220d520cd0` in the SDK compatibility manifest. Source binding is not
+SDK build/native/IPC or device acceptance; final robot integration, packaging
+and HIL remain pending. Use the matched offline wheels, not the old schema80 pack.
 
 `end_effector_external.py` uses one shared controller for Body and both selected
 end effectors. The default and `--dry-run` use a read-only source: no control
@@ -22,20 +22,31 @@ units come from the actual descriptor; targets are never clipped. OP3 remains
 unsupported.
 
 `--pattern sine` requires two actual one-axis AGX endpoints and validates the
-peak command slope. Angular `simultaneous`/`sequential` patterns require actual
-six-axis BrainCo or Linker capabilities; the default fractions are 25%/75%, with
-20 deg/s expressed as float32 radians. Sequential movement selects one axis
-across the selected hands. These trajectories are SDK intent; backend output,
+peak command slope. Angular `simultaneous`/`sequential` patterns require six-axis
+angular capability and a proven positive slope limit. The BrainCo example keeps
+the default fractions 25%/75%, with 20 deg/s expressed as float32 radians;
+an actual lower limit rejects that default. Current LINKER_L6 declares POS only,
+so its vendor entry accepts `target` only, without borrowing BrainCo velocity.
+Sequential first moves all selected axes to low, then varies one axis while
+continuing POS commands on the other axes. These trajectories are SDK intent; backend output,
 physical arrival and complete progress cannot be inferred from it.
+
+Full-N target, sequential and `--return-to-start` are not first single-axis HIL.
+For a separately authorized single-axis check, the existing direct
+`EndEffectorTarget.command_fields` API distinguishes the selected POS axis from
+non-target mask 0; use its established safety/control procedure. These file CLIs
+do not expose that mask selection, fill missing positions with zero or silently
+copy measurements into other axes and call them uncommanded. Even explicitly
+submitting the measured position is still a command on every selected field.
 
 The new State has an admission key, not the legacy numeric host-target pose.
 Target-mode `--duration` bounds streaming only. It does not reuse a feedback-
 applied target as the current host target, or claim an arrival duration. Entry
-interpolation starts from a current valid same-descriptor State after ready and
+interpolation for trajectory patterns starts from a current valid same-descriptor State after ready and
 touch waits; the saved pre-entry measurement remains the separate return target.
 Body and each endpoint retain their absolute send deadlines across all phases;
-the loop wakes at the earliest deadline without replaying missed sends. Entry
-and return use declared command slope limits. Each command references the actual
+the loop wakes at the earliest deadline without replaying missed sends. Trajectory entry
+and return use declared command slope limits; target mode has no entry ramp. Each command references the actual
 endpoint State used for its safety checks (fixed K=1). Diagnostic timestamps are not permission gates and
 are not subtracted from the SDK clock.
 
@@ -109,3 +120,77 @@ The CLI above, including `--ee-only`, still selects EXTERNAL. The separate
 neither entry silently changes into robot-local TELEOP. This Python addition
 requires the corresponding robot action binding and regenerated static-Ref
 bindings; final candidate packaging, combined execution and HIL are pending.
+
+## Three vendor file entries
+
+Run these files from the SDK checkout or its core bundle using the matched
+installed SDK. Each is a thin call to the same `main`, `EndEffectorClient` and
+EXTERNAL owner/loop. Before any control, every selected endpoint must have the
+actual public side, model, axis count and quantity domain below. `--side both`
+requires both to match; on a mixed robot choose only the actual vendor side.
+The generic entry above retains `--side none`; vendor entries reject it.
+
+| File | Actual descriptor and units | Available patterns |
+| --- | --- | --- |
+| `brainco_revo2.py` | BRAINCO_REVO2, six JOINT_ANGLE axes; rad and supported rad/s speed limits | target, simultaneous, sequential |
+| `agx_gripper.py` | AGX, one TOTAL_OPENING axis; total opening in m, speed limit m/s | target, sine (both actual AGX sides) |
+| `linker_l6.py` | LINKER_L6, six JOINT_ANGLE axes; rad, POS-only | target only |
+
+Axis names/order, per-axis valid limits and their sources come from actual Info;
+there is no universal six-finger ordering or CAN-ID assumption. BrainCo has
+POS/VEL_LIMIT; LINKER_L6 has no velocity/torque capability to invent. AGX's
+optional N·m column has VENDOR_UNCONFIRMED physical domain: it is not gripping
+force in N, and AGX State has no measured velocity. Initial examples omit torque.
+An unsupported explicit field still fails through the original codec. Six-axis
+positions or speed limits require all six values, with no scalar broadcast.
+
+After the normal peer profile/group setup and permission to connect, inspect
+one actual side without taking control. `GROUP` is the deployment group;
+`right` below is an example selection, not a statement about your robot:
+
+```bash
+python examples/end_effector/brainco_revo2.py --group "${GROUP:?}" --side right --dry-run
+python examples/end_effector/agx_gripper.py --group "${GROUP:?}" --side right --dry-run
+python examples/end_effector/linker_l6.py --group "${GROUP:?}" --side right --dry-run
+```
+
+Default invocation is also read-only. Check printed Info/State and valid bits;
+missing motion limits or a dynamic fault remain observable rather than being
+invented as healthy values. Motion still rejects absent/unproven limits.
+
+Only after separate current motion authorization, support, clear pinch/movement
+zones, attendant and emergency stop, the following full-axis templates may be
+filled with explicitly chosen actual values. They are not single-axis HIL or
+permission to operate. `--ee-only` omits Body commands, not EXTERNAL ownership
+or the effect of CANCEL to PASSIVE on unsupported limbs.
+
+```bash
+# BrainCo: full-hand fraction sequence, not an isolated one-axis command.
+# The original float32 20deg/s default must fit each actual speed limit;
+# otherwise supply six explicit legal --right-vel-limit values.
+python examples/end_effector/brainco_revo2.py --group "${GROUP:?}" --side right --ee-only \
+  --pattern sequential --right-unit rad --low-frac "${LOW_FRAC:?}" --high-frac "${HIGH_FRAC:?}" --confirm-motion
+
+# AGX: one explicitly selected total opening, never per-finger mm or force.
+python examples/end_effector/agx_gripper.py --group "${GROUP:?}" --side right --ee-only \
+  --pattern target --right-unit m --right-pos "${OPENING_M:?}" \
+  --right-vel-limit "${OPENING_RATE_M_S:?}" --duration "${STREAM_S:?}" --confirm-motion
+
+# L6: six explicit rad values in actual Info order. No inferred velocity.
+python examples/end_effector/linker_l6.py --group "${GROUP:?}" --side right --ee-only \
+  --pattern target --right-unit rad --right-pos "${Q1_RAD:?}" "${Q2_RAD:?}" "${Q3_RAD:?}" \
+  "${Q4_RAD:?}" "${Q5_RAD:?}" "${Q6_RAD:?}" --duration "${STREAM_S:?}" --confirm-motion
+```
+
+L6 target duration only bounds repeated input submission: no interpolation,
+backend speed or arrival is inferred. The default 50 Hz per-side setting is PC
+submission cadence, not a vendor speed or a measured bus guarantee. Body hold,
+if selected instead of `--ee-only`, uses the same original owner/allocator and
+guards. Keep Touch unchanged unless its actual capability and separate operation
+are confirmed; Info alone never acknowledges a touch switch.
+
+Ctrl-C/TERM/error stops target submission and attempts one original CANCEL before
+joining any service wait. No zero tail target or automatic retry is added.
+Check the actual PASSIVE confirmation; unconfirmed CANCEL remains an error,
+and `close()` is not proof of release. A runtime/immutable descriptor change
+requires a new connection, control context and client, not a cache clear.
