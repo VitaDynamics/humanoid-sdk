@@ -16,7 +16,7 @@ from locomotion_aorta import BODY_CMD_TOPIC
 from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector_types import (
     CommandKey, ControlMode, ControlRef, DescriptorRef, DeviceModel, EndEffectorSubmission,
-    FeedbackAppliedTarget, Field, InhibitReason, PositionDomain, SampleStatus,
+    Field, InhibitReason, PositionDomain, SampleStatus,
     SampleStream,
 )
 from test_end_effector_codec import decode, info_object, state_object, touch_object
@@ -24,9 +24,9 @@ from test_examples import FakeClock, RecordingController
 
 
 class Endpoint:
-    """Deterministic sensor/admission seam, not another permission authority."""
-    def __init__(self, connection, side='right', *, hand=False, echo=True,
-                 stale=False, reject=False, inhibited=False, touch=False):
+    """Deterministic sensor seam, not another permission authority."""
+    def __init__(self, connection, side='right', *, hand=False,
+                 stale=False, inhibited=False, touch=False):
         self.connection, self.side = connection, side
         wire_side = 1 if side == 'left' else 2
         n = 6 if hand else 1
@@ -40,7 +40,7 @@ class Endpoint:
         self._touch = decode('touch', touch_object(side=wire_side)) if touch else None
         self.observation_sources = ((SampleStream.EE_STATE, wire_side),)
         self.commands, self.times, self.observations = [], [], []
-        self.echo, self.stale, self.reject, self.inhibited = echo, stale, reject, inhibited
+        self.stale, self.inhibited = stale, inhibited
         self.after_publish = None
         self._position_received_at = connection.clock.monotonic()
 
@@ -79,12 +79,6 @@ class Endpoint:
         self.commands.append(submission)
         self.times.append(self.connection.clock.monotonic())
         self.observations.append(input_observations)
-        changes = dict(received_key=submission.key, key_valid_mask=1)
-        if self.echo and not self.reject:
-            changes.update(host_target_key=submission.key, key_valid_mask=3)
-        if self.reject:
-            changes.update(reject_count=1, diagnostic_valid_mask=4)
-        self._state = replace(self._state, **changes)
         if self.after_publish:
             self.after_publish(submission)
         return submission
@@ -237,7 +231,7 @@ class EndEffectorExampleTest(unittest.TestCase):
             with self.subTest(torque=torque):
                 target=self.target(e,torque=torque)
                 self.assertEqual(bool(target.command_fields[0]&Field.TAU),torque is not None)
-                self.assertEqual(target.tau_cmd,(0.,) if torque is None else torque)
+                self.assertEqual(target.tau,(0.,) if torque is None else torque)
         with self.assertRaisesRegex(ValueError,'unit'):
             demo.position_target(e.info,(.05,),unit='rad')
         with self.assertRaises(ValueError): self.target(e,vel_limit=(-.1,))
@@ -262,17 +256,14 @@ class EndEffectorExampleTest(unittest.TestCase):
             with self.assertRaises(ValueError): self.run_case(c,[e])
             self.assertNotIn('enter_external',c.calls)
 
-    def test_reject_inhibit_stale_and_received_only_abort_once(self):
-        for options in ({'reject':True},{'inhibited':True},{'stale':True},{'echo':False}):
+    def test_inhibit_and_stale_abort_once(self):
+        for options in ({'inhibited':True},{'stale':True}):
             with self.subTest(options=options):
                 c=self.controller(); e=Endpoint(c,**options)
                 with self.assertRaises((RuntimeError,TimeoutError)):
                     self.run_case(c,[e],duration=.4)
                 self.assertEqual(c.calls.count('enter_external'),1)
                 self.assertEqual(c.calls.count('exit_external'),1)
-                if options.get('echo') is False:
-                    self.assertTrue(e._state.key_valid_mask&1)
-                    self.assertFalse(e._state.key_valid_mask&2)
 
     def test_descriptor_change_after_first_send_stops_and_cancels(self):
         c=self.controller(); e=Endpoint(c)
@@ -316,7 +307,6 @@ class EndEffectorExampleTest(unittest.TestCase):
 
     def test_new_state_has_no_numeric_host_target_for_duration_or_arrival(self):
         c=self.controller(); e=Endpoint(c)
-        e._state=replace(e._state,feedback_applied_target=FeedbackAppliedTarget((.12,),(.9,),(5,)))
         self.run_case(c,[e],return_to_start=True)
         self.assertEqual(e.commands[-1].target.pos,(.03125,))
         self.assertFalse(hasattr(e._state,'host_target'))
@@ -404,15 +394,13 @@ class EndEffectorExampleTest(unittest.TestCase):
             cancel.assert_called_once()
         self.assertEqual(e.commands, [])
 
-    def test_feedback_preserves_distinct_keys_validity_raw_and_incomplete_progress(self):
+    def test_feedback_preserves_validity_without_retired_diagnostics(self):
         c=self.controller(); e=Endpoint(c)
-        e._state=replace(e._state,received_key=CommandKey(17,9),host_target_key=CommandKey(17,8),
-            key_valid_mask=3,pos=(math.nan,),valid_fields=(0,))
+        e._state=replace(e._state,pos=(math.nan,),valid_fields=(0,))
         demo.print_feedback(e,self.events.append)
         text='\n'.join(self.events)
-        self.assertIn('sequence=9',text); self.assertIn('sequence=8',text)
         self.assertIn('pos=(nan,)',text); self.assertIn('valid=(0,)',text)
-        self.assertIn('progress_complete=False',text); self.assertIn('raw_pos=(-32768,)',text)
+        self.assertNotIn('progress_complete=',text); self.assertNotIn('raw_pos=',text)
 
     def test_cli_default_and_dry_run_borrow_readonly_source_without_controller(self):
         for flags in ([],['--dry-run']):
@@ -478,8 +466,6 @@ class EndEffectorExampleTest(unittest.TestCase):
                 side='left' if wire.Side()==1 else 'right'
                 samples[side]+=1
                 state=state_object(side=wire.Side(),sample=samples[side])
-                state.receivedKey=node.bindings.CommandKey.CommandKeyT(wire.Key().SessionId(),wire.Key().Sequence())
-                state.hostTargetKey=state.receivedKey; state.keyValidMask=3
                 node.emit(side,'state',state)
             result.publish_typed=publish
             return result
@@ -695,7 +681,7 @@ class PartialFeedbackGuardTest(unittest.TestCase):
     def guard(self):
         return demo._EndpointGuard(self.client,self.client.info,1.,self.clock.monotonic)
 
-    def test_partial_diagnosis_keeps_position_ref_and_latest_admission(self):
+    def test_partial_diagnosis_keeps_position_ref_without_inventing_admission(self):
         position=self.emit(1,Field.POS)
         guard=self.guard()
         self.clock.sleep(.01)
@@ -704,11 +690,9 @@ class PartialFeedbackGuardTest(unittest.TestCase):
         self.assertIs(guard.feedback(True),position)
         self.harness.accept_enter(); self.harness.controller.enter_external(timeout=.1)
         command=guard.publish(demo.position_target(self.client.info,(.05,),unit='m'),position)
-        from test_end_effector_codec import module
-        self.emit(4,Field.TEMPERATURE,keyValidMask=2,
-            hostTargetKey=module('CommandKey').CommandKeyT(command.key.session_id,command.key.sequence))
+        self.emit(4,Field.TEMPERATURE)
         self.assertIs(guard.feedback(True),position)
-        self.assertTrue(guard.admitted(guard.latest))
+        self.assertFalse(hasattr(guard, 'admitted'))
         self.assertEqual(command.input_observations,(position.sample_ref,))
         newer=self.emit(5,Field.POS,pos=[.04])
         self.assertIs(guard.feedback(True),newer)
@@ -789,9 +773,7 @@ class VendorExamplesTest(unittest.TestCase):
             tau_min=endpoint.info.tau_min if commands & Field.TAU else (),
             tau_max=endpoint.info.tau_max if commands & Field.TAU else (),
             current_min=endpoint.info.current_min if states & Field.CURRENT else (),
-            current_max=endpoint.info.current_max if states & Field.CURRENT else (),
-            limit_source=tuple(value for _ in range(n) for value in
-                (1, 0, int(bool(limits & Field.VEL_LIMIT)), int(bool(limits & Field.TAU)), 0)))
+            current_max=endpoint.info.current_max if states & Field.CURRENT else ())
         endpoint._state = replace(endpoint._state, valid_fields=(states,) * n,
             vel=endpoint._state.vel if states & Field.VEL else (),
             tau=endpoint._state.tau if states & Field.TAU else (),
@@ -867,7 +849,7 @@ class VendorExamplesTest(unittest.TestCase):
                     self.assertEqual((Field.POS,) * 6, endpoint.info.supported_command_fields)
                     self.assertEqual((), endpoint.info.vel_limit_max)
                     self.assertEqual((), endpoint.info.tau_min)
-                    self.assertTrue(all(command.target.vel_limit == () and command.target.tau_cmd == ()
+                    self.assertTrue(all(command.target.vel_limit == () and command.target.tau == ()
                                         for command in endpoint.commands))
 
     def test_vendor_default_and_dry_run_keep_readonly_diagnostics(self):

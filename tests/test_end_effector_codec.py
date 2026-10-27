@@ -52,8 +52,8 @@ def info_object(*, side=1, n=1, touch=False, runtime=100):
         validLimits=[Field.POS | Field.VEL | Field.VEL_LIMIT | Field.TAU | Field.CURRENT]*n,
         posMin=[0.]*n, posMax=[.0625]*n, velMin=[-.125]*n, velMax=[.125]*n,
         velLimitMax=[.125]*n, tauMin=[-.5]*n, tauMax=[.5]*n,
-        currentMin=[-.25]*n, currentMax=[.25]*n, limitSource=[1]*(n*5),
-        touchAvailable=touch, touchRegions=regions, diagnosticEncoding=0,
+        currentMin=[-.25]*n, currentMax=[.25]*n,
+        touchAvailable=touch, touchRegions=regions, isMock=[False]*n,
         tsDescriptorAcquiredUs=10, tsStatePubUs=20, timeValidMask=3)
 
 
@@ -62,18 +62,11 @@ def state_object(*, side=1, n=1, sample=1, runtime=100):
     return module('EndEffectorState').EndEffectorStateT(
         protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(runtime),
         layoutId=7, side=side, stateId=sample, tsStateRealUs=100, tsStatePubUs=110,
-        tsAcquiredHwUs=5, tsIngestedUs=101, tsAssembledUs=102, timeValidMask=31,
+        tsAcquiredHwUs=5, tsIngestedUs=101, tsAssembledUs=102,
         sampleStatus=1, validFields=[field]*n, pos=[.03125]*n, vel=[-.015625]*n,
         tau=[-.25]*n, current=[.125]*n, temperatureC=[25.]*n, errorCode=[0]*n,
-        isMock=[False]*n, ready=True, outputAllowed=True, inhibitReason=0,
-        touchEnabled=False, statusValidMask=15, receivedKey=None, hostTargetKey=None,
-        keyValidMask=0, actualOutputKey=[module('CommandKey').CommandKeyT(42, i+1) for i in range(n)],
-        actualOutputKeyValid=[False]*n, feedbackAppliedKey=None, feedbackAppliedTarget=None,
-        progress=[], progressComplete=False, lastValidAgeUs=0, estimatedInputPeriodUs=0,
-        rejectCount=0, lastRejectCode=0, ingressDropCount=0, timeoutCount=0,
-        crcErrorCount=0, diagnosticValidMask=0, rawPos=[-32768]*n,
-        rawVel=[32767]*n, rawCurrent=[-1]*n, rawStatus=[0xffffffff]*n,
-        rawValidFields=[15]*n)
+        ready=True, outputAllowed=True, inhibitReason=0,
+        touchEnabled=False, statusValidMask=15)
 
 
 def touch_object(*, side=1, sample=1, runtime=100):
@@ -98,7 +91,7 @@ def target(n=1, *, torque=None):
         mask |= Field.TAU
     return EndEffectorTarget((ControlMode.POSITION_TORQUE,)*n, (mask,)*n,
                              pos=(.03125,)*n, vel_limit=(0.,)*n,
-                             tau_cmd=None if torque is None else (torque,)*n)
+                             tau=None if torque is None else (torque,)*n)
 
 
 class EndEffectorCodecTest(unittest.TestCase):
@@ -124,12 +117,11 @@ class EndEffectorCodecTest(unittest.TestCase):
         request = EndEffectorSetTouchRequest(DescriptorRef(100), 7, 1, ControlRef('C', 'L'), False)
         codec.validate_set_touch_response(request, response)
         self.assertEqual(response.status, ServiceStatus.INTERNAL_ERROR)
-        self.assertFalse(response.enabled_valid)
+        self.assertFalse(hasattr(response, 'enabled_valid'))
         self.assertFalse(hasattr(response, 'layout_id'))
         self.assertFalse(hasattr(response, 'key'))
         for changed in ({'protocol_version': 0}, {'side': 2}, {'descriptor_ref': DescriptorRef(101)},
-                        {'reason': 65536}, {'status': 128},
-                        {'enabled_valid': 0}):
+                        {'reason': 65536}, {'status': 128}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 codec.validate_set_touch_response(request, dataclasses.replace(response, **changed))
 
@@ -152,6 +144,8 @@ class EndEffectorCodecTest(unittest.TestCase):
         codec.validate_info(info); codec.validate_state(info, state); codec.validate_touch(info, touch)
         self.assertEqual(info.descriptor_ref, DescriptorRef(100))
         self.assertEqual((info.firmware, info.axis_names), ('synthetic-μ', ('axis0', 'axis1')))
+        self.assertEqual(info.is_mock, (False, False))
+        self.assertFalse(hasattr(state, 'is_mock'))
         self.assertEqual((state.pos, state.current, state.temperature_c), ((.03125,)*2, (.125,)*2, (25.,)*2))
         self.assertEqual((state.sample_ref.stream, state.sample_ref.side, state.sample_ref.sample_id),
                          (SampleStream.EE_STATE, 1, 2**64-1))
@@ -176,15 +170,16 @@ class EndEffectorCodecTest(unittest.TestCase):
                 self.assertEqual(wire.DescriptorRef().RobotRuntimeId(), 100)
                 self.assertEqual((wire.ControlRef().ClientId(), wire.ControlRef().LeaseId()), ('client-μ'.encode(), b'lease'))
                 self.assertEqual((wire.Pos(0), wire.VelLimit(0)), (.03125, 0.))
-                self.assertEqual(wire.TauCmd(0), torque or 0.)
+                self.assertEqual(wire.Tau(0), torque or 0.)
                 self.assertEqual(bool(wire.CommandFields(0) & Field.TAU), torque is not None)
                 self.assertEqual((wire.InputObservationsLength(), wire.TsClientCreatedUs(),
-                                  wire.TsClientSendUs(), wire.SdkTimeValidMask()), (0, 0, 0, 0))
+                                  wire.TsClientSendUs()), (0, 0, 0))
+                self.assertFalse(hasattr(wire, 'SdkTimeValidMask'))
 
     def test_all_axis_vector_lengths_and_capability_sets_are_checked(self):
         info = decode('info', info_object())
         for changed in ({'position_domain': ()}, {'supported_modes': (1,)},
-                        {'limit_source': (1,)}, {'pos_max': ()},
+                        {'is_mock': ()}, {'is_mock': (1,)}, {'pos_max': ()},
                         {'supported_state_fields': (Field.MODE,)},
                         {'supported_command_fields': (Field.TEMPERATURE,)}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
@@ -222,37 +217,21 @@ class EndEffectorCodecTest(unittest.TestCase):
         self.assertEqual(state.error_code, (0, 0, 0xf1234567))
         self.assertEqual([bool(v & Field.ERROR_CODE) for v in state.valid_fields], [True, False, True])
 
-    def test_output_progress_and_feedback_keys_are_not_relabelled_as_targets(self):
+    def test_state_has_no_retired_command_correlation_or_progress(self):
         info = decode('info', info_object(n=2))
         obj = state_object(n=2)
-        obj.receivedKey = module('CommandKey').CommandKeyT(9, 3)
-        obj.hostTargetKey = module('CommandKey').CommandKeyT(9, 2)
-        obj.feedbackAppliedKey = module('CommandKey').CommandKeyT(9, 1)
-        obj.feedbackAppliedTarget = module('FeedbackAppliedTarget').FeedbackAppliedTargetT(
-            pos=[.015625, .03125], velLimit=[0., .0625], fields=[Field.POS, Field.POS | Field.VEL_LIMIT])
-        obj.keyValidMask = 7
-        obj.actualOutputKey = [module('CommandKey').CommandKeyT(9, i) for i in (1, 2)]
-        obj.actualOutputKeyValid = [True, True]
-        obj.progress = [module('ProgressEntry').ProgressEntryT(
-            key=module('CommandKey').CommandKeyT(9, 1), tsReceivedUs=0, stageValidMask=1)]
         state = decode('state', obj)
         codec.validate_state(info, state)
-        self.assertEqual((state.received_key.sequence, state.host_target_key.sequence,
-                          state.feedback_applied_key.sequence), (3, 2, 1))
-        self.assertEqual(tuple(k.sequence for k in state.actual_output_key), (1, 2))
-        self.assertEqual(state.feedback_applied_target.pos, (.015625, .03125))
-        self.assertEqual(state.feedback_applied_target.fields, (Field.POS, Field.POS | Field.VEL_LIMIT))
-        self.assertEqual((state.progress[0].ts_received_us, state.progress[0].stage_valid_mask), (0, 1))
-        self.assertEqual(state.progress[0].key, CommandKey(9, 1))
-        with self.assertRaises(ValueError):
-            codec.validate_state(info, dataclasses.replace(state, progress=state.progress*2))
+        self.assertEqual(state.pos, (.03125, .03125))
+        for name in ('received_key', 'host_target_key', 'actual_output_key', 'progress'):
+            self.assertFalse(hasattr(state, name))
 
     def test_corrupt_endpoint_shape_and_permission_are_rejected(self):
         info = decode('info', info_object())
         state = decode('state', state_object())
         for changed in ({'side': 2}, {'layout_id': 8}, {'protocol_version': 0},
                         {'descriptor_ref': DescriptorRef(101)}, {'pos': ()},
-                        {'actual_output_key_valid': ()}, {'output_allowed': False}):
+                        {'valid_fields': ()}, {'output_allowed': False}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 codec.validate_state(info, dataclasses.replace(state, **changed))
 
@@ -262,7 +241,7 @@ class EndEffectorCodecTest(unittest.TestCase):
                         {'command_fields': (Field.TEMPERATURE,)}, {'command_fields': (0,)},
                         {'pos': ()}, {'pos': (math.nan,)}, {'pos': (math.inf,)},
                         {'pos': (.125,)}, {'vel_limit': (-.1,)}, {'pos': None},
-                        {'current_cmd': (1e100,), 'command_fields': (Field.CURRENT,)}):
+                        {'current': (1e100,), 'command_fields': (Field.CURRENT,)}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 codec.prepare_target(info, dataclasses.replace(target(), **changed))
         valid = codec.prepare_target(info, target())
@@ -282,10 +261,10 @@ class EndEffectorCodecTest(unittest.TestCase):
     def test_current_is_amperes_and_signed_velocity_is_not_a_speed_limit(self):
         info = decode('info', info_object())
         prepared = codec.prepare_target(info, EndEffectorTarget((ControlMode.POSITION,),
-            (Field.CURRENT | Field.VEL,), current_cmd=(.125,), vel=(-.03125,)))
-        self.assertEqual((prepared.current_cmd, prepared.vel), ((.125,), (-.03125,)))
+            (Field.CURRENT | Field.VEL,), current=(.125,), vel=(-.03125,)))
+        self.assertEqual((prepared.current, prepared.vel), ((.125,), (-.03125,)))
         with self.assertRaises(ValueError):
-            codec.prepare_target(info, dataclasses.replace(prepared, current_cmd=(125.,)))
+            codec.prepare_target(info, dataclasses.replace(prepared, current=(125.,)))
 
     def test_unsupported_columns_stay_empty_and_unknown_read_enums_stay_unknown(self):
         obj = info_object()
@@ -293,12 +272,12 @@ class EndEffectorCodecTest(unittest.TestCase):
         obj.supportedStateFields = [Field.POS]
         obj.validLimits = [Field.POS | Field.VEL_LIMIT]
         obj.velMin = obj.velMax = obj.tauMin = obj.tauMax = obj.currentMin = obj.currentMax = []
-        obj.deviceModel = 65535; obj.diagnosticEncoding = 65535
+        obj.deviceModel = 65535
         info = decode('info', obj)
         codec.validate_info(info)
-        self.assertEqual((info.device_model, info.diagnostic_encoding), (65535, 65535))
+        self.assertEqual(info.device_model, 65535)
         prepared = codec.prepare_target(info, target())
-        self.assertEqual((prepared.vel, prepared.tau_cmd, prepared.current_cmd), ((), (), ()))
+        self.assertEqual((prepared.vel, prepared.tau, prepared.current), ((), (), ()))
         state = state_object()
         state.validFields = [Field.POS]
         state.vel = state.tau = state.current = state.temperatureC = state.errorCode = []
@@ -342,8 +321,7 @@ class EndEffectorCodecTest(unittest.TestCase):
         info = decode('info', info_object())
         result = EndEffectorSubmission(info.descriptor_ref, 7, 1, ControlRef('C', 'L'),
                                       CommandKey(42, 1), codec.prepare_target(info, target()))
-        for changed in ({'sdk_time_valid_mask': 1},
-                        {'ts_client_created_us': 1}, {'ts_client_send_us': 1}):
+        for changed in ({'ts_client_created_us': 1}, {'ts_client_send_us': 1}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 codec.fill_command(bindings, dataclasses.replace(result, **changed), flatbuffers.Builder(1), 0)
 
@@ -367,7 +345,7 @@ class EndEffectorCodecTest(unittest.TestCase):
                 self.assertEqual(wire.InputObservations(0).SampleId(), 0)
                 self.assertEqual(wire.InputObservations(1).SampleId(), 2**64-1)
                 self.assertEqual(wire.InputObservations(2).SourceTimeUs(), 0)
-                self.assertEqual((wire.SdkTimeValidMask(), wire.TsClientCreatedUs(), wire.TsClientSendUs()), (0, 0, 0))
+                self.assertEqual((wire.TsClientCreatedUs(), wire.TsClientSendUs()), (0, 0))
 
     def test_wide_descriptor_and_sample_ref_preserved_by_command_codec(self):
         bindings = codec.load_bindings()
@@ -381,20 +359,12 @@ class EndEffectorCodecTest(unittest.TestCase):
         self.assertEqual(actual, submission)
         self.assertEqual(actual.input_observations[0].descriptor_ref, DescriptorRef(2**64-1))
 
-    def test_diagnostic_counters_unknown_times_and_signed_raw_keep_full_received_values(self):
+    def test_zero_source_time_is_unknown_without_a_time_mask(self):
         wire = state_object(sample=2**64-1)
-        wire.lastValidAgeUs, wire.estimatedInputPeriodUs = 2**64-1, 2**63+1
-        wire.rejectCount, wire.ingressDropCount, wire.timeoutCount, wire.crcErrorCount = 2, 3, 4, 5
-        wire.lastRejectCode = 65535
-        wire.timeValidMask = wire.diagnosticValidMask = 0
+        wire.tsStateRealUs = 0
         actual = decode('state', wire)
         self.assertEqual(actual.state_id, 2**64-1)
-        self.assertEqual((actual.last_valid_age_us, actual.estimated_input_period_us), (2**64-1, 2**63+1))
-        self.assertEqual((actual.reject_count, actual.ingress_drop_count, actual.timeout_count,
-                          actual.crc_error_count, actual.last_reject_code), (2, 3, 4, 5, 65535))
-        self.assertEqual((actual.raw_pos, actual.raw_vel, actual.raw_current, actual.raw_status),
-                         ((-32768,), (32767,), (-1,), (0xffffffff,)))
-        self.assertEqual((actual.time_valid_mask, actual.diagnostic_valid_mask), (0, 0))
-        self.assertEqual(actual.ts_state_real_us, 100)
+        self.assertFalse(hasattr(actual, 'time_valid_mask'))
+        self.assertEqual(actual.ts_state_real_us, 0)
         self.assertEqual(actual.sample_ref.source_time_us, 0)
         self.assertFalse(actual.sample_ref.validity & 2)

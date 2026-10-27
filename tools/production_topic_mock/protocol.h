@@ -65,7 +65,7 @@ struct EEObservation {
 struct EECommand {
   uint32_t version = 0, layout_id = 0;
   uint64_t runtime = 0;
-  uint8_t side = 0, sdk_time_valid_mask = 0;
+  uint8_t side = 0;
   uint64_t client_created_us = 0, client_send_us = 0;
   std::string client_id, lease_id;
   EEKey key;

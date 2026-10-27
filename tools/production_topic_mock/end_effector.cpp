@@ -82,6 +82,7 @@ std::vector<uint8_t> EncodeEEInfo(const std::vector<uint8_t>& fixture,
   std::unique_ptr<lowlevel::ee::EndEffectorInfoT> info(lowlevel::ee::GetEndEffectorInfo(fixture.data())->UnPack());
   info->descriptor_ref=std::make_unique<lowlevel::ee::DescriptorRef>(runtime);
   info->firmware="SYNTHETIC_NO_DEVICE"; info->serial="SYNTHETIC_NO_DEVICE"; info->identity_valid_mask=0;
+  info->is_mock.assign(info->axis_names.size(),true);
   info->ts_descriptor_acquired_us=startup_us; info->ts_state_pub_us=wall_us; info->time_valid_mask=3;
   info->aorta_header=Header(0,wall_us);
   return Pack<lowlevel::ee::EndEffectorInfo>(*info);
@@ -101,9 +102,8 @@ EECommand DecodeEECommand(const std::vector<uint8_t>& bytes) {
   out.client_id=c->client_id()->str(); out.lease_id=c->lease_id()->str();
   out.key={w->key()->session_id(),w->key()->sequence()};
   out.modes=CopyVector(w->mode()); out.fields=CopyVector(w->command_fields());
-  out.columns={CopyVector(w->pos()),CopyVector(w->vel()),CopyVector(w->vel_limit()),CopyVector(w->tau_cmd()),CopyVector(w->current_cmd())};
+  out.columns={CopyVector(w->pos()),CopyVector(w->vel()),CopyVector(w->vel_limit()),CopyVector(w->tau()),CopyVector(w->current())};
   out.client_created_us=w->ts_client_created_us(); out.client_send_us=w->ts_client_send_us();
-  out.sdk_time_valid_mask=w->sdk_time_valid_mask();
   if (w->input_observations()) {
     if (w->input_observations()->size()>5) throw std::invalid_argument("EE observation bound");
     for (const auto* o:*w->input_observations()) {
@@ -119,7 +119,6 @@ std::vector<uint8_t> EncodeEEState(const EESnapshot& s,uint64_t id,uint64_t us) 
   out.protocol_version=1; out.descriptor_ref=std::make_unique<lowlevel::ee::DescriptorRef>(s.runtime);
   out.layout_id=s.info.layout_id; out.side=s.info.side; out.state_id=id;
   out.ts_state_real_us=out.ts_state_pub_us=out.ts_ingested_us=out.ts_assembled_us=us;
-  out.time_valid_mask=27; // Host synthetic sample, not a hardware acquisition clock.
   out.sample_status=lowlevel::ee::SampleStatus_OK;
   out.pos=s.position;
   const auto n=s.info.axes.size();
@@ -131,21 +130,8 @@ std::vector<uint8_t> EncodeEEState(const EESnapshot& s,uint64_t id,uint64_t us) 
   if (all&16) out.current.assign(n,unknown);
   if (all&32) out.temperature_c.assign(n,unknown);
   if (all&128) out.error_code.assign(n,0); // invalid, not "no fault measured".
-  out.is_mock.assign(n,true);
   out.ready=true;out.output_allowed=s.output_allowed;out.inhibit_reason=s.inhibit_reason;
   out.touch_enabled=s.touch_enabled;out.status_valid_mask=15;
-  if (s.received_valid) {out.received_key=std::make_unique<lowlevel::ee::CommandKey>(s.received.session,s.received.sequence);out.key_valid_mask|=1;}
-  if (s.accepted_valid) {out.host_target_key=std::make_unique<lowlevel::ee::CommandKey>(s.accepted.session,s.accepted.sequence);out.key_valid_mask|=2;}
-  for (size_t i=0;i<n;++i) {
-    out.actual_output_key.emplace_back(s.output_keys[i].session,s.output_keys[i].sequence);
-    out.actual_output_key_valid.push_back(s.output_key_valid[i]);
-  }
-  // No simulated CAN ACK, feedback-carried key or complete progress history.
-  out.progress_complete=false;
-  out.reject_count=s.reject_count;out.last_reject_code=s.reject_code;
-  out.ingress_drop_count=s.overwritten;out.timeout_count=s.timeouts;
-  out.diagnostic_valid_mask=60;
-  out.raw_valid_fields.assign(n,0);
   out.aorta_header=Header(id,us);
   return Pack<lowlevel::ee::EndEffectorState>(out);
 }
@@ -186,7 +172,6 @@ std::vector<uint8_t> EncodeTouchReply(const TouchReply& value) {
   out.descriptor_ref=std::make_unique<lowlevel::ee::DescriptorRef>(value.runtime);
   out.side=value.side;out.reason=value.reason;
   out.status=value.success ? aorta::services::common::ServiceStatus_SUCCESS : aorta::services::common::ServiceStatus_INTERNAL_ERROR;
-  out.enabled=value.enabled;out.enabled_valid=value.enabled_valid;
   return Pack<aorta::services::humanoid_locomotion::EndEffectorSetTouchResponse>(out);
 }
 #endif

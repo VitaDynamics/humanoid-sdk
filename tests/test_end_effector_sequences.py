@@ -162,7 +162,7 @@ class EndEffectorSequenceTest(unittest.TestCase):
             'zero_single_round_trip': (True, False, True, False),
             'dual_sine_measured_hold': (False, True, False, False),
             'dual_sine_zero_hold': (True, True, False, False),
-            'single_rejected': (False, False, False, True),
+            'single_inhibited': (False, False, False, True),
         }
         for name, (zero, sine, back, reject) in cases.items():
             with self.subTest(case=name):
@@ -171,7 +171,7 @@ class EndEffectorSequenceTest(unittest.TestCase):
                 self.addCleanup(c.close)
                 reply = robot_info_reply()
                 c.get_robot_info = lambda timeout: replace(reply, info=replace(reply.info, body=body_info()))
-                endpoints = [Endpoint(c, side, reject=reject) for side in
+                endpoints = [Endpoint(c, side, inhibited=reject) for side in
                              (('left', 'right') if sine else ('right',))]
                 for endpoint, opening in zip(endpoints, (.03125, .0625) if sine else (.0625,)):
                     endpoint._state = replace(endpoint._state, pos=(opening,))
@@ -192,7 +192,7 @@ class EndEffectorSequenceTest(unittest.TestCase):
                 targets = {e.side: demo.position_target(e.info, (.09375,), unit='m', torque=(0.,))
                            for e in endpoints}
                 if reject:
-                    with self.assertRaisesRegex(RuntimeError, 'reject'):
+                    with self.assertRaisesRegex(RuntimeError, 'inhibited|permission'):
                         demo.run(c, endpoints, targets, **options)
                 else:
                     demo.run(c, endpoints, targets, **options)
@@ -210,7 +210,7 @@ class EndEffectorSequenceTest(unittest.TestCase):
                         self.assertEqual((command.descriptor_ref, command.layout_id, command.side),
                                          (e.info.descriptor_ref, e.info.layout_id, e.info.side))
                         self.assertEqual(command.control_ref, ControlRef('example-client', 'lease-example'))
-                        self.assertEqual(command.target.tau_cmd, (0.,))
+                        self.assertEqual(command.target.tau, (0.,))
                         self.assertTrue(command.target.command_fields[0] & Field.TAU)
                         self.assertEqual(command.target.vel_limit, (0.,))
                         self.assertGreaterEqual(command.target.pos[0], e.info.pos_min[0])
@@ -219,8 +219,7 @@ class EndEffectorSequenceTest(unittest.TestCase):
                         sample = command.input_observations[0]
                         self.assertEqual((sample.descriptor_ref, sample.stream, sample.side),
                                          (e.info.descriptor_ref, SampleStream.EE_STATE, e.info.side))
-                        self.assertEqual((command.ts_client_created_us, command.ts_client_send_us,
-                                          command.sdk_time_valid_mask), (0, 0, 0))
+                        self.assertEqual((command.ts_client_created_us, command.ts_client_send_us), (0, 0))
                     self.assertTrue(all(b-a >= .02-1e-9 for a, b in zip(e.times, e.times[1:])))
                     if not reject:
                         self.assertEqual(e.commands[-1].target.pos, originals[e.side] if (back or sine) else (.09375,))

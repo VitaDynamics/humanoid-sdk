@@ -307,16 +307,14 @@ class BrainCoCaptureTest(unittest.TestCase):
         from test_end_effector_codec import state_object, pack
         obj = state_object(); obj.pos[0] = float('nan'); obj.inhibitReason = 4
         obj.validFields[0] = 0
-        obj.rawCurrent[0] = -1250
-        obj.diagnosticValidMask = 0
         row = capture.decode('left_ee_state', pack(obj), capture.load_bindings())
         self.assertIsNone(row['pos'][0])
         self.assertTrue(row['nonfinite_feedback'])
         self.assertEqual(row['inhibit_reason'], 4)
         self.assertEqual(row['ts_acquired_hw_us'], 5)
         self.assertEqual(row['valid_fields'], [0])
-        self.assertEqual(row['raw_current'], [-1250])
-        self.assertEqual(row['diagnostic_valid_mask'], 0)
+        self.assertNotIn('raw_current', row)
+        self.assertNotIn('diagnostic_valid_mask', row)
         self.assertEqual(row['descriptor_ref'], dict(robot_runtime_id=100))
 
     def test_new_ee_cmd_capture_keeps_k_keys_and_original_time_validity(self):
@@ -325,17 +323,17 @@ class BrainCoCaptureTest(unittest.TestCase):
             protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(2**64-1),
             layoutId=7, side=1, controlRef=module('ControlRef').ControlRefT('C', 'L'),
             key=module('CommandKey').CommandKeyT(2**64-1, 0), mode=[2], commandFields=[5],
-            pos=[.03125], vel=[], velLimit=[0.], tauCmd=[], currentCmd=[],
+            pos=[.03125], vel=[], velLimit=[0.], tau=[], current=[],
             inputObservations=[module('SampleRef').SampleRefT(
                 module('DescriptorRef').DescriptorRefT(2**64-1), 2, 2, 2**64-1, 0, 9)],
-            tsClientCreatedUs=0, tsClientSendUs=0, sdkTimeValidMask=0)
+            tsClientCreatedUs=0, tsClientSendUs=0)
         row = capture.decode('left_ee_cmd', pack(obj), capture.load_bindings())
         self.assertEqual(row['key'], dict(session_id=2**64-1, sequence=0))
         self.assertEqual(row['input_observations'][0]['sample_id'], 2**64-1)
         self.assertEqual(row['input_observations'][0]['validity'], 9)
         self.assertEqual(row['target']['vel_limit'], [0.])
-        self.assertEqual(row['target']['tau_cmd'], [])
-        self.assertEqual(row['sdk_time_valid_mask'], 0)
+        self.assertEqual(row['target']['tau'], [])
+        self.assertNotIn('sdk_time_valid_mask', row)
         self.assertNotIn('cmd_id', row)
 
     def test_new_capture_has_no_old_live_ee_fallback_or_publishers(self):

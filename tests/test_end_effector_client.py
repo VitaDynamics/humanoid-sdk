@@ -87,8 +87,7 @@ class TouchRPC(Handle):
             protocolVersion=1,
             descriptorRef=self.node.bindings.DescriptorRef.DescriptorRefT(
                 wire.DescriptorRef().RobotRuntimeId()),
-            side=wire.Side(), status=ServiceStatus.SUCCESS, reason=TouchSetReason.NONE,
-            enabled=wire.Enable(), enabledValid=True)
+            side=wire.Side(), status=ServiceStatus.SUCCESS, reason=TouchSetReason.NONE)
         if self.node.reply_edit is not None:
             self.node.reply_edit(response)
         payload = pack(response)
@@ -171,7 +170,7 @@ class EndEffectorClientTest(unittest.TestCase):
             harness.controller.publish(make_command(0))
         self.assertEqual(harness.transport.published, before)
         self.assertEqual(harness.controller._next_external_sequence, 2)
-        self.assertTrue(left.set_touch(True, .1).enabled)
+        self.assertEqual(left.set_touch(True, .1).status, ServiceStatus.SUCCESS)
         self.assertEqual(harness.controller._next_external_sequence, 2)
         second = right.publish(target())
         self.assertEqual((first.key.sequence, second.key.sequence), (1, 2))
@@ -266,15 +265,15 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(second.control_ref.client_id, harness.controller.client_id)
         self.assertEqual(second.control_ref.lease_id, harness.lease_id)
         self.assertEqual(second.descriptor_ref, DescriptorRef(100))
-        self.assertEqual((second.ts_client_created_us, second.ts_client_send_us, second.sdk_time_valid_mask), (0, 0, 0))
+        self.assertEqual((second.ts_client_created_us, second.ts_client_send_us), (0, 0))
         for (topic, wire), expected in zip(node.commands, (second, third)):
             self.assertTrue(topic.endswith('/cmd'))
             self.assertEqual((wire.Key().SessionId(), wire.Key().Sequence()),
                              (expected.key.session_id, expected.key.sequence))
             self.assertEqual((wire.ControlRef().ClientId(), wire.ControlRef().LeaseId()),
                              (harness.controller.client_id.encode(), harness.lease_id.encode()))
-            self.assertEqual((wire.Side(), wire.Pos(0), wire.TauCmd(0)),
-                             (expected.side, .03125, expected.target.tau_cmd[0]))
+            self.assertEqual((wire.Side(), wire.Pos(0), wire.Tau(0)),
+                             (expected.side, .03125, expected.target.tau[0]))
         self.assertIs(left.connection, harness.controller)
         self.assertIs(right.connection.transport.node, node)
 
@@ -415,7 +414,7 @@ class EndEffectorClientTest(unittest.TestCase):
                     dataclasses.replace(sample, descriptor_ref=None)):
             with self.subTest(sample=bad), self.assertRaises(ValueError):
                 client.wait_state(0.01, after_sample=bad)
-        obj = state_object(sample=2); obj.timeValidMask = 0; obj.tsStateRealUs = 999
+        obj = state_object(sample=2); obj.tsStateRealUs = 0
         node.emit('left', 'state', obj)
         self.assertEqual(client.state.sample_ref.source_time_us, 0)
         self.assertFalse(client.state.sample_ref.validity & 2)
@@ -688,7 +687,7 @@ class EndEffectorClientTest(unittest.TestCase):
             self.assertIs(client._latest['state'], first)
         node.emit('left', 'state', state_object(sample=2))
         second = client.state
-        resized = state_object(sample=3); resized.rawPos = []; resized.rawValidFields = [14]
+        resized = state_object(sample=3); resized.validFields = []
         node.emit('left', 'state', resized)
         with self.assertRaisesRegex(ValueError, 'invalid EE state'):
             client.wait_state(0.01)
@@ -912,8 +911,8 @@ class EndEffectorClientTest(unittest.TestCase):
         sequence = harness.controller._next_external_sequence
         for enable in (True, False):
             response = client.set_touch(enable, timeout=.125)
-            self.assertEqual((response.status, response.reason, response.enabled, response.enabled_valid),
-                             (ServiceStatus.SUCCESS, TouchSetReason.NONE, enable, True))
+            self.assertEqual((response.status, response.reason), (ServiceStatus.SUCCESS, TouchSetReason.NONE))
+            self.assertFalse(hasattr(response, 'enabled_valid'))
             self.assertEqual(response.descriptor_ref, DescriptorRef(100))
             self.assertIs(client.state, state)
             self.assertIs(client.touch, touch)
@@ -1038,32 +1037,26 @@ class EndEffectorClientTest(unittest.TestCase):
                 self.assertEqual(len(node.touch_requests), 1)
                 self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
 
-    def test_set_touch_service_failures_unknown_enabled_and_partial_status_preserve_raw_reply(self):
+    def test_set_touch_service_failures_and_partial_status_preserve_raw_reply(self):
         # Synthetic returned statuses test preservation, not claims about backend pairings.
         cases = (
-            (ServiceStatus.TIMEOUT, TouchSetReason.TIMEOUT, False, False),
-            (ServiceStatus.REJECTED, TouchSetReason.UNAUTHORIZED, True, True),
-            (ServiceStatus.PARTIAL_SUCCESS, 0, True, True),
-            (127, 65535, False, False),
-            (-128, 65535, False, False),
-            (ServiceStatus.SUCCESS, 0, False, False),
-            (ServiceStatus.SUCCESS, 0, False, True),
-            (ServiceStatus.SUCCESS, 65535, True, True),
-            (ServiceStatus.INTERNAL_ERROR, 0, False, False),
+            (ServiceStatus.TIMEOUT, TouchSetReason.TIMEOUT),
+            (ServiceStatus.REJECTED, TouchSetReason.UNAUTHORIZED),
+            (ServiceStatus.PARTIAL_SUCCESS, 0), (127, 65535), (-128, 65535),
+            (ServiceStatus.SUCCESS, 65535), (ServiceStatus.INTERNAL_ERROR, 0),
         )
-        for status, reason, enabled, valid in cases:
-            with self.subTest(status=status, reason=reason, enabled=enabled, valid=valid):
+        for status, reason in cases:
+            with self.subTest(status=status, reason=reason):
                 harness, node = self.harness()
                 client = self.client(harness, node, touch=True)
                 state = client.state
                 def edit(reply):
-                    reply.status, reply.reason, reply.enabled, reply.enabledValid = status, reason, enabled, valid
+                    reply.status, reply.reason = status, reason
                 node.reply_edit = edit
                 with self.assertRaises(TouchSetError) as caught:
                     client.set_touch(True, timeout=.1)
                 actual = caught.exception.response
-                self.assertEqual((actual.status, actual.reason, actual.enabled, actual.enabled_valid),
-                                 (status, reason, enabled, valid))
+                self.assertEqual((actual.status, actual.reason), (status, reason))
                 self.assertIs(client.state, state)
                 self.assertEqual(len(node.touch_requests), 1)
                 self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
@@ -1249,7 +1242,7 @@ class EndEffectorClientTest(unittest.TestCase):
             wire = node.commands[-1][1]
             self.assertEqual(codec.decode_cmd(wire), result)
             self.assertEqual(wire.InputObservations(0).SampleId(), 2**64-1)
-            self.assertEqual((wire.SdkTimeValidMask(), wire.TsClientCreatedUs(), wire.TsClientSendUs()), (0, 0, 0))
+            self.assertEqual((wire.TsClientCreatedUs(), wire.TsClientSendUs()), (0, 0))
         self.assertEqual(harness.transport.published, before)
         self.assertEqual(harness.controller.publish(make_command(0)).sequence, 3)
 
@@ -1278,7 +1271,7 @@ class EndEffectorClientTest(unittest.TestCase):
         harness, node = self.harness()
         client = self.client(harness, node, observation_sources=((SampleStream.EE_STATE, 1),))
         wire_state = state_object(sample=2)
-        wire_state.timeValidMask = 0
+        wire_state.tsStateRealUs = 0
         wire_state.sampleStatus = 3  # Actual stale sample, not fabricated current content.
         node.emit('left', 'state', wire_state)
         sample = client.state.sample_ref
@@ -1344,14 +1337,14 @@ class EndEffectorClientTest(unittest.TestCase):
         for changes in ({'pos': (True,)}, {'pos': (-.001,)}, {'pos': (.063,)},
                 {'pos': (float('nan'),)}, {'vel_limit': (-.001,)}, {'vel_limit': (.126,)},
                 {'vel_limit': (True,)}, {'vel_limit': (float('inf'),)},
-                {'tau_cmd': (True,)}, {'tau_cmd': (float('nan'),)}, {'tau_cmd': (.501,)}):
+                {'tau': (True,)}, {'tau': (float('nan'),)}, {'tau': (.501,)}):
             with self.subTest(changes=changes), self.assertRaises(InvalidCommandError):
                 client.publish(dataclasses.replace(target(torque=0.), **changes))
         self.assertEqual(node.commands, [])
         for index, (position, torque) in enumerate(((0., -.5), (.0625, .5)), 1):
             sent = client.publish(dataclasses.replace(target(torque=torque), pos=(position,), vel_limit=(.125,)))
             self.assertEqual(sent.key, CommandKey(harness.generation, index))
-            self.assertEqual((node.commands[-1][1].Pos(0), node.commands[-1][1].TauCmd(0)), (position, torque))
+            self.assertEqual((node.commands[-1][1].Pos(0), node.commands[-1][1].Tau(0)), (position, torque))
 
     def test_callback_error_does_not_relabel_valid_feedback_and_close_attempts_every_handle(self):
         harness, node = self.harness()
@@ -1385,11 +1378,9 @@ class EndEffectorClientTest(unittest.TestCase):
         first = client.state
         revised = state_object(); revised.tsStatePubUs = 120
         revised.outputAllowed = False; revised.inhibitReason = 1
-        revised.rejectCount = 7; revised.diagnosticValidMask = 4
         node.emit('left', 'state', revised)
         self.assertEqual(client.state.sample_ref, first.sample_ref)
         self.assertFalse(client.state.output_allowed)
-        self.assertEqual(client.state.reject_count, 7)
         self.assertIs(seen[-1], client.state)
         self.assertEqual(client.motion_feedback()[3], 10.)
         node.emit('left', 'state', state_object())
@@ -1403,7 +1394,7 @@ class EndEffectorClientTest(unittest.TestCase):
         client = self.client(harness, node)
         first_time = client.motion_feedback()[3]
         stale = state_object(); stale.tsStatePubUs = 120; stale.sampleStatus = 3
-        stale.validFields = [0]; stale.pos = [0.]; stale.rawValidFields = [0]
+        stale.validFields = [0]; stale.pos = [0.]
         node.emit('left', 'state', stale)
         latest, position, _, received = client.motion_feedback()
         self.assertIs(position, latest)
@@ -1416,11 +1407,10 @@ class EndEffectorClientTest(unittest.TestCase):
 
     def test_publication_conflicts_unknown_time_and_source_changes_are_not_samples(self):
         changes = (
-            {'tsStatePubUs': 110, 'rejectCount': 1},
-            {'tsStatePubUs': 120, 'timeValidMask': 29},
+            {'tsStatePubUs': 110, 'outputAllowed': False, 'inhibitReason': 1},
+            {'tsStatePubUs': 0},
             {'tsStatePubUs': 120, 'tsIngestedUs': 999},
             {'tsStatePubUs': 120, 'pos': [.05]},
-            {'tsStatePubUs': 120, 'rawCurrent': [-2]},
         )
         for change in changes:
             with self.subTest(change=change):

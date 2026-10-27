@@ -88,7 +88,8 @@ class EEPullTest(unittest.TestCase):
         self.assertEqual(sent.descriptor_ref, sample.descriptor_ref)
         # No independently generated session/clock and no polling-thread burst.
         self.assertEqual(sent.key.session_id, owner.generation)
-        self.assertEqual((sent.sdk_time_valid_mask, sent.ts_client_send_us), (0, 0))
+        self.assertEqual(sent.ts_client_send_us, 0)
+        self.assertFalse(hasattr(sent, 'sdk_time_valid_mask'))
         handles = list(node.handles)
         client.close()
         self.assertTrue(all(handle.close_count == 1 for handle in handles))
@@ -111,8 +112,8 @@ class EEPullTest(unittest.TestCase):
             sent = client.publish(target(torque=torque))
             wire = node.commands[-1][1]
             self.assertEqual(bool(wire.CommandFields(0) & Field.TAU), torque is not None)
-            self.assertEqual(wire.TauCmd(0), 0. if torque is None else torque)
-            self.assertEqual(sent.target.tau_cmd, (0. if torque is None else torque,))
+            self.assertEqual(wire.Tau(0), 0. if torque is None else torque)
+            self.assertEqual(sent.target.tau, (0. if torque is None else torque,))
         readonly, readonly_node, owner = self.client(read_only=True)
         node_before = len(readonly_node.handles)
         requests_before = list(owner.transport.published)

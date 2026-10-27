@@ -23,7 +23,7 @@ def touch_wait_client(mode, output):
     from locomotion_aorta import EndEffectorClient, PullController
     from locomotion_aorta import _end_effector_codec as codec
     from locomotion_aorta.end_effector_types import (ControlMode, DeviceModel, Field,
-        LimitSource, PositionDomain, SampleStatus, SampleStream, ServiceStatus,
+        PositionDomain, SampleStatus, SampleStream, ServiceStatus,
         TouchPayloadType, TouchSetReason)
 
     if mode not in ('late_reply', 'no_reply', 'no_provider'):
@@ -87,7 +87,7 @@ def touch_wait_client(mode, output):
             layoutId=7, side=1, deviceModel=DeviceModel.AGX, firmware='synthetic', serial='synthetic',
             axisNames=['synthetic'], positionDomain=[PositionDomain.TOTAL_OPENING], torqueDomain=[0], supportedModes=[1 << ControlMode.POSITION],
             supportedCommandFields=[Field.POS | Field.MODE], supportedStateFields=[Field.POS], validLimits=[Field.POS],
-            posMin=[0.], posMax=[.0625], limitSource=[LimitSource.CONFIG,0,0,0,0], touchAvailable=True,
+            posMin=[0.], posMax=[.0625], isMock=[True], touchAvailable=True,
             touchRegions=[module('TouchRegionInfo').TouchRegionInfoT(regionId=1, name='synthetic',
                 frame='synthetic', sensorType=1, shape=[1], components=['raw'], dtype=TouchPayloadType.UINT16_LE,
                 unit='1', payloadOffset=0, payloadBytes=2, encodingVersion=1)])
@@ -107,10 +107,8 @@ def touch_wait_client(mode, output):
             sample_id += 1
             state = module('EndEffectorState').EndEffectorStateT(protocolVersion=1,
                 descriptorRef=wire_ref, layoutId=7, side=1, stateId=sample_id, sampleStatus=SampleStatus.OK,
-                validFields=[Field.POS], pos=[.03125], isMock=[True], ready=True, outputAllowed=True,
-                inhibitReason=0, touchEnabled=False, statusValidMask=15,
-                actualOutputKey=[module('CommandKey').CommandKeyT(0,0)],
-                actualOutputKeyValid=[False], rawValidFields=[0])
+                validFields=[Field.POS], pos=[.03125], ready=True, outputAllowed=True,
+                inhibitReason=0, touchEnabled=False, statusValidMask=15)
             # Fixture sample identity only; no invented robot acquisition time.
             state_pub.publish_bytes(pack(state, sample_id))
         publish_state(); endpoint.wait_state(3)
@@ -170,7 +168,7 @@ def touch_wait_client(mode, output):
                 request, responder = held[0]
                 response = rpc_bindings.response.EndEffectorSetTouchResponseT(
                     protocolVersion=1, descriptorRef=wire_ref, side=1, status=ServiceStatus.SUCCESS,
-                    reason=TouchSetReason.NONE, enabled=request.Enable(), enabledValid=True)
+                    reason=TouchSetReason.NONE)
                 mark('late_reply_begin')
                 responder.reply_bytes(pack(response, 1))
                 mark('late_reply_end')

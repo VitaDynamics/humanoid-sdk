@@ -1,9 +1,8 @@
 # Generic end-effector example (development source)
 
-This source binds the actual runtime-only static-descriptor S91220 candidate
-`0.0.0+g91220d520cd0` in the SDK compatibility manifest. Source binding is not
-SDK build/native/IPC or device acceptance; final robot integration, packaging
-and HIL remain pending. Use the matched offline wheels, not the old schema80 pack.
+This source targets the 25aa static-descriptor schema candidate. Its actual
+generated bindings, final robot integration, packaging and HIL remain pending.
+Do not substitute an older wheel for the matching generated dependency.
 
 `end_effector_external.py` uses one shared controller for Body and both selected
 end effectors. The default and `--dry-run` use a read-only source: no control
@@ -39,14 +38,15 @@ do not expose that mask selection, fill missing positions with zero or silently
 copy measurements into other axes and call them uncommanded. Even explicitly
 submitting the measured position is still a command on every selected field.
 
-The new State has an admission key, not the legacy numeric host-target pose.
-Target-mode `--duration` bounds streaming only. It does not reuse a feedback-
-applied target as the current host target, or claim an arrival duration. Entry
+State does not confirm individual command admission, physical output or arrival.
+Target-mode `--duration` bounds local streaming only. Entry
 interpolation for trajectory patterns starts from a current valid same-descriptor State after ready and
 touch waits; the saved pre-entry measurement remains the separate return target.
 Body and each endpoint retain their absolute send deadlines across all phases;
 the loop wakes at the earliest deadline without replaying missed sends. Trajectory entry
-and return use declared command slope limits; target mode has no entry ramp. Each command references the actual
+and return use declared command slope limits; target mode has no entry ramp. The
+AGX source-step movement contract remains unresolved and is not HIL-ready.
+Each command references the actual
 endpoint State used for its safety checks (fixed K=1). Diagnostic timestamps are not permission gates and
 are not subtracted from the SDK clock.
 

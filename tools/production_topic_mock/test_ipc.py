@@ -50,7 +50,7 @@ def ee_client():
     from contextlib import ExitStack
     from locomotion_aorta import BodyCmd, BodyJointCmd, PullController
     from locomotion_aorta.end_effector import EndEffectorClient
-    from locomotion_aorta.end_effector_types import ControlMode, EndEffectorTarget, Field, SampleStream
+    from locomotion_aorta.end_effector_types import ControlMode, EndEffectorTarget, Field, SampleStream, ServiceStatus
     with ExitStack() as stack:
         controller = stack.enter_context(PullController(group=os.environ['AORTA_GROUP']))
         endpoints = [stack.enter_context(EndEffectorClient(side, connection=controller,
@@ -81,21 +81,19 @@ def ee_client():
                 submitted.append(endpoint.publish(target, input_observations=(sample.sample_ref,)))
             assert [s.key.sequence for s in submitted] == [first.sequence+1, first.sequence+2]
             assert all(s.key.session_id == first.session_id for s in submitted)
-            for endpoint, sent in zip(endpoints, submitted):
+            for endpoint, info in zip(endpoints, infos):
                 deadline = time.monotonic()+2
                 while True:
                     sample = endpoint.wait_state(max(.001, deadline-time.monotonic()))
-                    if (sample.host_target_key == sent.key and all(sample.actual_output_key_valid)
-                            and all(key == sent.key for key in sample.actual_output_key)):
+                    if all(mask & Field.POS for mask in sample.valid_fields) and all(q == .03125 for q in sample.pos):
                         break
-                    if time.monotonic() >= deadline: raise AssertionError('EE key never applied')
+                    if time.monotonic() >= deadline: raise AssertionError('synthetic EE position not observed')
                     endpoint.wait_state(deadline-time.monotonic(), after_sample=sample.sample_ref)
-                assert all(sample.is_mock) and all(q == .03125 for q in sample.pos)
-                assert not sample.progress_complete and sample.feedback_applied_key is None
+                assert all(info.is_mock) and all(q == .03125 for q in sample.pos)
             left = endpoints[0]
             before = left.wait_state(1)
             reply = left.set_touch(True, timeout=1.)
-            assert reply.enabled and reply.enabled_valid and reply.descriptor_ref == infos[0].descriptor_ref
+            assert reply.status == ServiceStatus.SUCCESS and reply.descriptor_ref == infos[0].descriptor_ref
             deadline = time.monotonic()+2
             sample = before
             while not (sample.status_valid_mask & 8 and sample.touch_enabled):
@@ -129,7 +127,6 @@ def ee_client():
             while sample.output_allowed:
                 sample = endpoint.wait_state(max(.001, deadline-time.monotonic()), after_sample=sample.sample_ref)
                 if time.monotonic() >= deadline: raise AssertionError('EE permission survived CANCEL')
-            assert not any(sample.actual_output_key_valid)
 
 
 class MockIpcTest(unittest.TestCase):
@@ -176,7 +173,7 @@ class MockIpcTest(unittest.TestCase):
                     positionDomain=[PositionDomain.JOINT_ANGLE if number==1 else PositionDomain.TOTAL_OPENING]*n,
                     torqueDomain=[0]*n, supportedModes=[2]*n, supportedCommandFields=[65]*n,
                     supportedStateFields=[1]*n, validLimits=[1]*n, posMin=[0.]*n, posMax=[.0625]*n,
-                    limitSource=[1,0,0,0,0]*n, touchAvailable=number==1,
+                    isMock=[True]*n, touchAvailable=number==1,
                     touchRegions=[region] if number==1 else [])
                 write(root/(side+'-info.bin'), info)
                 spec[side] = dict(info=side+'-info.bin', initial_pos=[.02]*n,

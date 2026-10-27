@@ -11,11 +11,9 @@ from .body_types import DescriptorRef
 try:
     from lowlevel.ee.ControlMode import ControlMode
     from lowlevel.ee.DeviceModel import DeviceModel
-    from lowlevel.ee.DiagnosticEncoding import DiagnosticEncoding
     from lowlevel.ee.EndEffectorSide import EndEffectorSide
     from lowlevel.ee.Field import Field
     from lowlevel.ee.InhibitReason import InhibitReason
-    from lowlevel.ee.LimitSource import LimitSource
     from lowlevel.ee.PositionDomain import PositionDomain
     from lowlevel.ee.SampleStatus import SampleStatus
     from lowlevel.ee.SampleStream import SampleStream
@@ -97,31 +95,12 @@ class EndEffectorInfo:
     tau_max: tuple[float, ...] = ()
     current_min: tuple[float, ...] = ()
     current_max: tuple[float, ...] = ()
-    limit_source: tuple[int, ...] = ()
     touch_available: bool = False
     touch_regions: tuple[TouchRegionInfo, ...] = ()
-    diagnostic_encoding: int = 0
+    is_mock: tuple[bool, ...] = ()
     ts_descriptor_acquired_us: int = 0
     ts_state_pub_us: int = 0
     time_valid_mask: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class ProgressEntry:
-    key: CommandKey
-    ts_received_us: int = 0
-    ts_accepted_us: int = 0
-    ts_first_output_us: int = 0
-    ts_write_ack_us: int = 0
-    ts_first_feedback_us: int = 0
-    stage_valid_mask: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class FeedbackAppliedTarget:
-    pos: tuple[float, ...] = ()
-    vel_limit: tuple[float, ...] = ()
-    fields: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +115,6 @@ class EndEffectorState:
     ts_acquired_hw_us: int = 0
     ts_ingested_us: int = 0
     ts_assembled_us: int = 0
-    time_valid_mask: int = 0
     sample_status: int = 0
     valid_fields: tuple[int, ...] = ()
     pos: tuple[float, ...] = ()
@@ -145,38 +123,15 @@ class EndEffectorState:
     current: tuple[float, ...] = ()
     temperature_c: tuple[float, ...] = ()
     error_code: tuple[int, ...] = ()
-    is_mock: tuple[bool, ...] = ()
     ready: bool = False
     output_allowed: bool = False
     inhibit_reason: int = 0
     touch_enabled: bool = False
     status_valid_mask: int = 0
-    received_key: CommandKey | None = None
-    host_target_key: CommandKey | None = None
-    key_valid_mask: int = 0
-    actual_output_key: tuple[CommandKey | None, ...] = ()
-    actual_output_key_valid: tuple[bool, ...] = ()
-    feedback_applied_key: CommandKey | None = None
-    feedback_applied_target: FeedbackAppliedTarget | None = None
-    progress: tuple[ProgressEntry, ...] = ()
-    progress_complete: bool = False
-    last_valid_age_us: int = 0
-    estimated_input_period_us: int = 0
-    reject_count: int = 0
-    last_reject_code: int = 0
-    ingress_drop_count: int = 0
-    timeout_count: int = 0
-    crc_error_count: int = 0
-    diagnostic_valid_mask: int = 0
-    raw_pos: tuple[int, ...] = ()
-    raw_vel: tuple[int, ...] = ()
-    raw_current: tuple[int, ...] = ()
-    raw_status: tuple[int, ...] = ()
-    raw_valid_fields: tuple[int, ...] = ()
 
     @property
     def sample_ref(self) -> SampleRef:
-        validity = 1 | (2 if self.time_valid_mask & 1 else 0)
+        validity = 1 | (2 if self.ts_state_real_us else 0)
         validity |= 4 if self.sample_status == SampleStatus.OK else 0
         validity |= 8 if self.sample_status == SampleStatus.STALE else 0
         return SampleRef(self.descriptor_ref, SampleStream.EE_STATE, self.side,
@@ -230,8 +185,8 @@ class EndEffectorTarget:
     pos: tuple[float, ...] | None = None
     vel: tuple[float, ...] | None = None
     vel_limit: tuple[float, ...] | None = None
-    tau_cmd: tuple[float, ...] | None = None
-    current_cmd: tuple[float, ...] | None = None
+    tau: tuple[float, ...] | None = None
+    current: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,7 +201,6 @@ class EndEffectorSubmission:
     input_observations: tuple[SampleRef, ...] = ()
     ts_client_created_us: int = 0
     ts_client_send_us: int = 0
-    sdk_time_valid_mask: int = 0
     protocol_version: int = EE_PROTOCOL_VERSION
 
 
@@ -266,6 +220,4 @@ class EndEffectorSetTouchResponse:
     side: int
     status: int
     reason: int
-    enabled: bool
-    enabled_valid: bool
     protocol_version: int = EE_PROTOCOL_VERSION

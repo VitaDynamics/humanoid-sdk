@@ -10,8 +10,8 @@ from ._body_codec import _dto, _getter, _text
 from .transport import AortaBindingsUnavailableError
 from .end_effector_types import (
     CommandKey, ControlMode, DescriptorRef, EE_PROTOCOL_VERSION, EndEffectorInfo,
-    EndEffectorState, EndEffectorTarget, EndEffectorTouch, FeedbackAppliedTarget,
-    Field, InhibitReason, LimitSource, PositionDomain, ProgressEntry, RegionStamp,
+    EndEffectorState, EndEffectorTarget, EndEffectorTouch,
+    Field, InhibitReason, PositionDomain, RegionStamp,
     TorqueDomain, TouchPayloadType, TouchRegionInfo, EndEffectorSetTouchResponse,
     ControlRef, EndEffectorSubmission, SampleRef, SampleStream,
 )
@@ -27,7 +27,7 @@ _LIMITS = (
 )
 _COMMAND_COLUMNS = (
     ('pos', Field.POS), ('vel', Field.VEL), ('vel_limit', Field.VEL_LIMIT),
-    ('tau_cmd', Field.TAU), ('current_cmd', Field.CURRENT),
+    ('tau', Field.TAU), ('current', Field.CURRENT),
 )
 _STATE_COLUMNS = (
     ('pos', Field.POS), ('vel', Field.VEL), ('tau', Field.TAU),
@@ -38,12 +38,10 @@ _INFO_VECTORS = (
     'position_domain', 'torque_domain', 'supported_modes', 'supported_command_fields',
     'supported_state_fields', 'valid_limits', 'pos_min', 'pos_max', 'vel_min',
     'vel_max', 'vel_limit_max', 'tau_min', 'tau_max', 'current_min', 'current_max',
-    'limit_source',
+    'is_mock',
 )
 _STATE_VECTORS = (
     'valid_fields', 'pos', 'vel', 'tau', 'current', 'temperature_c', 'error_code',
-    'is_mock', 'actual_output_key_valid', 'raw_pos', 'raw_vel', 'raw_current',
-    'raw_status', 'raw_valid_fields',
 )
 
 
@@ -116,21 +114,8 @@ def decode_info(view):
 
 
 def decode_state(view):
-    from lowlevel.ee.CommandKey import CommandKey as WireCommandKey
-
-    target = view.FeedbackAppliedTarget()
-    target = None if target is None else _dto(
-        target, FeedbackAppliedTarget, **{name: _vector(target, name) for name in ('pos', 'vel_limit', 'fields')})
-    progress = []
-    for i in range(view.ProgressLength()):
-        entry = view.Progress(i)
-        progress.append(_dto(entry, ProgressEntry, key=_key(entry.Key(WireCommandKey()))))
-    progress = tuple(progress)
     return _dto(view, EndEffectorState, descriptor_ref=_ref(view.DescriptorRef()),
-                received_key=_key(view.ReceivedKey()), host_target_key=_key(view.HostTargetKey()),
-                feedback_applied_key=_key(view.FeedbackAppliedKey()), feedback_applied_target=target,
-                actual_output_key=tuple(_key(view.ActualOutputKey(i)) for i in range(view.ActualOutputKeyLength())),
-                progress=progress, **{name: _vector(view, name) for name in _STATE_VECTORS})
+                **{name: _vector(view, name) for name in _STATE_VECTORS})
 
 
 def decode_touch(view):
@@ -180,7 +165,7 @@ def validate_info(info):
     if not n or any(not isinstance(v, str) or not v.strip() for v in info.axis_names) or len(set(info.axis_names)) != n:
         raise ValueError('axis_names must be nonempty and unique')
     for name, bits in (('device_model', 16), ('identity_valid_mask', 8),
-                       ('diagnostic_encoding', 16), ('time_valid_mask', 8),
+                       ('time_valid_mask', 8),
                        ('ts_descriptor_acquired_us', 64), ('ts_state_pub_us', 64)):
         _uint(getattr(info, name), bits, name)
     for name, bits in (('position_domain', 8), ('torque_domain', 8), ('supported_modes', 32),
@@ -194,10 +179,10 @@ def validate_info(info):
             raise ValueError('field is declared in the wrong capability set')
         if limits & ~_LIMIT_FIELDS or limits & ~(commands | states) or modes & 1:
             raise ValueError('invalid limits or reserved supported_modes bit')
-    _tuple(info.limit_source, n * 5, 'limit_source')
-    for value in info.limit_source:
-        _uint(value, 8, 'limit_source')
-    for ordinal, (bit, lower, upper) in enumerate(_LIMITS):
+    _tuple(info.is_mock, n, 'is_mock')
+    if any(type(value) is not bool for value in info.is_mock):
+        raise ValueError('invalid boolean vector: is_mock')
+    for bit, lower, upper in _LIMITS:
         supported = any((c | s) & bit for c, s in zip(info.supported_command_fields, info.supported_state_fields))
         for name in (lower, upper):
             if name is not None:
@@ -207,8 +192,7 @@ def validate_info(info):
                 maximum = getattr(info, upper)[i]
                 minimum = 0.0 if lower is None else getattr(info, lower)[i]
                 _finite(minimum, upper); _finite(maximum, upper)
-                if minimum > maximum or info.limit_source[5 * i + ordinal] not in (
-                        LimitSource.CONFIG, LimitSource.DEVICE_READBACK, LimitSource.PROTOCOL_DOCUMENT):
+                if minimum > maximum:
                     raise ValueError('invalid or unproven limit: ' + upper)
     if type(info.touch_available) is not bool or bool(info.touch_regions) != info.touch_available:
         raise ValueError('touch capability and fixed regions disagree')
@@ -261,15 +245,11 @@ def validate_state(info, state):
     _same_endpoint(info, state)
     n = len(info.axis_names)
     for name in ('state_id', 'ts_state_real_us', 'ts_state_pub_us', 'ts_acquired_hw_us',
-                 'ts_ingested_us', 'ts_assembled_us', 'last_valid_age_us', 'estimated_input_period_us',
-                 'reject_count', 'ingress_drop_count', 'timeout_count', 'crc_error_count'):
+                 'ts_ingested_us', 'ts_assembled_us'):
         _uint(getattr(state, name), 64, name)
-    for name, bits in (('time_valid_mask', 8), ('sample_status', 8), ('inhibit_reason', 8),
-                       ('status_valid_mask', 8), ('key_valid_mask', 8), ('last_reject_code', 16),
-                       ('diagnostic_valid_mask', 32)):
+    for name, bits in (('sample_status', 8), ('inhibit_reason', 8), ('status_valid_mask', 8)):
         _uint(getattr(state, name), bits, name)
-    for name in ('valid_fields', 'is_mock', 'actual_output_key', 'actual_output_key_valid', 'raw_valid_fields'):
-        _tuple(getattr(state, name), n, name)
+    _tuple(state.valid_fields, n, 'valid_fields')
     for i, mask in enumerate(state.valid_fields):
         _uint(mask, 32, 'valid_fields')
         if mask & ~info.supported_state_fields[i]:
@@ -282,53 +262,11 @@ def validate_state(info, state):
                 _uint(value, 32, name)
             elif state.valid_fields[i] & bit:
                 _finite(value, name)
-    for name in ('is_mock', 'actual_output_key_valid'):
-        if any(type(v) is not bool for v in getattr(state, name)):
-            raise ValueError('invalid boolean vector: ' + name)
-    for name in ('ready', 'output_allowed', 'touch_enabled', 'progress_complete'):
+    for name in ('ready', 'output_allowed', 'touch_enabled'):
         if type(getattr(state, name)) is not bool:
             raise ValueError('invalid boolean: ' + name)
     if state.status_valid_mask & 6 == 6 and state.output_allowed != (state.inhibit_reason == InhibitReason.NONE):
         raise ValueError('inconsistent output permission snapshot')
-    for key, bit in ((state.received_key, 1), (state.host_target_key, 2), (state.feedback_applied_key, 4)):
-        _validate_key(key, bool(state.key_valid_mask & bit))
-    for key, valid in zip(state.actual_output_key, state.actual_output_key_valid):
-        _validate_key(key, valid)
-    target = state.feedback_applied_target
-    if target is not None:
-        _tuple(target.fields, n, 'feedback_applied_target.fields')
-        for mask in target.fields:
-            _uint(mask, 32, 'feedback target fields')
-            if mask & ~(Field.POS | Field.VEL_LIMIT):
-                raise ValueError('unsupported feedback target field')
-        for name, bit in (('pos', Field.POS), ('vel_limit', Field.VEL_LIMIT)):
-            values = getattr(target, name)
-            if not isinstance(values, tuple) or len(values) not in (0, n) or any(m & bit for m in target.fields) and len(values) != n:
-                raise ValueError('feedback target fixed length differs')
-            for i, value in enumerate(values):
-                if target.fields[i] & bit:
-                    _finite(value, 'feedback target ' + name)
-    keys = set()
-    for entry in state.progress:
-        _validate_key(entry.key, True)
-        if entry.key in keys:
-            raise ValueError('duplicate key in progress')
-        keys.add(entry.key)
-        _uint(entry.stage_valid_mask, 8, 'stage_valid_mask')
-        for name in ('ts_received_us', 'ts_accepted_us', 'ts_first_output_us', 'ts_write_ack_us', 'ts_first_feedback_us'):
-            _uint(getattr(entry, name), 64, name)
-    for i, mask in enumerate(state.raw_valid_fields):
-        _uint(mask, 8, 'raw_valid_fields')
-        for ordinal, name in enumerate(('raw_pos', 'raw_vel', 'raw_current', 'raw_status')):
-            values = getattr(state, name)
-            if not isinstance(values, tuple) or len(values) not in (0, n) or mask & (1 << ordinal) and len(values) != n:
-                raise ValueError('raw column fixed length differs')
-    for name in ('raw_pos', 'raw_vel', 'raw_current', 'raw_status'):
-        for value in getattr(state, name):
-            if name == 'raw_status':
-                _uint(value, 32, name)
-            elif type(value) is not int or not -(1 << 31) <= value < 1 << 31:
-                raise ValueError('raw signed value outside int32')
 
 
 def validate_touch(info, touch):
@@ -462,7 +400,7 @@ def decode_cmd(view):
 
 def fill_command(bindings, command, builder, header):
     validate_observations(command.descriptor_ref, command.input_observations)
-    if command.sdk_time_valid_mask or command.ts_client_created_us or command.ts_client_send_us:
+    if command.ts_client_created_us or command.ts_client_send_us:
         raise ValueError('SDK time remains invalid/zero until a verified Vita mapping exists')
     module = bindings.EndEffectorCmd
     control_offset = _create_control_ref(bindings, builder, command.control_ref)
@@ -493,7 +431,6 @@ def fill_command(bindings, command, builder, header):
     module.EndEffectorCmdAddControlRef(builder, control_offset)
     module.EndEffectorCmdAddTsClientCreatedUs(builder, command.ts_client_created_us)
     module.EndEffectorCmdAddTsClientSendUs(builder, command.ts_client_send_us)
-    module.EndEffectorCmdAddSdkTimeValidMask(builder, command.sdk_time_valid_mask)
     for name, offset in vectors.items():
         getattr(module, 'EndEffectorCmdAdd' + _getter(name))(builder, offset)
     return module.EndEffectorCmdEnd(builder)
@@ -536,5 +473,3 @@ def validate_set_touch_response(request, response):
     if type(response.status) is not int or not -128 <= response.status < 128:
         raise ValueError('status must fit shared ServiceStatus int8')
     _uint(response.reason, 16, 'reason')
-    if type(response.enabled) is not bool or type(response.enabled_valid) is not bool:
-        raise ValueError('invalid set_touch enabled/validity')

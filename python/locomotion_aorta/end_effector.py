@@ -35,7 +35,7 @@ def _description(info):
 
 
 def _publication_time(kind, value):
-    valid = value.time_valid_mask & 2 if kind == 'state' else value.publish_time_valid
+    valid = bool(value.ts_state_pub_us) if kind == 'state' else value.publish_time_valid
     return value.ts_state_pub_us if valid and value.ts_state_pub_us else None
 
 
@@ -50,21 +50,16 @@ def _same_sample(kind, old, new):
                     or b.validity & 1 and not a.validity & 1):
                 raise ValueError('same Touch sample changed source or restored validity')
         return
-    source = ('ts_state_real_us', 'ts_acquired_hw_us', 'ts_ingested_us', 'is_mock')
-    if (any(getattr(old, name) != getattr(new, name) for name in source)
-            or old.time_valid_mask & 13 != new.time_valid_mask & 13
+    source = ('ts_state_real_us', 'ts_acquired_hw_us', 'ts_ingested_us')
+    if (any(getattr(new, name) not in (0, getattr(old, name)) for name in source)
             or old.sample_status != SampleStatus.OK and new.sample_status == SampleStatus.OK):
         raise ValueError('same State sample changed source or restored validity')
-    for masks, columns in (
-            ('valid_fields', codec._STATE_COLUMNS),
-            ('raw_valid_fields', (('raw_pos', 1), ('raw_vel', 2),
-                                  ('raw_current', 4), ('raw_status', 8)))):
-        for index, (a, b) in enumerate(zip(getattr(old, masks), getattr(new, masks))):
-            if b & ~a:
-                raise ValueError('same State sample restored measurement validity')
-            for name, bit in columns:
-                if b & bit and _token(getattr(old, name)[index]) != _token(getattr(new, name)[index]):
-                    raise ValueError('same State sample changed measurement')
+    for index, (a, b) in enumerate(zip(old.valid_fields, new.valid_fields)):
+        if b & ~a:
+            raise ValueError('same State sample restored measurement validity')
+        for name, bit in codec._STATE_COLUMNS:
+            if b & bit and _token(getattr(old, name)[index]) != _token(getattr(new, name)[index]):
+                raise ValueError('same State sample changed measurement')
 
 
 def _new_publication(kind, old, new):
@@ -93,8 +88,7 @@ class TouchSetError(RuntimeError):
 
     def __init__(self, response):
         self.response = response
-        super().__init__(f'set_touch not confirmed: status={response.status} reason={response.reason} '
-                         f'enabled={response.enabled} enabled_valid={response.enabled_valid}')
+        super().__init__(f'set_touch not confirmed: status={response.status} reason={response.reason}')
 
 
 class EndEffectorClient:
@@ -133,7 +127,6 @@ class EndEffectorClient:
         self._registering = set()
         self._publisher = None
         self._service_clients = set()
-        self._raw_shape = None
         self._position = self._fault = self._position_received_at = None
         try:
             self.connection._register_end_effector_client(self)
@@ -159,7 +152,6 @@ class EndEffectorClient:
         self._fatal = error
         self._latest['state'] = self._latest['touch'] = None
         self._errors['state'] = self._errors['touch'] = None
-        self._raw_shape = None
         self._position = self._fault = self._position_received_at = None
         handles = list(self._service_clients)
         self._service_clients.clear()
@@ -263,10 +255,6 @@ class EndEffectorClient:
                     if previous is not None and not _new_publication(kind, previous, value):
                         return
                     if kind == 'state':
-                        shape = tuple(len(getattr(value, n)) for n in ('raw_pos', 'raw_vel', 'raw_current', 'raw_status'))
-                        if self._raw_shape is not None and shape != self._raw_shape:
-                            raise ValueError('raw columns resized within a DescriptorRef')
-                        self._raw_shape = shape
                         if self._position is not None and value.state_id == self._position.state_id:
                             self._position = value  # Includes same-sample validity revocation.
                         elif value.state_id and all(mask & Field.POS for mask in value.valid_fields):
@@ -513,8 +501,7 @@ class EndEffectorClient:
             reply = codec.decode_set_touch(rpc.call(fill).decode())
             self._check_touch_context(info, context)
             codec.validate_set_touch_response(request, reply)
-            if (reply.status != ServiceStatus.SUCCESS or reply.reason != TouchSetReason.NONE
-                    or not reply.enabled_valid or reply.enabled != enable):
+            if reply.status != ServiceStatus.SUCCESS or reply.reason != TouchSetReason.NONE:
                 raise TouchSetError(reply)
             return reply
         finally:

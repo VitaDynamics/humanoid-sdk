@@ -312,7 +312,7 @@ def position_target(info, positions, *, unit, vel_limit=None, torque=None):
               (Field.TAU if torque is not None else 0),) * n
     return codec.prepare_target(info, EndEffectorTarget(modes, fields, pos=tuple(positions),
         vel_limit=None if vel_limit is None else tuple(vel_limit),
-        tau_cmd=None if torque is None else tuple(torque)))
+        tau=None if torque is None else tuple(torque)))
 
 
 def print_feedback(client, emit=print):
@@ -324,20 +324,7 @@ def print_feedback(client, emit=print):
          f'pos={state.pos} vel={state.vel} tau={state.tau} current_A={state.current} '
          f'valid={state.valid_fields} status_valid={state.status_valid_mask} '
          f'output={state.output_allowed} inhibit={state.inhibit_reason} '
-         f'received={state.received_key} host_target={state.host_target_key} key_valid={state.key_valid_mask} '
-         f'actual_output={state.actual_output_key} actual_valid={state.actual_output_key_valid} '
-         f'feedback_applied={state.feedback_applied_key} feedback_target={state.feedback_applied_target} '
-         f'progress_complete={state.progress_complete} diagnostic_valid={state.diagnostic_valid_mask} '
-         f'reject={state.reject_count}/{state.last_reject_code} drop={state.ingress_drop_count} '
-         f'timeout={state.timeout_count} crc={state.crc_error_count} raw_pos={state.raw_pos} '
-         f'raw_current={state.raw_current} raw_status={state.raw_status} raw_valid={state.raw_valid_fields}')
-    for entry in state.progress:
-        stamps = (entry.ts_received_us, entry.ts_accepted_us, entry.ts_first_output_us,
-                  entry.ts_write_ack_us, entry.ts_first_feedback_us)
-        deltas = tuple(b-a if entry.stage_valid_mask & (3 << i) == (3 << i) and a <= b
-                       else 'NOT_MEASURED' for i, (a, b) in enumerate(zip(stamps, stamps[1:])))
-        emit(f'{client.side}: key={entry.key} stages_us={stamps} stage_valid={entry.stage_valid_mask} '
-             f'adjacent_deltas_us={deltas}; no SDK clock subtraction or physical-arrival inference')
+         f'error_code={state.error_code} sample_status={state.sample_status}')
 
 
 def observe(clients, *, timeout, emit=print):
@@ -363,7 +350,7 @@ def set_touch_and_observe(client, enabled, timeout, *, monotonic=time.monotonic,
     if before_state is None:
         raise ValueError('touch change requires an actual State snapshot')
     deadline = monotonic() + timeout
-    if not before_state.time_valid_mask & 2 or not before_state.ts_state_pub_us:
+    if not before_state.ts_state_pub_us:
         raise ValueError('touch confirmation requires a valid State publication time')
     client.set_touch(enabled, timeout=timeout)
     while True:
@@ -375,7 +362,7 @@ def set_touch_and_observe(client, enabled, timeout, *, monotonic=time.monotonic,
             raise ValueError('State disappeared while confirming touch switch')
         if state.descriptor_ref != before_state.descriptor_ref:
             raise ValueError('descriptor changed while confirming touch switch')
-        if (state.time_valid_mask & 2 and state.ts_state_pub_us > before_state.ts_state_pub_us
+        if (state.ts_state_pub_us > before_state.ts_state_pub_us
                 and state.status_valid_mask & 8 and state.touch_enabled == enabled):
             break
         sleep(min(.01, remaining))
@@ -400,41 +387,16 @@ class _EndpointGuard:
         self.client, self.info = client, info
         self.timeout, self.monotonic = timeout, monotonic
         self.latest = client.motion_feedback()[0]
-        self.rejects = (self.latest.reject_count if self.latest is not None and
-                        self.latest.diagnostic_valid_mask & 4 else None)
-        self.submitted = None
-        self.echoed = None
-        self.progress_time = monotonic()
 
     def feedback(self, moving):
         state, position = motion_feedback(self.client, self.info, moving, self.monotonic)
         if state is None or position is None:
             raise ValueError('end-effector measured position is unavailable')
         self.latest = state
-        now = self.monotonic()
-        if state.diagnostic_valid_mask & 4:
-            if self.rejects is not None and state.reject_count != self.rejects:
-                raise RuntimeError('end-effector reject_count changed')
-            self.rejects = state.reject_count
-        if self.submitted is not None:
-            accepted = state.host_target_key if state.key_valid_mask & 2 else None
-            if accepted is not None and accepted.session_id == self.submitted.key.session_id:
-                if accepted.sequence > self.submitted.key.sequence:
-                    raise RuntimeError('end-effector echoed an unsent sequence')
-                if self.echoed is None or accepted.sequence > self.echoed:
-                    self.echoed, self.progress_time = accepted.sequence, now
-            if not self.admitted(state) and now - self.progress_time >= self.timeout:
-                raise TimeoutError('end-effector input admission did not advance')
         return position
 
-    def admitted(self, state):
-        return self.submitted is None or (state.key_valid_mask & 2 and state.host_target_key == self.submitted.key)
-
     def publish(self, target, state):
-        if self.submitted is None:
-            self.progress_time = self.monotonic()
-        self.submitted = self.client.publish(target, input_observations=(state.sample_ref,))
-        return self.submitted
+        return self.client.publish(target, input_observations=(state.sample_ref,))
 
 
 def _transition_duration(start, target, rate, minimum=0.0):
@@ -622,16 +584,6 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
                 if len(final_sent) != len(guards) or monotonic() < deadline:
                     sleep(max(0.0, min([frame.next_deadline(), *next_due.values(),
                         *([deadline] if now < deadline else [])])-monotonic()))
-            final_deadline = monotonic()+timeout
-            while True:
-                frame(wait=False)
-                for guard in guards.values():
-                    guard.feedback(True)
-                if all(g.admitted(g.latest) for g in guards.values()):
-                    break
-                if monotonic() >= final_deadline:
-                    raise TimeoutError('final end-effector input admission was not observed')
-                sleep(max(0.0, min(frame.next_deadline(), final_deadline)-monotonic()))
     touch_worker = ThreadPoolExecutor(max_workers=1) if touch != 'keep' else None
     try:
         run_external(controller, command_loop, body=body, timeout=timeout, body_enabled=body_enabled,
