@@ -7,6 +7,7 @@ from dataclasses import replace
 import importlib.util
 import math
 import signal
+import struct
 from pathlib import Path
 import time
 
@@ -408,8 +409,31 @@ def _transition_duration(start, target, rate, minimum=0.0):
     return max(minimum, delta/rate)
 
 
+def _float32(value):
+    return struct.unpack('<f', struct.pack('<f', value))[0]
+
+
+def _agx_source_step(previous, desired, rate, elapsed, native_hz):
+    """Limit one source step; this does not establish native admission."""
+    if elapsed < 0:
+        raise RuntimeError('source monotonic clock moved backwards')
+    desired = _float32(desired)
+    budget = rate * min(elapsed, 1.0 / native_hz)
+    bounded = max(previous - budget, min(previous + budget, desired))
+    value = _float32(bounded)
+    # The AGX opening is nonnegative. If float32 rounding crosses the budget,
+    # choose the adjacent representable float towards the previous value.
+    if abs(value - previous) > budget:
+        bits = struct.unpack('<I', struct.pack('<f', value))[0]
+        bits += -1 if value > previous else 1
+        value = struct.unpack('<f', struct.pack('<I', bits))[0]
+    if abs(value - previous) > budget:
+        raise RuntimeError('AGX float32 source step exceeds native budget')
+    return value
+
+
 def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
-        rates=None, body_enabled=True, body_gains='hold', body_pose='measured',
+        rates=None, native_hz=None, native_config=None, body_enabled=True, body_gains='hold', body_pose='measured',
         return_to_start=False, touch='keep', feedback_interval=1.0,
         pattern='target', period=10.0, sine_min=.01, sine_max=.08,
         low_frac=.25, high_frac=.75, loop=False,
@@ -443,11 +467,20 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
     if set(rates) != set(targets) or any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0 for v in rates.values()):
         raise ValueError('one finite positive command rate per endpoint required')
     infos, prepared, returns, limits = {}, {}, {}, {}
+    native_hz = {} if native_hz is None else native_hz
     for client in clients:
         info = client.wait_info(timeout)
         codec.validate_info(info)
         if info.device_model not in (DeviceModel.AGX, DeviceModel.LINKER_L6, DeviceModel.BRAINCO_REVO2):
             raise ValueError('this demo requires actual AGX/Linker/BrainCo capability; OP3 is not enabled')
+        if info.device_model == DeviceModel.AGX:
+            frequency = native_hz.get(client.side)
+            if (type(frequency) is not int or not 0 < frequency < 1 << 32
+                    or not isinstance(native_config, str) or not native_config.strip()):
+                raise ValueError('AGX motion requires its explicit native frequency and deployed config reference')
+            if not all(mask & Field.VEL_LIMIT for mask in info.valid_limits):
+                raise ValueError('AGX source trajectory requires a proven velocity limit')
+            emit(f'{client.side}: native_hz={frequency} config={native_config}; operator supplied, not auto-verified')
         state = wait_position(client, info, timeout, sleep=sleep, monotonic=monotonic)
         if client.observation_sources != ((SampleStream.EE_STATE, info.side),):
             raise ValueError('demo requires its actual endpoint State as fixed K=1 input')
@@ -472,7 +505,7 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
         # or evidence of physical arrival. Explicit zero intent remains zero.
         speed = tuple(v if v > 0 else maximum for v,maximum in
                       zip(prepared[client.side].vel_limit or (0.0,)*len(info.axis_names), info.vel_limit_max))
-        if pattern != 'target' and (len(speed) != len(info.axis_names) or any(v <= 0 for v in speed)):
+        if (pattern != 'target' or info.device_model == DeviceModel.AGX) and (len(speed) != len(info.axis_names) or any(v <= 0 for v in speed)):
             raise ValueError('a proven positive speed limit is required for a trajectory')
         limits[client.side] = (lows, highs, speed)
         emit(f'{client.side}: trajectory slope limits={speed}; configured zero-speed default is not measured')
@@ -507,7 +540,29 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
                 emit(f'{client.side}: touch_state={state.sample_ref} touch_sample={None if sample is None else sample.sample_ref}')
         # Preparation and RPC may outlive the preflight measurement. Keep the
         # saved return target, but enter interpolation from current guarded data.
-        positions = {side: guard.feedback(True).pos for side, guard in guards.items()}
+        initial_state = {side: guard.feedback(True) for side, guard in guards.items()}
+        initial_position = {side: state.pos for side, state in initial_state.items()}
+        positions = dict(initial_position)
+        cursor = {side: _float32(state.pos[0]) for side, state in initial_state.items()
+                  if infos[side].device_model == DeviceModel.AGX}
+        last_now = monotonic()
+        cursor_time = {side: last_now for side in cursor}
+        requested_motion = {side: [0.0, 0.0] for side in cursor}
+        observed_motion = {side: [0.0, 0.0] for side in cursor}
+        motion_start_id = {side: None for side in cursor}
+
+        def check_motion(states):
+            for side in cursor:
+                state = states[side]
+                if motion_start_id[side] is not None and state.state_id > motion_start_id[side]:
+                    delta = state.pos[0] - initial_position[side][0]
+                    observed_motion[side][0] = max(observed_motion[side][0], delta)
+                    observed_motion[side][1] = max(observed_motion[side][1], -delta)
+
+        def motion_unobserved(side):
+            return (any(requested_motion[side]) and not any(
+                requested > 0 and observed >= min(1e-6, requested / 2)
+                for requested, observed in zip(requested_motion[side], observed_motion[side])))
 
         def transition(end, minimum=0.0):
             start = dict(positions)
@@ -563,18 +618,41 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
         next_due = {side: monotonic() for side in guards}
         for leg, target_at, seconds in phases():
             began = monotonic()
+            if began < last_now:
+                raise RuntimeError('source monotonic clock moved backwards')
             deadline, next_print = began+seconds, began
+            hard_deadline = deadline + timeout
             final_sent = set()
             while len(final_sent) != len(guards) or monotonic() < deadline:
                 frame(wait=False)
-                states = {side: g.feedback(True) for side, g in guards.items()}
                 now = monotonic()
+                if now < last_now:
+                    raise RuntimeError('source monotonic clock moved backwards')
+                last_now = now
+                states = {side: g.feedback(True) for side, g in guards.items()}
+                check_motion(states)
+                if now >= hard_deadline:
+                    raise TimeoutError('final source point not submitted within the observation budget')
                 selected = target_at(min(seconds, now-began))
                 for side, guard in guards.items():
                     if now >= next_due[side]:
-                        command = guard.publish(selected[side], states[side])
+                        target = selected[side]
+                        if side in cursor:
+                            desired = _float32(target.pos[0])
+                            value = _agx_source_step(cursor[side], desired, limits[side][2][0],
+                                                     now - cursor_time[side], native_hz[side])
+                            target = codec.prepare_target(infos[side], replace(target, pos=(value,)))
+                        command = guard.publish(target, states[side])
+                        if side in cursor:
+                            cursor[side], cursor_time[side] = target.pos[0], now
+                            delta = target.pos[0] - initial_position[side][0]
+                            if delta:
+                                if motion_start_id[side] is None:
+                                    motion_start_id[side] = states[side].state_id
+                                requested_motion[side][0] = max(requested_motion[side][0], delta)
+                                requested_motion[side][1] = max(requested_motion[side][1], -delta)
                         emit(f'EE leg={leg} side={side} submitted={command.key} observations={command.input_observations}; admission/arrival not inferred')
-                        if now >= deadline:
+                        if now >= deadline and (side not in cursor or cursor[side] == _float32(selected[side].pos[0])):
                             final_sent.add(side)
                         next_due[side] = monotonic() + 1.0/rates[side]  # Never catch-up burst.
                 if now >= next_print:
@@ -582,8 +660,25 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
                         print_feedback(client, emit)
                     next_print = now+feedback_interval
                 if len(final_sent) != len(guards) or monotonic() < deadline:
-                    sleep(max(0.0, min([frame.next_deadline(), *next_due.values(),
+                    sleep(max(0.0, min([frame.next_deadline(), hard_deadline, *next_due.values(),
                         *([deadline] if now < deadline else [])])-monotonic()))
+        observation_deadline = monotonic() + timeout
+        while any(motion_unobserved(s) for s in cursor):
+            frame(wait=False)
+            now = monotonic()
+            if now < last_now:
+                raise RuntimeError('source monotonic clock moved backwards')
+            last_now = now
+            states = {side: g.feedback(True) for side, g in guards.items()}
+            check_motion(states)
+            if all(not motion_unobserved(s) for s in cursor):
+                break
+            if now >= observation_deadline:
+                raise TimeoutError('AGX movement not observed; local submissions are unconfirmed')
+            sleep(max(0.0, min(frame.next_deadline(), observation_deadline)-now))
+        for side in cursor:
+            if any(requested_motion[side]):
+                emit(f'{side}: fresh feedback observed movement; command admission/output/arrival remain unconfirmed')
     touch_worker = ThreadPoolExecutor(max_workers=1) if touch != 'keep' else None
     try:
         run_external(controller, command_loop, body=body, timeout=timeout, body_enabled=body_enabled,
@@ -640,12 +735,14 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     parser.add_argument('--touch', choices=('keep', 'on', 'off'), default='keep')
     parser.add_argument('--dry-run', action='store_true', help='read-only; no lease, target or touch switch')
     parser.add_argument('--confirm-motion', action='store_true', help='requires separate current on-site authorization')
+    parser.add_argument('--native-config', help='reference to deployed effective arm-group configuration, including overrides')
     for side in ('left', 'right'):
         parser.add_argument('--'+side+'-pos', type=float, nargs='+', help='all axes in declared fixed Info order')
         parser.add_argument('--'+side+'-unit', choices=('m', 'rad'))
         parser.add_argument('--'+side+'-vel-limit', type=float, nargs='+', help='nonnegative magnitude in m/s or rad/s; zero retains robot default')
         parser.add_argument('--'+side+'-torque-nm', type=float, nargs='+', help='declared torque domain; omit means no intent, explicit zero remains zero')
         parser.add_argument('--'+side+'-hz', type=float, default=50.0)
+        parser.add_argument('--'+side+'-native-hz', type=int, help='AGX arm-group native send_frequency from the effective configuration')
     args = parser.parse_args(argv)
     if _expected_device_model is not None and args.side == 'none':
         parser.error('vendor example requires a selected endpoint')
@@ -711,7 +808,9 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
                 torque=getattr(args, client.side+'_torque_nm'))
         try:
             run(connection, clients, targets, timeout=args.timeout, duration=args.duration,
-                rates={side: getattr(args, side+'_hz') for side in sides}, body_enabled=not args.ee_only,
+                rates={side: getattr(args, side+'_hz') for side in sides},
+                native_hz={side: getattr(args, side+'_native_hz') for side in sides}, native_config=args.native_config,
+                body_enabled=not args.ee_only,
                 body_gains=args.body_gains, body_pose=args.body_pose, return_to_start=args.return_to_start,
                 touch=args.touch, feedback_interval=args.feedback_interval,
                 pattern=args.pattern, period=args.period_s, sine_min=args.sine_min_m, sine_max=args.sine_max_m,

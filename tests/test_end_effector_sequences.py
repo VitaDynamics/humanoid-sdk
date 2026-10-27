@@ -187,6 +187,7 @@ class EndEffectorSequenceTest(unittest.TestCase):
                     self.assertLess(clock.monotonic(), 30., 'bounded synthetic scenario did not finish')
                 options = dict(timeout=1, duration=.2, sleep=sleep, monotonic=clock.monotonic,
                     emit=lambda _: None, body_pose='zero' if zero else 'measured',
+                    native_hz={e.side:250 for e in endpoints}, native_config='synthetic-test-effective-config',
                     return_to_start=back, pattern='sine' if sine else 'target',
                     period=1., sine_min=.015625, sine_max=.078125)
                 targets = {e.side: demo.position_target(e.info, (.09375,), unit='m', torque=(0.,))

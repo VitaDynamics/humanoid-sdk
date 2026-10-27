@@ -11,6 +11,13 @@ lease, command publisher or touch switch. `--side none` reads/controls Body only
 explicit `--left-hz`/`--right-hz`; missed deadlines are not replayed. A combined
 Body/EE call is not an atomic frame.
 
+AGX motion additionally requires each selected side's `--left-native-hz` or
+`--right-native-hz`, taken from that arm group's effective deployed
+`send_frequency` after overrides, and `--native-config` naming that effective
+configuration. These are operator-supplied inputs, not automatic verification
+of the robot. They are distinct from the PC publish rate; no hardware period is
+assumed. Read-only use and the BrainCo/Linker paths do not require them.
+
 Motion requires `--confirm-motion` plus separate current on-site authorization.
 Use full-axis targets in actual Info order with `--left-pos`/`--right-pos` and
 explicit `--left-unit`/`--right-unit` (`m` total opening or `rad` joint angle).
@@ -44,11 +51,23 @@ interpolation for trajectory patterns starts from a current valid same-descripto
 touch waits; the saved pre-entry measurement remains the separate return target.
 Body and each endpoint retain their absolute send deadlines across all phases;
 the loop wakes at the earliest deadline without replaying missed sends. Trajectory entry
-and return use declared command slope limits; target mode has no entry ramp. The
-AGX source-step movement contract remains unresolved and is not HIL-ready.
+and return use declared command slope limits. For AGX, target, sine and return
+are explicit source steps bounded by the effective command rate and the smaller
+of the actual source interval and one native period. A late wakeup never banks
+extra distance or replays missed sends. Float32 rounding is kept within that
+budget. A finite timeout ends the example if the final source point cannot be
+submitted; this is not a guarantee that native accepted any particular point.
 Each command references the actual
 endpoint State used for its safety checks (fixed K=1). Diagnostic timestamps are not permission gates and
 are not subtracted from the SDK clock.
+
+For a requested nonzero AGX movement the example also waits a bounded time for
+fresh feedback showing some movement. Its observation threshold is at most one
+micrometre, the AGX wire opening representation; this does not claim device
+accuracy or provide per-command admission, output or arrival confirmation. A
+silent loss, busy path or stalled device may therefore end as unconfirmed
+failure. Stop, fault, permission loss and the original CANCEL still take
+precedence over producing the final point.
 
 `--touch on/off` makes one existing typed RPC under the shared owner. The main
 thread continues the original Body watchdog while one service-only worker
@@ -174,7 +193,9 @@ python examples/end_effector/brainco_revo2.py --group "${GROUP:?}" --side right 
 # AGX: one explicitly selected total opening, never per-finger mm or force.
 python examples/end_effector/agx_gripper.py --group "${GROUP:?}" --side right --ee-only \
   --pattern target --right-unit m --right-pos "${OPENING_M:?}" \
-  --right-vel-limit "${OPENING_RATE_M_S:?}" --duration "${STREAM_S:?}" --confirm-motion
+  --right-vel-limit "${OPENING_RATE_M_S:?}" --duration "${STREAM_S:?}" \
+  --right-native-hz "${DEPLOYED_RIGHT_ARM_SEND_HZ:?}" \
+  --native-config "${EFFECTIVE_ARM_CONFIG_REFERENCE:?}" --confirm-motion
 
 # L6: six explicit rad values in actual Info order. No inferred velocity.
 python examples/end_effector/linker_l6.py --group "${GROUP:?}" --side right --ee-only \

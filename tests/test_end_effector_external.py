@@ -26,7 +26,7 @@ from test_examples import FakeClock, RecordingController
 class Endpoint:
     """Deterministic sensor seam, not another permission authority."""
     def __init__(self, connection, side='right', *, hand=False,
-                 stale=False, inhibited=False, touch=False):
+                 stale=False, inhibited=False, touch=False, feedback_moves=True):
         self.connection, self.side = connection, side
         wire_side = 1 if side == 'left' else 2
         n = 6 if hand else 1
@@ -41,6 +41,7 @@ class Endpoint:
         self.observation_sources = ((SampleStream.EE_STATE, wire_side),)
         self.commands, self.times, self.observations = [], [], []
         self.stale, self.inhibited = stale, inhibited
+        self.feedback_moves = feedback_moves
         self.after_publish = None
         self._position_received_at = connection.clock.monotonic()
 
@@ -79,6 +80,9 @@ class Endpoint:
         self.commands.append(submission)
         self.times.append(self.connection.clock.monotonic())
         self.observations.append(input_observations)
+        if self.feedback_moves:
+            # Synthetic measurement, not a claim about admission or device ACK.
+            self._state = replace(self._state, pos=prepared.pos)
         if self.after_publish:
             self.after_publish(submission)
         return submission
@@ -99,6 +103,9 @@ class EndEffectorExampleTest(unittest.TestCase):
             unit='rad' if len(endpoint.info.axis_names) == 6 else 'm', **kwargs)
 
     def run_case(self, controller, clients, *, targets=None, **options):
+        options.setdefault('native_hz', {c.side: 250 for c in clients
+                                         if c.info.device_model == DeviceModel.AGX})
+        options.setdefault('native_config', 'synthetic-test-effective-config')
         return demo.run(controller, clients,
             targets=targets or {c.side: self.target(c) for c in clients},
             timeout=options.pop('timeout', .3), duration=options.pop('duration', .08),
@@ -118,10 +125,12 @@ class EndEffectorExampleTest(unittest.TestCase):
         keys = [CommandKey(cmd.session_id,cmd.sequence) for cmd in body_commands]
         for client in clients:
             self.assertTrue(client.commands)
+            self.assertEqual(client.commands[-1].target.pos, (.0625,))
             keys.extend(cmd.key for cmd in client.commands)
             for cmd in client.commands:
                 self.assertEqual(cmd.control_ref, ControlRef('example-client', 'lease-example'))
-                self.assertEqual(cmd.target.pos, (.0625,))
+                self.assertGreaterEqual(cmd.target.pos[0], .03125)
+                self.assertLessEqual(cmd.target.pos[0], .0625)
                 self.assertEqual(cmd.target.vel_limit, (0.,))
                 self.assertFalse(cmd.target.command_fields[0] & Field.TAU)
                 self.assertEqual(cmd.input_observations[0].descriptor_ref, client.info.descriptor_ref)
@@ -153,10 +162,15 @@ class EndEffectorExampleTest(unittest.TestCase):
     def test_mixed_rates_do_not_couple_endpoints_or_speed_up_body(self):
         c = self.controller()
         clients = [Endpoint(c,side) for side in ('left','right')]
-        self.run_case(c,clients,duration=.4,rates={'left':20.,'right':100.})
+        self.run_case(c,clients,duration=.4,rates={'left':20.,'right':100.},
+                      native_hz={'left':200,'right':125})
         self.assertGreater(len(clients[1].commands),len(clients[0].commands)*3)
         for times,period in ((c.command_times,.02),(clients[0].times,.05),(clients[1].times,.01)):
             self.assertTrue(all(b-a >= period-1e-10 for a,b in zip(times,times[1:])))
+        for endpoint, frequency in zip(clients, (200, 125)):
+            for first, second, a, b in zip(endpoint.commands, endpoint.commands[1:], endpoint.times, endpoint.times[1:]):
+                self.assertLessEqual(abs(second.target.pos[0]-first.target.pos[0]), min(b-a, 1/frequency))
+            self.assertEqual(endpoint.commands[-1].target.pos, (.0625,))
         self.assertEqual(c.calls.count('enter_external'),1)
 
     def test_slow_host_never_replays_missed_deadlines(self):
@@ -165,7 +179,74 @@ class EndEffectorExampleTest(unittest.TestCase):
         c = self.controller(); e=Endpoint(c)
         self.run_case(c,[e],duration=.2,rates={'right':100.})
         self.assertTrue(all(b-a >= .031 for a,b in zip(e.times,e.times[1:])))
+        for first, second, a, b in zip(e.commands,e.commands[1:],e.times,e.times[1:]):
+            self.assertLessEqual(abs(second.target.pos[0]-first.target.pos[0]), min(b-a, 1/250))
         self.assertEqual(c.calls.count('exit_external'),1)
+
+    def test_agx_missing_native_config_fails_before_owner_but_other_vendor_is_not_gated(self):
+        c = self.controller(); e = Endpoint(c)
+        for frequencies, config in (({}, 'deployment'), ({'right': 250}, None),
+                                    ({'right': 0}, 'deployment'), ({'right': True}, 'deployment')):
+            with self.subTest(frequencies=frequencies, config=config), self.assertRaisesRegex(ValueError, 'native frequency'):
+                self.run_case(c, [e], native_hz=frequencies, native_config=config)
+            self.assertNotIn('enter_external', c.calls)
+        c2 = self.controller(); hand = Endpoint(c2, hand=True)
+        self.run_case(c2, [hand], native_hz={}, native_config=None)
+        self.assertEqual(c2.calls.count('exit_external'), 1)
+
+    def test_agx_unproven_velocity_limit_fails_before_owner(self):
+        c = self.controller(); e = Endpoint(c)
+        target = self.target(e)
+        e.info = replace(e.info, valid_limits=(Field.POS | Field.TAU,))
+        with self.assertRaisesRegex(ValueError, 'proven velocity limit'):
+            self.run_case(c, [e], targets={'right': target})
+        self.assertNotIn('enter_external', c.calls)
+
+    def test_agx_local_submission_without_observed_motion_fails_and_cancels(self):
+        for scenario in ('loss', 'busy'):
+            with self.subTest(scenario=scenario):
+                c = self.controller(); e = Endpoint(c, feedback_moves=False)
+                with self.assertRaisesRegex(TimeoutError, 'movement not observed'):
+                    self.run_case(c, [e], body_enabled=False)
+                self.assertGreater(len(e.commands), 1)
+                self.assertEqual(e.commands[-1].target.pos, (.0625,))
+                self.assertEqual(c.calls.count('exit_external'), 1)
+                self.assertFalse(any('fresh feedback observed movement' in line for line in self.events))
+
+    def test_agx_feedback_only_in_opposite_direction_is_not_requested_motion(self):
+        c = self.controller(); e = Endpoint(c, feedback_moves=False)
+        e.after_publish = lambda _: setattr(e, '_state', replace(e._state, pos=(.02,)))
+        with self.assertRaisesRegex(TimeoutError, 'movement not observed'):
+            self.run_case(c, [e], body_enabled=False)
+        self.assertEqual(c.calls.count('exit_external'), 1)
+        self.assertFalse(any('fresh feedback observed movement' in line for line in self.events))
+
+    def test_agx_short_source_interval_is_not_expanded_to_native_period(self):
+        c = self.controller(); e = Endpoint(c)
+        self.run_case(c, [e], body_enabled=False, duration=.08,
+                      rates={'right':500.}, native_hz={'right':100})
+        for first, second, a, b in zip(e.commands,e.commands[1:],e.times,e.times[1:]):
+            self.assertLessEqual(abs(second.target.pos[0]-first.target.pos[0]), min(b-a, 1/100))
+        self.assertEqual(e.commands[-1].target.pos, (.0625,))
+        self.assertTrue(any('fresh feedback observed movement' in line and 'unconfirmed' in line
+                            for line in self.events))
+
+    def test_agx_source_clock_rollback_stops_before_next_target(self):
+        c = self.controller(); e = Endpoint(c)
+        e.after_publish = lambda _: setattr(self.clock, 'now', self.clock.now - .1)
+        with self.assertRaisesRegex(RuntimeError, 'clock moved backwards'):
+            self.run_case(c, [e], body_enabled=False)
+        self.assertEqual(len(e.commands), 1)
+        self.assertEqual(c.calls.count('exit_external'), 1)
+
+    def test_agx_unfinished_final_point_is_failure_not_success(self):
+        c = self.controller(); e = Endpoint(c)
+        with self.assertRaisesRegex(TimeoutError, 'final source point'):
+            self.run_case(c, [e], body_enabled=False, duration=.01, timeout=.03,
+                          rates={'right':50.}, native_hz={'right':1000})
+        self.assertTrue(e.commands)
+        self.assertNotEqual(e.commands[-1].target.pos, (.0625,))
+        self.assertEqual(c.calls.count('exit_external'), 1)
 
     def test_trajectory_entry_uses_post_prepare_state_and_keeps_original_return_target(self):
         for during in ('entry', 'touch'):
@@ -198,7 +279,7 @@ class EndEffectorExampleTest(unittest.TestCase):
                     self.assertNotEqual(e.commands[0].target.pos, saved[e.side])
                     self.assertEqual(e.commands[-1].target.pos, saved[e.side])
                     for a, b, t0, t1 in zip(e.commands, e.commands[1:], e.times, e.times[1:]):
-                        self.assertLessEqual(abs(b.target.pos[0]-a.target.pos[0]), (t1-t0)+1e-9)
+                        self.assertLessEqual(abs(b.target.pos[0]-a.target.pos[0]), min(t1-t0, 1/250)+1e-9)
                 self.assertEqual(c.calls.count('exit_external'), 1)
 
     def test_nondividing_body_and_endpoint_deadlines_keep_each_cadence(self):
@@ -216,7 +297,7 @@ class EndEffectorExampleTest(unittest.TestCase):
     def test_slow_endpoint_deadline_survives_target_to_return_phase(self):
         c = self.controller(); e = Endpoint(c)
         saved = e._state.pos
-        self.run_case(c, [e], duration=1., rates={'right': 1.}, return_to_start=True)
+        self.run_case(c, [e], duration=1., rates={'right': 1.}, native_hz={'right': 2}, return_to_start=True)
         returning = [i for i, command in enumerate(e.commands) if command.target.pos == saved]
         self.assertTrue(returning)
         self.assertGreater(returning[0], 0)
@@ -296,7 +377,7 @@ class EndEffectorExampleTest(unittest.TestCase):
         e.after_publish=interrupt
         with self.assertRaises(KeyboardInterrupt): self.run_case(c,[e],return_to_start=True)
         self.assertEqual(len(e.commands),1)
-        self.assertEqual(e.commands[0].target.pos,(.0625,))
+        self.assertEqual(e.commands[0].target.pos,(.03125,))
         self.assertEqual(c.calls.count('exit_external'),1)
 
     def test_unconfirmed_cancel_never_reports_passive_success(self):
@@ -475,7 +556,9 @@ class EndEffectorExampleTest(unittest.TestCase):
              patch.object(controller,'enter_external',wraps=enter) as entered, \
              patch.object(controller,'exit_external',wraps=exit_) as cancelled:
             demo.run(controller,clients,{c.side:demo.position_target(c.info,(.03125,),unit='m') for c in clients},
-                duration=.08,timeout=.3,sleep=self.clock.sleep,monotonic=self.clock.monotonic,emit=self.events.append)
+                duration=.08,timeout=.3,native_hz={'left':250,'right':250},
+                native_config='synthetic-test-effective-config',sleep=self.clock.sleep,
+                monotonic=self.clock.monotonic,emit=self.events.append)
         entered.assert_called_once(); cancelled.assert_called_once()
         keys=[(value.session_id,value.sequence) for topic,value in recorded.transport.published if topic==BODY_CMD_TOPIC]
         for topic,wire in node.commands:
@@ -791,6 +874,10 @@ class VendorExamplesTest(unittest.TestCase):
         for selected in sides:
             flags += ['--' + selected + '-unit', 'm' if model == DeviceModel.AGX else 'rad',
                       '--' + selected + '-pos'] + ['.0625'] * (1 if model == DeviceModel.AGX else 6)
+            if model == DeviceModel.AGX:
+                flags += ['--' + selected + '-native-hz', '250']
+        if model == DeviceModel.AGX:
+            flags += ['--native-config', 'synthetic-test-effective-config']
         return flags
 
     def invoke(self, expected, flags, *, models=None, mutate=None):
@@ -901,7 +988,7 @@ class VendorExamplesTest(unittest.TestCase):
                 model = DeviceModel.LINKER_L6 if fault.startswith('l6') else DeviceModel.AGX
                 flags = self.motion_flags(model)
                 if fault == 'outside':
-                    flags[-1] = '.25'
+                    flags[flags.index('--right-pos') + 1] = '.25'
                 elif fault == 'unit':
                     flags[flags.index('--right-unit') + 1] = 'rad'
                 elif fault.startswith('l6'):
