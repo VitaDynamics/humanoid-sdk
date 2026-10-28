@@ -20,6 +20,75 @@ class Ring:
     def close(self):self.closed=True
 
 class PullTest(unittest.TestCase):
+    def test_real_status_ring_rechecks_after_body_reservation_before_submit(self):
+        from body_fixtures import robot_info_reply
+        cases = {
+            'stable': (None, True),
+            'revoked': ({'phase': ExternalPhase.IDLE, 'current_action': 'PASSIVE'}, False),
+            'client': ({'client_id': 17}, False),
+            'control': ({'control_id': 19}, False),
+            'generation': ({'generation': 84}, False),
+            'hold': ({'phase': ExternalPhase.TIMEOUT_HOLD}, True),
+            'foreign_runtime_noise': ({'descriptor_ref': DescriptorRef(99)}, True),
+        }
+        for name, (change, allowed) in cases.items():
+            with self.subTest(name=name):
+                t = self.transport()
+                t._candidate_gate = None
+                t.node = S(create_subscriber_typed=lambda *a, **kw: S(close=lambda: None))
+                t.subscriptions = []
+                t._publish_trace = threading.local()
+                t._capture_publish_timing = False
+                t._prepare_body_output = lambda: None
+                t.get_robot_info = lambda timeout: robot_info_reply()
+                t.close = lambda: setattr(t, '_closed', True)
+                entered, release = threading.Event(), threading.Event()
+                sent, errors = [], []
+                class Publisher:
+                    def publish(self, command, trace, guard):
+                        entered.set()
+                        if not release.wait(2):
+                            raise TimeoutError('test gate not released')
+                        guard(lambda: sent.append(command))
+                t._body_publisher = Publisher()
+                c = PullController(client_id=7, _transport=t)
+                self.addCleanup(c.close)
+                c.get_robot_info(.1)
+                def control(request, guard):
+                    guard(lambda: None)
+                    c._on_ack(ControlAck(request_id=request.request_id,
+                        operation=request.operation, accepted=True, client_id=9,
+                        control_id=13, descriptor_ref=DescriptorRef(11)))
+                    if request.operation == ControlOperation.COMMIT:
+                        t._pulls[CONTROL_STATUS_TOPIC].samples.append(S(payload=ControlStatus(
+                            status_seq=1, current_action='EXTERNAL', phase=ExternalPhase.RUNNING,
+                            client_id=9, control_id=13, generation=42, descriptor_ref=DescriptorRef(11))))
+                t._publish_control = control
+                c.enter_external(.2)
+                def publish():
+                    try:
+                        c.publish(BodyCmd(tuple(BodyJointCmd() for _ in range(31))))
+                    except Exception as error:
+                        errors.append(error)
+                worker = threading.Thread(target=publish)
+                worker.start()
+                try:
+                    self.assertTrue(entered.wait(2))
+                    if change is not None:
+                        status = ControlStatus(status_seq=2, current_action='EXTERNAL',
+                            phase=ExternalPhase.RUNNING, client_id=9, control_id=13,
+                            generation=42, descriptor_ref=DescriptorRef(11))
+                        t._pulls[CONTROL_STATUS_TOPIC].samples.append(S(payload=replace(status, **change)))
+                finally:
+                    release.set()
+                    worker.join(2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(len(sent), int(allowed))
+                self.assertEqual(len(errors), int(not allowed))
+                if not allowed:
+                    self.assertIsInstance(errors[0], NotRunningError)
+                self.assertEqual(c._next_external_sequence, 2)  # no retry or new key
+
     def test_teleop_pull_entry_and_body_rejection_keep_original_lock_order(self):
         c, t = self.fixture(action='HUMANOID_TELEOP')
         original = t.poll_control_status
@@ -492,7 +561,8 @@ class PullCandidateCommitR3Test(unittest.TestCase):
         return source, transport
 
     def test_real_ring_rejects_foreign_runtime_before_both_state_caches(self):
-        from test_body_codec import make_state
+        import flatbuffers
+        from test_body_codec import make_state, module
         source, transport = self.make_source()
         ring = transport._pulls[BODY_STATE_TOPIC]
         def sample(runtime, error, stamp):
@@ -507,6 +577,21 @@ class PullCandidateCommitR3Test(unittest.TestCase):
         clocks = (arrays_a.received_monotonic_ns, arrays_a.received_realtime_ns,
                   arrays_a.pull_context_receive_stamp_ns)
         self.assertEqual(clocks[2], 41)
+
+        for arrays in (True, False):
+            obj = module('BodyState').BodyStateT.InitFromObj(make_state(runtime_id=11)[1])
+            obj.joints = None
+            builder = flatbuffers.Builder(1)
+            builder.Finish(obj.Pack(builder))
+            ring.samples.append(S(payload=bytes(builder.Output()), context=S(receive_stamp_ns=40)))
+            read = source.wait_state if arrays else transport._wait_body_state
+            with self.assertRaisesRegex(ValueError, '31 joint slots'):
+                read(0)
+            self.assertIs(transport._latest_sample, accepted_a)
+            self.assertIs(source.wait_state(0), arrays_a)
+            self.assertIs(transport._wait_body_state(0), body_a)
+            self.assertEqual((arrays_a.received_monotonic_ns, arrays_a.received_realtime_ns,
+                              arrays_a.pull_context_receive_stamp_ns), clocks)
 
         ring.samples.append(sample(99, 7, 42))
         self.assertIs(source.wait_state(0), arrays_a)

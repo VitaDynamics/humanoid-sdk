@@ -62,9 +62,15 @@ def _vector_field_data(view: Any, slot: int, stride: int, alignment: int) -> mem
     return data[payload:payload + count * stride]
 
 
-def unpack_body_joints(view: Any) -> tuple[BodyJointState, ...]:
+def _require_body_joints(view: Any) -> memoryview:
     data = _vector_field_data(view, _STATE_JOINTS_SLOT, _JOINT_STATE.size, 8)
-    return () if data is None else tuple(BodyJointState(*v) for v in _JOINT_STATE.iter_unpack(data))
+    if data is None:
+        raise ValueError('body vector requires exactly 31 joint slots')
+    return data
+
+
+def unpack_body_joints(view: Any) -> tuple[BodyJointState, ...]:
+    return tuple(BodyJointState(*v) for v in _JOINT_STATE.iter_unpack(_require_body_joints(view)))
 
 
 def unpack_body_cmd(view: Any, *, slot: int = _COMMAND_JOINTS_SLOT) -> tuple[BodyJointCmd, ...]:

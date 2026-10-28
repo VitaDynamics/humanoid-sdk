@@ -121,7 +121,8 @@ class ExternalControllerTest(unittest.TestCase):
         selected = sample(100, 1000000)
         h.controller._on_body_state(selected)
         command = replace(make_command(0), input_state_id=selected.state_id,
-                          input_state_ts_real_us=selected.ts_state_real_us)
+                          input_state_ts_real_us=selected.ts_state_real_us,
+                          descriptor_ref=selected.descriptor_ref)
         h.controller._on_body_state(sample(102, 1002000))
         sent = h.controller.publish(command)
         wire = module('BodyCmd').BodyCmd.GetRootAs(encode(sent))
@@ -136,13 +137,27 @@ class ExternalControllerTest(unittest.TestCase):
         h.controller.enter_external(.1)
         command = replace(make_command(99), input_state_id=100,
                           input_state_ts_real_us=123456,
-                          descriptor_ref=DescriptorRef(88), control_id=77)
+                          control_id=77)
         sent = h.controller.publish(command)
         self.assertEqual((sent.protocol_version, sent.descriptor_ref.robot_runtime_id,
                           sent.control_id, sent.session_id, sent.sequence),
                          (3, 2**64 - 1, 13, 42, 1))
         self.assertEqual((sent.input_state_id, sent.input_state_ts_real_us), (100, 123456))
         self.assertEqual(h.transport.published[-1], (BODY_CMD_TOPIC, sent))
+
+    def test_body_rejects_explicit_old_runtime_without_allocating(self):
+        h = ControllerHarness(runtime_id=22)
+        self.addCleanup(h.controller.close)
+        h.accept_enter()
+        h.controller.enter_external(.1)
+        for ref in (DescriptorRef(11), DescriptorRef(0), DescriptorRef(True)):
+            with self.subTest(ref=ref), self.assertRaises(InvalidCommandError):
+                h.controller.publish(replace(make_command(0), descriptor_ref=ref,
+                    input_state_id=100, input_state_ts_real_us=123456))
+        self.assertEqual(h.controller._next_external_sequence, 1)
+        self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in h.transport.published))
+        sent = h.controller.publish(replace(make_command(0), descriptor_ref=DescriptorRef(22)))
+        self.assertEqual((sent.descriptor_ref, sent.sequence), (DescriptorRef(22), 1))
 
     def test_body_submission_after_close_or_owner_change_is_rejected(self):
         for transition in ('close', 'owner'):
@@ -812,13 +827,13 @@ class ExternalControllerTest(unittest.TestCase):
         first = BodyState(
             state_id=10,
             ts_state_real_us=100,
-            joints=(sample_motor(q=0.1, dq=0.2),),
+            joints=(sample_motor(q=0.1, dq=0.2),) * 31,
             descriptor_ref=DescriptorRef(11),
         )
         latest = BodyState(
             state_id=11,
             ts_state_real_us=200,
-            joints=(sample_motor(q=0.3, dq=0.4),),
+            joints=(sample_motor(q=0.3, dq=0.4),) * 31,
             descriptor_ref=DescriptorRef(11),
         )
         harness.transport.emit(BODY_STATE_TOPIC, first)
@@ -830,7 +845,7 @@ class ExternalControllerTest(unittest.TestCase):
         from locomotion_aorta.body_types import DescriptorRef
         harness = ControllerHarness(runtime_id=2**64-1)
         self.addCleanup(harness.controller.close)
-        state = BodyState(2**64-1, (), descriptor_ref=DescriptorRef(2**64-1),
+        state = BodyState(2**64-1, (sample_motor(),) * 31, descriptor_ref=DescriptorRef(2**64-1),
                           ts_control_us=2**64-2, applied_key_valid=True, association_source_type=2)
         harness.transport.emit(BODY_STATE_TOPIC, state)
         self.assertIs(harness.controller.wait_body_state(.01), state)
@@ -838,9 +853,12 @@ class ExternalControllerTest(unittest.TestCase):
         for protocol in (0, 1, 2, 4, 0xffffffff):
             harness.transport.emit(BODY_STATE_TOPIC, replace(state, protocol_version=protocol))
             self.assertIs(harness.controller.wait_body_state(.01), state)
+        for joints in ((), state.joints[:30], state.joints + state.joints[:1]):
+            harness.transport.emit(BODY_STATE_TOPIC, replace(state, joints=joints))
+            self.assertIs(harness.controller.wait_body_state(.01), state)
         harness.accept_enter()
         harness.controller.enter_external(timeout=.1)
-        self.assertEqual(harness.controller.publish(make_command(0)).protocol_version, 2)
+        self.assertEqual(harness.controller.publish(make_command(0)).protocol_version, 3)
 
     def test_status_cache_does_not_regress_or_replace_a_sequence(self) -> None:
         harness = ControllerHarness()

@@ -366,11 +366,11 @@ class PullController(ExternalController):
             self.transport.poll_control_status()
         return super().status
 
-    def _reserve_command(self, *, for_body=False):
+    def _reserve_command(self, *, for_body=False, expected_ref=None):
         with self._condition:
             self._ensure_open()
         self.transport.poll_control_status()
-        return super()._reserve_command(for_body=for_body)
+        return super()._reserve_command(for_body=for_body, expected_ref=expected_ref)
 
     def _reserve_end_effector_command(self, client, robot_runtime_id, prepare):
         with self._condition:

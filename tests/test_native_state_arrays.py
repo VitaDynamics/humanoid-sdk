@@ -39,9 +39,11 @@ class NativeStateArraysTest(unittest.TestCase):
         self.assertEqual(v.stamp_ns,v.ts_state_real_us*1000)
 
     def test_absent_vectors_optional_imu_unknown_enums_and_nan(self):
-        for kw in ({'missing_joints':True},{'missing_imus':True},{'missing_sample':True}):
+        for kw in ({'missing_imus':True},{'missing_sample':True}):
             data=state_buffer(4,**kw);v=self.compare(data)
             if kw.get('missing_sample'):self.assertFalse(v.imu_state_present.any())
+        with self.assertRaisesRegex(ValueError, '31 joint slots'):
+            decode_body_state_arrays(state_buffer(4, missing_joints=True))
         self.assertIn(255,self.compare(state_buffer(4)).imu_location)
 
     def test_owned_readonly_contiguous_arrays_survive_input_and_result_deletion(self):
@@ -74,8 +76,9 @@ class NativeStateArraysTest(unittest.TestCase):
         m = module('BodyState')
         for source in (0, 1, 2, 3, 4, 5, 6, 255):
             with self.subTest(source=source):
-                obj = m.BodyStateT(protocolVersion=3, descriptorRef=DescriptorRefT(2**64-1),
-                    tsControlUs=2**64-2, appliedKeyValid=True, associationSourceType=source)
+                obj = m.BodyStateT.InitFromObj(make_state()[1])
+                obj.descriptorRef = DescriptorRefT(2**64-1)
+                obj.tsControlUs, obj.appliedKeyValid, obj.associationSourceType = 2**64-2, True, source
                 b = flatbuffers.Builder(1); b.Finish(obj.Pack(b))
                 arrays = self.compare(bytes(b.Output()))
                 state = arrays.body_state()

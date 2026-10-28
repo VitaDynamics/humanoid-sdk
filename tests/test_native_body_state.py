@@ -98,13 +98,17 @@ class NativeBodyStateTest(unittest.TestCase):
             with self.subTest(seed=seed): self.compare(state_buffer(seed))
 
     def test_absent_joints_imus_and_optional_sample_keep_defaults(self):
-        for kwargs in ({'missing_joints':True}, {'missing_imus':True}, {'missing_sample':True}):
+        for kwargs in ({'missing_imus':True}, {'missing_sample':True}):
             with self.subTest(**kwargs): self.compare(state_buffer(3, **kwargs))
+        missing = state_buffer(3, missing_joints=True)
+        with self.assertRaisesRegex(ValueError, '31 joint slots'):
+            _decode_body_state_python(module('BodyState').BodyState.GetRootAs(missing))
+        with self.assertRaisesRegex(ValueError, '31 joint slots'):
+            decode_body_state_native(missing)
         b = flatbuffers.Builder(1);m = module('BodyState')
         m.BodyStateStart(b);m.BodyStateAddProtocolVersion(b, 3);b.Finish(m.BodyStateEnd(b))
-        state = self.compare(bytes(b.Output()))
-        self.assertEqual((state.joints, state.imu_states), ((), ()))
-        self.assertEqual((state.state_id, state.applied_session_id, state.applied_sequence), (0, 0, 0))
+        with self.assertRaisesRegex(ValueError, '31 joint slots'):
+            self.compare(bytes(b.Output()))
 
     def test_wrong_protocol_and_present_wrong_joint_lengths_reject(self):
         for kwargs in ({'protocol':0}, {'protocol':1}, {'protocol':2}, {'protocol':4}, {'protocol':0xffffffff},
@@ -119,9 +123,9 @@ class NativeBodyStateTest(unittest.TestCase):
         ref = importlib.import_module('lowlevel.ee.DescriptorRef')
         for source in (0, 1, 2, 3, 4, 5, 6, 255):
             with self.subTest(source=source):
-                obj = m.BodyStateT(protocolVersion=3,
-                    descriptorRef=ref.DescriptorRefT(2**64-1),
-                    tsControlUs=2**64-2, appliedKeyValid=True, associationSourceType=source)
+                obj = m.BodyStateT.InitFromObj(make_state()[1])
+                obj.descriptorRef = ref.DescriptorRefT(2**64-1)
+                obj.tsControlUs, obj.appliedKeyValid, obj.associationSourceType = 2**64-2, True, source
                 b = flatbuffers.Builder(1); b.Finish(obj.Pack(b))
                 state = self.compare(bytes(b.Output()))
                 self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us), (0, 0, 0))
@@ -133,7 +137,8 @@ class NativeBodyStateTest(unittest.TestCase):
     def test_present_zero_runtime_descriptor_is_rejected_by_python_and_native(self):
         m = module('BodyState')
         ref = importlib.import_module('lowlevel.ee.DescriptorRef')
-        obj = m.BodyStateT(protocolVersion=3, descriptorRef=ref.DescriptorRefT(0))
+        obj = m.BodyStateT.InitFromObj(make_state()[1])
+        obj.descriptorRef = ref.DescriptorRefT(0)
         builder = flatbuffers.Builder(1)
         builder.Finish(obj.Pack(builder))
         payload = bytes(builder.Output())
@@ -209,11 +214,13 @@ class NativeBodyStateTest(unittest.TestCase):
                 put(state_buffer(3))
                 first = read(0)
                 receipt = t._latest_sample
-                put(b'bad')
-                with self.assertRaises(ValueError):
-                    read(0)
-                self.assertIs(t._latest_sample, receipt)
-                self.assertIs(read(0), first)
+                for bad in (b'bad', state_buffer(3, missing_joints=True),
+                            state_buffer(3, count=30)):
+                    put(bad)
+                    with self.assertRaises(ValueError):
+                        read(0)
+                    self.assertIs(t._latest_sample, receipt)
+                    self.assertIs(read(0), first)
                 put(state_buffer(4))
                 self.assertNotEqual(read(0).state_id, first.state_id)
                 empty = PullTest().transport()

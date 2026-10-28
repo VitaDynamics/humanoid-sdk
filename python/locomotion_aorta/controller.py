@@ -328,11 +328,15 @@ class ExternalController:
             validation = time.perf_counter_ns() if trace is not None else 0
             try:
                 _validate_command(command, population)
+                if (command.descriptor_ref is not None and
+                        (not _valid_ref(command.descriptor_ref) or
+                         command.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id)):
+                    raise InvalidCommandError('BodyCmd belongs to a different robot runtime')
             finally:
                 if trace is not None:
                     trace['validation_ns'] = time.perf_counter_ns() - validation
         preparing = time.perf_counter_ns() if trace is not None else 0
-        context = self._reserve_command(for_body=True)
+        context = self._reserve_command(for_body=True, expected_ref=command.descriptor_ref)
         external_command = replace(
             command,
             protocol_version=BODY_CMD_PROTOCOL_VERSION,
@@ -352,15 +356,23 @@ class ExternalController:
         sending = time.perf_counter_ns() if trace is not None else 0
         try:
             def guard(submit):
+                # PullController pumps its status ring here, outside _condition.
+                current = self._control_context()
                 with self._condition:
                     self._ensure_open()
                     status = self._require_owned_status()
                     if (self._end_effector_runtime_id != context.descriptor_ref.robot_runtime_id
                             or self._request_id != context.request_id
+                            or current.request_id != context.request_id
+                            or current.client_id != context.client_id
+                            or current.control_id != context.control_id
+                            or current.generation != context.session_id
                             or self.client_id != context.client_id
                             or self._control_id != context.control_id
                             or self._external_session_id != context.session_id
                             or status.generation != context.session_id
+                            or (command.descriptor_ref is not None and
+                                command.descriptor_ref != context.descriptor_ref)
                             or self._request_action != 'EXTERNAL'):
                         raise NotRunningError('Body control context changed before submission')
                     return submit()
@@ -376,7 +388,8 @@ class ExternalController:
                         trace['timing_error_type'] = type(error).__name__
         return external_command
 
-    def _reserve_command(self, *, for_body: bool = False) -> _CommandContext:
+    def _reserve_command(self, *, for_body: bool = False,
+                         expected_ref: DescriptorRef | None = None) -> _CommandContext:
         """Reserve from the connection's stream for a validated BODY/EE call.
 
         This never enters control or publishes. Failed sends consume their key;
@@ -385,13 +398,18 @@ class ExternalController:
         Call outside _condition so pull reception cannot invert its lock order.
         """
         with self._condition:
-            return self._reserve_command_locked(for_body=for_body)
+            return self._reserve_command_locked(for_body=for_body, expected_ref=expected_ref)
 
-    def _reserve_command_locked(self, *, for_body: bool = False) -> _CommandContext:
+    def _reserve_command_locked(self, *, for_body: bool = False,
+                                expected_ref: DescriptorRef | None = None) -> _CommandContext:
         """Reserve one key while the caller holds the connection condition."""
         status = self._require_owned_status()
         if for_body and self._request_action != "EXTERNAL":
             raise NotRunningError("BodyCmd requires an owned EXTERNAL session")
+        if expected_ref is not None and (
+                not _valid_ref(expected_ref) or
+                expected_ref.robot_runtime_id != self._end_effector_runtime_id):
+            raise InvalidCommandError('BodyCmd belongs to a different robot runtime')
         if status.phase == ExternalPhase.RUNNING:
             if status.generation != self._external_session_id:
                 self._external_session_id = status.generation
@@ -620,7 +638,9 @@ class ExternalController:
         self.close()
 
     def _on_body_state(self, lowstate: Any) -> None:
-        if not isinstance(lowstate, BodyState) or lowstate.protocol_version != BODY_STATE_PROTOCOL_VERSION:
+        if (not isinstance(lowstate, BodyState) or
+                lowstate.protocol_version != BODY_STATE_PROTOCOL_VERSION or
+                not isinstance(lowstate.joints, tuple) or len(lowstate.joints) != BODY_SLOTS):
             return
         with self._condition:
             if (not self._closed and self._end_effector_runtime_error is None

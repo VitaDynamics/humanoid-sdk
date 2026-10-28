@@ -201,16 +201,12 @@ class AortaBindingContractTest(unittest.TestCase):
         self.assertEqual(view.RequestedLeaseMs(), 0)
 
     def test_body_timestamp_preserves_the_robot_microsecond_clock(self) -> None:
-        import flatbuffers
         import lowlevel.BodyState as module
-        builder = flatbuffers.Builder(128)
-        module.BodyStateStart(builder)
-        module.BodyStateAddProtocolVersion(builder, 3)
-        module.BodyStateAddTsStateRealUs(builder, 1_234_567)
-        builder.Finish(module.BodyStateEnd(builder))
-        state = transport_module.decode_body_state(module.BodyState.GetRootAs(builder.Output()))
+        from test_body_codec import make_state
+        payload, _ = make_state()
+        state = transport_module.decode_body_state(module.BodyState.GetRootAs(payload))
         self.assertEqual(state.ts_state_real_us, 1_234_567)
-        self.assertEqual(state.joints, ())
+        self.assertEqual(len(state.joints), 31)
 
     def test_public_topic_constants_match_the_protocol(self) -> None:
         self.assertEqual(BODY_STATE_TOPIC, "/sdk/foot_humanoid/body_state")

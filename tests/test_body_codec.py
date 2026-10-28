@@ -491,13 +491,10 @@ class BodyCodecTest(unittest.TestCase):
     def test_applied_correlation_keeps_zero_defaults_and_full_uint64_keys(self):
         m = module('BodyState')
         for session, sequence, stamp in ((0, 0, 0), (2**64-1, 2**64-2, 99)):
+            obj = m.BodyStateT.InitFromObj(make_state()[1])
+            obj.appliedSessionId, obj.appliedSequence, obj.tsFirstOutputUs = session, sequence, stamp
             builder = flatbuffers.Builder(1)
-            m.BodyStateStart(builder)
-            m.BodyStateAddProtocolVersion(builder, 3)
-            m.BodyStateAddAppliedSessionId(builder, session)
-            m.BodyStateAddAppliedSequence(builder, sequence)
-            m.BodyStateAddTsFirstOutputUs(builder, stamp)
-            builder.Finish(m.BodyStateEnd(builder))
+            builder.Finish(obj.Pack(builder))
             state = codec.decode_body_state(m.BodyState.GetRootAs(builder.Output()))
             self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us),
                              (session, sequence, stamp))
@@ -511,10 +508,11 @@ class BodyCodecTest(unittest.TestCase):
         for source in (0, 1, 2, 3, 4, 5, 6, 255):
             for key, valid in (((0, 0), True), ((2**64-1, 2**63+3), True), ((99, 101), False)):
                 with self.subTest(source=source, key=key, valid=valid):
-                    obj = m.BodyStateT(protocolVersion=3, stateId=2**64-2,
-                        descriptorRef=ref_module.DescriptorRefT(2**64-1),
-                        tsControlUs=2**64-3, appliedKeyValid=valid, associationSourceType=source,
-                        appliedSessionId=key[0], appliedSequence=key[1], tsFirstOutputUs=0)
+                    obj = m.BodyStateT.InitFromObj(make_state()[1])
+                    obj.stateId = 2**64-2
+                    obj.descriptorRef = ref_module.DescriptorRefT(2**64-1)
+                    obj.tsControlUs, obj.appliedKeyValid, obj.associationSourceType = 2**64-3, valid, source
+                    obj.appliedSessionId, obj.appliedSequence, obj.tsFirstOutputUs = *key, 0
                     builder = flatbuffers.Builder(1)
                     builder.Finish(obj.Pack(builder))
                     state = codec.decode_body_state(m.BodyState.GetRootAs(builder.Output()))
@@ -530,8 +528,8 @@ class BodyCodecTest(unittest.TestCase):
 
     def test_state3_rejects_present_zero_runtime_descriptor(self):
         ref_module = importlib.import_module('lowlevel.ee.DescriptorRef')
-        obj = module('BodyState').BodyStateT(protocolVersion=3,
-            descriptorRef=ref_module.DescriptorRefT(0))
+        obj = module('BodyState').BodyStateT.InitFromObj(make_state()[1])
+        obj.descriptorRef = ref_module.DescriptorRefT(0)
         builder = flatbuffers.Builder(1)
         builder.Finish(obj.Pack(builder))
         with self.assertRaisesRegex(ValueError, 'nonzero robot_runtime_id'):

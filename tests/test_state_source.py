@@ -151,26 +151,42 @@ class StateSourceTest(unittest.TestCase):
         source._stream.emit()
         good = source.snapshot()
         self.assertEqual(good.body_state().state_id, 91)
+        # Structural checks pass, but a later non-structural decode can fail.
+        source._stream.emit()
+        bad = source.snapshot(after=good)
+        failure = ValueError('deferred decode error')
+        with mock.patch.object(state_module, 'decode_body_state', side_effect=failure) as decode:
+            for _ in range(2):
+                with self.assertRaisesRegex(ValueError, 'deferred decode error') as error:
+                    bad.body_state()
+                self.assertIs(error.exception, failure)
+            decode.assert_called_once()
+        self.assertEqual(good.body_state().state_id, 91)
+        source._stream.emit()
+        self.assertEqual(source.snapshot(after=bad).body_state().state_id, 91)
+
+    def test_missing_or_wrong_joint_vector_never_replaces_lazy_snapshot(self):
+        import flatbuffers
+        source = self.source()
+        source._stream.emit()
+        good = source.snapshot()
+        clocks = (good.received_monotonic_ns, good.received_realtime_ns)
         # The envelope and Ref are valid, but the Body joint vector is malformed.
         data = bytearray(make_state(runtime_id=11)[0])
         view = module('BodyState').BodyState.GetRootAs(data)
         vector = view._tab.Vector(view._tab.Offset(22))
         struct.pack_into('<I', data, vector - 4, 30)
-        decoder = mock.Mock(wraps=module('BodyState').BodyState.GetRootAs)
-        source._stream.callback(data, decoder)
-        bad = source.snapshot(after=good)
-        failures = []
-        for _ in range(2):
-            with self.assertRaises(Exception) as error:
-                bad.body_state()
-            failures.append(error.exception)
-        self.assertIs(failures[0], failures[1])
-        self.assertEqual(decoder.call_count, 2)  # Ref gate and one lazy decode.
-        with self.assertRaises(type(failures[0])):
-            state_module.decode_body_state(module('BodyState').BodyState.GetRootAs(data))
+        obj = module('BodyState').BodyStateT.InitFromObj(make_state(runtime_id=11)[1])
+        obj.joints = None
+        builder = flatbuffers.Builder(1)
+        builder.Finish(obj.Pack(builder))
+        for invalid in (data, bytes(builder.Output())):
+            source._stream.emit(invalid)
+            self.assertIs(source.snapshot(), good)
+            self.assertEqual((good.received_monotonic_ns, good.received_realtime_ns), clocks)
         self.assertEqual(good.body_state().state_id, 91)
         source._stream.emit()
-        self.assertEqual(source.snapshot(after=bad).body_state().state_id, 91)
+        self.assertEqual(source.snapshot(after=good).body_state().state_id, 91)
 
     def test_undecodable_envelope_does_not_replace_valid_snapshot(self):
         source = self.source()

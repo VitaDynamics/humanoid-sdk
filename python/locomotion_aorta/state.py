@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
 
-from ._body_codec import decode_body_state
+from ._body_codec import decode_body_state, _require_body_joints
 from .body_types import BODY_STATE_PROTOCOL_VERSION, BodyState, ServiceStatus
 from .controller import _deadline, _nonempty_text, _valid_ref
 from ._state_stream import create_state_stream
@@ -118,11 +118,13 @@ class BodyStateSource:
         monotonic_ns = time.monotonic_ns()
         realtime_ns = time.time_ns()
         try:
+            payload = bytes(payload)
             view = decoder(payload)
             if view.ProtocolVersion() != BODY_STATE_PROTOCOL_VERSION:
                 return
             ref = view.DescriptorRef()
             runtime = None if ref is None else ref.RobotRuntimeId()
+            _require_body_joints(view)
         except (ValueError, TypeError, AttributeError, IndexError, OverflowError, struct.error):
             return
         with self._condition:

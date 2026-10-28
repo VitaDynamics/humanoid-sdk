@@ -74,13 +74,11 @@ State ReadState(const uint8_t *data, size_t size, size_t offset) {
   result.key_valid = view->applied_key_valid();
   result.source_type = view->association_source_type();
   if (view->descriptor_ref()) result.descriptor = *view->descriptor_ref();
-  if (const auto *joints = view->joints()) {
-    if (joints->size() != 31)
-      throw std::invalid_argument(
-          "body vector requires exactly 31 joint slots");
-    result.joints.reserve(31);
-    for (const auto *joint : *joints) result.joints.push_back(*joint);
-  }
+  const auto *joints = view->joints();
+  if (!joints || joints->size() != 31)
+    throw std::invalid_argument("body vector requires exactly 31 joint slots");
+  result.joints.reserve(31);
+  for (const auto *joint : *joints) result.joints.push_back(*joint);
   if (const auto *imus = view->imu_states()) {
     result.imus.reserve(imus->size());
     for (const auto *sample : *imus) {
