@@ -1,4 +1,5 @@
 from body_fixtures import body_array_frame, sample_motor, robot_info_reply
+from dataclasses import replace
 import math
 import unittest
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ from locomotion_aorta import (
     ExternalController,
     ExternalPhase,
     BodyState,
+    DescriptorRef,
 )
 from fake_transport import FakeTransport
 
@@ -46,8 +48,10 @@ class RecordingController:
         self.drift_position_rad = drift_position_rad
         self.follow_commands = follow_commands
         self.transport = FakeTransport()
+        self.transport.get_robot_info = lambda timeout: replace(
+            robot_info_reply(), descriptor_ref=DescriptorRef(100))
         self.controller = ExternalController(
-            client_id="example-client", _transport=self.transport
+            client_id=7, _transport=self.transport
         )
         self.calls: list[str] = []
         self.status_sequence = 0
@@ -110,6 +114,7 @@ class RecordingController:
             BODY_STATE_TOPIC,
             BodyState(
                 state_id=self.state_id,
+                descriptor_ref=DescriptorRef(100),
                 ts_state_real_us=int(self.clock.monotonic() * 1_000_000),
                 joints=tuple(
                     sample_motor(q=q, dq=dq, body_index=i, populated=i != 14)
@@ -143,8 +148,9 @@ class RecordingController:
                         status_seq=self.status_sequence,
                         current_action="EXTERNAL",
                         phase=phase,
-                        client_id="example-client",
-                        lease_id="lease-example",
+                        client_id=9,
+                        control_id=13,
+                        descriptor_ref=DescriptorRef(100),
                         lease_deadline_monotonic_ns=0,
                         generation=17,
                         reject_count=reject_count,
@@ -163,7 +169,9 @@ class RecordingController:
                     request_id=message.request_id,
                     operation=message.operation,
                     accepted=True,
-                    lease_id="lease-example",
+                    client_id=9,
+                    control_id=13,
+                    descriptor_ref=DescriptorRef(100),
                 ),
             )
         elif message.operation == ControlOperation.COMMIT:
@@ -173,7 +181,9 @@ class RecordingController:
                     request_id=message.request_id,
                     operation=message.operation,
                     accepted=True,
-                    lease_id="lease-example",
+                    client_id=9,
+                    control_id=13,
+                    descriptor_ref=DescriptorRef(100),
                 ),
             )
             self.status_sequence += 1
@@ -183,8 +193,9 @@ class RecordingController:
                     status_seq=self.status_sequence,
                     current_action="EXTERNAL",
                     phase=ExternalPhase.RUNNING,
-                    client_id="example-client",
-                    lease_id="lease-example",
+                    client_id=9,
+                    control_id=13,
+                    descriptor_ref=DescriptorRef(100),
                     lease_deadline_monotonic_ns=0,
                     generation=17,
                     stamp_monotonic_ns=1_000_000_000,
@@ -197,7 +208,9 @@ class RecordingController:
                     request_id=message.request_id,
                     operation=message.operation,
                     accepted=True,
-                    lease_id="lease-example",
+                    client_id=9,
+                    control_id=13,
+                    descriptor_ref=DescriptorRef(100),
                 ),
             )
             self.status_sequence += 1
@@ -207,6 +220,9 @@ class RecordingController:
                     status_seq=self.status_sequence,
                     current_action=self.cancel_action,
                     phase=ExternalPhase.IDLE,
+                    client_id=9,
+                    control_id=13,
+                    descriptor_ref=DescriptorRef(100),
                     stamp_monotonic_ns=2_000_000_000,
                 ),
             )

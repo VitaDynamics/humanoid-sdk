@@ -18,6 +18,9 @@ def client():
             info = controller.get_robot_info(5)
             if info.info is None or info.info.body.slot_count != 31:
                 raise AssertionError('31-slot RobotInfo missing')
+            source_info = source.get_robot_info(5)
+            if source_info.descriptor_ref != info.descriptor_ref:
+                raise AssertionError('source and controller runtime differ')
             state = source.wait_state(5)
             controller.enter_external(5)
             try:
@@ -53,13 +56,14 @@ def ee_client():
     from locomotion_aorta.end_effector_types import ControlMode, EndEffectorTarget, Field, SampleStream, ServiceStatus
     with ExitStack() as stack:
         controller = stack.enter_context(PullController(group=os.environ['AORTA_GROUP']))
+        roster = controller.get_robot_info(5)
+        assert roster.info is not None and roster.info.body.slot_count == 31
         endpoints = [stack.enter_context(EndEffectorClient(side, connection=controller,
             observation_sources=((SampleStream.EE_STATE, number),)))
             for side, number in (('left',1), ('right',2))]
         infos = [endpoint.wait_info(5) for endpoint in endpoints]
         assert infos[0].descriptor_ref == infos[1].descriptor_ref
-        roster = controller.get_robot_info(5)
-        assert roster.info is not None and roster.info.body.slot_count == 31
+        assert roster.descriptor_ref == infos[0].descriptor_ref
         state = controller.wait_body_state(5)
         assert state.protocol_version == 3
         assert state.descriptor_ref == infos[0].descriptor_ref == infos[1].descriptor_ref

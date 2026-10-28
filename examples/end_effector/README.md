@@ -1,13 +1,14 @@
 # Generic end-effector example (development source)
 
-This source targets the 25aa static-descriptor schema candidate. Its actual
+This source targets the R3 static-descriptor schema candidate. Its actual
 generated bindings, final robot integration, packaging and HIL remain pending.
 Do not substitute an older wheel for the matching generated dependency.
 
 `end_effector_external.py` uses one shared controller for Body and both selected
 end effectors. The default and `--dry-run` use a read-only source: no control
-lease, command publisher or touch switch. `--side none` reads/controls Body only;
-`--ee-only` omits Body discovery and Body commands. Each endpoint uses its own
+control request, command publisher or touch switch. `--side none` reads/controls Body only;
+`--ee-only` still queries RobotInfo for the shared startup identity but omits Body
+motion preflight and Body commands. Each endpoint uses its own
 explicit `--left-hz`/`--right-hz`; missed deadlines are not replayed. A combined
 Body/EE call is not an atomic frame.
 

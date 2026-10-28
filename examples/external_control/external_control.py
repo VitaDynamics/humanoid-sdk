@@ -80,7 +80,7 @@ def run(
         generation = entered_status.generation
         reject_count = entered_status.reject_count
         client_id = entered_status.client_id
-        lease_id = entered_status.lease_id
+        control_id = entered_status.control_id
         last_state_id = start_state.state_id
         last_state_change = monotonic()
         next_publish = monotonic()
@@ -97,7 +97,7 @@ def run(
                 or status.phase != ExternalPhase.RUNNING
                 or status.generation != generation
                 or status.client_id != client_id
-                or status.lease_id != lease_id
+                or status.control_id != control_id
             ):
                 raise RuntimeError(
                     "EXTERNAL ownership is no longer the entered RUNNING session"

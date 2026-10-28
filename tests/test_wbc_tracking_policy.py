@@ -191,7 +191,7 @@ class FakeController:
     def __init__(self, p, clock):
         self.clock, self.state = clock, example.synthetic_state(p)
         self.status = ControlStatus(1, 'EXTERNAL', ExternalPhase.RUNNING,
-                                    'tracking-test', 'lease', generation=9)
+                                    9, 13, generation=9)
         self.commands, self.exits, self.enters = [], 0, 0
         self.advance = True
 

@@ -8,7 +8,7 @@ from examples.external_control import external_control as body
 from examples.fixed_stand_pose.fixed_stand_pose import FixedStandPose
 from examples.end_effector.end_effector_external import run_external
 from examples.end_effector import end_effector_external as gripper_demo
-from locomotion_aorta import BODY_CMD_TOPIC
+from locomotion_aorta import BODY_CMD_TOPIC, DescriptorRef
 from test_examples import FakeClock, RecordingController
 from test_end_effector_external import Endpoint
 from test_teleop_policy import NAMES
@@ -30,7 +30,8 @@ class ZeroPoseTest(unittest.TestCase):
         c = RecordingController(clock, **options)
         self.addCleanup(c.close)
         reply = robot_info_reply()
-        c.get_robot_info = lambda timeout: replace(reply, info=replace(reply.info, body=info or body_info()))
+        c.transport.get_robot_info = lambda timeout: replace(
+            reply, descriptor_ref=DescriptorRef(100), info=replace(reply.info, body=info or body_info()))
         return c, clock
 
     def run_zero(self, c, clock, loop, events=None):

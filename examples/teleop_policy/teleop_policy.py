@@ -282,7 +282,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
         while not stop.is_set() and (duration == 0 or monotonic()-started < duration):
             status = controller.status
             if status is None or any(getattr(status,key) != getattr(entered,key)
-                                     for key in ('phase','generation','client_id','lease_id','current_action','reject_count')) or getattr(status, 'timeout_hold', False):
+                                     for key in ('phase','generation','client_id','control_id','current_action','reject_count')) or getattr(status, 'timeout_hold', False):
                 raise RuntimeError('EXTERNAL ownership/status changed')
             # wait_state may return its cache. Reuse --timeout to wait for
             # a strictly newer input; never infer/publish again from that cache.
@@ -327,7 +327,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
                 # A wait/inference may have crossed into TIMEOUT_HOLD.
                 status = controller.status
                 if status is None or any(getattr(status, key) != getattr(entered, key)
-                        for key in ('phase','generation','client_id','lease_id','current_action','reject_count')) or getattr(status, 'timeout_hold', False):
+                        for key in ('phase','generation','client_id','control_id','current_action','reject_count')) or getattr(status, 'timeout_hold', False):
                     raise RuntimeError('EXTERNAL state changed during state wait/inference')
                 msg = bodycmd(api,targets,state)
                 row['S5'] = time.time_ns()

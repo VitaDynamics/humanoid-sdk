@@ -336,7 +336,7 @@ class TeleopReviewTest(unittest.TestCase):
         for joint in state.joints:
             joint.q = joint.dq = 0.
         status = S(phase='RUNNING', current_action='EXTERNAL', generation=1,
-                   client_id='test', lease_id='lease', reject_count=0, timeout_hold=False)
+                   client_id=9, control_id=13, reject_count=0, timeout_hold=False)
         self.published, self.events = [], []
         controller = S(status=status)
         reads = 0

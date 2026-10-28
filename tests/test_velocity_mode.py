@@ -41,7 +41,7 @@ def frame_state(state_id):
 def running_status():
     from locomotion_aorta import ControlStatus, ExternalPhase
     return ControlStatus(status_seq=1, current_action='EXTERNAL', phase=ExternalPhase.RUNNING,
-                         generation=3, client_id='test', lease_id='lease')
+                         generation=3, client_id=9, control_id=13)
 
 
 def policy_fixture():
@@ -136,6 +136,8 @@ class LoggingTest(unittest.TestCase):
                                joints=[SimpleNamespace(populated=True, is_mock=False)]*31)
         transport, directions = Mock(), Mock()
         transport.get_robot_info.return_value = SimpleNamespace(info=SimpleNamespace(body=body))
+        source = Mock()
+        source.get_robot_info.return_value = transport.get_robot_info.return_value
         transport.observed_status = SimpleNamespace(current_action="PASSIVE",
             phase=SimpleNamespace(value="IDLE"), generation=0)
         transport.publishers, directions.node.publishers = {}, []
@@ -147,12 +149,15 @@ class LoggingTest(unittest.TestCase):
                  patch.object(example, "parse_args", return_value=args), \
                  patch.object(example, "VelocityModePolicy", return_value=policy), \
                  patch.object(example, "PullTransport", return_value=transport), \
+                 patch.object(example, "PullStateSource", return_value=source), \
                  patch.object(example, "wait_ready", return_value=transport.observed_status), \
                  patch.object(example, "read_frame", return_value=Mock()), \
                  patch.object(example, "JoyReader", return_value=directions), \
                  patch.object(example, "transition_duration", return_value=([], 0.)), \
                  patch.object(example, "run_cycles"):
                 example.main()
+            source.get_robot_info.assert_called_once_with(args.timeout)
+            source.close.assert_called_once()
             header = json.loads(path.read_text().splitlines()[0])
         self.assertEqual(header["models"][0]["body_joint_names"], list(names))
         self.assertEqual(header["models"][0]["policy_to_body_slot"], [30, 24])

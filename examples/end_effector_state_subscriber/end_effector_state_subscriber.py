@@ -44,6 +44,7 @@ def main(argv=None):
     from locomotion_aorta import PullStateSource
     from locomotion_aorta.end_effector import EndEffectorClient
     with closing(PullStateSource(group=args.group)) as connection:
+        connection.get_robot_info(args.timeout)
         with EndEffectorClient(args.side, connection=connection, read_only=True) as client:
             run_once(client, timeout=args.timeout, include_touch=args.touch)
 

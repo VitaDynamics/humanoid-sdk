@@ -326,7 +326,7 @@ def live(model, policy, args, recorder, controller, *,
         while not stop.is_set() and monotonic()-start < args.duration:
             status = controller.status
             if status is None or any(getattr(status, k) != getattr(entered, k) for k in (
-                    'current_action', 'phase', 'generation', 'client_id', 'lease_id',
+                    'current_action', 'phase', 'generation', 'client_id', 'control_id',
                     'reject_count', 'ingress_drop_count')) or status.timeout_hold:
                 raise RuntimeError('EXTERNAL ownership, rejection/drop counters or running state changed')
             state = wait_fresh(source, policy, previous_ns=previous_ns,
@@ -345,7 +345,7 @@ def live(model, policy, args, recorder, controller, *,
             # Recheck ownership after inference, before the transport's own guard.
             status = controller.status
             if status is None or any(getattr(status, k) != getattr(entered, k) for k in (
-                    'current_action', 'phase', 'generation', 'client_id', 'lease_id',
+                    'current_action', 'phase', 'generation', 'client_id', 'control_id',
                     'reject_count', 'ingress_drop_count')) or status.timeout_hold:
                 raise RuntimeError('EXTERNAL state changed during inference')
             row['before_publish_monotonic_ns'] = time.monotonic_ns()
@@ -458,6 +458,9 @@ def main():
                     response = controller.get_robot_info(args.timeout)
                     if response.info is None or response.info.body is None:
                         raise RuntimeError(response.error_message or 'RobotInfo has no body roster')
+                    source_info = source.get_robot_info(args.timeout)
+                    if source_info.descriptor_ref != response.descriptor_ref:
+                        raise RuntimeError('BodyState source and controller have different robot runtimes')
                     policy.bind_body_info(response.info.body)
                     recorder.write(dict(kind='roster', names=policy.order,
                                         roster_version=response.info.body.roster_version,

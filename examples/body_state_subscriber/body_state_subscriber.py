@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=5.0)
     args = parser.parse_args()
     with closing(PullStateSource(group=args.group)) as source:
+        source.get_robot_info(args.timeout)
         run_once(source, timeout=args.timeout)
 
 

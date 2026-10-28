@@ -78,6 +78,7 @@ def touch_wait_client(mode, output):
     publishers = []
     outcome = 'NOT_COMPLETED'
     try:
+        controller.get_robot_info(5)
         actual_body = controller.wait_body_state(5)
         ref = actual_body.descriptor_ref
         assert actual_body.protocol_version == 3
@@ -105,9 +106,10 @@ def touch_wait_client(mode, output):
         def publish_state():
             nonlocal sample_id
             sample_id += 1
-            state = module('EndEffectorState').EndEffectorStateT(protocolVersion=1,
+            state = module('EndEffectorState').EndEffectorStateT(protocolVersion=2,
                 descriptorRef=wire_ref, layoutId=7, side=1, stateId=sample_id, sampleStatus=SampleStatus.OK,
-                validFields=[Field.POS], pos=[.03125], ready=True, outputAllowed=True,
+                axes=[module('AxisState').AxisStateT(validFields=Field.POS, pos=.03125)],
+                ready=True, outputAllowed=True,
                 inhibitReason=0, touchEnabled=False, statusValidMask=15)
             # Fixture sample identity only; no invented robot acquisition time.
             state_pub.publish_bytes(pack(state, sample_id))
@@ -167,7 +169,7 @@ def touch_wait_client(mode, output):
                 assert len(held) == 1
                 request, responder = held[0]
                 response = rpc_bindings.response.EndEffectorSetTouchResponseT(
-                    protocolVersion=1, descriptorRef=wire_ref, side=1, status=ServiceStatus.SUCCESS,
+                    protocolVersion=2, descriptorRef=wire_ref, side=1, status=ServiceStatus.SUCCESS,
                     reason=TouchSetReason.NONE)
                 mark('late_reply_begin')
                 responder.reply_bytes(pack(response, 1))

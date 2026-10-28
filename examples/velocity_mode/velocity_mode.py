@@ -13,7 +13,7 @@ import time
 import uuid
 
 from locomotion_aorta import (
-    PullController, PullTransport, BodyCmd, BodyJointCmd, JoyReader, ExternalPhase,
+    PullController, PullStateSource, PullTransport, BodyCmd, BodyJointCmd, JoyReader, ExternalPhase,
 )
 import locomotion_aorta
 
@@ -98,7 +98,7 @@ def require_running(controller, expected=None):
             or status.phase != ExternalPhase.RUNNING or getattr(status, 'timeout_hold', False)):
         raise RuntimeError('EXTERNAL is no longer RUNNING')
     if expected is not None and any(getattr(status, key, 0) != getattr(expected, key, 0)
-            for key in ('generation', 'client_id', 'lease_id', 'reject_count', 'ingress_drop_count')):
+            for key in ('generation', 'client_id', 'control_id', 'reject_count', 'ingress_drop_count')):
         raise RuntimeError('EXTERNAL ownership or rejection/drop counters changed')
     return status
 
@@ -244,7 +244,7 @@ def main():
                     S1_source="Python pull recv return, before root lookup and decode",
                     S5_source="would-publish boundary" if args.shadow else "ExternalController.publish entry",
                     period_s=PERIOD_S, models=[policy.inventory])
-    log = transport = controller = directions = None
+    log = transport = controller = source = directions = None
     entered = False
     stop = threading.Event()
     handlers = {sig: signal.signal(sig, lambda *_args: stop.set())
@@ -254,11 +254,14 @@ def main():
             node_name=f"velocity-mode-{uuid.uuid4().hex}")
         if not args.shadow:
             controller = PullController(group=args.group, _transport=transport)
-        status = wait_ready(transport, args.timeout)
-        frames = lambda: read_frame(transport, args.timeout)
-        response = controller.get_robot_info(args.timeout) if controller else transport.get_robot_info(args.timeout)
+        else:
+            source = PullStateSource(group=args.group, _transport=transport)
+        reader = controller if controller is not None else source
+        response = reader.get_robot_info(args.timeout)
         if response.info is None or response.info.body is None:
             raise RuntimeError(response.error_message or "RobotInfo has no body roster")
+        status = wait_ready(transport, args.timeout)
+        frames = lambda: read_frame(reader, args.timeout)
         policy.bind_body_info(response.info.body)
         log = CycleLog(args.log, metadata)
         log.write(dict(record_type="roster", joint_names=policy.order,
@@ -296,6 +299,8 @@ def main():
                 try:
                     if controller is not None:
                         controller.close()
+                    elif source is not None:
+                        source.close()
                     elif transport is not None:
                         transport.close()
                 finally:

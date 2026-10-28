@@ -15,12 +15,13 @@ from examples.end_effector import end_effector_external as demo
 from locomotion_aorta import BODY_CMD_TOPIC
 from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector_types import (
-    CommandKey, ControlMode, ControlRef, DescriptorRef, DeviceModel, EndEffectorSubmission,
+    CommandKey, ControlMode, DescriptorRef, DeviceModel, EndEffectorSubmission,
     Field, InhibitReason, PositionDomain, SampleStatus,
     SampleStream,
 )
 from test_end_effector_codec import decode, info_object, state_object, touch_object
 from test_examples import FakeClock, RecordingController
+from body_fixtures import robot_info_reply
 
 
 class Endpoint:
@@ -75,7 +76,7 @@ class Endpoint:
         prepared = codec.prepare_target(self.info, target)
         context = self.connection.controller._reserve_command()
         submission = EndEffectorSubmission(self.info.descriptor_ref, self.info.layout_id, self.info.side,
-            ControlRef(context.client_id, context.lease_id), CommandKey(context.session_id, context.sequence),
+            context.control_id, CommandKey(context.session_id, context.sequence),
             prepared, input_observations=input_observations)
         self.commands.append(submission)
         self.times.append(self.connection.clock.monotonic())
@@ -128,7 +129,7 @@ class EndEffectorExampleTest(unittest.TestCase):
             self.assertEqual(client.commands[-1].target.pos, (.0625,))
             keys.extend(cmd.key for cmd in client.commands)
             for cmd in client.commands:
-                self.assertEqual(cmd.control_ref, ControlRef('example-client', 'lease-example'))
+                self.assertEqual(cmd.control_id, 13)
                 self.assertGreaterEqual(cmd.target.pos[0], .03125)
                 self.assertLessEqual(cmd.target.pos[0], .0625)
                 self.assertEqual(cmd.target.vel_limit, (0.,))
@@ -151,12 +152,13 @@ class EndEffectorExampleTest(unittest.TestCase):
     def test_ee_only_does_not_read_or_publish_body(self):
         c = self.controller()
         c.wait_state = Mock(side_effect=AssertionError('Body read'))
-        c.get_robot_info = Mock(side_effect=AssertionError('Body discovery'))
+        original_info = c.get_robot_info
+        c.get_robot_info = Mock(side_effect=original_info)
         e = Endpoint(c)
         self.run_case(c,[e],body_enabled=False)
         self.assertTrue(e.commands)
         self.assertEqual(c.command_count,0)
-        c.wait_state.assert_not_called(); c.get_robot_info.assert_not_called()
+        c.wait_state.assert_not_called(); c.get_robot_info.assert_called_once()
         self.assertEqual(c.calls.count('exit_external'),1)
 
     def test_mixed_rates_do_not_couple_endpoints_or_speed_up_body(self):
@@ -250,7 +252,7 @@ class EndEffectorExampleTest(unittest.TestCase):
             builder = flatbuffers.Builder(128)
             builder.Finish(codec.fill_command(bindings, submission, builder, 0))
             wire = bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(builder.Output())
-            encoded.append((e.times[-1], wire.Pos(0), wire.VelLimit(0)))
+            encoded.append((e.times[-1], wire.Axes(0).Pos(), wire.Axes(0).VelLimit()))
 
         e.after_publish = capture
         self.run_case(c, [e], targets={'right': target}, body_enabled=False,
@@ -555,6 +557,7 @@ class EndEffectorExampleTest(unittest.TestCase):
             source,connection,client=Mock(),Mock(),Mock()
             source.return_value.__enter__=Mock(return_value=connection)
             source.return_value.__exit__=Mock(return_value=False)
+            connection.get_robot_info.return_value=robot_info_reply()
             client.return_value.__enter__=Mock(return_value=Mock(side='right'))
             client.return_value.__exit__=Mock(return_value=False)
             controller=Mock()
@@ -562,17 +565,30 @@ class EndEffectorExampleTest(unittest.TestCase):
                 demo.main(['--side','right']+flags,_state_source_factory=source,
                           _client_factory=client,_controller_factory=controller)
             controller.assert_not_called(); observe.assert_called_once()
+            connection.get_robot_info.assert_called_once_with(5.0)
             client.assert_called_once_with('right',connection=connection,read_only=True,observation_sources=())
 
     def test_cli_none_does_not_construct_an_endpoint_or_request_control(self):
         source,connection,client,controller=Mock(),Mock(),Mock(),Mock()
         source.return_value.__enter__=Mock(return_value=connection)
         source.return_value.__exit__=Mock(return_value=False)
+        connection.get_robot_info.return_value=robot_info_reply()
         with patch('builtins.print'):
             demo.main(['--side','none'],_state_source_factory=source,
                       _client_factory=client,_controller_factory=controller)
         client.assert_not_called(); controller.assert_not_called()
         connection.wait_state.assert_called_once_with(5.0)
+
+    def test_cli_missing_runtime_does_not_construct_endpoint_or_request_control(self):
+        source, connection, client, controller = Mock(), Mock(), Mock(), Mock()
+        source.return_value.__enter__ = Mock(return_value=connection)
+        source.return_value.__exit__ = Mock(return_value=False)
+        connection.get_robot_info.return_value = replace(robot_info_reply(), descriptor_ref=None)
+        with self.assertRaisesRegex(RuntimeError, 'startup identity'):
+            demo.main(['--side', 'right'], _state_source_factory=source,
+                      _client_factory=client, _controller_factory=controller)
+        client.assert_not_called()
+        controller.assert_not_called()
 
     def test_cli_bad_options_fail_before_any_factory_or_rpc(self):
         cases=(['--ee-only','--side','none'],['--dry-run','--touch','on'],
@@ -595,6 +611,7 @@ class EndEffectorExampleTest(unittest.TestCase):
         clock_patch.start(); self.addCleanup(clock_patch.stop)
         recorded=self.controller()
         controller=recorded.controller
+        controller.get_robot_info(.1)
         node=Node(); recorded.transport.node=node
         clients=[]
         for side,wire_side in (('left',1),('right',2)):
@@ -634,9 +651,10 @@ class EndEffectorExampleTest(unittest.TestCase):
             self.assertEqual(wire.InputObservationsLength(),1)
             sample=wire.InputObservations(0)
             self.assertEqual((sample.Stream(),sample.Side()),(SampleStream.EE_STATE,wire.Side()))
-            self.assertEqual(sample.DescriptorRef().RobotRuntimeId(),100)
-            self.assertEqual(wire.ControlRef().LeaseId(),b'lease-example')
-            self.assertEqual(wire.ProtocolVersion(),1)
+            self.assertEqual(wire.DescriptorRef().RobotRuntimeId(),100)
+            self.assertFalse(hasattr(sample, 'DescriptorRef'))
+            self.assertEqual(wire.ControlId(),13)
+            self.assertEqual(wire.ProtocolVersion(),2)
         self.assertEqual(len(keys),len(set(keys)))
         self.assertEqual(sorted(sequence for _,sequence in keys),list(range(1,len(keys)+1)))
 
@@ -812,7 +830,7 @@ class PartialFeedbackGuardTest(unittest.TestCase):
         from test_controller import ControllerHarness
         from locomotion_aorta.end_effector import EndEffectorClient
         self.clock=FakeClock()
-        self.harness=ControllerHarness(); self.addCleanup(self.harness.controller.close)
+        self.harness=ControllerHarness(runtime_id=100); self.addCleanup(self.harness.controller.close)
         self.node=Node(); self.harness.transport.node=self.node
         self.client=EndEffectorClient('left',connection=self.harness.controller,
             observation_sources=((SampleStream.EE_STATE,1),))
@@ -823,8 +841,12 @@ class PartialFeedbackGuardTest(unittest.TestCase):
         confirm_info(self.client,self.node,info)
 
     def emit(self,sample,fields,**changes):
-        state=state_object(sample=sample); state.validFields=[fields]
-        for name,value in changes.items(): setattr(state,name,value)
+        state=state_object(sample=sample); state.axes[0].validFields=fields
+        for name,value in changes.items():
+            if name in ('pos', 'errorCode'):
+                setattr(state.axes[0], name, value[0])
+            else:
+                setattr(state,name,value)
         self.node.emit('left','state',state)
         return self.client.state
 
@@ -884,8 +906,12 @@ class PartialFeedbackGuardTest(unittest.TestCase):
         position=demo.wait_position(self.client,self.client.info,.03,sleep=sleep,monotonic=self.clock.monotonic)
         self.assertEqual(position.state_id,2)
         from test_end_effector_client import confirm_info
+        self.node.emit('left','info',info_object(runtime=101))
+        self.assertEqual(self.client.info.descriptor_ref, DescriptorRef(100))
+        self.harness.transport.get_robot_info = lambda timeout: replace(
+            robot_info_reply(), descriptor_ref=DescriptorRef(101))
         with self.assertRaises(ValueError):
-            confirm_info(self.client,self.node,info_object(runtime=101))
+            self.harness.controller.get_robot_info(.1)
         with self.assertRaises(ValueError):
             demo.wait_position(self.client,self.client.info,.03,sleep=self.clock.sleep,monotonic=self.clock.monotonic)
 
@@ -924,12 +950,7 @@ class VendorExamplesTest(unittest.TestCase):
             tau_max=endpoint.info.tau_max if commands & Field.TAU else (),
             current_min=endpoint.info.current_min if states & Field.CURRENT else (),
             current_max=endpoint.info.current_max if states & Field.CURRENT else ())
-        endpoint._state = replace(endpoint._state, valid_fields=(states,) * n,
-            vel=endpoint._state.vel if states & Field.VEL else (),
-            tau=endpoint._state.tau if states & Field.TAU else (),
-            current=endpoint._state.current if states & Field.CURRENT else (),
-            temperature_c=endpoint._state.temperature_c if states & Field.TEMPERATURE else (),
-            error_code=endpoint._state.error_code if states & Field.ERROR_CODE else ())
+        endpoint._state = replace(endpoint._state, valid_fields=(states,) * n)
         codec.validate_info(endpoint.info)
         codec.validate_state(endpoint.info, endpoint._state)
         endpoint.set_touch = Mock(side_effect=AssertionError('unexpected Touch RPC'))

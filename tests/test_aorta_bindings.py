@@ -164,9 +164,11 @@ class AortaBindingContractTest(unittest.TestCase):
 
         command = BodyCmd(
             joints=tuple(BodyJointCmd(q=0.25, kp=30.0, kd=1.5) for _ in range(31)),
-            protocol_version=2,
+            protocol_version=3,
             session_id=42,
             sequence=3,
+            descriptor_ref=DescriptorRef(11),
+            control_id=13,
         )
         builder = flatbuffers.Builder(256)
         root = transport_module._fill_body_cmd(bindings, command, builder, 0)
@@ -175,7 +177,9 @@ class AortaBindingContractTest(unittest.TestCase):
         self.assertFalse(hasattr(command_view, 'CmdId'))
         self.assertEqual(command_view.JointsLength(), 31)
         self.assertAlmostEqual(command_view.Joints(0).Q(), 0.25)
-        self.assertEqual(command_view.ProtocolVersion(), 2)
+        self.assertEqual(command_view.ProtocolVersion(), 3)
+        self.assertEqual(command_view.DescriptorRef().RobotRuntimeId(), 11)
+        self.assertEqual(command_view.ControlId(), 13)
         self.assertEqual(command_view.SessionId(), 42)
         self.assertEqual(command_view.Sequence(), 3)
 

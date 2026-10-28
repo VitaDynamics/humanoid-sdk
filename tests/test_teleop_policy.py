@@ -182,7 +182,7 @@ class LifecycleTests(unittest.TestCase):
         for m in state.joints:m.q=0;m.dq=0
         stop=threading.Event();events=[]
         status=NS(phase='RUNNING',current_action='EXTERNAL',generation=3,
-                  client_id='client',lease_id=4,reject_count=0)
+                  client_id=9,control_id=13,reject_count=0)
         class Controller:
             def get_robot_info(self,timeout):return NS(info=NS(body=body),status=reply_status,error_message='hands unavailable')
             def wait_body_state(self,timeout):
@@ -223,7 +223,7 @@ class LifecycleTests(unittest.TestCase):
         stop = threading.Event()
         commands, events = [], []
         status = NS(phase=api.ExternalPhase.RUNNING, current_action='EXTERNAL',
-                    generation=3, client_id='client', lease_id='lease', reject_count=0)
+                    generation=3, client_id=9, control_id=13, reject_count=0)
         targets = tuple(api.BodyJointCmd() for _ in range(31))
 
         class Controller:
@@ -280,7 +280,7 @@ class LifecycleTests(unittest.TestCase):
         clock, stop = FakeClock(), threading.Event()
         published, inferred, reads, events = [], [], [], []
         status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
-                    client_id='client', lease_id=4, reject_count=0)
+                    client_id=9, control_id=13, reject_count=0)
         class Controller:
             def get_robot_info(self, timeout):
                 return NS(info=NS(body=body), status=API.ServiceStatus.SUCCESS, error_message='')
@@ -333,7 +333,7 @@ class LifecycleTests(unittest.TestCase):
                 clock, stop = FakeClock(), threading.Event()
                 outputs, inferences, events = [], [], []
                 status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
-                            client_id='client', lease_id=4, reject_count=0)
+                            client_id=9, control_id=13, reject_count=0)
                 class Controller:
                     reads = 0
                     def get_robot_info(self, timeout):

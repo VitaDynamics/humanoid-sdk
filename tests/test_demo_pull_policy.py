@@ -23,7 +23,7 @@ class TimedDemoTests(unittest.TestCase):
     def test_teleop_publish_failure_is_preserved_when_diagnostics_also_fail(self):
         body, state = fixture()
         status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
-                    client_id='client', lease_id=4, reject_count=0)
+                    client_id=9, control_id=13, reject_count=0)
         def latest(timeout):
             state.state_id += 1
             return state
@@ -84,7 +84,7 @@ class TimedDemoTests(unittest.TestCase):
         policy = teleop_policy.Policy(METADATA, CONTRACT)
         times, commands, rows, events = [], [], [], []
         status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
-                    client_id='client', lease_id=4, reject_count=0)
+                    client_id=9, control_id=13, reject_count=0)
 
         class Controller:
             def get_robot_info(self, timeout):

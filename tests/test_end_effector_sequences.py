@@ -11,8 +11,8 @@ import unittest
 from unittest.mock import patch
 
 import locomotion_aorta as sdk
-from locomotion_aorta import BODY_CMD_TOPIC
-from locomotion_aorta.end_effector_types import CommandKey, ControlRef, Field, SampleStream
+from locomotion_aorta import BODY_CMD_TOPIC, DescriptorRef
+from locomotion_aorta.end_effector_types import CommandKey, Field, SampleStream
 from examples.end_effector import end_effector_external as demo
 from test_examples import FakeClock, RecordingController
 from test_end_effector_external import Endpoint
@@ -170,7 +170,8 @@ class EndEffectorSequenceTest(unittest.TestCase):
                 c = RecordingController(clock)
                 self.addCleanup(c.close)
                 reply = robot_info_reply()
-                c.get_robot_info = lambda timeout: replace(reply, info=replace(reply.info, body=body_info()))
+                c.transport.get_robot_info = lambda timeout: replace(
+                    reply, descriptor_ref=DescriptorRef(100), info=replace(reply.info, body=body_info()))
                 endpoints = [Endpoint(c, side, inhibited=reject) for side in
                              (('left', 'right') if sine else ('right',))]
                 for endpoint, opening in zip(endpoints, (.03125, .0625) if sine else (.0625,)):
@@ -201,7 +202,7 @@ class EndEffectorSequenceTest(unittest.TestCase):
                 self.assertTrue(body)
                 keys = [CommandKey(value.session_id, value.sequence) for value in body]
                 for command in body:
-                    self.assertEqual(command.protocol_version, 2)
+                    self.assertEqual(command.protocol_version, 3)
                     self.assertEqual(len(command.joints), 31)
                     self.assertFalse(hasattr(command, 'cmd_id'))
                 for e in endpoints:
@@ -210,7 +211,7 @@ class EndEffectorSequenceTest(unittest.TestCase):
                     for command in e.commands:
                         self.assertEqual((command.descriptor_ref, command.layout_id, command.side),
                                          (e.info.descriptor_ref, e.info.layout_id, e.info.side))
-                        self.assertEqual(command.control_ref, ControlRef('example-client', 'lease-example'))
+                        self.assertEqual(command.control_id, 13)
                         self.assertEqual(command.target.tau, (0.,))
                         self.assertTrue(command.target.command_fields[0] & Field.TAU)
                         self.assertEqual(command.target.vel_limit, (0.,))

@@ -107,7 +107,11 @@ def decode(kind, payload, bindings):
     if "_ee_" in kind:
         side, ee_kind = kind.split("_ee_")
         record = getattr(_end_effector_codec, "decode_" + ee_kind)(view)
-        _end_effector_codec._identity(record)
+        version = {'info': _end_effector_codec.EE_INFO_PROTOCOL_VERSION,
+                   'state': _end_effector_codec.EE_STATE_PROTOCOL_VERSION,
+                   'touch': _end_effector_codec.EE_TOUCH_PROTOCOL_VERSION,
+                   'cmd': _end_effector_codec.EE_CMD_PROTOCOL_VERSION}[ee_kind]
+        _end_effector_codec._identity(record, version)
         if record.side != (1 if side == "left" else 2):
             raise ValueError("EE message side differs from selected topic")
         # Raw, partial and NaN observations retain their original validity;

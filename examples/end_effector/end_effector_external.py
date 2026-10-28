@@ -11,7 +11,7 @@ import struct
 from pathlib import Path
 import time
 
-from locomotion_aorta import PullController, PullStateSource
+from locomotion_aorta import PullController, PullStateSource, ServiceStatus
 from locomotion_aorta.end_effector import EndEffectorClient
 from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector_types import (
@@ -25,6 +25,16 @@ _body_spec = importlib.util.spec_from_file_location(
     Path(__file__).resolve().parents[1] / 'external_control/external_control.py')
 body = importlib.util.module_from_spec(_body_spec)
 _body_spec.loader.exec_module(body)
+
+
+def _bind_runtime(connection, timeout):
+    reply = connection.get_robot_info(timeout)
+    if (reply.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
+            or reply.info is None or reply.info.body is None
+            or reply.descriptor_ref is None
+            or type(reply.descriptor_ref.robot_runtime_id) is not int
+            or not 0 < reply.descriptor_ref.robot_runtime_id < 2**64):
+        raise RuntimeError('get_robot_info did not confirm a robot startup identity')
 
 
 @contextmanager
@@ -103,6 +113,9 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
         if body_gains == 'zero':
             hold = replace(hold, joints=tuple(replace(j, kp=0.0, kd=0.0, dq=0.0, tau=0.0)
                                               for j in hold.joints))
+    else:
+        # Even EE-only control must bind the startup runtime before PREPARE.
+        _bind_runtime(controller, timeout)
     attempted = False
     active = False
     traces = []
@@ -141,8 +154,8 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             if (status is None or status.current_action != 'EXTERNAL'
                     or status.phase not in ((body.ExternalPhase.RUNNING,) if body_enabled else
                                            (body.ExternalPhase.RUNNING, body.ExternalPhase.TIMEOUT_HOLD))
-                    or (status.generation, status.client_id, status.lease_id) !=
-                       (entered.generation, entered.client_id, entered.lease_id)
+                    or (status.generation, status.client_id, status.control_id) !=
+                       (entered.generation, entered.client_id, entered.control_id)
                     or status.reject_count != entered.reject_count):
                 raise RuntimeError(f'body EXTERNAL ownership/phase/reject_count changed: {status!r}')
             if not body_enabled:
@@ -794,6 +807,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     state_factory = PullStateSource if _state_source_factory is None else _state_source_factory
     with ExitStack() as stack:
         connection = stack.enter_context((state_factory if readonly else controller_factory)(group=args.group))
+        _bind_runtime(connection, args.timeout)
         clients = [stack.enter_context(client_factory(side, connection=connection, read_only=readonly,
             observation_sources=() if readonly else ((SampleStream.EE_STATE, 1 if side == 'left' else 2),))) for side in sides]
         if _expected_device_model is not None:

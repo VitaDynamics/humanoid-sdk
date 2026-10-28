@@ -305,8 +305,8 @@ class BrainCoCaptureTest(unittest.TestCase):
 
     def test_new_ee_state_capture_preserves_missing_feedback_as_null(self):
         from test_end_effector_codec import state_object, pack
-        obj = state_object(); obj.pos[0] = float('nan'); obj.inhibitReason = 4
-        obj.validFields[0] = 0
+        obj = state_object(); obj.axes[0].pos = float('nan'); obj.inhibitReason = 4
+        obj.axes[0].validFields = 0
         row = capture.decode('left_ee_state', pack(obj), capture.load_bindings())
         self.assertIsNone(row['pos'][0])
         self.assertTrue(row['nonfinite_feedback'])
@@ -316,23 +316,29 @@ class BrainCoCaptureTest(unittest.TestCase):
         self.assertNotIn('raw_current', row)
         self.assertNotIn('diagnostic_valid_mask', row)
         self.assertEqual(row['descriptor_ref'], dict(robot_runtime_id=100))
+        obj.protocolVersion = 1
+        with self.assertRaisesRegex(ValueError, 'protocol_version'):
+            capture.decode('left_ee_state', pack(obj), capture.load_bindings())
 
     def test_new_ee_cmd_capture_keeps_k_keys_and_original_time_validity(self):
         from test_end_effector_codec import module, pack
         obj = module('EndEffectorCmd').EndEffectorCmdT(
-            protocolVersion=1, descriptorRef=module('DescriptorRef').DescriptorRefT(2**64-1),
-            layoutId=7, side=1, controlRef=module('ControlRef').ControlRefT('C', 'L'),
-            key=module('CommandKey').CommandKeyT(2**64-1, 0), mode=[2], commandFields=[5],
-            pos=[.03125], vel=[], velLimit=[0.], tau=[], current=[],
+            protocolVersion=2, descriptorRef=module('DescriptorRef').DescriptorRefT(2**64-1),
+            layoutId=7, side=1, controlId=13,
+            key=module('CommandKey').CommandKeyT(2**64-1, 0),
+            axes=[module('AxisCommand').AxisCommandT(commandFields=5, mode=2,
+                                                     pos=.03125, velLimit=0.)],
             inputObservations=[module('SampleRef').SampleRefT(
-                module('DescriptorRef').DescriptorRefT(2**64-1), 2, 2, 2**64-1, 0, 9)],
+                2, 2, 2**64-1, 0, 9)],
             tsClientCreatedUs=0, tsClientSendUs=0)
         row = capture.decode('left_ee_cmd', pack(obj), capture.load_bindings())
         self.assertEqual(row['key'], dict(session_id=2**64-1, sequence=0))
         self.assertEqual(row['input_observations'][0]['sample_id'], 2**64-1)
         self.assertEqual(row['input_observations'][0]['validity'], 9)
         self.assertEqual(row['target']['vel_limit'], [0.])
-        self.assertEqual(row['target']['tau'], [])
+        self.assertEqual(row['target']['tau'], [0.])
+        self.assertFalse(row['target']['command_fields'][0] & 8)
+        self.assertEqual(row['control_id'], 13)
         self.assertNotIn('sdk_time_valid_mask', row)
         self.assertNotIn('cmd_id', row)
 
