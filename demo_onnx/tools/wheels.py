@@ -14,6 +14,7 @@ import zipfile
 from packaging.requirements import Requirement
 
 ARCHES = {"x86_64": 62, "aarch64": 183}
+COMPATIBILITY = Path(__file__).resolve().parents[2] / "compatibility.json"
 
 
 def inspect_body_codec(wheel, arch):
@@ -38,22 +39,27 @@ def inspect_body_codec(wheel, arch):
 
 
 def inspect(path):
+    # Read the reviewed source manifest independently of the wheel under audit.
+    expected = json.loads(COMPATIBILITY.read_text())
     with zipfile.ZipFile(path) as wheel:
         info = next(n.rsplit("/", 1)[0] for n in wheel.namelist() if n.endswith(".dist-info/WHEEL"))
         tags = email.message_from_bytes(wheel.read(info + "/WHEEL")).get_all("Tag", [])
         arch = next((a for a in ARCHES if tags == ["cp310-cp310-manylinux_2_35_" + a]), None)
         if arch is None:
             raise ValueError("expected one audited cp310/manylinux_2_35 x86_64 or aarch64 tag: " + str(tags))
-        if not path.name.endswith("-cp310-cp310-manylinux_2_35_" + arch + ".whl"):
+        if path.name != ("locomotion_aorta-" + expected["sdk_version"] +
+                         "-cp310-cp310-manylinux_2_35_" + arch + ".whl"):
             raise ValueError("filename and WHEEL tags differ")
         metadata = email.message_from_bytes(wheel.read(info + "/METADATA"))
-        if metadata["Name"] != "locomotion-aorta" or metadata["Version"] != "0.2.1":
+        if metadata["Name"] != "locomotion-aorta" or metadata["Version"] != expected["sdk_version"]:
             raise ValueError("unexpected distribution/version")
-        core = {"aorta-sdk": "==2026.10.20", "aorta-msgs": "==2026.10.20",
-                "vbot-humanoid-msgs": "==0.0.0+g80a154209738", "flatbuffers": "==25.12.19"}
+        core = {"aorta-sdk": "==" + expected["aorta_version"],
+                "aorta-msgs": "==" + expected["aorta_version"],
+                "vbot-humanoid-msgs": "==" + expected["humanoid_msgs_version"],
+                "flatbuffers": "==" + expected["flatbuffers_version"]}
         requirements = [Requirement(value) for value in metadata.get_all("Requires-Dist", [])]
         actual = {req.name: str(req.specifier) for req in requirements if req.marker is None}
-        if metadata["Requires-Python"] != "==3.10.*" or actual != core:
+        if metadata["Requires-Python"] != expected["python_requires"] or actual != core:
             raise ValueError("unexpected SDK Python/core dependencies")
         licenses = metadata.get_all("License-File", [])
         if len(licenses) != 4 or any(info + "/licenses/" + n not in wheel.namelist() for n in licenses):

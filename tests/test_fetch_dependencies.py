@@ -40,15 +40,19 @@ class FetchDependenciesTest(unittest.TestCase):
         (output / name).write_bytes(name.encode())
 
     def test_candidate_identity_is_exact_and_not_a_published_dependency_release(self):
-        self.assertIsNone(self.manifest["dependency_release_tag"])
-        self.assertEqual(self.manifest["humanoid_msgs_version"], "0.0.0+g80a154209738")
+        # A missing-tag candidate is an explicit fixture, not a permanent
+        # requirement that the production manifest never name a release.
+        candidate = copy.deepcopy(self.manifest)
+        candidate["dependency_release_tag"] = None
+        version = self.manifest["humanoid_msgs_version"]
+        wheel = f"vbot_humanoid_msgs-{version}-py3-none-any.whl"
+        self.assertIn(wheel, self.manifest["wheel_sha256"])
+        self.assertRegex(self.manifest["wheel_sha256"][wheel], r"^[0-9a-f]{64}$")
         self.assertEqual(self.manifest["dependency_release_repository"], "VitaDynamics/humanoid-sdk")
-        self.assertEqual(self.manifest["wheel_sha256"]["vbot_humanoid_msgs-0.0.0+g80a154209738-py3-none-any.whl"],
-                         "972e7b5cf768caed26cc9f65b60ba8c5198da23ad0330e71913e55fb31a42186")
         with tempfile.TemporaryDirectory() as directory:
             with mock.patch.object(fetch_dependencies.subprocess, "run") as run:
                 with self.assertRaisesRegex(ValueError, "dependency_release_tag must be a nonempty string"):
-                    self.fetch(Path(directory), self.manifest)
+                    self.fetch(Path(directory), candidate)
                 run.assert_not_called()
             self.assertFalse((Path(directory) / "wheels").exists())
 
