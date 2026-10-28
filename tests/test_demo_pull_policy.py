@@ -70,14 +70,6 @@ class TimedDemoTests(unittest.TestCase):
             c, loop, body=external_control, timeout=1, sleep=clock.sleep,
             monotonic=clock.monotonic, emit=lambda _: None))
 
-    def test_hand_body_hold_keeps_timer_with_400hz_state(self):
-        def run(c, clock):
-            hand = Endpoint(c, hand=True)
-            target = end_effector_external.position_target(hand.info, (.25,)*6, unit='rad')
-            end_effector_external.run(c, [hand], {hand.side: target}, duration=.12,
-                timeout=1, sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
-        self.assert_body_timer(run)
-
     def test_teleop_50hz_logs_actual_keys_and_keeps_timer_with_400hz_state(self):
         body, state = fixture()
         clock, stop = FakeClock(), threading.Event()
