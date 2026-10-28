@@ -88,7 +88,7 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
         command = guard.publish(target, continued)
         self.assertEqual(command.descriptor_ref, old_ref)
         sent = len(self.node.commands)
-        self.assertIs(self.feed('info', 'static/left_new_runtime_info.fb'), info)
+        self.assertIs(self.feed('info', 'static/left_new_runtime_info.fb'), republished)
         self.assertEqual(right.info.descriptor_ref, old_ref)
         self.assertEqual(len(self.node.commands), sent)
         self.assertEqual(info.descriptor_ref, old_ref)
