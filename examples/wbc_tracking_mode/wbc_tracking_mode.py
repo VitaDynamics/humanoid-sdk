@@ -459,7 +459,7 @@ def main():
                     if response.info is None or response.info.body is None:
                         raise RuntimeError(response.error_message or 'RobotInfo has no body roster')
                     source_info = source.get_robot_info(args.timeout)
-                    if source_info.descriptor_ref != response.descriptor_ref:
+                    if source_info.runtime_id != response.runtime_id:
                         raise RuntimeError('BodyState source and controller have different robot runtimes')
                     policy.bind_body_info(response.info.body)
                     recorder.write(dict(kind='roster', names=policy.order,

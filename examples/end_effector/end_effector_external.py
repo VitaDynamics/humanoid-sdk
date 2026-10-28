@@ -31,9 +31,8 @@ def _bind_runtime(connection, timeout):
     reply = connection.get_robot_info(timeout)
     if (reply.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
             or reply.info is None or reply.info.body is None
-            or reply.descriptor_ref is None
-            or type(reply.descriptor_ref.robot_runtime_id) is not int
-            or not 0 < reply.descriptor_ref.robot_runtime_id < 2**64):
+            or type(reply.runtime_id) is not int
+            or not 0 < reply.runtime_id < 2**64):
         raise RuntimeError('get_robot_info did not confirm a robot startup identity')
 
 

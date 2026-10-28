@@ -7,7 +7,7 @@ from dataclasses import replace
 
 from .controller import (ExternalController, ExternalControlTimeoutError,
                          ControllerClosedError, _deadline, _nonempty_text,
-                         _uint64_nonzero, _valid_ref)
+                         _uint64_nonzero, _valid_ref, _valid_generation)
 from .body_types import BODY_STATE_PROTOCOL_VERSION, ServiceStatus
 from .types import ControlStatus, PROTOCOL_VERSION
 from .transport import _AortaTransport, BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC
@@ -199,9 +199,15 @@ class PullStateSource:
     def _commit_pull_candidate(self, candidate, commit):
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
-            version = PROTOCOL_VERSION if isinstance(candidate, ControlStatus) else BODY_STATE_PROTOCOL_VERSION
-            if (candidate.protocol_version != version or not _valid_ref(candidate.descriptor_ref)
-                    or candidate.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id):
+            if isinstance(candidate, ControlStatus):
+                valid = (candidate.protocol_version == PROTOCOL_VERSION
+                         and _valid_generation(candidate.runtime_id)
+                         and candidate.runtime_id == self._end_effector_runtime_id)
+            else:
+                valid = (candidate.protocol_version == BODY_STATE_PROTOCOL_VERSION
+                         and _valid_ref(candidate.descriptor_ref)
+                         and candidate.descriptor_ref.robot_runtime_id == self._end_effector_runtime_id)
+            if not valid:
                 return False
             commit()
             return True
@@ -228,8 +234,8 @@ class PullStateSource:
             self._ensure_runtime_locked()
             if (reply.status in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
                     and reply.info is not None and reply.info.body is not None
-                    and _valid_ref(reply.descriptor_ref)):
-                runtime = reply.descriptor_ref.robot_runtime_id
+                    and _valid_generation(reply.runtime_id)):
+                runtime = reply.runtime_id
                 if (self._end_effector_runtime_id != observed_runtime
                         and self._end_effector_runtime_id != runtime):
                     raise ValueError('discovery context changed while request was in flight')
@@ -263,9 +269,9 @@ class PullStateSource:
         status = self.transport.control_status
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
-            if status is None or not _valid_ref(status.descriptor_ref):
+            if status is None or not _valid_generation(status.runtime_id):
                 return None
-            return status if status.descriptor_ref.robot_runtime_id == self._end_effector_runtime_id else None
+            return status if status.runtime_id == self._end_effector_runtime_id else None
 
     def _register_end_effector_client(self, client) -> None:
         with self._end_effector_runtime_lock:
@@ -327,9 +333,15 @@ class PullController(ExternalController):
         with self._condition:
             self._ensure_open()
             self.transport._ensure_open()
-            version = PROTOCOL_VERSION if isinstance(candidate, ControlStatus) else BODY_STATE_PROTOCOL_VERSION
-            if (candidate.protocol_version != version or not _valid_ref(candidate.descriptor_ref)
-                    or candidate.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id):
+            if isinstance(candidate, ControlStatus):
+                valid = (candidate.protocol_version == PROTOCOL_VERSION
+                         and _valid_generation(candidate.runtime_id)
+                         and candidate.runtime_id == self._end_effector_runtime_id)
+            else:
+                valid = (candidate.protocol_version == BODY_STATE_PROTOCOL_VERSION
+                         and _valid_ref(candidate.descriptor_ref)
+                         and candidate.descriptor_ref.robot_runtime_id == self._end_effector_runtime_id)
+            if not valid:
                 return False
             commit()
             return True

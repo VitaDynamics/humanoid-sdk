@@ -29,7 +29,7 @@ class PullTest(unittest.TestCase):
             'control': ({'control_id': 19}, False),
             'generation': ({'generation': 84}, False),
             'hold': ({'phase': ExternalPhase.TIMEOUT_HOLD}, True),
-            'foreign_runtime_noise': ({'descriptor_ref': DescriptorRef(99)}, True),
+            'foreign_runtime_noise': ({'runtime_id': 99}, True),
         }
         for name, (change, allowed) in cases.items():
             with self.subTest(name=name):
@@ -58,11 +58,11 @@ class PullTest(unittest.TestCase):
                     guard(lambda: None)
                     c._on_ack(ControlAck(request_id=request.request_id,
                         operation=request.operation, accepted=True, client_id=9,
-                        control_id=13, descriptor_ref=DescriptorRef(11)))
+                        control_id=13, runtime_id=11))
                     if request.operation == ControlOperation.COMMIT:
                         t._pulls[CONTROL_STATUS_TOPIC].samples.append(S(payload=ControlStatus(
                             status_seq=1, current_action='EXTERNAL', phase=ExternalPhase.RUNNING,
-                            client_id=9, control_id=13, generation=42, descriptor_ref=DescriptorRef(11))))
+                            client_id=9, control_id=13, generation=42, runtime_id=11)))
                 t._publish_control = control
                 c.enter_external(.2)
                 def publish():
@@ -77,7 +77,7 @@ class PullTest(unittest.TestCase):
                     if change is not None:
                         status = ControlStatus(status_seq=2, current_action='EXTERNAL',
                             phase=ExternalPhase.RUNNING, client_id=9, control_id=13,
-                            generation=42, descriptor_ref=DescriptorRef(11))
+                            generation=42, runtime_id=11)
                         t._pulls[CONTROL_STATUS_TOPIC].samples.append(S(payload=replace(status, **change)))
                 finally:
                     release.set()
@@ -271,10 +271,10 @@ class PullTest(unittest.TestCase):
         t._wait_body_state=lambda timeout:t.wait_state(timeout).body_state()
         def publish(topic,req):
             if topic!=CONTROL_REQUEST_TOPIC:return
-            t.emit('/sdk/foot_humanoid/control/ack',ControlAck(request_id=req.request_id,operation=req.operation,accepted=not reject,client_id=9,control_id=13,descriptor_ref=DescriptorRef(11)))
+            t.emit('/sdk/foot_humanoid/control/ack',ControlAck(request_id=req.request_id,operation=req.operation,accepted=not reject,client_id=9,control_id=13,runtime_id=11))
             if not missing_status and req.operation in(ControlOperation.COMMIT,ControlOperation.CANCEL):
                 cancel=req.operation==ControlOperation.CANCEL
-                t.emit(CONTROL_STATUS_TOPIC,ControlStatus(status_seq=2 if cancel else 1,current_action='PASSIVE'if cancel else action,phase=ExternalPhase.IDLE if cancel else ExternalPhase.RUNNING,client_id=9,control_id=13,generation=42,descriptor_ref=DescriptorRef(11)))
+                t.emit(CONTROL_STATUS_TOPIC,ControlStatus(status_seq=2 if cancel else 1,current_action='PASSIVE'if cancel else action,phase=ExternalPhase.IDLE if cancel else ExternalPhase.RUNNING,client_id=9,control_id=13,generation=42,runtime_id=11))
         t.on_publish=publish;c=PullController(client_id=7,_transport=t);c.get_robot_info(.1);self.addCleanup(c.close);return c,t
 
     def test_enter_cancel_original_ack_lease_generation_no_body_callback(self):
@@ -290,18 +290,18 @@ class PullTest(unittest.TestCase):
         first=c.publish(command)
         t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
             status_seq=2,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
-            client_id=9,control_id=13,generation=84,descriptor_ref=DescriptorRef(11)))
+            client_id=9,control_id=13,generation=84,runtime_id=11))
         second=c.publish(command)
         self.assertEqual((first.session_id,first.sequence),(42,1))
         self.assertEqual((second.session_id,second.sequence),(84,1))
         t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
             status_seq=3,current_action='PASSIVE',phase=ExternalPhase.IDLE,
-            client_id=9,control_id=13,generation=84,descriptor_ref=DescriptorRef(11)))
+            client_id=9,control_id=13,generation=84,runtime_id=11))
         with self.assertRaises(NotRunningError):c.publish(command)
         self.assertEqual([m for topic,m in t.published if topic==BODY_CMD_TOPIC],[first,second])
         t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
             status_seq=4,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
-            client_id=9,control_id=13,generation=84,descriptor_ref=DescriptorRef(11)))
+            client_id=9,control_id=13,generation=84,runtime_id=11))
         resumed=c.publish(command)
         self.assertEqual((resumed.session_id,resumed.sequence),(84,2))
 
@@ -421,7 +421,7 @@ class PullTest(unittest.TestCase):
         pull._callbacks[CONTROL_STATUS_TOPIC]=[callback]
         pull._pulls[CONTROL_STATUS_TOPIC].samples.append(S(payload=ControlStatus(
             status_seq=2,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
-            client_id=9,control_id=13,generation=84,descriptor_ref=DescriptorRef(11))))
+            client_id=9,control_id=13,generation=84,runtime_id=11)))
 
         def poll():
             publish_polling.set()
@@ -466,7 +466,7 @@ class PullTest(unittest.TestCase):
         pull._callbacks[CONTROL_STATUS_TOPIC]=[callback]
         pull._pulls[CONTROL_STATUS_TOPIC].samples.append(S(payload=ControlStatus(
             status_seq=2,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
-            client_id=9,control_id=13,generation=84,descriptor_ref=DescriptorRef(11))))
+            client_id=9,control_id=13,generation=84,runtime_id=11)))
         t.poll_control_status=pull.poll_control_status
 
         def publish():
@@ -504,7 +504,7 @@ class PullTest(unittest.TestCase):
         self.assertEqual(t.published[-1][1].operation,ControlOperation.CANCEL)
 
     def test_state_source_has_one_array_wait_api_and_close_is_readonly(self):
-        calls=[];state=S(descriptor_ref=DescriptorRef(11));status=S(descriptor_ref=DescriptorRef(11))
+        calls=[];state=S(descriptor_ref=DescriptorRef(11));status=S(runtime_id=11)
         class Transport(FakeTransport):
             control_status=status
             def wait_state(self, timeout):
@@ -524,7 +524,7 @@ class RuntimeIdentityPullR3Test(unittest.TestCase):
         class Reader(FakeTransport):
             def __init__(self):
                 super().__init__()
-                self.reply = replace(robot_info_reply(), descriptor_ref=DescriptorRef(11))
+                self.reply = replace(robot_info_reply(), runtime_id=11)
                 self.state = S(descriptor_ref=DescriptorRef(11))
             def get_robot_info(self, timeout):
                 return self.reply
@@ -541,7 +541,7 @@ class RuntimeIdentityPullR3Test(unittest.TestCase):
         with self.assertRaises(ValueError):
             source.wait_state(.1)
         self.assertEqual(transport.published, [])
-        transport.reply = replace(transport.reply, descriptor_ref=DescriptorRef(12))
+        transport.reply = replace(transport.reply, runtime_id=12)
         with self.assertRaisesRegex(ValueError, 'runtime changed'):
             source.get_robot_info(.1)
         transport.state = S(descriptor_ref=DescriptorRef(11))
@@ -619,15 +619,17 @@ class PullCandidateCommitR3Test(unittest.TestCase):
     def test_real_status_ring_keeps_last_valid_on_foreign_runtime(self):
         source, transport = self.make_source()
         ring = transport._pulls[CONTROL_STATUS_TOPIC]
-        a = ControlStatus(1, 'PASSIVE', ExternalPhase.IDLE, descriptor_ref=DescriptorRef(11))
-        b = ControlStatus(2, 'EXTERNAL', ExternalPhase.RUNNING, descriptor_ref=DescriptorRef(99))
-        c = ControlStatus(3, 'PASSIVE', ExternalPhase.IDLE, descriptor_ref=DescriptorRef(11))
+        a = ControlStatus(1, 'PASSIVE', ExternalPhase.IDLE, runtime_id=11)
+        b = ControlStatus(2, 'EXTERNAL', ExternalPhase.RUNNING, runtime_id=99)
+        c = ControlStatus(3, 'PASSIVE', ExternalPhase.IDLE, runtime_id=11)
         ring.samples.append(S(payload=a))
         self.assertIs(source.control_status, a)
         ring.samples.append(S(payload=b))
         self.assertIs(source.control_status, a)
         self.assertIs(source.control_status, a)
         ring.samples.append(S(payload=replace(a, status_seq=2, protocol_version=2)))
+        self.assertIs(source.control_status, a)
+        ring.samples.append(S(payload=replace(a, status_seq=2, protocol_version=3)))
         self.assertIs(source.control_status, a)
         ring.samples.append(S(payload=c))
         self.assertIs(source.control_status, c)

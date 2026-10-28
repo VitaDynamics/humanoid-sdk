@@ -11,7 +11,7 @@ from functools import cached_property
 
 from ._body_codec import decode_body_state, _require_body_joints
 from .body_types import BODY_STATE_PROTOCOL_VERSION, BodyState, ServiceStatus
-from .controller import _deadline, _nonempty_text, _valid_ref
+from .controller import _deadline, _nonempty_text, _valid_ref, _valid_generation
 from ._state_stream import create_state_stream
 
 
@@ -86,8 +86,8 @@ class BodyStateSource:
             self._ensure_open()
             if (reply.status in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
                     and reply.info is not None and reply.info.body is not None
-                    and _valid_ref(reply.descriptor_ref)):
-                runtime = reply.descriptor_ref.robot_runtime_id
+                    and _valid_generation(reply.runtime_id)):
+                runtime = reply.runtime_id
                 if self._runtime_id != observed_runtime and self._runtime_id != runtime:
                     raise ValueError('discovery context changed while request was in flight')
                 if self._runtime_id is None:

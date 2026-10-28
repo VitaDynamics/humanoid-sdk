@@ -13,8 +13,7 @@ def robot_info_reply():
                                       -3., 3., -10., 10., -20., 20., 0., 200., 0., 10.) for i in range(31))
     identities = tuple(BodyMotorIdentity('fake-can', i + 1, i != 14) for i in range(31))
     body = BodyInfo(0, 31, tuple('fake_joint_' + str(i) for i in range(31)), joints, identities)
-    from locomotion_aorta.body_types import DescriptorRef
-    return GetRobotInfoResponse(ServiceStatus.SUCCESS, RobotInfo(1, 0, body, ()), '', DescriptorRef(11))
+    return GetRobotInfoResponse(ServiceStatus.SUCCESS, RobotInfo(1, 0, body, ()), '', 11)
 
 
 def body_array_frame(state):

@@ -268,7 +268,7 @@ class RuntimeIdentityStateSourceR3Test(unittest.TestCase):
             source._stream.emit()
             with self.assertRaisesRegex(ValueError, 'get_robot_info'):
                 source.snapshot(.01)
-            self.assertEqual(source.get_robot_info(.1).descriptor_ref.robot_runtime_id, 11)
+            self.assertEqual(source.get_robot_info(.1).runtime_id, 11)
             source._stream.emit()
             original = source.snapshot(.1)
             source._stream.emit(make_state(runtime_id=99)[0])

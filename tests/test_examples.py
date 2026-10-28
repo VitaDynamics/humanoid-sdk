@@ -49,7 +49,7 @@ class RecordingController:
         self.follow_commands = follow_commands
         self.transport = FakeTransport()
         self.transport.get_robot_info = lambda timeout: replace(
-            robot_info_reply(), descriptor_ref=DescriptorRef(100))
+            robot_info_reply(), runtime_id=100)
         self.controller = ExternalController(
             client_id=7, _transport=self.transport
         )
@@ -150,8 +150,7 @@ class RecordingController:
                         phase=phase,
                         client_id=9,
                         control_id=13,
-                        descriptor_ref=DescriptorRef(100),
-                        lease_deadline_monotonic_ns=0,
+                        runtime_id=100,
                         generation=17,
                         reject_count=reject_count,
                         stamp_monotonic_ns=(
@@ -171,7 +170,7 @@ class RecordingController:
                     accepted=True,
                     client_id=9,
                     control_id=13,
-                    descriptor_ref=DescriptorRef(100),
+                    runtime_id=100,
                 ),
             )
         elif message.operation == ControlOperation.COMMIT:
@@ -183,7 +182,7 @@ class RecordingController:
                     accepted=True,
                     client_id=9,
                     control_id=13,
-                    descriptor_ref=DescriptorRef(100),
+                    runtime_id=100,
                 ),
             )
             self.status_sequence += 1
@@ -195,8 +194,7 @@ class RecordingController:
                     phase=ExternalPhase.RUNNING,
                     client_id=9,
                     control_id=13,
-                    descriptor_ref=DescriptorRef(100),
-                    lease_deadline_monotonic_ns=0,
+                    runtime_id=100,
                     generation=17,
                     stamp_monotonic_ns=1_000_000_000,
                 ),
@@ -210,7 +208,7 @@ class RecordingController:
                     accepted=True,
                     client_id=9,
                     control_id=13,
-                    descriptor_ref=DescriptorRef(100),
+                    runtime_id=100,
                 ),
             )
             self.status_sequence += 1
@@ -222,7 +220,7 @@ class RecordingController:
                     phase=ExternalPhase.IDLE,
                     client_id=9,
                     control_id=13,
-                    descriptor_ref=DescriptorRef(100),
+                    runtime_id=100,
                     stamp_monotonic_ns=2_000_000_000,
                 ),
             )
@@ -461,7 +459,7 @@ class ExamplesSmokeTest(unittest.TestCase):
             message for topic, message in harness.transport.published
             if topic == CONTROL_REQUEST_TOPIC
         ]
-        self.assertEqual(requests[0].requested_lease_ms, 0)
+        self.assertFalse(hasattr(requests[0], "requested_lease_ms"))
         commands = [
             message for topic, message in harness.transport.published
             if topic == BODY_CMD_TOPIC
@@ -502,7 +500,7 @@ class ExamplesSmokeTest(unittest.TestCase):
             [request.operation for request in requests],
             [ControlOperation.PREPARE, ControlOperation.COMMIT, ControlOperation.CANCEL],
         )
-        self.assertTrue(all(request.requested_lease_ms == 0 for request in requests))
+        self.assertTrue(all(not hasattr(request, "requested_lease_ms") for request in requests))
         self.assertEqual(harness.status.current_action, "PASSIVE")
 
     def test_external_example_rejects_stale_preflight_lowstate(self):

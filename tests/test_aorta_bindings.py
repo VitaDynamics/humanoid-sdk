@@ -26,7 +26,7 @@ class AortaBindingContractTest(unittest.TestCase):
                 with self.subTest(action=action, operation=operation):
                     request = ControlRequest(request_id='bound-request', client_id=9,
                                              operation=operation, action_name=action, control_id=13,
-                                             descriptor_ref=DescriptorRef(11))
+                                             runtime_id=11)
                     builder = flatbuffers.Builder(256)
                     builder.Finish(transport_module._fill_control_request(bindings, request, builder, 0))
                     view = bindings.control_request_module.ControlRequest.GetRootAs(builder.Output())
@@ -144,7 +144,7 @@ class AortaBindingContractTest(unittest.TestCase):
             client_id=9,
             operation=ControlOperation.COMMIT,
             control_id=13,
-            descriptor_ref=DescriptorRef(11),
+            runtime_id=11,
         )
         builder = flatbuffers.Builder(256)
         root = transport_module._fill_control_request(
@@ -191,7 +191,7 @@ class AortaBindingContractTest(unittest.TestCase):
             request_id="request-unlimited",
             client_id=7,
             operation=ControlOperation.PREPARE,
-            descriptor_ref=DescriptorRef(11),
+            runtime_id=11,
         )
         builder = flatbuffers.Builder(256)
         root = transport_module._fill_control_request(bindings, request, builder, 0)
@@ -232,7 +232,7 @@ class R3ControlIdentityBindingTest(unittest.TestCase):
         bindings = transport_module._load_aorta_bindings()
         valid = ControlRequest(request_id='one', client_id=9,
                                operation=ControlOperation.COMMIT, control_id=13,
-                               descriptor_ref=DescriptorRef(11))
+                               runtime_id=11)
         for changes in ({'client_id': True}, {'client_id': 0}, {'client_id': -1},
                         {'client_id': 1 << 64}, {'control_id': True},
                         {'control_id': 0}, {'control_id': 1 << 64},

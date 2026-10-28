@@ -174,8 +174,8 @@ class ExternalController:
             self._ensure_open()
             if (reply.status in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
                     and reply.info is not None and reply.info.body is not None
-                    and _valid_ref(reply.descriptor_ref)):
-                runtime = reply.descriptor_ref.robot_runtime_id
+                    and _valid_generation(reply.runtime_id)):
+                runtime = reply.runtime_id
                 if (self._end_effector_runtime_id != observed_runtime
                         and self._end_effector_runtime_id != runtime):
                     raise ValueError('discovery context changed while request was in flight')
@@ -669,9 +669,9 @@ class ExternalController:
                 if (ack.operation != ControlOperation.PREPARE and self._control_id
                         and (ack.client_id != self.client_id or ack.control_id != self._control_id)):
                     return
-                if not _valid_ref(ack.descriptor_ref):
+                if not _valid_generation(ack.runtime_id):
                     return
-                if ack.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id:
+                if ack.runtime_id != self._end_effector_runtime_id:
                     handles = self._retire_runtime_locked()
                 else:
                     key = (ack.request_id, ack.operation)
@@ -694,8 +694,8 @@ class ExternalController:
             return
         with self._condition:
             if (not self._closed and self._end_effector_runtime_error is None
-                    and _valid_ref(status.descriptor_ref)
-                    and status.descriptor_ref.robot_runtime_id == self._end_effector_runtime_id):
+                    and _valid_generation(status.runtime_id)
+                    and status.runtime_id == self._end_effector_runtime_id):
                 if _status_is_newer(status, self._latest_status):
                     self._latest_status = status
                     self._condition.notify_all()
@@ -738,8 +738,7 @@ class ExternalController:
             operation=operation,
             action_name=self._request_action,
             control_id=self._control_id,
-            requested_lease_ms=0,
-            descriptor_ref=DescriptorRef(self._end_effector_runtime_id),
+            runtime_id=self._end_effector_runtime_id,
         )
 
     def _best_effort_cancel(self, *, request_id: str | None = None) -> None:
@@ -761,7 +760,7 @@ class ExternalController:
             with self._condition:
                 if self._end_effector_runtime_error is not None:
                     raise self._end_effector_runtime_changed()
-                if request.request_id != self._request_id or request.descriptor_ref != DescriptorRef(self._end_effector_runtime_id):
+                if request.request_id != self._request_id or request.runtime_id != self._end_effector_runtime_id:
                     raise NotRunningError('control request context changed before encoding')
                 if request.operation != self._expected_ack:
                     raise NotRunningError('control request phase changed before encoding')
@@ -800,7 +799,7 @@ class ExternalController:
             and status.phase in (ExternalPhase.RUNNING, ExternalPhase.TIMEOUT_HOLD)
             and status.client_id == self.client_id
             and status.control_id == self._control_id
-            and status.descriptor_ref == DescriptorRef(self._end_effector_runtime_id)
+            and status.runtime_id == self._end_effector_runtime_id
         )
 
     def _require_accepted(self, ack: ControlAck) -> None:

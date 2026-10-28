@@ -1,10 +1,9 @@
 from dataclasses import dataclass
 from enum import Enum
-from .body_types import DescriptorRef
 
 
-PROTOCOL_VERSION = 3
-CONTROL_REQUEST_VERSION = 3
+PROTOCOL_VERSION = 4
+CONTROL_REQUEST_VERSION = 4
 
 
 class ControlOperation(str, Enum):
@@ -69,9 +68,8 @@ class ControlRequest:
     operation: ControlOperation
     action_name: str = "EXTERNAL"
     control_id: int = 0
-    requested_lease_ms: int = 0  # Legacy wire field; the controller always sends 0.
     protocol_version: int = CONTROL_REQUEST_VERSION
-    descriptor_ref: DescriptorRef | None = None
+    runtime_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,9 +80,8 @@ class ControlAck:
     error_code: int = 0
     reason: str = ""
     control_id: int = 0
-    lease_deadline_monotonic_ns: int = 0  # Legacy wire field; 0 means no expiry.
     protocol_version: int = PROTOCOL_VERSION
-    descriptor_ref: DescriptorRef | None = None
+    runtime_id: int = 0
     client_id: int = 0
 
 
@@ -95,7 +92,6 @@ class ControlStatus:
     phase: ExternalPhase
     client_id: int = 0
     control_id: int = 0
-    lease_deadline_monotonic_ns: int = 0  # Legacy wire field; 0 means no expiry.
     generation: int = 0
     last_accepted_cmd_id: int = 0
     last_valid_age_ms: int = 0
@@ -106,4 +102,4 @@ class ControlStatus:
     ingress_drop_count: int = 0
     stamp_monotonic_ns: int = 0
     protocol_version: int = PROTOCOL_VERSION
-    descriptor_ref: DescriptorRef | None = None
+    runtime_id: int = 0

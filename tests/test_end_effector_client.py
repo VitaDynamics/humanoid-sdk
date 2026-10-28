@@ -161,7 +161,7 @@ class PendingTransport(FakeTransport):
 class EndEffectorClientTest(unittest.TestCase):
     def confirm_restart(self, harness, runtime_id=101):
         harness.transport.get_robot_info = lambda timeout: dataclasses.replace(
-            robot_info_reply(), descriptor_ref=DescriptorRef(runtime_id))
+            robot_info_reply(), runtime_id=runtime_id)
         with self.assertRaisesRegex(ValueError, 'new connection'):
             harness.controller.get_robot_info(.1)
 
@@ -373,7 +373,7 @@ class EndEffectorClientTest(unittest.TestCase):
         harness.controller.close()
         harness.transport = PendingTransport()
         harness.transport.get_robot_info = lambda timeout: dataclasses.replace(
-            robot_info_reply(), descriptor_ref=DescriptorRef(100))
+            robot_info_reply(), runtime_id=100)
         harness.controller = PullController(client_id=7, _transport=harness.transport)
         self.addCleanup(harness.controller.close)
         harness.controller.get_robot_info(.1)
@@ -1146,7 +1146,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 harness = ControllerHarness(runtime_id=100); harness.controller.close()
                 harness.transport = PendingTransport()
                 harness.transport.get_robot_info = lambda timeout: dataclasses.replace(
-                    robot_info_reply(), descriptor_ref=DescriptorRef(100))
+                    robot_info_reply(), runtime_id=100)
                 harness.controller = PullController(client_id=7, _transport=harness.transport)
                 self.addCleanup(harness.controller.close)
                 harness.controller.get_robot_info(.1)
@@ -1319,7 +1319,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 node = Node()
                 t.node, t.subscriptions = node, []
                 t.get_robot_info = lambda timeout: dataclasses.replace(
-                    robot_info_reply(), descriptor_ref=DescriptorRef(100))
+                    robot_info_reply(), runtime_id=100)
                 t._prepare_body_output = lambda: None
                 t.close = lambda: setattr(t, '_closed', True)
                 c = PullController(client_id=7, _transport=t)
@@ -1328,11 +1328,11 @@ class EndEffectorClientTest(unittest.TestCase):
                 def control(request, guard):
                     guard(lambda: None)
                     c._on_ack(ControlAck(request_id=request.request_id, operation=request.operation,
-                        accepted=True, client_id=9, control_id=13, descriptor_ref=DescriptorRef(100)))
+                        accepted=True, client_id=9, control_id=13, runtime_id=100))
                     if request.operation == ControlOperation.COMMIT:
                         t._pulls[CONTROL_STATUS_TOPIC].samples.append(SimpleNamespace(payload=ControlStatus(
                             status_seq=1, current_action='EXTERNAL', phase=ExternalPhase.RUNNING,
-                            client_id=9, control_id=13, generation=42, descriptor_ref=DescriptorRef(100))))
+                            client_id=9, control_id=13, generation=42, runtime_id=100)))
                 t._publish_control = control
                 c.enter_external(.2)
                 client = EndEffectorClient('left', connection=c)
@@ -1358,7 +1358,7 @@ class EndEffectorClientTest(unittest.TestCase):
                         self.assertTrue(entered.wait(2))
                         status = ControlStatus(status_seq=2, current_action='EXTERNAL',
                             phase=ExternalPhase.RUNNING, client_id=9, control_id=13,
-                            generation=42, descriptor_ref=DescriptorRef(100))
+                            generation=42, runtime_id=100)
                         if change is not None:
                             t._pulls[CONTROL_STATUS_TOPIC].samples.append(SimpleNamespace(
                                 payload=dataclasses.replace(status, **change)))

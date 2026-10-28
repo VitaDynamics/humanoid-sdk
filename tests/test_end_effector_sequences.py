@@ -93,7 +93,7 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
         self.assertEqual(len(self.node.commands), sent)
         self.assertEqual(info.descriptor_ref, old_ref)
         new_reply = self.service_reply('static/new_runtime_robot_info.fb')
-        self.assertNotEqual(new_reply.descriptor_ref, old_ref)
+        self.assertNotEqual(new_reply.runtime_id, old_ref.robot_runtime_id)
         self.harness.transport.get_robot_info = lambda timeout: new_reply
         with self.assertRaisesRegex(ValueError, 'new connection'):
             self.harness.controller.get_robot_info(.1)
@@ -110,7 +110,7 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
             observation_sources=((SampleStream.EE_STATE, 1),))
         self.addCleanup(new_client.close)
         new_info = self.feed('info', 'static/left_new_runtime_info.fb', client=new_client)
-        self.assertEqual(new_info.descriptor_ref, new_reply.descriptor_ref)
+        self.assertEqual(new_info.descriptor_ref.robot_runtime_id, new_reply.runtime_id)
         fresh.accept_enter(); fresh.controller.enter_external(timeout=.1)
         with self.assertRaises(ValueError):
             new_client.publish(target, input_observations=(old_sample,))
@@ -203,7 +203,7 @@ class EndEffectorSequenceTest(unittest.TestCase):
                 self.addCleanup(c.close)
                 reply = robot_info_reply()
                 c.transport.get_robot_info = lambda timeout: replace(
-                    reply, descriptor_ref=DescriptorRef(100), info=replace(reply.info, body=body_info()))
+                    reply, runtime_id=100, info=replace(reply.info, body=body_info()))
                 endpoints = [Endpoint(c, side, inhibited=reject) for side in
                              (('left', 'right') if sine else ('right',))]
                 for endpoint, opening in zip(endpoints, (.03125, .0625) if sine else (.0625,)):

@@ -583,7 +583,7 @@ class EndEffectorExampleTest(unittest.TestCase):
         source, connection, client, controller = Mock(), Mock(), Mock(), Mock()
         source.return_value.__enter__ = Mock(return_value=connection)
         source.return_value.__exit__ = Mock(return_value=False)
-        connection.get_robot_info.return_value = replace(robot_info_reply(), descriptor_ref=None)
+        connection.get_robot_info.return_value = replace(robot_info_reply(), runtime_id=0)
         with self.assertRaisesRegex(RuntimeError, 'startup identity'):
             demo.main(['--side', 'right'], _state_source_factory=source,
                       _client_factory=client, _controller_factory=controller)
@@ -909,7 +909,7 @@ class PartialFeedbackGuardTest(unittest.TestCase):
         self.node.emit('left','info',info_object(runtime=101))
         self.assertEqual(self.client.info.descriptor_ref, DescriptorRef(100))
         self.harness.transport.get_robot_info = lambda timeout: replace(
-            robot_info_reply(), descriptor_ref=DescriptorRef(101))
+            robot_info_reply(), runtime_id=101)
         with self.assertRaises(ValueError):
             self.harness.controller.get_robot_info(.1)
         with self.assertRaises(ValueError):
