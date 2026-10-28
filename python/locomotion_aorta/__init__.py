@@ -83,12 +83,12 @@ __all__ += ["JOY_TOPIC", "JOY_PULL_DEPTH", "JoyReader", "JoySnapshot"]
 
 from .end_effector import EndEffectorClient, TouchSetError
 from .end_effector_types import (
-    CommandKey, ControlRef, SampleRef, EndEffectorInfo, EndEffectorState,
+    CommandKey, SampleRef, EndEffectorInfo, EndEffectorState,
     EndEffectorTouch, EndEffectorTarget, EndEffectorSubmission,
     EndEffectorSetTouchRequest, EndEffectorSetTouchResponse,
 )
 __all__ += [
-    "EndEffectorClient", "TouchSetError", "CommandKey", "ControlRef", "SampleRef",
+    "EndEffectorClient", "TouchSetError", "CommandKey", "SampleRef",
     "EndEffectorInfo", "EndEffectorState", "EndEffectorTouch", "EndEffectorTarget",
     "EndEffectorSubmission", "EndEffectorSetTouchRequest", "EndEffectorSetTouchResponse",
 ]

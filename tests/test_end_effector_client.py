@@ -14,11 +14,12 @@ from unittest.mock import patch
 import flatbuffers
 
 from fake_transport import FakeTransport
+from body_fixtures import robot_info_reply
 from test_controller import ControllerHarness, make_command
 from test_end_effector_codec import info_object, state_object, touch_object, pack, target
 from locomotion_aorta import (
     CONTROL_REQUEST_TOPIC, CONTROL_STATUS_TOPIC, ControllerClosedError,
-    ControlOperation,
+    ControlAck, ControlStatus, ControlOperation,
     ExternalController, ExternalPhase, InvalidCommandError, NotRunningError,
     PullController, PullStateSource,
 )
@@ -84,7 +85,7 @@ class TouchRPC(Handle):
         if self.node.rpc_error is not None:
             raise self.node.rpc_error
         response = self.node.touch_bindings.response.EndEffectorSetTouchResponseT(
-            protocolVersion=1,
+            protocolVersion=2,
             descriptorRef=self.node.bindings.DescriptorRef.DescriptorRefT(
                 wire.DescriptorRef().RobotRuntimeId()),
             side=wire.Side(), status=ServiceStatus.SUCCESS, reason=TouchSetReason.NONE)
@@ -158,6 +159,12 @@ class PendingTransport(FakeTransport):
 
 
 class EndEffectorClientTest(unittest.TestCase):
+    def confirm_restart(self, harness, runtime_id=101):
+        harness.transport.get_robot_info = lambda timeout: dataclasses.replace(
+            robot_info_reply(), descriptor_ref=DescriptorRef(runtime_id))
+        with self.assertRaisesRegex(ValueError, 'new connection'):
+            harness.controller.get_robot_info(.1)
+
     def test_teleop_real_ee_commands_and_touch_share_one_confirmed_controller(self):
         harness, node = self.harness(running=False)
         left = self.client(harness, node, touch=True)
@@ -178,11 +185,9 @@ class EndEffectorClientTest(unittest.TestCase):
         for (_, wire), expected in zip(node.commands, (first, second)):
             self.assertEqual((wire.Key().SessionId(), wire.Key().Sequence()),
                              (expected.key.session_id, expected.key.sequence))
-            self.assertEqual((wire.ControlRef().ClientId(), wire.ControlRef().LeaseId()),
-                             (harness.controller.client_id.encode(), harness.lease_id.encode()))
+            self.assertEqual(wire.ControlId(), harness.control_id)
         touch = node.touch_requests[0]
-        self.assertEqual((touch.ControlRef().ClientId(), touch.ControlRef().LeaseId()),
-                         (harness.controller.client_id.encode(), harness.lease_id.encode()))
+        self.assertEqual(touch.ControlId(), harness.control_id)
         self.assertIs(left.connection, right.connection)
         harness.controller._best_effort_cancel()
         before = (len(node.commands), len(node.touch_requests), harness.controller._next_external_sequence)
@@ -230,8 +235,8 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(harness.controller._next_external_sequence, 1)
         self.assertEqual(node.handles[-1].close_count, 1)
 
-    def harness(self, *, running=True):
-        harness = ControllerHarness()
+    def harness(self, *, running=True, runtime_id=100):
+        harness = ControllerHarness(runtime_id=runtime_id)
         self.addCleanup(harness.controller.close)
         node = Node()
         harness.transport.node = node
@@ -262,17 +267,15 @@ class EndEffectorClientTest(unittest.TestCase):
         fourth = harness.controller.publish(make_command(0))
         self.assertEqual((first.sequence, second.key.sequence, third.key.sequence, fourth.sequence), (1, 2, 3, 4))
         self.assertEqual((first.session_id, second.key.session_id, third.key.session_id), (2**64-1,)*3)
-        self.assertEqual(second.control_ref.client_id, harness.controller.client_id)
-        self.assertEqual(second.control_ref.lease_id, harness.lease_id)
+        self.assertEqual(second.control_id, harness.control_id)
         self.assertEqual(second.descriptor_ref, DescriptorRef(100))
         self.assertEqual((second.ts_client_created_us, second.ts_client_send_us), (0, 0))
         for (topic, wire), expected in zip(node.commands, (second, third)):
             self.assertTrue(topic.endswith('/cmd'))
             self.assertEqual((wire.Key().SessionId(), wire.Key().Sequence()),
                              (expected.key.session_id, expected.key.sequence))
-            self.assertEqual((wire.ControlRef().ClientId(), wire.ControlRef().LeaseId()),
-                             (harness.controller.client_id.encode(), harness.lease_id.encode()))
-            self.assertEqual((wire.Side(), wire.Pos(0), wire.Tau(0)),
+            self.assertEqual(wire.ControlId(), harness.control_id)
+            self.assertEqual((wire.Side(), wire.Axes(0).Pos(), wire.Axes(0).Tau()),
                              (expected.side, .03125, expected.target.tau[0]))
         self.assertIs(left.connection, harness.controller)
         self.assertIs(right.connection.transport.node, node)
@@ -347,7 +350,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
 
     def test_foreign_owner_lease_invalid_generation_and_unentered_connection_cannot_send(self):
-        for replacement in ({'client_id': 'other'}, {'lease_id': 'other'}, {'generation': 0}):
+        for replacement in ({'client_id': 17}, {'control_id': 19}, {'generation': 0}):
             with self.subTest(replacement=replacement):
                 harness, node = self.harness()
                 client = self.client(harness, node)
@@ -366,16 +369,19 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertFalse(any(topic == CONTROL_REQUEST_TOPIC for topic, _ in harness.transport.published))
 
     def test_pull_connection_drains_pending_foreign_status_before_real_ee_publish(self):
-        harness = ControllerHarness()
+        harness = ControllerHarness(runtime_id=100)
         harness.controller.close()
         harness.transport = PendingTransport()
-        harness.controller = PullController(client_id='test-client', _transport=harness.transport)
+        harness.transport.get_robot_info = lambda timeout: dataclasses.replace(
+            robot_info_reply(), descriptor_ref=DescriptorRef(100))
+        harness.controller = PullController(client_id=7, _transport=harness.transport)
         self.addCleanup(harness.controller.close)
+        harness.controller.get_robot_info(.1)
         node = Node(); harness.transport.node = node
         harness.accept_enter(); harness.controller.enter_external(timeout=.1)
         client = self.client(harness, node)
         owned = harness.controller.status
-        harness.transport.pending.append(dataclasses.replace(owned, status_seq=2, client_id='other'))
+        harness.transport.pending.append(dataclasses.replace(owned, status_seq=2, client_id=17))
         with self.assertRaises(NotRunningError):
             client.publish(target())
         self.assertEqual(node.commands, [])
@@ -429,6 +435,8 @@ class EndEffectorClientTest(unittest.TestCase):
         client = self.client(harness, node)
         sibling = self.client(harness, node, 'right')
         node.emit('left', 'info', info_object(runtime=101))
+        self.assertEqual(client.info.descriptor_ref, DescriptorRef(100))
+        self.confirm_restart(harness)
         with self.assertRaisesRegex(ValueError, 'lifecycle'):
             client.wait_state(0.01)
         with self.assertRaises(ValueError):
@@ -442,7 +450,7 @@ class EndEffectorClientTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'new connection'):
             EndEffectorClient('left', connection=harness.controller)
 
-        fresh, fresh_node = self.harness()
+        fresh, fresh_node = self.harness(runtime_id=101)
         fresh_client = self.client(fresh, fresh_node, feedback=False)
         self.assertEqual(confirm_info(fresh_client, fresh_node, info_object(runtime=101)).descriptor_ref,
                          DescriptorRef(101))
@@ -452,7 +460,7 @@ class EndEffectorClientTest(unittest.TestCase):
     def test_runtime_poison_linearizes_before_reservation_and_final_typed_fill(self):
         for stage, method_name, allocated_before_poison in (
                 ('reservation', '_reserve_end_effector_command', False),
-                ('typed-fill', '_run_end_effector_gate', True)):
+                ('typed-fill', '_end_effector_control_context', True)):
             with self.subTest(stage=stage):
                 harness, node = self.harness()
                 left = self.client(harness, node)
@@ -481,7 +489,7 @@ class EndEffectorClientTest(unittest.TestCase):
                     thread.start()
                     try:
                         self.assertTrue(entered.wait(1))
-                        node.emit('left', 'info', info_object(runtime=101))
+                        self.confirm_restart(harness)
                     finally:
                         release.set()
                         thread.join(2)
@@ -495,23 +503,10 @@ class EndEffectorClientTest(unittest.TestCase):
                     right.publish(target())
                 self.assertEqual(harness.controller._next_external_sequence, after_poison)
 
-                body = harness.controller.publish(make_command(0))
-                self.assertEqual(body.sequence, after_poison)
-                previous_publish = harness.transport.on_publish
-
-                def accept_cancel(topic, request):
-                    if (topic == CONTROL_REQUEST_TOPIC and
-                            request.operation == ControlOperation.CANCEL):
-                        harness.ack(request)
-                        harness.status(action='PASSIVE', phase=ExternalPhase.IDLE)
-                    else:
-                        previous_publish(topic, request)
-
-                harness.transport.on_publish = accept_cancel
-                self.assertEqual(
-                    harness.controller.exit_external(.1).phase, ExternalPhase.IDLE
-                )
-                self.assertTrue(left._fatal is right._fatal)
+                with self.assertRaises(ValueError):
+                    harness.controller.publish(make_command(0))
+                self.assertIsNotNone(left._fatal)
+                self.assertIsNotNone(right._fatal)
 
     def test_runtime_poison_retires_sibling_publisher_and_inflight_rpc_once(self):
         harness, node = self.harness()
@@ -540,7 +535,7 @@ class EndEffectorClientTest(unittest.TestCase):
             self.assertTrue(entered.wait(1))
             rpc = next(handle for handle in reversed(node.handles)
                        if isinstance(handle, TouchRPC))
-            node.emit('left', 'info', info_object(touch=True, runtime=101))
+            self.confirm_restart(harness)
             self.assertEqual((publisher.close_count, rpc.close_count), (1, 1))
         finally:
             release.set()
@@ -580,7 +575,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 thread.join(2)
         self.assertFalse(thread.is_alive())
         self.assertTrue(all(handle.close_count == 1 for handle in left_handles))
-        self.assertIsNone(harness.controller._end_effector_runtime_id)
+        self.assertEqual(harness.controller._end_effector_runtime_id, 100)
         self.assertIsNone(harness.controller._end_effector_runtime_error)
         self.assertEqual(
             confirm_info(right, node, info_object(side=2)).descriptor_ref,
@@ -591,6 +586,7 @@ class EndEffectorClientTest(unittest.TestCase):
     def test_read_only_clients_on_one_source_share_one_runtime_binding(self):
         harness, node = self.harness(running=False)
         source = PullStateSource(_transport=harness.transport)
+        source.get_robot_info(.1)
         left = EndEffectorClient('left', connection=source, read_only=True)
         right = EndEffectorClient('right', connection=source, read_only=True)
         self.addCleanup(source.close)
@@ -599,8 +595,10 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(confirm_info(left, node, info_object()).descriptor_ref,
                          DescriptorRef(100))
         node.emit('right', 'info', info_object(side=2, runtime=101))
-        with self.assertRaisesRegex(ValueError, 'lifecycle'):
+        with self.assertRaises(TimeoutError):
             right.wait_info(0.01)
+        self.assertEqual(confirm_info(right, node, info_object(side=2)).descriptor_ref,
+                         DescriptorRef(100))
 
     def test_read_only_fake_transport_enforces_the_real_closed_gate(self):
         harness, node = self.harness(running=False)
@@ -609,7 +607,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.addCleanup(client.close)
         source.close()
         node.emit('left', 'info', info_object())
-        with self.assertRaisesRegex(ValueError, 'lifecycle'):
+        with self.assertRaises(ControllerClosedError):
             client.wait_info(.01)
 
     def test_same_runtime_publication_metadata_may_change_but_static_semantics_may_not(self):
@@ -679,7 +677,7 @@ class EndEffectorClientTest(unittest.TestCase):
         harness, node = self.harness(running=False)
         client = self.client(harness, node)
         first = client.state
-        malformed = state_object(sample=2); malformed.pos = []
+        malformed = state_object(sample=2); malformed.axes = None
         for obj in (state_object(side=2, sample=2), malformed):
             node.emit('left', 'state', obj)
             with self.assertRaisesRegex(ValueError, 'invalid EE state'):
@@ -687,7 +685,7 @@ class EndEffectorClientTest(unittest.TestCase):
             self.assertIs(client._latest['state'], first)
         node.emit('left', 'state', state_object(sample=2))
         second = client.state
-        resized = state_object(sample=3); resized.validFields = []
+        resized = state_object(sample=3); resized.axes = []
         node.emit('left', 'state', resized)
         with self.assertRaisesRegex(ValueError, 'invalid EE state'):
             client.wait_state(0.01)
@@ -808,6 +806,7 @@ class EndEffectorClientTest(unittest.TestCase):
     def test_read_only_cli_is_actual_client_consumer_without_control_or_touch_writes(self):
         harness, node = self.harness(running=False)
         source = PullStateSource(_transport=harness.transport)
+        source.get_robot_info(.1)
         script = Path(__file__).resolve().parents[1] / 'examples/end_effector_state_subscriber/end_effector_state_subscriber.py'
         spec = importlib.util.spec_from_file_location('ee_readonly_cli', script)
         cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
@@ -815,7 +814,8 @@ class EndEffectorClientTest(unittest.TestCase):
         with EndEffectorClient('left', connection=source, read_only=True) as client:
             confirm_info(client, node, info_object(n=2, touch=True))
             state = state_object(n=2)
-            state.validFields = [Field.POS | Field.ERROR_CODE, 0]
+            state.axes[0].validFields = Field.POS | Field.ERROR_CODE
+            state.axes[1].validFields = 0
             node.emit('left', 'state', state)
             node.emit('left', 'touch', touch_object())
             cli.run_once(client, timeout=0.01, include_touch=True, emit=lines.append)
@@ -851,8 +851,7 @@ class EndEffectorClientTest(unittest.TestCase):
         cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
         original_wait = client.wait_state
         def change_runtime(timeout):
-            info = info_object(runtime=101)
-            confirm_info(client, node, info)
+            self.confirm_restart(harness)
             return original_wait(timeout)
         lines = []
         with patch.object(client, 'wait_state', side_effect=change_runtime):
@@ -871,8 +870,7 @@ class EndEffectorClientTest(unittest.TestCase):
         cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
         original_wait = client.wait_touch
         def change_runtime(timeout):
-            info = info_object(runtime=101, touch=True)
-            confirm_info(client, node, info)
+            self.confirm_restart(harness)
             return original_wait(timeout)
         lines = []
         with patch.object(client, 'wait_touch', side_effect=change_runtime):
@@ -922,10 +920,9 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertTrue(all(o.timeout_ms == 125 and o.allow_retry is False for o in node.rpc_options))
         self.assertEqual([w.Enable() for w in node.touch_requests], [True, False])
         for wire in node.touch_requests:
-            self.assertEqual((wire.ProtocolVersion(), wire.LayoutId(), wire.Side()), (1, 7, 1))
+            self.assertEqual((wire.ProtocolVersion(), wire.LayoutId(), wire.Side()), (2, 7, 1))
             self.assertEqual(wire.DescriptorRef().RobotRuntimeId(), 100)
-            self.assertEqual((wire.ControlRef().ClientId(), wire.ControlRef().LeaseId()),
-                             (harness.controller.client_id.encode(), harness.lease_id.encode()))
+            self.assertEqual(wire.ControlId(), harness.control_id)
             self.assertFalse(hasattr(wire, 'Key'))
         self.assertEqual(node.commands, [])
         self.assertEqual((first.sequence, client.publish(target()).key.sequence,
@@ -943,14 +940,17 @@ class EndEffectorClientTest(unittest.TestCase):
                 elif reason == 'wrong-side':
                     node.emit('left', 'info', info_object(side=2, touch=True))
                 elif reason == 'bad-ref':
-                    with self.assertRaisesRegex(ValueError, 'recreate'):
-                        confirm_info(client, node, info_object(runtime=101, touch=True))
+                    self.confirm_restart(harness)
                 with self.assertRaises((ValueError, InvalidCommandError, ControllerClosedError)):
                     client.set_touch(1 if reason == 'enable' else True,
                                      timeout=0 if reason == 'timeout' else .1)
                 self.assertEqual(node.rpc_options, [])
                 self.assertEqual(node.touch_requests, [])
-                self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+                if reason == 'bad-ref':
+                    with self.assertRaises(ValueError):
+                        harness.controller.publish(make_command(0))
+                else:
+                    self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
         harness, node = self.harness()
         client = self.client(harness, node, touch=True)
         for timeout in (True, -1, float('nan'), float('inf'), '1', 1e300):
@@ -970,7 +970,7 @@ class EndEffectorClientTest(unittest.TestCase):
                     elif change == 'closed':
                         harness.controller.close()
                     else:
-                        changes = {'owner': {'client_id': 'other'}, 'lease': {'lease_id': 'other'},
+                        changes = {'owner': {'client_id': 17}, 'lease': {'control_id': 19},
                                    'generation': {'generation': 84}}[change]
                         harness.transport.emit(CONTROL_STATUS_TOPIC, dataclasses.replace(owned, status_seq=2, **changes))
                 node.match_hook = change_owner
@@ -988,9 +988,9 @@ class EndEffectorClientTest(unittest.TestCase):
                 if change == 'owner':
                     owned = harness.controller.status
                     node.before_fill_hook = lambda: harness.transport.emit(CONTROL_STATUS_TOPIC,
-                        dataclasses.replace(owned, status_seq=2, lease_id='other'))
+                        dataclasses.replace(owned, status_seq=2, control_id=19))
                 else:
-                    node.before_fill_hook = lambda: confirm_info(client, node, info_object(touch=True, runtime=101))
+                    node.before_fill_hook = lambda: self.confirm_restart(harness)
                 with self.assertRaises((NotRunningError, InvalidCommandError, ValueError)):
                     client.set_touch(True, timeout=.1)
                 self.assertEqual(node.touch_requests, [])
@@ -1003,7 +1003,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 client = self.client(harness, node, touch=True)
                 old_state, old_touch = client.state, client.touch
                 if change == 'descriptor':
-                    node.rpc_hook = lambda: confirm_info(client, node, info_object(touch=True, runtime=101))
+                    node.rpc_hook = lambda: self.confirm_restart(harness)
                 elif change == 'generation':
                     node.rpc_hook = lambda: harness.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
                 elif change == 'cancel':
@@ -1143,16 +1143,19 @@ class EndEffectorClientTest(unittest.TestCase):
     def test_set_touch_pull_drains_initial_and_post_matching_and_inflight_revocations(self):
         for stage in ('initial', 'matching', 'fill', 'rpc'):
             with self.subTest(stage=stage):
-                harness = ControllerHarness(); harness.controller.close()
+                harness = ControllerHarness(runtime_id=100); harness.controller.close()
                 harness.transport = PendingTransport()
-                harness.controller = PullController(client_id='test-client', _transport=harness.transport)
+                harness.transport.get_robot_info = lambda timeout: dataclasses.replace(
+                    robot_info_reply(), descriptor_ref=DescriptorRef(100))
+                harness.controller = PullController(client_id=7, _transport=harness.transport)
                 self.addCleanup(harness.controller.close)
+                harness.controller.get_robot_info(.1)
                 node = Node(); harness.transport.node = node
                 harness.accept_enter(); harness.controller.enter_external(.1)
                 client = self.client(harness, node, touch=True)
                 owned = harness.controller.status
                 def revoke():
-                    harness.transport.pending.append(dataclasses.replace(owned, status_seq=2, client_id='other'))
+                    harness.transport.pending.append(dataclasses.replace(owned, status_seq=2, client_id=17))
                 if stage == 'initial': revoke()
                 elif stage == 'matching': node.match_hook = revoke
                 elif stage == 'fill': node.before_fill_hook = revoke
@@ -1169,6 +1172,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(node.handles[-1].close_count, 1)
         self.assertEqual(node.touch_requests, [])
         source = PullStateSource(_transport=harness.transport)
+        source.get_robot_info(.1)
         with EndEffectorClient('left', connection=source, read_only=True) as readonly:
             node.emit('left', 'info', info_object(touch=True))
             before = len(node.rpc_options)
@@ -1183,7 +1187,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 client = self.client(harness, node, touch=True)
                 if running:
                     harness.transport.emit(CONTROL_STATUS_TOPIC,
-                        dataclasses.replace(harness.controller.status, status_seq=2, lease_id='other'))
+                        dataclasses.replace(harness.controller.status, status_seq=2, control_id=19))
                 before = list(harness.transport.published)
                 with self.assertRaises(NotRunningError): client.set_touch(True, timeout=.1)
                 self.assertEqual(node.rpc_options, [])
@@ -1246,6 +1250,131 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(harness.transport.published, before)
         self.assertEqual(harness.controller.publish(make_command(0)).sequence, 3)
 
+    def test_body_and_selected_ee_sample_keep_order_after_latest_changes(self):
+        from test_body_codec import make_state
+        from locomotion_aorta._body_codec import decode_body_state
+        harness, node = self.harness()
+        sources = ((SampleStream.BODY_STATE, 0), (SampleStream.EE_STATE, 1))
+        client = self.client(harness, node, observation_sources=sources)
+        body = decode_body_state(make_state(runtime_id=100)[1])
+        body_ref = SampleRef(body.descriptor_ref, SampleStream.BODY_STATE, 0,
+                             body.state_id, body.ts_state_real_us, 3)
+        node.emit('left', 'state', state_object(sample=100))
+        selected = client.state.sample_ref
+        node.emit('left', 'state', state_object(sample=102))
+        self.assertEqual(client.state.state_id, 102)
+        sent = client.publish(target(), input_observations=(body_ref, selected))
+        wire = node.commands[-1][1]
+        self.assertEqual(sent.input_observations, (body_ref, selected))
+        self.assertEqual([(wire.InputObservations(i).Stream(), wire.InputObservations(i).Side(),
+                           wire.InputObservations(i).SampleId(), wire.InputObservations(i).SourceTimeUs(),
+                           wire.InputObservations(i).Validity()) for i in range(2)],
+                         [(s.stream, s.side, s.sample_id, s.source_time_us, s.validity)
+                          for s in (body_ref, selected)])
+        self.assertEqual(wire.InputObservations(1).SampleId(), 100)
+        self.assertFalse(hasattr(wire.InputObservations(0), 'DescriptorRef'))
+
+    def test_ee_final_submit_rechecks_owner_and_generation_after_reservation(self):
+        for change in ({'client_id': 17}, {'control_id': 19}, {'generation': 84}):
+            with self.subTest(change=change):
+                harness, node = self.harness()
+                client = self.client(harness, node)
+                original = harness.controller._end_effector_control_context
+                entered, release = threading.Event(), threading.Event()
+                errors = []
+                def blocked(*args, **kwargs):
+                    entered.set()
+                    if not release.wait(2):
+                        raise TimeoutError('test gate not released')
+                    return original(*args, **kwargs)
+                def send():
+                    try:
+                        client.publish(target())
+                    except Exception as error:
+                        errors.append(error)
+                with patch.object(harness.controller, '_end_effector_control_context', side_effect=blocked):
+                    thread = threading.Thread(target=send)
+                    thread.start()
+                    try:
+                        self.assertTrue(entered.wait(2))
+                        owned = harness.controller.status
+                        harness.transport.emit(CONTROL_STATUS_TOPIC, dataclasses.replace(
+                            owned, status_seq=owned.status_seq + 1, **change))
+                    finally:
+                        release.set()
+                        thread.join(2)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(len(errors), 1)
+                self.assertIsInstance(errors[0], NotRunningError)
+                self.assertEqual(node.commands, [])
+                self.assertEqual(harness.controller._next_external_sequence, 2)
+
+    def test_ee_pull_ring_revocation_after_reservation_before_typed_submit(self):
+        from test_pull import PullTest
+        for change in (None, {'descriptor_ref': DescriptorRef(101)},
+                       {'client_id': 17}, {'control_id': 19}, {'generation': 84}):
+            with self.subTest(change=change):
+                t = PullTest().transport()
+                t._candidate_gate = None
+                node = Node()
+                t.node, t.subscriptions = node, []
+                t.get_robot_info = lambda timeout: dataclasses.replace(
+                    robot_info_reply(), descriptor_ref=DescriptorRef(100))
+                t._prepare_body_output = lambda: None
+                t.close = lambda: setattr(t, '_closed', True)
+                c = PullController(client_id=7, _transport=t)
+                self.addCleanup(c.close)
+                c.get_robot_info(.1)
+                def control(request, guard):
+                    guard(lambda: None)
+                    c._on_ack(ControlAck(request_id=request.request_id, operation=request.operation,
+                        accepted=True, client_id=9, control_id=13, descriptor_ref=DescriptorRef(100)))
+                    if request.operation == ControlOperation.COMMIT:
+                        t._pulls[CONTROL_STATUS_TOPIC].samples.append(SimpleNamespace(payload=ControlStatus(
+                            status_seq=1, current_action='EXTERNAL', phase=ExternalPhase.RUNNING,
+                            client_id=9, control_id=13, generation=42, descriptor_ref=DescriptorRef(100))))
+                t._publish_control = control
+                c.enter_external(.2)
+                client = EndEffectorClient('left', connection=c)
+                self.addCleanup(client.close)
+                confirm_info(client, node, info_object())
+                original = c._end_effector_control_context
+                entered, release = threading.Event(), threading.Event()
+                errors = []
+                def blocked(*args, **kwargs):
+                    entered.set()
+                    if not release.wait(2):
+                        raise TimeoutError('test gate not released')
+                    return original(*args, **kwargs)
+                def send():
+                    try:
+                        client.publish(target())
+                    except Exception as error:
+                        errors.append(error)
+                with patch.object(c, '_end_effector_control_context', side_effect=blocked):
+                    thread = threading.Thread(target=send)
+                    thread.start()
+                    try:
+                        self.assertTrue(entered.wait(2))
+                        status = ControlStatus(status_seq=2, current_action='EXTERNAL',
+                            phase=ExternalPhase.RUNNING, client_id=9, control_id=13,
+                            generation=42, descriptor_ref=DescriptorRef(100))
+                        if change is not None:
+                            t._pulls[CONTROL_STATUS_TOPIC].samples.append(SimpleNamespace(
+                                payload=dataclasses.replace(status, **change)))
+                    finally:
+                        release.set()
+                        thread.join(2)
+                self.assertFalse(thread.is_alive())
+                allowed = change is None or 'descriptor_ref' in change
+                self.assertEqual(len(errors), 0 if allowed else 1)
+                if not allowed:
+                    self.assertIsInstance(errors[0], NotRunningError)
+                self.assertEqual(len(node.commands), int(allowed))
+                if allowed:
+                    self.assertEqual(node.commands[0][1].ControlId(), 13)
+                self.assertEqual(c._next_external_sequence, 2)
+
     def test_observation_shape_identity_and_width_fail_before_reservation(self):
         harness, node = self.harness()
         sources = ((SampleStream.EE_STATE, 1), (SampleStream.EE_STATE, 2))
@@ -1287,7 +1416,7 @@ class EndEffectorClientTest(unittest.TestCase):
             observation_sources=((SampleStream.EE_STATE, 1),))
         old_sample = old_client.state.sample_ref
 
-        harness, node = self.harness()
+        harness, node = self.harness(runtime_id=101)
         client = self.client(harness, node, feedback=False,
             observation_sources=((SampleStream.EE_STATE, 1),))
         confirm_info(client, node, info_object(runtime=101))
@@ -1344,7 +1473,7 @@ class EndEffectorClientTest(unittest.TestCase):
         for index, (position, torque) in enumerate(((0., -.5), (.0625, .5)), 1):
             sent = client.publish(dataclasses.replace(target(torque=torque), pos=(position,), vel_limit=(.125,)))
             self.assertEqual(sent.key, CommandKey(harness.generation, index))
-            self.assertEqual((node.commands[-1][1].Pos(0), node.commands[-1][1].Tau(0)), (position, torque))
+            self.assertEqual((node.commands[-1][1].Axes(0).Pos(), node.commands[-1][1].Axes(0).Tau()), (position, torque))
 
     def test_callback_error_does_not_relabel_valid_feedback_and_close_attempts_every_handle(self):
         harness, node = self.harness()
@@ -1394,7 +1523,7 @@ class EndEffectorClientTest(unittest.TestCase):
         client = self.client(harness, node)
         first_time = client.motion_feedback()[3]
         stale = state_object(); stale.tsStatePubUs = 120; stale.sampleStatus = 3
-        stale.validFields = [0]; stale.pos = [0.]
+        stale.axes[0].validFields = 0; stale.axes[0].pos = 0.
         node.emit('left', 'state', stale)
         latest, position, _, received = client.motion_feedback()
         self.assertIs(position, latest)
@@ -1470,25 +1599,31 @@ class EndEffectorClientTest(unittest.TestCase):
         with patch('locomotion_aorta.end_effector.time.monotonic', return_value=10.):
             node.emit('left', 'state', state_object(n=2))
         position = client.state
-        fault = state_object(n=2, sample=2); fault.validFields = [Field.ERROR_CODE]*2
-        fault.errorCode = [9, 0]
+        fault = state_object(n=2, sample=2)
+        for axis, code in zip(fault.axes, (9, 0)):
+            axis.validFields, axis.errorCode = Field.ERROR_CODE, code
         node.emit('left', 'state', fault)
         fault_view = client.state
-        temp = state_object(n=2, sample=3); temp.validFields = [Field.TEMPERATURE]*2
+        temp = state_object(n=2, sample=3)
+        for axis in temp.axes: axis.validFields = Field.TEMPERATURE
         node.emit('left', 'state', temp)
         latest, retained, retained_fault, receipt = client.motion_feedback()
         self.assertIs(retained, position); self.assertIs(retained_fault, fault_view)
         self.assertEqual((latest.state_id, receipt), (3, 10.))
-        partial_zero = state_object(n=2, sample=4); partial_zero.validFields = [0, Field.ERROR_CODE]
+        partial_zero = state_object(n=2, sample=4)
+        partial_zero.axes[0].validFields, partial_zero.axes[1].validFields = 0, Field.ERROR_CODE
         node.emit('left', 'state', partial_zero)
         self.assertIs(client.motion_feedback()[2], fault_view)
-        other_fault = state_object(n=2, sample=5); other_fault.validFields = [0, Field.ERROR_CODE]
-        other_fault.errorCode = [0, 8]
+        other_fault = state_object(n=2, sample=5)
+        other_fault.axes[0].validFields, other_fault.axes[1].validFields = 0, Field.ERROR_CODE
+        other_fault.axes[0].errorCode, other_fault.axes[1].errorCode = 0, 8
         node.emit('left', 'state', other_fault)
-        first_axis_clear = state_object(n=2, sample=6); first_axis_clear.validFields = [Field.ERROR_CODE, 0]
+        first_axis_clear = state_object(n=2, sample=6)
+        first_axis_clear.axes[0].validFields, first_axis_clear.axes[1].validFields = Field.ERROR_CODE, 0
         node.emit('left', 'state', first_axis_clear)
         self.assertIs(client.motion_feedback()[2], fault_view)
-        clear = state_object(n=2, sample=7); clear.validFields = [Field.ERROR_CODE]*2
+        clear = state_object(n=2, sample=7)
+        for axis in clear.axes: axis.validFields = Field.ERROR_CODE
         node.emit('left', 'state', clear)
         self.assertEqual(client.motion_feedback()[2].error_code, (0, 0))
 
@@ -1509,7 +1644,7 @@ class EndEffectorClientTest(unittest.TestCase):
         seen = []
         client = self.client(harness, node, touch=True, on_info=seen.append)
         old_info, old_touch = client.info, client.touch
-        fault = state_object(sample=2); fault.errorCode = [9]
+        fault = state_object(sample=2); fault.axes[0].errorCode = 9
         node.emit('left', 'state', fault)
         original = client.motion_feedback()
         republished = info_object(touch=True)

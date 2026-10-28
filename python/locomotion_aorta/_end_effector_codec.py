@@ -1,4 +1,4 @@
-"""Generated e38 EE accessors/builders; no offsets or old Hand/Gripper bridge."""
+"""Generated R3 EE accessors/builders; no old Hand/Gripper bridge."""
 import hashlib
 import importlib
 import math
@@ -9,11 +9,13 @@ from types import SimpleNamespace
 from ._body_codec import _dto, _getter, _text
 from .transport import AortaBindingsUnavailableError
 from .end_effector_types import (
-    CommandKey, ControlMode, DescriptorRef, EE_PROTOCOL_VERSION, EndEffectorInfo,
+    CommandKey, ControlMode, DescriptorRef, EE_INFO_PROTOCOL_VERSION,
+    EE_STATE_PROTOCOL_VERSION, EE_TOUCH_PROTOCOL_VERSION, EE_CMD_PROTOCOL_VERSION,
+    EE_SET_TOUCH_REQUEST_VERSION, EE_SET_TOUCH_RESPONSE_VERSION, EndEffectorInfo,
     EndEffectorState, EndEffectorTarget, EndEffectorTouch,
     Field, InhibitReason, PositionDomain, RegionStamp,
     TorqueDomain, TouchPayloadType, TouchRegionInfo, EndEffectorSetTouchResponse,
-    ControlRef, EndEffectorSubmission, SampleRef, SampleStream,
+    EndEffectorSubmission, SampleRef, SampleStream,
 )
 
 _COMMAND_FIELDS = Field.POS | Field.VEL | Field.VEL_LIMIT | Field.TAU | Field.CURRENT | Field.MODE
@@ -55,7 +57,7 @@ def _schema_meta(stem, root):
 def load_bindings():
     try:
         names = ('EndEffectorInfo', 'EndEffectorState', 'EndEffectorTouch',
-                 'EndEffectorCmd', 'DescriptorRef', 'CommandKey', 'ControlRef', 'SampleRef')
+                 'EndEffectorCmd', 'DescriptorRef', 'CommandKey', 'SampleRef', 'AxisCommand')
         modules = {name: importlib.import_module('lowlevel.ee.' + name) for name in names}
         metas = {}
         for kind in ('info', 'state', 'touch', 'cmd'):
@@ -114,8 +116,14 @@ def decode_info(view):
 
 
 def decode_state(view):
+    if view.ProtocolVersion() != EE_STATE_PROTOCOL_VERSION:
+        raise ValueError('incompatible EndEffectorState protocol_version')
+    axes = tuple(view.Axes(i) for i in range(view.AxesLength()))
+    if not axes:
+        raise ValueError('EndEffectorState requires fixed axes')
     return _dto(view, EndEffectorState, descriptor_ref=_ref(view.DescriptorRef()),
-                **{name: _vector(view, name) for name in _STATE_VECTORS})
+                **{name: tuple(getattr(axis, _getter(name))() for axis in axes)
+                   for name in _STATE_VECTORS})
 
 
 def decode_touch(view):
@@ -145,9 +153,9 @@ def _finite(value, name):
         raise ValueError(name + ' must fit float32') from error
 
 
-def _identity(value):
+def _identity(value, version):
     _uint(value.protocol_version, 32, 'protocol_version')
-    if value.protocol_version != EE_PROTOCOL_VERSION:
+    if value.protocol_version != version:
         raise ValueError('incompatible new EE protocol_version')
     if not isinstance(value.descriptor_ref, DescriptorRef):
         raise ValueError('missing DescriptorRef')
@@ -160,7 +168,7 @@ def _identity(value):
 
 
 def validate_info(info):
-    _identity(info)
+    _identity(info, EE_INFO_PROTOCOL_VERSION)
     n = len(info.axis_names)
     if not n or any(not isinstance(v, str) or not v.strip() for v in info.axis_names) or len(set(info.axis_names)) != n:
         raise ValueError('axis_names must be nonempty and unique')
@@ -226,7 +234,8 @@ def validate_info(info):
 
 
 def _same_endpoint(info, value):
-    _identity(value)
+    _identity(value, EE_STATE_PROTOCOL_VERSION if isinstance(value, EndEffectorState)
+              else EE_TOUCH_PROTOCOL_VERSION)
     if (value.descriptor_ref, value.layout_id, value.side) != (info.descriptor_ref, info.layout_id, info.side):
         raise ValueError('sample DescriptorRef/layout/side does not match Info')
 
@@ -256,7 +265,7 @@ def validate_state(info, state):
             raise ValueError('State claims an unsupported measurement')
     for name, bit in _STATE_COLUMNS:
         column = getattr(state, name)
-        _tuple(column, n if any(m & bit for m in info.supported_state_fields) else 0, name)
+        _tuple(column, n, name)
         for i, value in enumerate(column):
             if bit == Field.ERROR_CODE:
                 _uint(value, 32, name)
@@ -330,15 +339,6 @@ def prepare_target(info, target):
     return replace(target, **columns)
 
 
-def _create_control_ref(bindings, builder, ref):
-    control = bindings.ControlRef
-    client = builder.CreateString(ref.client_id)
-    lease = builder.CreateString(ref.lease_id)
-    control.ControlRefStart(builder)
-    control.ControlRefAddClientId(builder, client); control.ControlRefAddLeaseId(builder, lease)
-    return control.ControlRefEnd(builder)
-
-
 def validate_observation_sources(sources):
     """The startup tuple is ordered and immutable; duplicates are errors."""
     if not isinstance(sources, tuple):
@@ -381,67 +381,104 @@ def validate_observations(descriptor_ref, observations, *, sources=None):
 
 
 def decode_cmd(view):
-    from lowlevel.ee.DescriptorRef import DescriptorRef as WireDescriptorRef
-
-    control = view.ControlRef()
-    if control is None:
-        raise ValueError('missing command ControlRef')
+    if view.ProtocolVersion() != EE_CMD_PROTOCOL_VERSION:
+        raise ValueError('incompatible EndEffectorCmd protocol_version')
+    descriptor = _ref(view.DescriptorRef())
     observations = []
     for i in range(view.InputObservationsLength()):
         sample = view.InputObservations(i)
-        observations.append(SampleRef(_ref(sample.DescriptorRef(WireDescriptorRef())), sample.Stream(),
+        observations.append(SampleRef(descriptor, sample.Stream(),
             sample.Side(), sample.SampleId(), sample.SourceTimeUs(), sample.Validity()))
-    target = EndEffectorTarget(_vector(view, 'mode'), _vector(view, 'command_fields'),
-                              **{name: _vector(view, name) for name, _ in _COMMAND_COLUMNS})
-    return _dto(view, EndEffectorSubmission, descriptor_ref=_ref(view.DescriptorRef()),
-                control_ref=ControlRef(_text(control.ClientId()), _text(control.LeaseId())),
+    axes = tuple(view.Axes(i) for i in range(view.AxesLength()))
+    if not axes:
+        raise ValueError('EndEffectorCmd requires fixed axes')
+    target = EndEffectorTarget(tuple(axis.Mode() for axis in axes),
+                              tuple(axis.CommandFields() for axis in axes),
+                              **{name: tuple(getattr(axis, _getter(name))() for axis in axes)
+                                 for name, _ in _COMMAND_COLUMNS})
+    command = _dto(view, EndEffectorSubmission, descriptor_ref=descriptor,
                 key=_key(view.Key()), target=target, input_observations=tuple(observations))
+    _identity(command, EE_CMD_PROTOCOL_VERSION)
+    _uint(command.control_id, 64, 'control_id')
+    if not command.control_id:
+        raise ValueError('control_id must be nonzero')
+    _validate_key(command.key, True)
+    validate_observations(command.descriptor_ref, command.input_observations)
+    _uint(command.ts_client_created_us, 64, 'ts_client_created_us')
+    _uint(command.ts_client_send_us, 64, 'ts_client_send_us')
+    return command
 
 
 def fill_command(bindings, command, builder, header):
+    _identity(command, EE_CMD_PROTOCOL_VERSION)
+    _uint(command.control_id, 64, 'control_id')
+    if not command.control_id:
+        raise ValueError('control_id must be nonzero')
+    _validate_key(command.key, True)
     validate_observations(command.descriptor_ref, command.input_observations)
+    _uint(command.ts_client_created_us, 64, 'ts_client_created_us')
+    _uint(command.ts_client_send_us, 64, 'ts_client_send_us')
     if command.ts_client_created_us or command.ts_client_send_us:
         raise ValueError('SDK time remains invalid/zero until a verified Vita mapping exists')
     module = bindings.EndEffectorCmd
-    control_offset = _create_control_ref(bindings, builder, command.control_ref)
-    vectors = {}
-    for name, prepend in [('mode', 'PrependUint16'), ('command_fields', 'PrependUint32')] + [(name, 'PrependFloat32') for name, _ in _COMMAND_COLUMNS]:
-        values = getattr(command.target, name)
-        if values:
-            getattr(module, 'EndEffectorCmdStart' + _getter(name) + 'Vector')(builder, len(values))
-            for value in reversed(values):
-                getattr(builder, prepend)(value)
-            vectors[name] = builder.EndVector()
-    if command.input_observations:
-        module.EndEffectorCmdStartInputObservationsVector(builder, len(command.input_observations))
-        for sample in reversed(command.input_observations):
-            bindings.SampleRef.CreateSampleRef(
-                builder, sample.descriptor_ref.robot_runtime_id,
-                sample.stream, sample.side, sample.sample_id, sample.source_time_us, sample.validity)
-        vectors['input_observations'] = builder.EndVector()
-    module.EndEffectorCmdStart(builder)
-    module.EndEffectorCmdAddAortaHeader(builder, header)
-    module.EndEffectorCmdAddProtocolVersion(builder, command.protocol_version)
-    module.EndEffectorCmdAddDescriptorRef(builder, bindings.DescriptorRef.CreateDescriptorRef(
-        builder, command.descriptor_ref.robot_runtime_id))
-    module.EndEffectorCmdAddKey(builder, bindings.CommandKey.CreateCommandKey(
-        builder, command.key.session_id, command.key.sequence))
-    module.EndEffectorCmdAddLayoutId(builder, command.layout_id)
-    module.EndEffectorCmdAddSide(builder, command.side)
-    module.EndEffectorCmdAddControlRef(builder, control_offset)
-    module.EndEffectorCmdAddTsClientCreatedUs(builder, command.ts_client_created_us)
-    module.EndEffectorCmdAddTsClientSendUs(builder, command.ts_client_send_us)
-    for name, offset in vectors.items():
-        getattr(module, 'EndEffectorCmdAdd' + _getter(name))(builder, offset)
-    return module.EndEffectorCmdEnd(builder)
+    target = command.target
+    if not isinstance(target, EndEffectorTarget) or not isinstance(target.mode, tuple) or not target.mode:
+        raise ValueError('command requires fixed axes')
+    n = len(target.mode)
+    _tuple(target.command_fields, n, 'command_fields')
+    for mode, mask in zip(target.mode, target.command_fields):
+        _uint(mode, 16, 'mode'); _uint(mask, 32, 'command_fields')
+        if mask & ~_COMMAND_FIELDS:
+            raise ValueError('unsupported command field')
+    for name, bit in _COMMAND_COLUMNS:
+        values = getattr(target, name)
+        if values is not None and (not isinstance(values, tuple) or len(values) not in (0, n)):
+            raise ValueError('command column has an incompatible fixed length: ' + name)
+        if not values and any(mask & bit for mask in target.command_fields):
+            raise ValueError('selected column is missing: ' + name)
+        for value in values or ():
+            _finite(value, name)
+    module.EndEffectorCmdStartInputObservationsVector(builder, len(command.input_observations))
+    for sample in reversed(command.input_observations):
+        bindings.SampleRef.CreateSampleRef(builder, sample.stream, sample.side,
+            sample.sample_id, sample.source_time_us, sample.validity)
+    observations = builder.EndVector()
+    module.EndEffectorCmdStartAxesVector(builder, n)
+    columns = [getattr(target, name) for name, _ in _COMMAND_COLUMNS]
+    for i in reversed(range(n)):
+        bindings.AxisCommand.CreateAxisCommand(builder, target.command_fields[i], target.mode[i],
+            *(values[i] if values else 0.0 for values in columns))
+    axes = builder.EndVector()
+    previous = builder.forceDefaults
+    try:
+        module.EndEffectorCmdStart(builder)
+        module.EndEffectorCmdAddAortaHeader(builder, header)
+        module.EndEffectorCmdAddInputObservations(builder, observations)
+        module.EndEffectorCmdAddAxes(builder, axes)
+        builder.ForceDefaults(True)
+        module.EndEffectorCmdAddProtocolVersion(builder, command.protocol_version)
+        module.EndEffectorCmdAddDescriptorRef(builder, bindings.DescriptorRef.CreateDescriptorRef(
+            builder, command.descriptor_ref.robot_runtime_id))
+        module.EndEffectorCmdAddKey(builder, bindings.CommandKey.CreateCommandKey(
+            builder, command.key.session_id, command.key.sequence))
+        module.EndEffectorCmdAddLayoutId(builder, command.layout_id)
+        module.EndEffectorCmdAddSide(builder, command.side)
+        module.EndEffectorCmdAddControlId(builder, command.control_id)
+        module.EndEffectorCmdAddTsClientCreatedUs(builder, command.ts_client_created_us)
+        module.EndEffectorCmdAddTsClientSendUs(builder, command.ts_client_send_us)
+        return module.EndEffectorCmdEnd(builder)
+    finally:
+        builder.ForceDefaults(previous)
 
 
 def fill_set_touch(bindings, service, request, builder, header):
-    _identity(request)
+    _identity(request, EE_SET_TOUCH_REQUEST_VERSION)
+    _uint(request.control_id, 64, 'control_id')
+    if not request.control_id:
+        raise ValueError('control_id must be nonzero')
     if type(request.enable) is not bool:
         raise ValueError('enable must be boolean')
     module = service.request
-    control = _create_control_ref(bindings, builder, request.control_ref)
     module.EndEffectorSetTouchRequestStart(builder)
     module.EndEffectorSetTouchRequestAddAortaHeader(builder, header)
     module.EndEffectorSetTouchRequestAddProtocolVersion(builder, request.protocol_version)
@@ -449,7 +486,7 @@ def fill_set_touch(bindings, service, request, builder, header):
         builder, request.descriptor_ref.robot_runtime_id))
     module.EndEffectorSetTouchRequestAddLayoutId(builder, request.layout_id)
     module.EndEffectorSetTouchRequestAddSide(builder, request.side)
-    module.EndEffectorSetTouchRequestAddControlRef(builder, control)
+    module.EndEffectorSetTouchRequestAddControlId(builder, request.control_id)
     module.EndEffectorSetTouchRequestAddEnable(builder, request.enable)
     return module.EndEffectorSetTouchRequestEnd(builder)
 
@@ -460,7 +497,7 @@ def decode_set_touch(view):
 
 def validate_set_touch_response(request, response):
     _uint(response.protocol_version, 32, 'protocol_version')
-    if response.protocol_version != EE_PROTOCOL_VERSION:
+    if response.protocol_version != EE_SET_TOUCH_RESPONSE_VERSION:
         raise ValueError('incompatible set_touch response protocol_version')
     if not isinstance(response.descriptor_ref, DescriptorRef):
         raise ValueError('missing set_touch response DescriptorRef')

@@ -16,7 +16,7 @@ from test_end_effector_codec import info_object, state_object, target
 
 class EEPullTest(unittest.TestCase):
     def client(self, side='left', **options):
-        owner = ControllerHarness()
+        owner = ControllerHarness(runtime_id=100)
         self.addCleanup(owner.controller.close)
         node = Node()
         owner.transport.node = node
@@ -111,8 +111,8 @@ class EEPullTest(unittest.TestCase):
         for torque in (None, 0., -.25):
             sent = client.publish(target(torque=torque))
             wire = node.commands[-1][1]
-            self.assertEqual(bool(wire.CommandFields(0) & Field.TAU), torque is not None)
-            self.assertEqual(wire.Tau(0), 0. if torque is None else torque)
+            self.assertEqual(bool(wire.Axes(0).CommandFields() & Field.TAU), torque is not None)
+            self.assertEqual(wire.Axes(0).Tau(), 0. if torque is None else torque)
             self.assertEqual(sent.target.tau, (0. if torque is None else torque,))
         readonly, readonly_node, owner = self.client(read_only=True)
         node_before = len(readonly_node.handles)

@@ -27,7 +27,12 @@ except ImportError as error:
         "the new EE pack; no Hand/Gripper fallback"
     ) from error
 
-EE_PROTOCOL_VERSION = 1
+EE_INFO_PROTOCOL_VERSION = 1
+EE_STATE_PROTOCOL_VERSION = 2
+EE_TOUCH_PROTOCOL_VERSION = 1
+EE_CMD_PROTOCOL_VERSION = 2
+EE_SET_TOUCH_REQUEST_VERSION = 2
+EE_SET_TOUCH_RESPONSE_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +49,6 @@ class SampleRef:
     sample_id: int
     source_time_us: int = 0
     validity: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class ControlRef:
-    client_id: str
-    lease_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +74,7 @@ class EndEffectorInfo:
     layout_id: int
     side: int
     axis_names: tuple[str, ...]
-    protocol_version: int = EE_PROTOCOL_VERSION
+    protocol_version: int = EE_INFO_PROTOCOL_VERSION
     device_model: int = 0
     firmware: str = ""
     serial: str = ""
@@ -109,7 +108,7 @@ class EndEffectorState:
     layout_id: int
     side: int
     state_id: int
-    protocol_version: int = EE_PROTOCOL_VERSION
+    protocol_version: int = EE_STATE_PROTOCOL_VERSION
     ts_state_real_us: int = 0
     ts_state_pub_us: int = 0
     ts_acquired_hw_us: int = 0
@@ -159,7 +158,7 @@ class EndEffectorTouch:
     touch_state_id: int
     region_stamps: tuple[RegionStamp, ...]
     payload: bytes
-    protocol_version: int = EE_PROTOCOL_VERSION
+    protocol_version: int = EE_TOUCH_PROTOCOL_VERSION
     ts_state_pub_us: int = 0
     publish_time_valid: bool = False
 
@@ -195,13 +194,13 @@ class EndEffectorSubmission:
     descriptor_ref: DescriptorRef
     layout_id: int
     side: int
-    control_ref: ControlRef
+    control_id: int
     key: CommandKey
     target: EndEffectorTarget
     input_observations: tuple[SampleRef, ...] = ()
     ts_client_created_us: int = 0
     ts_client_send_us: int = 0
-    protocol_version: int = EE_PROTOCOL_VERSION
+    protocol_version: int = EE_CMD_PROTOCOL_VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,9 +208,9 @@ class EndEffectorSetTouchRequest:
     descriptor_ref: DescriptorRef
     layout_id: int
     side: int
-    control_ref: ControlRef
+    control_id: int
     enable: bool
-    protocol_version: int = EE_PROTOCOL_VERSION
+    protocol_version: int = EE_SET_TOUCH_REQUEST_VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,4 +219,4 @@ class EndEffectorSetTouchResponse:
     side: int
     status: int
     reason: int
-    protocol_version: int = EE_PROTOCOL_VERSION
+    protocol_version: int = EE_SET_TOUCH_RESPONSE_VERSION

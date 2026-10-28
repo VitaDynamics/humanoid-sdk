@@ -13,7 +13,7 @@ from . import _end_effector_codec as codec
 from .controller import ControllerClosedError, ExternalController, InvalidCommandError, NotRunningError, _deadline
 from .pull import PullStateSource
 from .end_effector_types import (
-    CommandKey, ControlRef, DescriptorRef, EndEffectorSide, EndEffectorSubmission,
+    CommandKey, DescriptorRef, EndEffectorSide, EndEffectorSubmission,
     SampleRef, SampleStream, Field, SampleStatus,
     EndEffectorSetTouchRequest, ServiceStatus, TouchSetReason,
 )
@@ -416,13 +416,19 @@ class EndEffectorClient:
             )
             submission = EndEffectorSubmission(
                 info.descriptor_ref, info.layout_id, info.side,
-                ControlRef(context.client_id, context.lease_id),
+                context.control_id,
                 CommandKey(context.session_id, context.sequence), prepared, input_observations)
 
-            def submit():
+            def submit(current):
                 self._ensure_open()
+                if (current.client_id != context.client_id or
+                        current.control_id != context.control_id or
+                        current.generation != context.session_id or
+                        current.request_id != context.request_id):
+                    raise NotRunningError('control context changed before EE submission')
                 latest = self._latest['info']
-                if latest is None or latest.descriptor_ref != info.descriptor_ref:
+                if latest is None or (latest.descriptor_ref, latest.layout_id, latest.side) != (
+                        info.descriptor_ref, info.layout_id, info.side):
                     raise InvalidCommandError('DescriptorRef changed during reservation')
                 if self._publisher is not publisher:
                     raise InvalidCommandError('EE publisher retired before submission')
@@ -432,7 +438,7 @@ class EndEffectorClient:
                     )
                 )
 
-            self.connection._run_end_effector_gate(self, runtime_id, submit)
+            self.connection._end_effector_control_context(self, runtime_id, submit)
             return submission
 
     def _check_touch_context(self, info, context=None, operation=None):
@@ -490,7 +496,7 @@ class EndEffectorClient:
                 raise TimeoutError('EE set_touch service provider not found')
             request = EndEffectorSetTouchRequest(
                 info.descriptor_ref, info.layout_id, info.side,
-                ControlRef(context.client_id, context.lease_id), enable)
+                context.control_id, enable)
             def fill(builder, header):
                 return self._check_touch_context(
                     info,
