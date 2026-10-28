@@ -162,12 +162,8 @@ class NativeBodyCmdTest(unittest.TestCase):
     def test_raw_adapter_keeps_core_clock_node_policy_and_failure_sequence(self):
         from locomotion_aorta._native_body_codec import NativeBodyPublisher
         pub = Publisher();adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
-        scratch = adapter._encode_scratch
-        other = NativeBodyPublisher(Publisher(), importlib.import_module('body_cmd_schema_meta'))
-        self.assertIsNot(scratch, other._encode_scratch)
         for node in [True, False]:
             pub._include_node = node;seq = pub._sequence;adapter.publish(make_command(), guard=lambda send: send())
-            self.assertIs(adapter._encode_scratch, scratch)
             self.assertEqual(pub.sent[-1], oracle(make_command(), pub.stamp,
                                                  pub._node_name if node else None, seq))
         pub.failure = OSError('send failed');seq = pub._sequence
@@ -176,6 +172,27 @@ class NativeBodyCmdTest(unittest.TestCase):
         pub.failure = None;pub._closed = True
         with self.assertRaises(Exception): adapter.publish(make_command(), guard=lambda send: send())
         self.assertEqual(pub._sequence, seq+1)
+
+    def test_nested_publish_cannot_overwrite_outer_joint_values(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        pub = Publisher()
+        adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+        outer = dataclasses.replace(make_command(), joints=(BodyJointCmd(q=0.25),) * 31)
+        inner = dataclasses.replace(make_command(), joints=(BodyJointCmd(q=-0.5),) * 31)
+
+        class ReentrantCommand:
+            def __getattr__(self, name):
+                return getattr(outer, name)
+
+            @property
+            def protocol_version(self):
+                adapter.publish(inner, guard=lambda send: send())
+                return outer.protocol_version
+
+        adapter.publish(ReentrantCommand(), guard=lambda send: send())
+        self.assertEqual(pub._sequence, 2)
+        self.assertEqual(pub.sent, [oracle(inner, pub.stamp, pub._node_name, 1),
+                                    oracle(outer, pub.stamp, pub._node_name, 0)])
 
     def test_schema_mismatch_fails_before_publish(self):
         from locomotion_aorta._native_body_codec import NativeBodyPublisher

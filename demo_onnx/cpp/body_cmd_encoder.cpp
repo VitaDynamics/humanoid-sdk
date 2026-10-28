@@ -29,20 +29,13 @@ float Float(py::handle value) {
   return result;
 }
 
-struct BodyEncodeScratch {
-  std::array<lowlevel::BodyJointCmd, 31> joints;
-};
-
 py::tuple Encode(py::object command, uint64_t stamp, py::object node,
-                 uint64_t header_sequence, bool measure,
-                 BodyEncodeScratch* scratch) {
+                 uint64_t header_sequence, bool measure) {
   const auto begin = measure ? Clock::now() : Stamp{};
   py::object joints = command.attr("joints");
   if (!py::isinstance<py::tuple>(joints) || py::len(joints) != 31)
     throw py::value_error("BodyCmd requires a 31-slot tuple");
-  // Encode holds the GIL throughout; a publisher's scratch cannot race here.
-  BodyEncodeScratch local;
-  auto& values = scratch ? scratch->joints : local.joints;
+  std::array<lowlevel::BodyJointCmd, 31> values;
   size_t joint_index = 0;
   for (auto joint : joints) {
     std::array<float, 5> row;
@@ -138,10 +131,9 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
 
 PYBIND11_MODULE(_body_cmd_native, module) {
   BindBodyState(module);
-  py::class_<BodyEncodeScratch>(module, "BodyEncodeScratch").def(py::init<>());
   module.attr("BODY_SCHEMA_SHA256") = BODY_CMD_SCHEMA_SHA256;
   module.attr("BODY_CMD_PROTOCOL_VERSION") = 3;
   module.def("encode", &Encode, py::arg("command"), py::arg("publish_stamp_ns"),
              py::arg("publisher_node"), py::arg("header_sequence"),
-             py::arg("measure") = false, py::arg("scratch") = nullptr);
+             py::arg("measure") = false);
 }
