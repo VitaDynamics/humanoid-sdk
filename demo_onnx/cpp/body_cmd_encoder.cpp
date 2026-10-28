@@ -8,7 +8,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 #include "body_cmd_vendor/body_cmd_generated.h"
 #include "body_state_decoder.h"
@@ -30,20 +29,28 @@ float Float(py::handle value) {
   return result;
 }
 
+struct BodyEncodeScratch {
+  std::array<lowlevel::BodyJointCmd, 31> joints;
+};
+
 py::tuple Encode(py::object command, uint64_t stamp, py::object node,
-                 uint64_t header_sequence, bool measure) {
+                 uint64_t header_sequence, bool measure,
+                 BodyEncodeScratch* scratch) {
   const auto begin = measure ? Clock::now() : Stamp{};
   py::object joints = command.attr("joints");
   if (!py::isinstance<py::tuple>(joints) || py::len(joints) != 31)
     throw py::value_error("BodyCmd requires a 31-slot tuple");
-  std::vector<lowlevel::BodyJointCmd> values;
-  values.reserve(31);
+  // Encode holds the GIL throughout; a publisher's scratch cannot race here.
+  BodyEncodeScratch local;
+  auto& values = scratch ? scratch->joints : local.joints;
+  size_t joint_index = 0;
   for (auto joint : joints) {
     std::array<float, 5> row;
     const char *names[] = {"q", "dq", "tau", "kp", "kd"};
     for (size_t i = 0; i < row.size(); ++i)
       row[i] = Float(joint.attr(names[i]));
-    values.emplace_back(row[0], row[1], row[2], row[3], row[4]);
+    values[joint_index++] = lowlevel::BodyJointCmd(row[0], row[1], row[2],
+                                                  row[3], row[4]);
   }
   const auto protocol = command.attr("protocol_version").cast<uint32_t>();
   if (protocol != 3) throw py::value_error("BodyCmd requires protocol version 3");
@@ -92,7 +99,7 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
   if (!publisher_node.empty()) header.add_publisher_node(string);
   header.add_sequence(header_sequence);
   const auto header_offset = header.Finish();
-  const auto vector = builder.CreateVectorOfStructs(values);
+  const auto vector = builder.CreateVectorOfStructs(values.data(), values.size());
   lowlevel::BodyCmdBuilder body(builder);
   body.add_aorta_header(header_offset);
   body.add_joints(vector);
@@ -131,9 +138,10 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
 
 PYBIND11_MODULE(_body_cmd_native, module) {
   BindBodyState(module);
+  py::class_<BodyEncodeScratch>(module, "BodyEncodeScratch").def(py::init<>());
   module.attr("BODY_SCHEMA_SHA256") = BODY_CMD_SCHEMA_SHA256;
   module.attr("BODY_CMD_PROTOCOL_VERSION") = 3;
   module.def("encode", &Encode, py::arg("command"), py::arg("publish_stamp_ns"),
              py::arg("publisher_node"), py::arg("header_sequence"),
-             py::arg("measure") = false);
+             py::arg("measure") = false, py::arg("scratch") = nullptr);
 }

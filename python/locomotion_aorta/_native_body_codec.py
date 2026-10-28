@@ -42,6 +42,7 @@ class NativeBodyPublisher:
                 raise RuntimeError('unsupported Aorta publisher header ABI: ' + name)
         self.publisher = publisher
         self.native = _body_cmd_native
+        self._encode_scratch = self.native.BodyEncodeScratch()
 
     def publish(self, command, trace=None, guard=None):
         from aorta.errors import AortaError, check_rc
@@ -69,7 +70,7 @@ class NativeBodyPublisher:
             payload, native_trace = self.native.encode(
                 command, stamp.value,
                 publisher._node_name if publisher._include_node else None,
-                sequence, measured)
+                sequence, measured, self._encode_scratch)
             if measured:
                 trace.update(native_trace)
         finally:

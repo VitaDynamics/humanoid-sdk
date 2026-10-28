@@ -162,8 +162,12 @@ class NativeBodyCmdTest(unittest.TestCase):
     def test_raw_adapter_keeps_core_clock_node_policy_and_failure_sequence(self):
         from locomotion_aorta._native_body_codec import NativeBodyPublisher
         pub = Publisher();adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+        scratch = adapter._encode_scratch
+        other = NativeBodyPublisher(Publisher(), importlib.import_module('body_cmd_schema_meta'))
+        self.assertIsNot(scratch, other._encode_scratch)
         for node in [True, False]:
             pub._include_node = node;seq = pub._sequence;adapter.publish(make_command(), guard=lambda send: send())
+            self.assertIs(adapter._encode_scratch, scratch)
             self.assertEqual(pub.sent[-1], oracle(make_command(), pub.stamp,
                                                  pub._node_name if node else None, seq))
         pub.failure = OSError('send failed');seq = pub._sequence
