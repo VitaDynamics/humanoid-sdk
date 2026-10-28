@@ -37,6 +37,14 @@ class FakeTransport:
         if self.on_publish is not None:
             self.on_publish(topic, message)
 
+    def _publish_control(self, message, guard) -> None:
+        from locomotion_aorta.transport import CONTROL_REQUEST_TOPIC
+        guard(lambda: None)
+        self.publish(CONTROL_REQUEST_TOPIC, message)
+
+    def _prepare_body_output(self) -> None:
+        self._ensure_open()
+
     def emit(self, topic: str, message: Any) -> None:
         for callback in list(self.callbacks.get(topic, [])):
             callback(message)

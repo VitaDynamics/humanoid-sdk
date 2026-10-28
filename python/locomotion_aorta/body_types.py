@@ -145,3 +145,4 @@ class GetRobotInfoResponse:
     status: int
     info: RobotInfo | None
     error_message: str
+    descriptor_ref: DescriptorRef | None = None

@@ -2,6 +2,7 @@ import importlib
 import unittest
 
 import locomotion_aorta.transport as transport_module
+from locomotion_aorta.body_types import DescriptorRef
 from locomotion_aorta import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
@@ -23,17 +24,19 @@ class AortaBindingContractTest(unittest.TestCase):
         for action in ('EXTERNAL', 'HUMANOID_TELEOP'):
             for operation in ControlOperation:
                 with self.subTest(action=action, operation=operation):
-                    request = ControlRequest(request_id='bound-request', client_id='client-1',
-                                             operation=operation, action_name=action, lease_id='lease-1')
+                    request = ControlRequest(request_id='bound-request', client_id=9,
+                                             operation=operation, action_name=action, control_id=13,
+                                             descriptor_ref=DescriptorRef(11))
                     builder = flatbuffers.Builder(256)
                     builder.Finish(transport_module._fill_control_request(bindings, request, builder, 0))
                     view = bindings.control_request_module.ControlRequest.GetRootAs(builder.Output())
                     self.assertEqual(view.ActionName(), action.encode())
                     self.assertEqual(view.RequestId(), b'bound-request')
-                    self.assertEqual(view.ClientId(), b'client-1')
-                    self.assertEqual(view.LeaseId(), b'lease-1')
+                    self.assertEqual(view.ClientId(), 9)
+                    self.assertEqual(view.ControlId(), 13)
+                    self.assertEqual(view.DescriptorRef().RobotRuntimeId(), 11)
                     self.assertEqual(view.RequestedLeaseMs(), 0)
-                    self.assertEqual(view.ProtocolVersion(), 2)
+                    self.assertEqual(view.ProtocolVersion(), 3)
                     self.assertEqual(view.Operation(), list(ControlOperation).index(operation) + 1)
 
     def test_real_aorta_and_generated_control_bindings_are_available(self) -> None:
@@ -74,7 +77,8 @@ class AortaBindingContractTest(unittest.TestCase):
                 "RequestId",
                 "ClientId",
                 "ActionName",
-                "LeaseId",
+                "ControlId",
+                "DescriptorRef",
                 "RequestedLeaseMs",
             ),
             "locomotion_sdk.ControlAck": (
@@ -84,7 +88,9 @@ class AortaBindingContractTest(unittest.TestCase):
                 "Accepted",
                 "ErrorCode",
                 "Reason",
-                "LeaseId",
+                "ControlId",
+                "ClientId",
+                "DescriptorRef",
                 "LeaseDeadlineMonotonicNs",
             ),
             "locomotion_sdk.ControlStatus": (
@@ -93,7 +99,8 @@ class AortaBindingContractTest(unittest.TestCase):
                 "CurrentAction",
                 "ActionPhase",
                 "ClientId",
-                "LeaseId",
+                "ControlId",
+                "DescriptorRef",
                 "LeaseDeadlineMonotonicNs",
                 "Generation",
                 "LastAcceptedCmdId",
@@ -134,9 +141,10 @@ class AortaBindingContractTest(unittest.TestCase):
 
         request = ControlRequest(
             request_id="request-1",
-            client_id="client-1",
+            client_id=9,
             operation=ControlOperation.COMMIT,
-            lease_id="lease-1",
+            control_id=13,
+            descriptor_ref=DescriptorRef(11),
         )
         builder = flatbuffers.Builder(256)
         root = transport_module._fill_control_request(
@@ -146,10 +154,12 @@ class AortaBindingContractTest(unittest.TestCase):
         request_view = bindings.control_request_module.ControlRequest.GetRootAs(
             builder.Output()
         )
-        self.assertEqual(request_view.ProtocolVersion(), 2)
+        self.assertEqual(request_view.ProtocolVersion(), 3)
         self.assertEqual(request_view.Operation(), 2)
         self.assertEqual(request_view.RequestId(), b"request-1")
-        self.assertEqual(request_view.LeaseId(), b"lease-1")
+        self.assertEqual(request_view.ClientId(), 9)
+        self.assertEqual(request_view.ControlId(), 13)
+        self.assertEqual(request_view.DescriptorRef().RobotRuntimeId(), 11)
         self.assertEqual(request_view.RequestedLeaseMs(), 0)
 
         command = BodyCmd(
@@ -175,8 +185,9 @@ class AortaBindingContractTest(unittest.TestCase):
         bindings = transport_module._load_aorta_bindings()
         request = ControlRequest(
             request_id="request-unlimited",
-            client_id="client-1",
+            client_id=7,
             operation=ControlOperation.PREPARE,
+            descriptor_ref=DescriptorRef(11),
         )
         builder = flatbuffers.Builder(256)
         root = transport_module._fill_control_request(bindings, request, builder, 0)
@@ -184,8 +195,9 @@ class AortaBindingContractTest(unittest.TestCase):
         view = bindings.control_request_module.ControlRequest.GetRootAs(builder.Output())
         self.assertEqual(view.Operation(), 1)
         self.assertEqual(view.RequestId(), b"request-unlimited")
-        self.assertEqual(view.ClientId(), b"client-1")
-        self.assertEqual(view.LeaseId(), b"")
+        self.assertEqual(view.ClientId(), 7)
+        self.assertEqual(view.ControlId(), 0)
+        self.assertEqual(view.DescriptorRef().RobotRuntimeId(), 11)
         self.assertEqual(view.RequestedLeaseMs(), 0)
 
     def test_body_timestamp_preserves_the_robot_microsecond_clock(self) -> None:
@@ -212,3 +224,19 @@ class AortaBindingContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class R3ControlIdentityBindingTest(unittest.TestCase):
+    def test_actual_control_fill_rejects_invalid_numeric_and_runtime_before_encoding(self):
+        import flatbuffers
+        from dataclasses import replace
+        bindings = transport_module._load_aorta_bindings()
+        valid = ControlRequest(request_id='one', client_id=9,
+                               operation=ControlOperation.COMMIT, control_id=13,
+                               descriptor_ref=DescriptorRef(11))
+        for changes in ({'client_id': True}, {'client_id': 0}, {'client_id': -1},
+                        {'client_id': 1 << 64}, {'control_id': True},
+                        {'control_id': 0}, {'control_id': 1 << 64},
+                        {'descriptor_ref': None}, {'descriptor_ref': DescriptorRef(0)}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                transport_module._fill_control_request(
+                    bindings, replace(valid, **changes), flatbuffers.Builder(256), 0)

@@ -230,9 +230,10 @@ class EndEffectorClient:
                 if value.side != self._side:
                     raise ValueError('Info side differs from endpoint')
                 try:
-                    self.connection._bind_end_effector_runtime(
+                    if not self.connection._bind_end_effector_runtime(
                         self, value.descriptor_ref.robot_runtime_id
-                    )
+                    ):
+                        return
                 except (ValueError, ControllerClosedError) as error:
                     self._fail_descriptor(error)
                     return

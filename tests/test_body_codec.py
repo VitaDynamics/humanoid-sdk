@@ -58,7 +58,7 @@ def encode(command, *, generated=False, initial_size=1, prefix=0):
     return bytes(builder.Output())
 
 
-def make_state(*, error_codes=None):
+def make_state(*, error_codes=None, runtime_id=None):
     builder = flatbuffers.Builder(1)
     # All IMUs retain clocks/rpy; deliberately use HEAD,TRUNK,HIP order.
     imu_module = module('BodyImuSample')
@@ -95,6 +95,9 @@ def make_state(*, error_codes=None):
     m.BodyStateAddImuStates(builder, imus)
     m.BodyStateAddAttitudeValid(builder, True)
     m.BodyStateAddJoints(builder, joints)
+    if runtime_id is not None:
+        ref = importlib.import_module('lowlevel.ee.DescriptorRef')
+        m.BodyStateAddDescriptorRef(builder, ref.CreateDescriptorRef(builder, runtime_id))
     builder.Finish(m.BodyStateEnd(builder))
     data = bytes(builder.Output())
     return data, m.BodyState.GetRootAs(data)
@@ -622,3 +625,20 @@ class BodyCodecTest(unittest.TestCase):
             data = bytearray(original); struct.pack_into('<I', data, field, offset)
             with self.subTest(offset=offset), self.assertRaises(ValueError):
                 codec.unpack_body_joints(module('BodyState').BodyState.GetRootAs(data))
+
+class RobotInfoRuntimeR3Test(unittest.TestCase):
+    def test_partial_info_reply_decodes_same_response_runtime(self):
+        from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
+        from locomotion_aorta.body_types import DescriptorRef
+        ref = importlib.import_module('lowlevel.ee.DescriptorRef')
+        info = module('RobotInfo').RobotInfoT(protocolVersion=1, tsInfoUs=987)
+        response = GetRobotInfoResponseT(
+            status=ServiceStatus.PARTIAL_SUCCESS, info=info,
+            errorMessage='right unavailable', descriptorRef=ref.DescriptorRefT(11))
+        builder = flatbuffers.Builder(1)
+        builder.Finish(response.Pack(builder))
+        decoded = codec.decode_robot_info_response(GetRobotInfoResponse.GetRootAs(builder.Output()))
+        self.assertEqual(decoded.status, ServiceStatus.PARTIAL_SUCCESS)
+        self.assertEqual(decoded.error_message, 'right unavailable')
+        self.assertEqual(decoded.descriptor_ref, DescriptorRef(11))
+        self.assertEqual(decoded.info.ts_info_us, 987)

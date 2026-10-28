@@ -150,5 +150,7 @@ def decode_robot_info(view: Any) -> RobotInfo:
 
 def decode_robot_info_response(view: Any) -> GetRobotInfoResponse:
     info = view.Info()
+    ref = view.DescriptorRef()
     return GetRobotInfoResponse(status=view.Status(), info=None if info is None else decode_robot_info(info),
-                                error_message=_text(view.ErrorMessage()))
+                                error_message=_text(view.ErrorMessage()),
+                                descriptor_ref=None if ref is None else DescriptorRef(ref.RobotRuntimeId()))

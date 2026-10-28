@@ -27,6 +27,9 @@ def decode_body_state_native(view):
 class NativeBodyPublisher:
     def __init__(self, publisher, schema_meta):
         from . import _body_cmd_native
+        from .body_types import BODY_CMD_PROTOCOL_VERSION
+        if BODY_CMD_PROTOCOL_VERSION != 3:
+            raise RuntimeError('native BodyCmd encoder requires the R3 BodyCmd3 contract')
         if (schema_meta.SCHEMA_HASH_HEX != _body_cmd_native.BODY_SCHEMA_SHA256
                 or hashlib.sha256(schema_meta.SCHEMA_BFBS).hexdigest()
                 != _body_cmd_native.BODY_SCHEMA_SHA256):

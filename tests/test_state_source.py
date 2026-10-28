@@ -1,6 +1,7 @@
 """Actual public body31 payloads with an isolated state-only stream."""
 import gc
 import math
+import struct
 import threading
 import unittest
 import weakref
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from fake_transport import FakeTransport
+from body_fixtures import robot_info_reply
 from test_body_codec import make_state, module
 from locomotion_aorta import BodyStateSource, BodyStateSnapshot, ExternalController, BODY_STATE_TOPIC
 from locomotion_aorta import state as state_module
@@ -21,8 +23,11 @@ class FakeStream:
         self.close = mock.Mock()
 
     def emit(self, data=None):
-        self.callback(make_state()[0] if data is None else data,
+        self.callback(make_state(runtime_id=11)[0] if data is None else data,
                       module('BodyState').BodyState.GetRootAs)
+
+    def get_robot_info(self, timeout):
+        return robot_info_reply()
 
 
 class StateSourceTest(unittest.TestCase):
@@ -34,6 +39,7 @@ class StateSourceTest(unittest.TestCase):
     def source(self, **kwargs):
         source = BodyStateSource(**kwargs)
         self.addCleanup(source.close)
+        source.get_robot_info(.1)
         return source
 
     def test_snapshot_caches_incompatible_body_revision_error(self):
@@ -95,7 +101,7 @@ class StateSourceTest(unittest.TestCase):
 
     def test_immutable_payload_and_old_snapshot_survives_close(self):
         source = self.source()
-        data = bytearray(make_state()[0])
+        data = bytearray(make_state(runtime_id=11)[0])
         source._stream.emit(data)
         old = source.snapshot()
         data[:] = bytes(len(data))
@@ -145,9 +151,13 @@ class StateSourceTest(unittest.TestCase):
         source._stream.emit()
         good = source.snapshot()
         self.assertEqual(good.body_state().state_id, 91)
+        # The envelope and Ref are valid, but the Body joint vector is malformed.
+        data = bytearray(make_state(runtime_id=11)[0])
+        view = module('BodyState').BodyState.GetRootAs(data)
+        vector = view._tab.Vector(view._tab.Offset(22))
+        struct.pack_into('<I', data, vector - 4, 30)
         decoder = mock.Mock(wraps=module('BodyState').BodyState.GetRootAs)
-        source._stream.callback(b'bad', decoder)  # Callback does not decode or raise.
-        decoder.assert_not_called()
+        source._stream.callback(data, decoder)
         bad = source.snapshot(after=good)
         failures = []
         for _ in range(2):
@@ -155,12 +165,21 @@ class StateSourceTest(unittest.TestCase):
                 bad.body_state()
             failures.append(error.exception)
         self.assertIs(failures[0], failures[1])
-        decoder.assert_called_once_with(b'bad')
+        self.assertEqual(decoder.call_count, 2)  # Ref gate and one lazy decode.
         with self.assertRaises(type(failures[0])):
-            state_module.decode_body_state(module('BodyState').BodyState.GetRootAs(b'bad'))
+            state_module.decode_body_state(module('BodyState').BodyState.GetRootAs(data))
         self.assertEqual(good.body_state().state_id, 91)
         source._stream.emit()
         self.assertEqual(source.snapshot(after=bad).body_state().state_id, 91)
+
+    def test_undecodable_envelope_does_not_replace_valid_snapshot(self):
+        source = self.source()
+        source._stream.emit()
+        good = source.snapshot()
+        source._stream.callback(b'bad', module('BodyState').BodyState.GetRootAs)
+        with self.assertRaises(TimeoutError):
+            source.snapshot(.001, after=good)
+        self.assertEqual(good.body_state().state_id, 91)
 
     def test_close_wakes_waiter_using_the_default_deadline(self):
         source = self.source()
@@ -224,3 +243,20 @@ class StateSourceTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class RuntimeIdentityStateSourceR3Test(unittest.TestCase):
+    def test_discovery_and_foreign_topic_do_not_create_publishers_or_rebind(self):
+        with mock.patch.object(state_module, 'create_state_stream', side_effect=FakeStream):
+            source = BodyStateSource()
+            self.addCleanup(source.close)
+            source._stream.emit()
+            with self.assertRaisesRegex(ValueError, 'get_robot_info'):
+                source.snapshot(.01)
+            self.assertEqual(source.get_robot_info(.1).descriptor_ref.robot_runtime_id, 11)
+            source._stream.emit()
+            original = source.snapshot(.1)
+            source._stream.emit(make_state(runtime_id=99)[0])
+            with self.assertRaises(TimeoutError):
+                source.snapshot(.001, after=original)
+            source._stream.emit()
+            self.assertIsNot(source.snapshot(.1, after=original), original)

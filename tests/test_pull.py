@@ -11,6 +11,7 @@ from locomotion_aorta import ControlAck,ControlStatus,ControlOperation,ExternalP
 from locomotion_aorta import BodyCmd,BodyJointCmd,ControllerClosedError,NotRunningError
 from locomotion_aorta.transport import BODY_CMD_TOPIC,BODY_STATE_TOPIC,CONTROL_STATUS_TOPIC,CONTROL_REQUEST_TOPIC
 from fake_transport import FakeTransport
+from locomotion_aorta.body_types import DescriptorRef
 
 class Ring:
     def __init__(self):self.samples=deque();self.waits=[];self.closed=False
@@ -74,7 +75,7 @@ class PullTest(unittest.TestCase):
             self.assertEqual(c._control_context().generation,42)
             self.assertEqual(t.published,before)
             self.assertEqual(c._next_external_sequence,1)
-            for i,changed in enumerate(({'client_id':'other'},{'lease_id':'other'}),2):
+            for i,changed in enumerate(({'client_id':17},{'control_id':19}),2):
                 t.emit(CONTROL_STATUS_TOPIC,replace(owned,status_seq=i,**changed))
                 with self.assertRaises(NotRunningError):c._control_context()
                 self.assertEqual(c._next_external_sequence,1)
@@ -198,11 +199,11 @@ class PullTest(unittest.TestCase):
         t._wait_body_state=lambda timeout:t.wait_state(timeout).body_state()
         def publish(topic,req):
             if topic!=CONTROL_REQUEST_TOPIC:return
-            t.emit('/sdk/foot_humanoid/control/ack',ControlAck(request_id=req.request_id,operation=req.operation,accepted=not reject,lease_id='L'))
+            t.emit('/sdk/foot_humanoid/control/ack',ControlAck(request_id=req.request_id,operation=req.operation,accepted=not reject,client_id=9,control_id=13,descriptor_ref=DescriptorRef(11)))
             if not missing_status and req.operation in(ControlOperation.COMMIT,ControlOperation.CANCEL):
                 cancel=req.operation==ControlOperation.CANCEL
-                t.emit(CONTROL_STATUS_TOPIC,ControlStatus(status_seq=2 if cancel else 1,current_action='PASSIVE'if cancel else action,phase=ExternalPhase.IDLE if cancel else ExternalPhase.RUNNING,client_id='client',lease_id='L',generation=42))
-        t.on_publish=publish;c=PullController(client_id='client',_transport=t);self.addCleanup(c.close);return c,t
+                t.emit(CONTROL_STATUS_TOPIC,ControlStatus(status_seq=2 if cancel else 1,current_action='PASSIVE'if cancel else action,phase=ExternalPhase.IDLE if cancel else ExternalPhase.RUNNING,client_id=9,control_id=13,generation=42,descriptor_ref=DescriptorRef(11)))
+        t.on_publish=publish;c=PullController(client_id=7,_transport=t);c.get_robot_info(.1);self.addCleanup(c.close);return c,t
 
     def test_enter_cancel_original_ack_lease_generation_no_body_callback(self):
         c,t=self.fixture();self.assertNotIn(BODY_STATE_TOPIC,t.callbacks)
@@ -217,18 +218,18 @@ class PullTest(unittest.TestCase):
         first=c.publish(command)
         t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
             status_seq=2,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
-            client_id='client',lease_id='L',generation=84))
+            client_id=9,control_id=13,generation=84,descriptor_ref=DescriptorRef(11)))
         second=c.publish(command)
         self.assertEqual((first.session_id,first.sequence),(42,1))
         self.assertEqual((second.session_id,second.sequence),(84,1))
         t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
             status_seq=3,current_action='PASSIVE',phase=ExternalPhase.IDLE,
-            client_id='client',lease_id='L',generation=84))
+            client_id=9,control_id=13,generation=84,descriptor_ref=DescriptorRef(11)))
         with self.assertRaises(NotRunningError):c.publish(command)
         self.assertEqual([m for topic,m in t.published if topic==BODY_CMD_TOPIC],[first,second])
         t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
             status_seq=4,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
-            client_id='client',lease_id='L',generation=84))
+            client_id=9,control_id=13,generation=84,descriptor_ref=DescriptorRef(11)))
         resumed=c.publish(command)
         self.assertEqual((resumed.session_id,resumed.sequence),(84,2))
 
@@ -255,8 +256,8 @@ class PullTest(unittest.TestCase):
 
     def test_pending_foreign_owner_or_lease_cannot_consume_key(self):
         for phase in (ExternalPhase.RUNNING, ExternalPhase.TIMEOUT_HOLD):
-            for foreign in ({'client_id': 'another-client'},
-                            {'lease_id': 'another-lease'}):
+            for foreign in ({'client_id': 17},
+                            {'control_id': 19}):
                 with self.subTest(phase=phase, foreign=foreign):
                     controller, transport = self.fixture()
                     owned = controller.enter_external(.2)
@@ -348,7 +349,7 @@ class PullTest(unittest.TestCase):
         pull._callbacks[CONTROL_STATUS_TOPIC]=[callback]
         pull._pulls[CONTROL_STATUS_TOPIC].samples.append(S(payload=ControlStatus(
             status_seq=2,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
-            client_id='client',lease_id='L',generation=84)))
+            client_id=9,control_id=13,generation=84,descriptor_ref=DescriptorRef(11))))
 
         def poll():
             publish_polling.set()
@@ -393,7 +394,7 @@ class PullTest(unittest.TestCase):
         pull._callbacks[CONTROL_STATUS_TOPIC]=[callback]
         pull._pulls[CONTROL_STATUS_TOPIC].samples.append(S(payload=ControlStatus(
             status_seq=2,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
-            client_id='client',lease_id='L',generation=84)))
+            client_id=9,control_id=13,generation=84,descriptor_ref=DescriptorRef(11))))
         t.poll_control_status=pull.poll_control_status
 
         def publish():
@@ -431,7 +432,46 @@ class PullTest(unittest.TestCase):
         self.assertEqual(t.published[-1][1].operation,ControlOperation.CANCEL)
 
     def test_state_source_has_one_array_wait_api_and_close_is_readonly(self):
-        calls=[];state=object();transport=S(wait_state=lambda timeout:(calls.append(timeout)or state),close=lambda:calls.append('close'),control_status='snapshot')
+        calls=[];state=S(descriptor_ref=DescriptorRef(11));status=S(descriptor_ref=DescriptorRef(11))
+        class Transport(FakeTransport):
+            control_status=status
+            def wait_state(self, timeout):
+                calls.append(timeout);return state
+            def close(self):
+                calls.append('close');super().close()
+        transport=Transport()
         source=PullStateSource(_transport=transport)
+        source.get_robot_info(.1)
         self.assertIs(source.wait_state(.1),state);self.assertFalse(hasattr(source, "wait_body_state"))
-        self.assertEqual(source.control_status,'snapshot');source.close();self.assertEqual(calls,[.1,'close'])
+        self.assertIs(source.control_status,status);source.close();self.assertEqual(calls,[.1,'close'])
+
+class RuntimeIdentityPullR3Test(unittest.TestCase):
+    def test_readonly_discovery_binds_before_accepting_body_without_control(self):
+        from body_fixtures import robot_info_reply
+        from locomotion_aorta.body_types import DescriptorRef
+        class Reader(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.reply = replace(robot_info_reply(), descriptor_ref=DescriptorRef(11))
+                self.state = S(descriptor_ref=DescriptorRef(11))
+            def get_robot_info(self, timeout):
+                return self.reply
+            def wait_state(self, timeout):
+                return self.state
+        transport = Reader()
+        source = PullStateSource(_transport=transport)
+        self.addCleanup(source.close)
+        with self.assertRaises(ValueError):
+            source.wait_state(.1)
+        self.assertEqual(source.get_robot_info(.1), transport.reply)
+        self.assertIs(source.wait_state(.1), transport.state)
+        transport.state = S(descriptor_ref=DescriptorRef(99))
+        with self.assertRaises(ValueError):
+            source.wait_state(.1)
+        self.assertEqual(transport.published, [])
+        transport.reply = replace(transport.reply, descriptor_ref=DescriptorRef(12))
+        with self.assertRaisesRegex(ValueError, 'runtime changed'):
+            source.get_robot_info(.1)
+        transport.state = S(descriptor_ref=DescriptorRef(11))
+        with self.assertRaisesRegex(ValueError, 'runtime changed'):
+            source.wait_state(.1)

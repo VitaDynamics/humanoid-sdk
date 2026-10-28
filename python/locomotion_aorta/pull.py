@@ -6,7 +6,8 @@ import uuid
 from dataclasses import replace
 
 from .controller import (ExternalController, ExternalControlTimeoutError,
-                         ControllerClosedError, _deadline, _nonempty_text)
+                         ControllerClosedError, _deadline, _nonempty_text, _valid_ref)
+from .body_types import ServiceStatus
 from .transport import _AortaTransport, BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC
 from .state_arrays import decode_body_state_arrays
 from ._native_body_codec import decode_body_state_native
@@ -164,41 +165,106 @@ class PullStateSource:
             group=group, publishers=False)
         self._end_effector_runtime_id = None
         self._end_effector_runtime_lock = threading.Lock()
+        self._runtime_changed = False
+        self._closed = False
+        self._end_effector_clients = set()
 
     @property
     def group(self):
         return self._group
 
     def wait_state(self, timeout=5.0):
-        return self.transport.wait_state(timeout)
+        state = self.transport.wait_state(timeout)
+        with self._end_effector_runtime_lock:
+            self._ensure_runtime_locked()
+            if not _valid_ref(state.descriptor_ref) or state.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id:
+                raise ValueError('BodyState does not belong to the discovered runtime')
+            return state
+
+    def get_robot_info(self, timeout=5.0):
+        with self._end_effector_runtime_lock:
+            self._ensure_runtime_locked()
+            observed_runtime = self._end_effector_runtime_id
+        reply = self.transport.get_robot_info(timeout)
+        handles = []
+        with self._end_effector_runtime_lock:
+            self._ensure_runtime_locked()
+            if (reply.status in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
+                    and reply.info is not None and reply.info.body is not None
+                    and _valid_ref(reply.descriptor_ref)):
+                runtime = reply.descriptor_ref.robot_runtime_id
+                if (self._end_effector_runtime_id != observed_runtime
+                        and self._end_effector_runtime_id != runtime):
+                    raise ValueError('discovery context changed while request was in flight')
+                if self._end_effector_runtime_id is None:
+                    self._end_effector_runtime_id = runtime
+                elif self._end_effector_runtime_id != runtime:
+                    self._runtime_changed = True
+                    for client in tuple(self._end_effector_clients):
+                        with client._condition:
+                            if not client._closed and client._fatal is None:
+                                handles.extend(client._retire_descriptor_locked(
+                                    ValueError('robot runtime changed; create a new connection')))
+        for handle in handles:
+            try:
+                handle.close()
+            except Exception:
+                pass
+        if self._runtime_changed:
+            raise ValueError('robot runtime changed; create a new connection')
+        return reply
+
+    def _ensure_runtime_locked(self):
+        if self._closed:
+            raise ControllerClosedError('body state source is closed')
+        self.transport._ensure_open()
+        if self._runtime_changed:
+            raise ValueError('robot runtime changed; create a new connection')
 
     @property
     def control_status(self):
-        return self.transport.control_status
+        status = self.transport.control_status
+        with self._end_effector_runtime_lock:
+            self._ensure_runtime_locked()
+            if status is None or not _valid_ref(status.descriptor_ref):
+                return None
+            return status if status.descriptor_ref.robot_runtime_id == self._end_effector_runtime_id else None
 
     def _register_end_effector_client(self, client) -> None:
         with self._end_effector_runtime_lock:
-            self.transport._ensure_open()
+            self._ensure_runtime_locked()
+            self._end_effector_clients.add(client)
 
     def _close_end_effector_client(self, client):
         with self._end_effector_runtime_lock:
+            self._end_effector_clients.discard(client)
             with client._condition:
                 return client._close_locked()
 
-    def _bind_end_effector_runtime(self, client, robot_runtime_id: int) -> None:
+    def _bind_end_effector_runtime(self, client, robot_runtime_id: int) -> bool:
         if type(robot_runtime_id) is not int or not 0 < robot_runtime_id < 2**64:
             raise ValueError('robot_runtime_id must be a nonzero uint64')
         with self._end_effector_runtime_lock:
-            self.transport._ensure_open()
+            self._ensure_runtime_locked()
             with client._condition:
                 client._ensure_open()
-                if self._end_effector_runtime_id is None:
-                    self._end_effector_runtime_id = robot_runtime_id
-                elif self._end_effector_runtime_id != robot_runtime_id:
-                    raise ValueError(
-                        'robot runtime changed; create a new connection and recreate EndEffectorClient')
+                return self._end_effector_runtime_id == robot_runtime_id
 
     def close(self):
+        with self._end_effector_runtime_lock:
+            if self._closed:
+                return
+            self._closed = True
+            handles = []
+            for client in tuple(self._end_effector_clients):
+                with client._condition:
+                    handles.extend(client._close_locked())
+            self._end_effector_clients.clear()
+        for handle in handles:
+            try:
+                handle.close()
+            except Exception:
+                pass
         self.transport.close()
 
 
@@ -207,8 +273,6 @@ class PullController(ExternalController):
 
     def __init__(self, *, group='default', node_name=None, client_id=None, _transport=None):
         _nonempty_text(group, 'group')
-        if client_id:
-            _nonempty_text(client_id, 'client_id')
         node_name = node_name or 'locomotion-pull-'+uuid.uuid4().hex
         _nonempty_text(node_name, 'node_name')
         transport = _transport if _transport is not None else PullTransport(
@@ -219,13 +283,23 @@ class PullController(ExternalController):
     def wait_state(self, timeout=5.0):
         with self._condition:
             self._ensure_open()
-        return self.transport.wait_state(timeout)
+        state = self.transport.wait_state(timeout)
+        with self._condition:
+            self._ensure_open()
+            if not _valid_ref(state.descriptor_ref) or state.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id:
+                raise ValueError('BodyState does not belong to the discovered runtime')
+            return state
 
     def wait_body_state(self, timeout=5.0):
         with self._condition:
             self._ensure_open()
         try:
-            return self.transport._wait_body_state(timeout)
+            state = self.transport._wait_body_state(timeout)
+            with self._condition:
+                self._ensure_open()
+                if not _valid_ref(state.descriptor_ref) or state.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id:
+                    raise ValueError('BodyState does not belong to the discovered runtime')
+                return state
         except TimeoutError as error:
             raise ExternalControlTimeoutError(str(error)) from error
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ._body_codec import create_body_cmd, decode_body_state, decode_robot_info_response
-from .body_types import BodyCmd, GetRobotInfoResponse
+from .body_types import BodyCmd, DescriptorRef, GetRobotInfoResponse
 from .types import (
     ControlAck,
     ControlOperation,
@@ -41,6 +41,10 @@ class Transport(Protocol):
 
     def publish(self, topic: str, message: Any) -> None: ...
 
+    def _publish_control(self, message: ControlRequest, guard: Callable[[Callable[[], Any]], Any]) -> None: ...
+
+    def _prepare_body_output(self) -> None: ...
+
     def get_robot_info(self, timeout: float) -> GetRobotInfoResponse: ...
 
     def close(self) -> None: ...
@@ -69,6 +73,8 @@ class _AortaTransport:
         self.subscriptions: list[Any] = []
         self._info_clients: dict[int, Any] = {}
         self._info_lock = threading.Lock()
+        self._body_lock = threading.Lock()
+        self._publishers_enabled = _publishers
         self._closed = False
         self._capture_publish_timing = os.environ.get("LOCOMOTION_AORTA_PUBLISH_TIMING") == "1"
         self._publish_trace = threading.local()
@@ -86,18 +92,6 @@ class _AortaTransport:
                     qos=realtime,
                 )
             )
-            self.publishers[BODY_CMD_TOPIC] = (
-                self.node.create_publisher_typed(
-                    self._bindings.body_cmd_schema_meta,
-                    BODY_CMD_TOPIC,
-                    qos=realtime,
-                )
-            )
-            # Validate the pinned native/header ABI before ownership can be
-            # acquired, rather than discovering incompatibility on first send.
-            from ._native_body_codec import NativeBodyPublisher
-            self._body_publisher = NativeBodyPublisher(
-                self.publishers[BODY_CMD_TOPIC], self._bindings.body_cmd_schema_meta)
         except BaseException:
             self.node.close()
             raise
@@ -125,22 +119,45 @@ class _AortaTransport:
         if publisher is None:
             raise ValueError(f"unsupported publish topic: {topic}")
         if topic == CONTROL_REQUEST_TOPIC:
-            if not isinstance(message, ControlRequest):
-                raise TypeError("control request topic requires ControlRequest")
-            publisher.publish_typed(
-                lambda builder, header: _fill_control_request(
-                    self._bindings, message, builder, header
-                )
-            )
-            return
+            raise ValueError('control requests require the connection gate')
         if not isinstance(message, BodyCmd):
             raise TypeError("body command topic requires BodyCmd")
-        from ._native_body_codec import NativeBodyPublisher
         if self._body_publisher is None:
-            self._body_publisher = NativeBodyPublisher(publisher, self._bindings.body_cmd_schema_meta)
+            raise RuntimeError('Body output was not prepared before control entry')
         trace = {} if self._capture_publish_timing else None
         self._publish_trace.last = trace
         self._body_publisher.publish(message, trace)
+
+    def _prepare_body_output(self) -> None:
+        """Prepare and validate the original Body output before EXTERNAL PREPARE."""
+        from ._native_body_codec import NativeBodyPublisher
+        with self._body_lock:
+            if self._closed or not self._publishers_enabled:
+                raise RuntimeError('Body output is unavailable on this transport')
+            if self._body_publisher is not None:
+                return
+            publisher = self.node.create_publisher_typed(
+                self._bindings.body_cmd_schema_meta, BODY_CMD_TOPIC,
+                qos=self._bindings.aorta.QoS.realtime_control())
+            try:
+                native = NativeBodyPublisher(publisher, self._bindings.body_cmd_schema_meta)
+            except BaseException:
+                try:
+                    publisher.close()
+                except Exception:
+                    pass
+                raise
+            self.publishers[BODY_CMD_TOPIC] = publisher
+            self._body_publisher = native
+
+    def _publish_control(self, message: ControlRequest, guard: Callable[[Callable[[], Any]], Any]) -> None:
+        if self._closed:
+            raise RuntimeError('Aorta transport is closed')
+        if not isinstance(message, ControlRequest):
+            raise TypeError('control request topic requires ControlRequest')
+        def fill(builder, header):
+            return guard(lambda: _fill_control_request(self._bindings, message, builder, header))
+        self.publishers[CONTROL_REQUEST_TOPIC].publish_typed(fill)
 
     def _last_publish_timing(self):
         trace = getattr(self._publish_trace, "last", None)
@@ -172,10 +189,11 @@ class _AortaTransport:
 
     def close(self) -> None:
         with self._info_lock:
-            if self._closed:
-                return
-            self._closed = True
-            self.node.close()
+            with self._body_lock:
+                if self._closed:
+                    return
+                self._closed = True
+                self.node.close()
 
     def _subscriber_spec(
         self, topic: str
@@ -241,20 +259,34 @@ def _fill_control_request(
     builder: Any,
     header: int,
 ) -> int:
+    for name in ('client_id', 'control_id'):
+        value = getattr(request, name)
+        if type(value) is not int or not 0 <= value < 2**64:
+            raise ValueError(f'{name} must be a uint64')
+    if not request.client_id:
+        raise ValueError('client_id must be nonzero')
+    if request.operation == ControlOperation.COMMIT and not request.control_id:
+        raise ValueError('COMMIT requires a nonzero control_id')
+    if (not isinstance(request.descriptor_ref, DescriptorRef)
+            or type(request.descriptor_ref.robot_runtime_id) is not int
+            or not 0 < request.descriptor_ref.robot_runtime_id < 2**64):
+        raise ValueError('descriptor_ref requires a nonzero uint64 runtime')
     module = bindings.control_request_module
     request_id = builder.CreateString(request.request_id)
-    client_id = builder.CreateString(request.client_id)
     action_name = builder.CreateString(request.action_name)
-    lease_id = builder.CreateString(request.lease_id)
     module.ControlRequestStart(builder)
     module.ControlRequestAddAortaHeader(builder, header)
     module.ControlRequestAddProtocolVersion(builder, request.protocol_version)
     module.ControlRequestAddOperation(builder, _encode_operation(request.operation))
     module.ControlRequestAddRequestId(builder, request_id)
-    module.ControlRequestAddClientId(builder, client_id)
+    module.ControlRequestAddClientId(builder, request.client_id)
     module.ControlRequestAddActionName(builder, action_name)
-    module.ControlRequestAddLeaseId(builder, lease_id)
+    module.ControlRequestAddControlId(builder, request.control_id)
     module.ControlRequestAddRequestedLeaseMs(builder, request.requested_lease_ms)
+    if request.descriptor_ref is not None:
+        descriptor = importlib.import_module('lowlevel.ee.DescriptorRef')
+        module.ControlRequestAddDescriptorRef(
+            builder, descriptor.CreateDescriptorRef(builder, request.descriptor_ref.robot_runtime_id))
     return module.ControlRequestEnd(builder)
 
 
@@ -290,25 +322,29 @@ def _fill_robot_info_request(module: Any, builder: Any, header: int) -> int:
 
 
 def _decode_control_ack(view: Any) -> ControlAck:
+    ref = view.DescriptorRef()
     return ControlAck(
         request_id=_decode_text(view.RequestId()),
         operation=_decode_operation(view.Operation()),
         accepted=bool(view.Accepted()),
         error_code=int(view.ErrorCode()),
         reason=_decode_text(view.Reason()),
-        lease_id=_decode_text(view.LeaseId()),
+        control_id=int(view.ControlId()),
         lease_deadline_monotonic_ns=int(view.LeaseDeadlineMonotonicNs()),
         protocol_version=int(view.ProtocolVersion()),
+        descriptor_ref=None if ref is None else DescriptorRef(ref.RobotRuntimeId()),
+        client_id=int(view.ClientId()),
     )
 
 
 def _decode_control_status(view: Any) -> ControlStatus:
+    ref = view.DescriptorRef()
     return ControlStatus(
         status_seq=int(view.StatusSeq()),
         current_action=_decode_text(view.CurrentAction()),
         phase=_decode_phase(view.ActionPhase()),
-        client_id=_decode_text(view.ClientId()),
-        lease_id=_decode_text(view.LeaseId()),
+        client_id=int(view.ClientId()),
+        control_id=int(view.ControlId()),
         lease_deadline_monotonic_ns=int(view.LeaseDeadlineMonotonicNs()),
         generation=int(view.Generation()),
         last_accepted_cmd_id=int(view.LastAcceptedCmdId()),
@@ -320,6 +356,7 @@ def _decode_control_status(view: Any) -> ControlStatus:
         ingress_drop_count=int(view.IngressDropCount()),
         stamp_monotonic_ns=int(view.StampMonotonicNs()),
         protocol_version=int(view.ProtocolVersion()),
+        descriptor_ref=None if ref is None else DescriptorRef(ref.RobotRuntimeId()),
     )
 
 

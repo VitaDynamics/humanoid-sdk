@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 from enum import Enum
+from .body_types import DescriptorRef
 
 
-PROTOCOL_VERSION = 1
-CONTROL_REQUEST_VERSION = 2
+PROTOCOL_VERSION = 3
+CONTROL_REQUEST_VERSION = 3
 
 
 class ControlOperation(str, Enum):
@@ -61,15 +62,16 @@ class HumanoidLowState:
 
 @dataclass(frozen=True, slots=True)
 class ControlRequest:
-    """Wire request; lease_id names control ownership, not a timer."""
+    """Numeric control ownership and expected robot process identity."""
 
     request_id: str
-    client_id: str
+    client_id: int
     operation: ControlOperation
     action_name: str = "EXTERNAL"
-    lease_id: str = ""
+    control_id: int = 0
     requested_lease_ms: int = 0  # Legacy wire field; the controller always sends 0.
     protocol_version: int = CONTROL_REQUEST_VERSION
+    descriptor_ref: DescriptorRef | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,9 +81,11 @@ class ControlAck:
     accepted: bool
     error_code: int = 0
     reason: str = ""
-    lease_id: str = ""
+    control_id: int = 0
     lease_deadline_monotonic_ns: int = 0  # Legacy wire field; 0 means no expiry.
     protocol_version: int = PROTOCOL_VERSION
+    descriptor_ref: DescriptorRef | None = None
+    client_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,8 +93,8 @@ class ControlStatus:
     status_seq: int
     current_action: str
     phase: ExternalPhase
-    client_id: str = ""
-    lease_id: str = ""
+    client_id: int = 0
+    control_id: int = 0
     lease_deadline_monotonic_ns: int = 0  # Legacy wire field; 0 means no expiry.
     generation: int = 0
     last_accepted_cmd_id: int = 0
@@ -102,3 +106,4 @@ class ControlStatus:
     ingress_drop_count: int = 0
     stamp_monotonic_ns: int = 0
     protocol_version: int = PROTOCOL_VERSION
+    descriptor_ref: DescriptorRef | None = None

@@ -9,6 +9,7 @@ from unittest import mock
 
 import locomotion_aorta.transport as transport_module
 from fake_transport import FakeTransport
+from locomotion_aorta.body_types import DescriptorRef
 from locomotion_aorta import (
     AortaBindingsUnavailableError,
     CONTROL_ACK_TOPIC,
@@ -35,12 +36,16 @@ from locomotion_aorta import (
 
 
 class ControllerHarness:
-    def __init__(self) -> None:
+    def __init__(self, runtime_id: int = 11) -> None:
         self.transport = FakeTransport()
+        self.runtime_id = runtime_id
+        self.transport.get_robot_info = lambda timeout: replace(
+            robot_info_reply(), descriptor_ref=DescriptorRef(runtime_id))
         self.controller = ExternalController(
-            client_id="test-client", _transport=self.transport
+            client_id=7, _transport=self.transport
         )
-        self.lease_id = "lease-123"
+        self.controller.get_robot_info(.1)
+        self.control_id = 13
         self.status_sequence = 0
         self.generation = 42
 
@@ -51,7 +56,9 @@ class ControllerHarness:
                 request_id=request.request_id,
                 operation=request.operation,
                 accepted=accepted,
-                lease_id=self.lease_id,
+                control_id=self.control_id,
+                client_id=9,
+                descriptor_ref=DescriptorRef(self.runtime_id),
                 reason=reason,
             ),
         )
@@ -68,8 +75,9 @@ class ControllerHarness:
             status_seq=self.status_sequence,
             current_action=action,
             phase=phase,
-            client_id="test-client",
-            lease_id=self.lease_id,
+            client_id=9,
+            control_id=self.control_id,
+            descriptor_ref=DescriptorRef(self.runtime_id),
             generation=self.generation if generation is None else generation,
         )
         self.transport.emit(CONTROL_STATUS_TOPIC, status)
@@ -143,18 +151,18 @@ class ExternalControllerTest(unittest.TestCase):
         self.assertIsNone(h.controller._request_id)
         h.accept_enter(action="HUMANOID_TELEOP")
         h.controller.enter_control("HUMANOID_TELEOP", .1)
-        identity = (h.controller._request_id, h.controller._lease_id)
+        identity = (h.controller._request_id, h.controller._control_id)
         before = list(h.transport.published)
         for action in ("EXTERNAL", "HUMANOID_TELEOP"):
             with self.assertRaises(ExternalControlError):
                 h.controller.enter_control(action, .1)
         self.assertEqual(h.transport.published, before)
-        self.assertEqual((h.controller._request_id, h.controller._lease_id), identity)
+        self.assertEqual((h.controller._request_id, h.controller._control_id), identity)
         self.assertEqual(h.controller._request_action, "HUMANOID_TELEOP")
 
     def test_teleop_entry_requires_fresh_matching_running_not_only_commit_ack(self):
-        for change in (None, {"current_action": "EXTERNAL"}, {"client_id": "other"},
-                       {"lease_id": "other"}, {"generation": 0},
+        for change in (None, {"current_action": "EXTERNAL"}, {"client_id": 17},
+                       {"control_id": 19}, {"generation": 0},
                        {"phase": ExternalPhase.TIMEOUT_HOLD}, {"status_seq": 1}):
             with self.subTest(change=change):
                 h = ControllerHarness()
@@ -328,9 +336,9 @@ class ExternalControllerTest(unittest.TestCase):
         first = harness.controller.publish(make_command(0))
         before = list(harness.transport.published)
         context = harness.controller._control_context()
-        self.assertEqual((context.client_id, context.lease_id, context.generation, context.request_id),
-                         ('test-client', harness.lease_id, 42, harness.controller._request_id))
-        with self.assertRaises(AttributeError): context.lease_id = 'other'
+        self.assertEqual((context.client_id, context.control_id, context.generation, context.request_id),
+                         (9, harness.control_id, 42, harness.controller._request_id))
+        with self.assertRaises(AttributeError): context.control_id = 19
         self.assertEqual(harness.transport.published, before)
         harness.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
         self.assertEqual(harness.controller._control_context().generation, 84)
@@ -343,8 +351,8 @@ class ExternalControllerTest(unittest.TestCase):
         with self.assertRaises(ExternalControlError): harness.controller.publish(make_command(0))
 
     def test_rpc_control_context_reuses_owned_status_guards_and_rejects_local_cancel(self):
-        for phase, changed in ((ExternalPhase.RUNNING, {'client_id': 'other'}),
-                               (ExternalPhase.TIMEOUT_HOLD, {'lease_id': 'other'}),
+        for phase, changed in ((ExternalPhase.RUNNING, {'client_id': 17}),
+                               (ExternalPhase.TIMEOUT_HOLD, {'control_id': 19}),
                                (ExternalPhase.RUNNING, {'generation': 0}),
                                (ExternalPhase.TIMEOUT_HOLD, {'generation': 84})):
             with self.subTest(phase=phase, changed=changed):
@@ -368,8 +376,8 @@ class ExternalControllerTest(unittest.TestCase):
 
     def test_foreign_owner_or_lease_cannot_publish_or_consume_key(self):
         for phase in (ExternalPhase.RUNNING, ExternalPhase.TIMEOUT_HOLD):
-            for foreign in ({"client_id": "another-client"},
-                            {"lease_id": "another-lease"}):
+            for foreign in ({"client_id": 17},
+                            {"control_id": 19}):
                 with self.subTest(phase=phase, foreign=foreign):
                     harness = ControllerHarness()
                     self.addCleanup(harness.controller.close)
@@ -493,8 +501,8 @@ class ExternalControllerTest(unittest.TestCase):
             [(value.session_id, value.sequence) for value in (first, body, last)],
             [(42, 1), (42, 2), (42, 3)],
         )
-        self.assertEqual((first.client_id, first.lease_id),
-                         (harness.controller.client_id, harness.lease_id))
+        self.assertEqual((first.client_id, first.control_id),
+                         (harness.controller.client_id, harness.control_id))
         self.assertEqual([message.operation for topic, message in harness.transport.published
                           if topic == CONTROL_REQUEST_TOPIC],
                          [ControlOperation.PREPARE, ControlOperation.COMMIT])
@@ -561,9 +569,13 @@ class ExternalControllerTest(unittest.TestCase):
         class FakePublisher:
             def __init__(self) -> None:
                 self.fills = []
+                self.closed = False
 
             def publish_typed(self, fill) -> None:
                 self.fills.append(fill)
+
+            def close(self):
+                self.closed = True
 
         class FakeNode:
             def __init__(self, name, group) -> None:
@@ -607,10 +619,14 @@ class ExternalControllerTest(unittest.TestCase):
             transport_module,
             "_load_aorta_bindings",
             return_value=fake_bindings,
-        ), mock.patch('locomotion_aorta._native_body_codec.NativeBodyPublisher'):
+        ), mock.patch('locomotion_aorta._native_body_codec.NativeBodyPublisher') as native:
             transport = transport_module.create_aorta_transport(
                 node_name="sdk-node", group="robot-domain"
             )
+            native.assert_not_called()
+            self.assertEqual(list(transport.publishers), [CONTROL_REQUEST_TOPIC])
+            transport._prepare_body_output()
+            native.assert_called_once()
 
         self.assertEqual((transport.node.name, transport.node.group()), ("sdk-node", "robot-domain"))
         self.assertEqual(
@@ -642,10 +658,11 @@ class ExternalControllerTest(unittest.TestCase):
 
         request = ControlRequest(
             request_id="request-1",
-            client_id="client-1",
+            client_id=7,
             operation=ControlOperation.PREPARE,
+            descriptor_ref=DescriptorRef(11),
         )
-        transport.publish(CONTROL_REQUEST_TOPIC, request)
+        transport._publish_control(request, lambda fill: fill())
         self.assertEqual(
             len(transport.publishers[CONTROL_REQUEST_TOPIC].fills), 1
         )
@@ -656,24 +673,27 @@ class ExternalControllerTest(unittest.TestCase):
     def test_generated_control_views_decode_to_public_values(self) -> None:
         ack = transport_module._decode_control_ack(
             SimpleNamespace(
-                ProtocolVersion=lambda: 1,
+                ProtocolVersion=lambda: 3,
                 Operation=lambda: 2,
                 RequestId=lambda: b"request-1",
                 Accepted=lambda: True,
                 ErrorCode=lambda: 0,
                 Reason=lambda: b"",
-                LeaseId=lambda: b"lease-1",
+                ClientId=lambda: 9,
+                ControlId=lambda: 13,
+                DescriptorRef=lambda: SimpleNamespace(RobotRuntimeId=lambda: 11),
                 LeaseDeadlineMonotonicNs=lambda: 123,
             )
         )
         status = transport_module._decode_control_status(
             SimpleNamespace(
-                ProtocolVersion=lambda: 1,
+                ProtocolVersion=lambda: 3,
                 StatusSeq=lambda: 9,
                 CurrentAction=lambda: b"EXTERNAL",
                 ActionPhase=lambda: 4,
-                ClientId=lambda: b"client-1",
-                LeaseId=lambda: b"lease-1",
+                ClientId=lambda: 9,
+                ControlId=lambda: 13,
+                DescriptorRef=lambda: SimpleNamespace(RobotRuntimeId=lambda: 11),
                 LeaseDeadlineMonotonicNs=lambda: 123,
                 Generation=lambda: 42,
                 LastAcceptedCmdId=lambda: 8,
@@ -688,8 +708,9 @@ class ExternalControllerTest(unittest.TestCase):
         )
 
         self.assertEqual(ack.operation, ControlOperation.COMMIT)
-        self.assertEqual(ack.lease_id, "lease-1")
+        self.assertEqual((ack.client_id, ack.control_id, ack.descriptor_ref), (9, 13, DescriptorRef(11)))
         self.assertEqual(status.phase, ExternalPhase.RUNNING)
+        self.assertEqual((status.client_id, status.control_id, status.descriptor_ref), (9, 13, DescriptorRef(11)))
         self.assertEqual((status.generation, status.last_accepted_cmd_id), (42, 8))
 
         with self.assertRaisesRegex(ValueError, "ControlActionPhase"):
@@ -715,11 +736,13 @@ class ExternalControllerTest(unittest.TestCase):
             state_id=10,
             ts_state_real_us=100,
             joints=(sample_motor(q=0.1, dq=0.2),),
+            descriptor_ref=DescriptorRef(11),
         )
         latest = BodyState(
             state_id=11,
             ts_state_real_us=200,
             joints=(sample_motor(q=0.3, dq=0.4),),
+            descriptor_ref=DescriptorRef(11),
         )
         harness.transport.emit(BODY_STATE_TOPIC, first)
         harness.transport.emit(BODY_STATE_TOPIC, latest)
@@ -728,7 +751,7 @@ class ExternalControllerTest(unittest.TestCase):
 
     def test_body_state3_keeps_all_source_association_and_cmd_stays2(self):
         from locomotion_aorta.body_types import DescriptorRef
-        harness = ControllerHarness()
+        harness = ControllerHarness(runtime_id=2**64-1)
         self.addCleanup(harness.controller.close)
         state = BodyState(2**64-1, (), descriptor_ref=DescriptorRef(2**64-1),
                           ts_control_us=2**64-2, applied_key_valid=True, association_source_type=2)
@@ -745,17 +768,17 @@ class ExternalControllerTest(unittest.TestCase):
     def test_status_cache_does_not_regress_or_replace_a_sequence(self) -> None:
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)
-        current = ControlStatus(
+        current = ControlStatus(descriptor_ref=DescriptorRef(11),
             status_seq=2,
             current_action="EXTERNAL",
             phase=ExternalPhase.RUNNING,
         )
-        duplicate = ControlStatus(
+        duplicate = ControlStatus(descriptor_ref=DescriptorRef(11),
             status_seq=2,
             current_action="FIXED_STAND",
             phase=ExternalPhase.IDLE,
         )
-        stale = ControlStatus(
+        stale = ControlStatus(descriptor_ref=DescriptorRef(11),
             status_seq=1,
             current_action="FIXED_STAND",
             phase=ExternalPhase.IDLE,
@@ -770,19 +793,19 @@ class ExternalControllerTest(unittest.TestCase):
     def test_status_cache_accepts_sequence_reset_after_server_restart(self) -> None:
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)
-        previous_process = ControlStatus(
+        previous_process = ControlStatus(descriptor_ref=DescriptorRef(11),
             status_seq=100,
             stamp_monotonic_ns=1_000,
             current_action="EXTERNAL",
             phase=ExternalPhase.RUNNING,
         )
-        restarted_process = ControlStatus(
+        restarted_process = ControlStatus(descriptor_ref=DescriptorRef(11),
             status_seq=0,
             stamp_monotonic_ns=2_000,
             current_action="FIXED_STAND",
             phase=ExternalPhase.IDLE,
         )
-        delayed_previous_status = ControlStatus(
+        delayed_previous_status = ControlStatus(descriptor_ref=DescriptorRef(11),
             status_seq=99,
             stamp_monotonic_ns=900,
             current_action="EXTERNAL",
@@ -819,11 +842,11 @@ class ExternalControllerTest(unittest.TestCase):
         self.assertEqual(
             {request.request_id for request in requests}, {str(fixed_request_id)}
         )
-        self.assertEqual({request.client_id for request in requests}, {"test-client"})
-        self.assertEqual({request.protocol_version for request in requests}, {2})
-        self.assertEqual(requests[0].lease_id, "")
+        self.assertEqual([request.client_id for request in requests], [7, 9])
+        self.assertEqual({request.protocol_version for request in requests}, {3})
+        self.assertEqual(requests[0].control_id, 0)
         self.assertEqual(requests[0].requested_lease_ms, 0)
-        self.assertEqual(requests[1].lease_id, harness.lease_id)
+        self.assertEqual(requests[1].control_id, harness.control_id)
         self.assertEqual(requests[1].requested_lease_ms, 0)
         self.assertEqual(status.phase, ExternalPhase.RUNNING)
         self.assertEqual(status.lease_deadline_monotonic_ns, 0)
@@ -899,7 +922,7 @@ class ExternalControllerTest(unittest.TestCase):
         self.addCleanup(harness.controller.close)
         harness.transport.emit(
             CONTROL_STATUS_TOPIC,
-            ControlStatus(
+            ControlStatus(descriptor_ref=DescriptorRef(11),
                 status_seq=100,
                 stamp_monotonic_ns=1_000,
                 current_action="FIXED_STAND",
@@ -914,13 +937,13 @@ class ExternalControllerTest(unittest.TestCase):
             if request.operation == ControlOperation.COMMIT:
                 harness.transport.emit(
                     CONTROL_STATUS_TOPIC,
-                    ControlStatus(
+                    ControlStatus(descriptor_ref=DescriptorRef(11),
                         status_seq=0,
                         stamp_monotonic_ns=2_000,
                         current_action="EXTERNAL",
                         phase=ExternalPhase.RUNNING,
-                        client_id="test-client",
-                        lease_id=harness.lease_id,
+                        client_id=9,
+                        control_id=harness.control_id,
                         generation=harness.generation,
                     ),
                 )
@@ -941,11 +964,11 @@ class ExternalControllerTest(unittest.TestCase):
             if request.operation == ControlOperation.PREPARE:
                 harness.transport.emit(
                     CONTROL_ACK_TOPIC,
-                    ControlAck(
+                    ControlAck(descriptor_ref=DescriptorRef(11), client_id=9,
                         request_id=request.request_id,
                         operation=request.operation,
                         accepted=True,
-                        lease_id=harness.lease_id,
+                        control_id=harness.control_id,
                         protocol_version=2,
                     ),
                 )
@@ -984,12 +1007,12 @@ class ExternalControllerTest(unittest.TestCase):
             if request.operation == ControlOperation.COMMIT:
                 harness.transport.emit(
                     CONTROL_STATUS_TOPIC,
-                    ControlStatus(
+                    ControlStatus(descriptor_ref=DescriptorRef(11),
                         status_seq=1,
                         current_action="EXTERNAL",
                         phase=ExternalPhase.RUNNING,
-                        client_id="test-client",
-                        lease_id=harness.lease_id,
+                        client_id=9,
+                        control_id=harness.control_id,
                         protocol_version=2,
                     ),
                 )
@@ -1150,12 +1173,12 @@ class ExternalControllerTest(unittest.TestCase):
         self.addCleanup(harness.controller.close)
         harness.transport.emit(
             CONTROL_STATUS_TOPIC,
-            ControlStatus(
+            ControlStatus(descriptor_ref=DescriptorRef(11),
                 status_seq=1,
                 current_action="EXTERNAL",
                 phase=ExternalPhase.RUNNING,
-                client_id="test-client",
-                lease_id="",
+                client_id=9,
+                control_id=0,
                 generation=42,
             ),
         )
@@ -1267,14 +1290,14 @@ class ExternalControllerTest(unittest.TestCase):
         )
         self.assertEqual((published.session_id, published.sequence), (42, 1))
 
-    def test_v2_request_keeps_v1_ack_and_status_without_fallback(self):
+    def test_v3_request_uses_v3_ack_and_status_without_fallback(self):
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)
         harness.accept_enter()
         status = harness.controller.enter_external(timeout=0.1)
         requests = [m for topic, m in harness.transport.published if topic == CONTROL_REQUEST_TOPIC]
-        self.assertEqual([r.protocol_version for r in requests], [2, 2])
-        self.assertEqual(status.protocol_version, 1)
+        self.assertEqual([r.protocol_version for r in requests], [3, 3])
+        self.assertEqual(status.protocol_version, 3)
 
     def test_publish_requires_the_public_fixed31_span(self) -> None:
         harness = ControllerHarness()
@@ -1400,3 +1423,303 @@ class ExternalControllerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class RuntimeIdentityR3Test(unittest.TestCase):
+    """Control tests use the original controller/transport entry, without a wire shim."""
+
+    def make_controller(self, runtime=11):
+        from locomotion_aorta.body_types import DescriptorRef
+        transport = FakeTransport()
+        transport.get_robot_info = lambda timeout: replace(
+            robot_info_reply(), descriptor_ref=DescriptorRef(runtime))
+        controller = ExternalController(client_id=7, _transport=transport)
+        controller.get_robot_info(.1)
+        self.addCleanup(controller.close)
+        return controller, transport
+
+    def test_prepare_canonical_client_differs_from_proposal_and_running_confirms(self):
+        from locomotion_aorta.body_types import DescriptorRef
+        controller, transport = self.make_controller()
+        seen = []
+
+        def publish(topic, request):
+            if topic != CONTROL_REQUEST_TOPIC:
+                return
+            seen.append(request)
+            transport.emit(CONTROL_ACK_TOPIC, ControlAck(
+                request.request_id, request.operation, True, client_id=9,
+                control_id=13, descriptor_ref=DescriptorRef(11)))
+            if request.operation == ControlOperation.COMMIT:
+                transport.emit(CONTROL_STATUS_TOPIC, ControlStatus(
+                    1, 'EXTERNAL', ExternalPhase.RUNNING, client_id=9,
+                    control_id=13, generation=17, descriptor_ref=DescriptorRef(11)))
+
+        transport.on_publish = publish
+        self.assertEqual(controller.enter_external(.1).generation, 17)
+        self.assertEqual((seen[0].client_id, seen[0].control_id), (7, 0))
+        self.assertEqual((seen[1].client_id, seen[1].control_id), (9, 13))
+        key = controller._reserve_command()
+        self.assertEqual((key.client_id, key.control_id, key.session_id, key.sequence), (9, 13, 17, 1))
+
+    def test_lost_prepare_ack_cancels_with_original_proposal_and_zero_control(self):
+        controller, transport = self.make_controller()
+        with self.assertRaises(ExternalControlTimeoutError):
+            controller.enter_external(.001)
+        requests = [value for topic, value in transport.published if topic == CONTROL_REQUEST_TOPIC]
+        self.assertEqual([value.operation for value in requests], [ControlOperation.PREPARE, ControlOperation.CANCEL])
+        self.assertEqual((requests[-1].client_id, requests[-1].control_id), (7, 0))
+        self.assertEqual(requests[-1].request_id, requests[0].request_id)
+
+    def test_unrelated_status_does_not_change_runtime_and_service_restart_retires(self):
+        from locomotion_aorta.body_types import DescriptorRef
+        controller, transport = self.make_controller()
+        transport.emit(CONTROL_STATUS_TOPIC, ControlStatus(
+            1, 'EXTERNAL', ExternalPhase.RUNNING, client_id=2,
+            control_id=3, generation=1, descriptor_ref=DescriptorRef(99)))
+        self.assertIsNone(controller.status)
+        transport.get_robot_info = lambda timeout: replace(
+            robot_info_reply(), descriptor_ref=DescriptorRef(12))
+        with self.assertRaisesRegex(ValueError, 'robot runtime changed'):
+            controller.get_robot_info(.1)
+        with self.assertRaisesRegex(ValueError, 'robot runtime changed'):
+            controller.enter_external(.1)
+
+    def test_failed_or_zero_discovery_never_authorizes_entry(self):
+        from locomotion_aorta.body_types import DescriptorRef, ServiceStatus
+        for reply in (replace(robot_info_reply(), descriptor_ref=DescriptorRef(0)),
+                      replace(robot_info_reply(), status=ServiceStatus.INTERNAL_ERROR,
+                              descriptor_ref=DescriptorRef(11))):
+            transport = FakeTransport()
+            transport.get_robot_info = lambda timeout, result=reply: result
+            controller = ExternalController(client_id=7, _transport=transport)
+            self.addCleanup(controller.close)
+            self.assertEqual(controller.get_robot_info(.1), reply)
+            with self.assertRaises(NotRunningError):
+                controller.enter_external(.1)
+            self.assertEqual(transport.published, [])
+
+    def test_cancel_between_prepare_and_typed_fill_blocks_late_prepare(self):
+        controller, transport = self.make_controller()
+        reached = threading.Event()
+        proceed = threading.Event()
+        errors = []
+        original = transport._publish_control
+
+        def blocked(request, guard):
+            if request.operation == ControlOperation.PREPARE:
+                reached.set()
+                self.assertTrue(proceed.wait(1))
+            original(request, guard)
+
+        transport._publish_control = blocked
+        def enter():
+            try:
+                controller.enter_external(.5)
+            except BaseException as error:
+                errors.append(error)
+        worker = threading.Thread(target=enter)
+        worker.start()
+        self.assertTrue(reached.wait(1))
+        controller._best_effort_cancel()
+        proceed.set()
+        worker.join(1)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(errors)
+        operations = [value.operation for topic, value in transport.published
+                      if topic == CONTROL_REQUEST_TOPIC]
+        self.assertEqual(operations, [ControlOperation.CANCEL])
+
+    def test_late_prepare_ack_cannot_reopen_cancelled_context(self):
+        from locomotion_aorta.body_types import DescriptorRef
+        controller, transport = self.make_controller()
+        with self.assertRaises(ExternalControlTimeoutError):
+            controller.enter_external(.001)
+        request = transport.published[0][1]
+        transport.emit(CONTROL_ACK_TOPIC, ControlAck(
+            request.request_id, ControlOperation.PREPARE, True,
+            client_id=9, control_id=13, descriptor_ref=DescriptorRef(11)))
+        self.assertNotIn((request.request_id, ControlOperation.PREPARE), controller._acks)
+        with self.assertRaises(NotRunningError):
+            controller._reserve_command()
+
+    def test_invalid_client_ids_never_create_control_transport(self):
+        for value in (True, -1, 0, 1 << 64, '7'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                ExternalController(client_id=value, _transport=FakeTransport())
+
+    def test_correlated_management_reply_with_new_runtime_retires_connection(self):
+        controller, transport = self.make_controller()
+        def publish(topic, request):
+            if topic == CONTROL_REQUEST_TOPIC and request.operation == ControlOperation.PREPARE:
+                transport.emit(CONTROL_ACK_TOPIC, ControlAck(
+                    request.request_id, request.operation, True, client_id=9,
+                    control_id=13, descriptor_ref=DescriptorRef(12)))
+        transport.on_publish = publish
+        with self.assertRaisesRegex(ValueError, 'runtime changed'):
+            controller.enter_external(.1)
+        with self.assertRaisesRegex(ValueError, 'runtime changed'):
+            controller._control_context()
+
+    def test_close_while_discovery_waits_cannot_bind_late_response(self):
+        entered, release = threading.Event(), threading.Event()
+        transport = FakeTransport()
+        reply = robot_info_reply()
+        def discover(timeout):
+            entered.set()
+            if not release.wait(1):
+                raise RuntimeError('test did not release discovery')
+            return reply
+        transport.get_robot_info = discover
+        controller = ExternalController(client_id=7, _transport=transport)
+        failures = []
+        def read():
+            try:
+                controller.get_robot_info(.5)
+            except BaseException as error:
+                failures.append(error)
+        worker = threading.Thread(target=read)
+        worker.start()
+        self.assertTrue(entered.wait(1))
+        controller.close()
+        release.set()
+        worker.join(1)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], ControllerClosedError)
+        self.assertIsNone(controller._end_effector_runtime_id)
+
+    def test_body_prepare_failure_precedes_prepare_and_key_allocation(self):
+        controller, transport = self.make_controller()
+        def fail():
+            self.assertFalse(controller._condition._is_owned())
+            raise RuntimeError('actual Body ABI mismatch')
+        transport._prepare_body_output = fail
+        with self.assertRaisesRegex(RuntimeError, 'actual Body ABI mismatch'):
+            controller.enter_external(.1)
+        self.assertEqual(transport.published, [])
+        self.assertIsNone(controller._request_id)
+        self.assertEqual(controller._next_external_sequence, 1)
+
+    def test_body_prepare_is_not_used_for_discovery_or_teleop(self):
+        controller, transport = self.make_controller()
+        transport._prepare_body_output = mock.Mock(side_effect=AssertionError('unexpected Body preparation'))
+        controller.get_robot_info(.1)
+        def reply(topic, request):
+            if topic != CONTROL_REQUEST_TOPIC:
+                return
+            transport.emit(CONTROL_ACK_TOPIC, ControlAck(
+                request.request_id, request.operation, True, client_id=9,
+                control_id=13, descriptor_ref=DescriptorRef(11)))
+            if request.operation == ControlOperation.COMMIT:
+                transport.emit(CONTROL_STATUS_TOPIC, ControlStatus(
+                    1, 'HUMANOID_TELEOP', ExternalPhase.RUNNING, client_id=9,
+                    control_id=13, generation=17, descriptor_ref=DescriptorRef(11)))
+        transport.on_publish = reply
+        self.assertEqual(controller.enter_control('HUMANOID_TELEOP', .1).generation, 17)
+        transport._prepare_body_output.assert_not_called()
+
+    def test_close_during_body_prepare_never_sends_prepare(self):
+        controller, transport = self.make_controller()
+        reached, release = threading.Event(), threading.Event()
+        failures = []
+        def prepare():
+            self.assertFalse(controller._condition._is_owned())
+            reached.set()
+            if not release.wait(1):
+                raise RuntimeError('test did not release preparation')
+        transport._prepare_body_output = prepare
+        def enter():
+            try:
+                controller.enter_external(.5)
+            except BaseException as error:
+                failures.append(error)
+        worker = threading.Thread(target=enter)
+        worker.start()
+        self.assertTrue(reached.wait(1))
+        controller.close()
+        release.set()
+        worker.join(1)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], ControllerClosedError)
+        self.assertEqual(transport.published, [])
+
+    def test_runtime_change_during_body_prepare_never_sends_prepare(self):
+        controller, transport = self.make_controller()
+        def prepare():
+            self.assertFalse(controller._condition._is_owned())
+            transport.get_robot_info = lambda timeout: replace(
+                robot_info_reply(), descriptor_ref=DescriptorRef(12))
+            with self.assertRaisesRegex(ValueError, 'runtime changed'):
+                controller.get_robot_info(.1)
+        transport._prepare_body_output = prepare
+        with self.assertRaisesRegex(ValueError, 'runtime changed'):
+            controller.enter_external(.1)
+        self.assertEqual(transport.published, [])
+
+    def test_transport_body_prepare_failure_closes_only_new_publisher(self):
+        class Publisher:
+            def __init__(self):
+                self.close_count = 0
+            def close(self):
+                self.close_count += 1
+        class Node:
+            def __init__(self, name, group):
+                self._group = group
+                self.created = []
+                self.close_count = 0
+            def group(self):
+                return self._group
+            def create_publisher_typed(self, meta, topic, *, qos):
+                pub = Publisher()
+                self.created.append((topic, pub))
+                return pub
+            def close(self):
+                self.close_count += 1
+        qos = SimpleNamespace(realtime_control=lambda: 'control')
+        bindings = SimpleNamespace(aorta=SimpleNamespace(Node=Node, QoS=qos),
+                                   control_request_schema_meta=object(),
+                                   body_cmd_schema_meta=object())
+        with mock.patch.object(transport_module, '_load_aorta_bindings', return_value=bindings), \
+             mock.patch('locomotion_aorta._native_body_codec.NativeBodyPublisher',
+                        side_effect=RuntimeError('native schema mismatch')):
+            transport = transport_module._AortaTransport(node_name='node', group='group')
+            self.addCleanup(transport.close)
+            self.assertEqual([topic for topic, _ in transport.node.created], [CONTROL_REQUEST_TOPIC])
+            with self.assertRaisesRegex(RuntimeError, 'native schema mismatch'):
+                transport._prepare_body_output()
+            self.assertEqual([topic for topic, _ in transport.node.created],
+                             [CONTROL_REQUEST_TOPIC, BODY_CMD_TOPIC])
+            self.assertEqual(transport.node.created[-1][1].close_count, 1)
+            self.assertNotIn(BODY_CMD_TOPIC, transport.publishers)
+            self.assertIsNone(transport._body_publisher)
+
+    def test_old_discovery_reply_cannot_retire_newly_bound_runtime(self):
+        entered, release = threading.Event(), threading.Event()
+        transport = FakeTransport()
+        controller = ExternalController(client_id=7, _transport=transport)
+        self.addCleanup(controller.close)
+        errors = []
+        def discover(timeout):
+            if threading.current_thread().name == 'old-discovery':
+                entered.set()
+                if not release.wait(1):
+                    raise RuntimeError('test did not release old discovery')
+                return replace(robot_info_reply(), descriptor_ref=DescriptorRef(11))
+            return replace(robot_info_reply(), descriptor_ref=DescriptorRef(12))
+        transport.get_robot_info = discover
+        def old():
+            try:
+                controller.get_robot_info(.5)
+            except BaseException as error:
+                errors.append(error)
+        worker = threading.Thread(target=old, name='old-discovery')
+        worker.start()
+        self.assertTrue(entered.wait(1))
+        self.assertEqual(controller.get_robot_info(.1).descriptor_ref, DescriptorRef(12))
+        release.set()
+        worker.join(1)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertRegex(str(errors[0]), 'discovery context changed')
+        self.assertEqual(controller.get_robot_info(.1).descriptor_ref, DescriptorRef(12))

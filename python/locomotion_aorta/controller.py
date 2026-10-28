@@ -28,7 +28,7 @@ from .types import (
 
 from .body_types import (
     BODY_SLOTS, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION, BodyState, BodyCmd, BodyJointCmd, BodyCmdAction,
-    BodyInfo, GetRobotInfoResponse,
+    BodyInfo, DescriptorRef, GetRobotInfoResponse, ServiceStatus,
 )
 
 
@@ -64,8 +64,8 @@ _MAX_UINT64 = (1 << 64) - 1
 class _CommandContext:
     """One call's confirmed connection context, never an ownership credential."""
 
-    client_id: str
-    lease_id: str
+    client_id: int
+    control_id: int
     session_id: int
     sequence: int
 
@@ -74,8 +74,8 @@ class _CommandContext:
 class _ControlContext:
     """Local RPC authorization snapshot; generation/request are never wire credentials."""
 
-    client_id: str
-    lease_id: str
+    client_id: int
+    control_id: int
     generation: int
     request_id: str
 
@@ -86,7 +86,7 @@ class ExternalController:
         *,
         group: str = "default",
         node_name: str | None = None,
-        client_id: str | None = None,
+        client_id: int | None = None,
         _transport: Transport | None = None,
         _subscribe_body_state: bool = True,
     ) -> None:
@@ -94,9 +94,10 @@ class ExternalController:
         self.node_name = _nonempty_text(
             node_name or f"locomotion-aorta-{uuid.uuid4()}", "node_name"
         )
-        self.client_id = _nonempty_text(
-            client_id or f"locomotion-client-{uuid.uuid4()}", "client_id"
-        )
+        self._proposed_client_id = _uint64_nonzero(
+            client_id if client_id is not None else ((uuid.uuid4().int & _MAX_UINT64) or 1),
+            'client_id')
+        self.client_id = 0  # learned only from the correlated PREPARE ACK
         self.transport = (
             _transport
             if _transport is not None
@@ -110,14 +111,13 @@ class ExternalController:
         self._body_info: BodyInfo | None = None
         self._latest_status: ControlStatus | None = None
         self._acks: dict[tuple[str, ControlOperation], ControlAck] = {}
+        self._expected_ack: ControlOperation | None = None
         self._request_id: str | None = None
         self._request_action: str | None = None
-        self._lease_id = ""
+        self._control_id = 0
         self._external_session_id = 0
         self._next_external_sequence = 1
-        # A connection is bound to one immutable robot process as soon as an
-        # EndEffectorClient accepts Info. Never transfer an old lease/control
-        # context to a restarted robot process.
+        # The discovery response binds the connection, not an EE topic.
         self._end_effector_runtime_id: int | None = None
         self._end_effector_runtime_error: str | None = None
         self._end_effector_clients: set[Any] = set()
@@ -165,11 +165,31 @@ class ExternalController:
         _deadline(timeout)
         with self._condition:
             self._ensure_open()
+            observed_runtime = self._end_effector_runtime_id
         reply = self.transport.get_robot_info(timeout)
+        handles = []
         with self._condition:
             self._ensure_open()
-            if reply.info is not None:
-                self._body_info = reply.info.body
+            if (reply.status in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
+                    and reply.info is not None and reply.info.body is not None
+                    and _valid_ref(reply.descriptor_ref)):
+                runtime = reply.descriptor_ref.robot_runtime_id
+                if (self._end_effector_runtime_id != observed_runtime
+                        and self._end_effector_runtime_id != runtime):
+                    raise ValueError('discovery context changed while request was in flight')
+                if self._end_effector_runtime_id is None:
+                    self._end_effector_runtime_id = runtime
+                elif self._end_effector_runtime_id != runtime:
+                    handles = self._retire_runtime_locked()
+                if not handles and self._end_effector_runtime_error is None:
+                    self._body_info = reply.info.body
+        for handle in handles:
+            try:
+                handle.close()
+            except Exception:
+                pass
+        if self._end_effector_runtime_error is not None:
+            raise self._end_effector_runtime_changed()
         # Preserve partial or failed discovery and each end-effector status for the caller.
         return reply
 
@@ -196,42 +216,59 @@ class ExternalController:
             self._ensure_open()
             if self._request_id is not None:
                 raise ExternalControlError("a control request is already active")
+            if self._end_effector_runtime_id is None:
+                raise NotRunningError('get_robot_info must establish a valid runtime first')
+            runtime_id = self._end_effector_runtime_id
+        if action_name == 'EXTERNAL':
+            self.transport._prepare_body_output()
+        with self._condition:
+            self._ensure_open()
+            if self._request_id is not None:
+                raise ExternalControlError('a control request is already active')
+            if self._end_effector_runtime_id != runtime_id:
+                raise self._end_effector_runtime_changed()
+            if time.monotonic() >= deadline:
+                raise ExternalControlTimeoutError('timed out preparing control output')
             request_id = str(uuid.uuid4())
             self._request_id = request_id
             self._request_action = action_name
-            self._lease_id = ""
+            self.client_id = 0
+            self._control_id = 0
             self._external_session_id = 0
             self._next_external_sequence = 1
             self._cancel_sent = False
             self._acks.clear()
             prepare = self._request(ControlOperation.PREPARE)
+            self._expected_ack = ControlOperation.PREPARE
 
         try:
-            self.transport.publish(CONTROL_REQUEST_TOPIC, prepare)
+            self._publish_control(prepare)
             prepare_ack = self._wait_for_ack(
                 request_id, ControlOperation.PREPARE, deadline
             )
             self._require_accepted(prepare_ack)
-            if not prepare_ack.lease_id:
+            if not _valid_generation(prepare_ack.control_id) or not _valid_generation(prepare_ack.client_id):
                 raise ControlRejectedError(
-                    "PREPARE was accepted without a lease_id"
+                    "PREPARE was accepted without canonical client/control identity"
                 )
             with self._condition:
                 self._ensure_open()
                 if self._request_id != request_id or self._cancel_sent:
                     raise NotRunningError("control entry was cancelled or replaced")
-                self._lease_id = prepare_ack.lease_id
+                self.client_id = prepare_ack.client_id
+                self._control_id = prepare_ack.control_id
                 status_before_commit = self._latest_status
                 commit = self._request(ControlOperation.COMMIT)
+                self._expected_ack = ControlOperation.COMMIT
 
-            self.transport.publish(CONTROL_REQUEST_TOPIC, commit)
+            self._publish_control(commit)
             commit_ack = self._wait_for_ack(
                 request_id, ControlOperation.COMMIT, deadline
             )
             self._require_accepted(commit_ack)
-            if commit_ack.lease_id and commit_ack.lease_id != self._lease_id:
+            if commit_ack.control_id != self._control_id or commit_ack.client_id != self.client_id:
                 raise ControlRejectedError(
-                    "COMMIT acknowledgement changed the prepared lease_id"
+                    "COMMIT acknowledgement changed the prepared identity"
                 )
 
             def activate() -> ControlStatus | None:
@@ -345,7 +382,7 @@ class ExternalController:
         if self._next_external_sequence > _MAX_UINT64:
             raise ExternalControlError("external sequence exhausted")
         context = _CommandContext(
-            client_id=self.client_id, lease_id=self._lease_id,
+            client_id=self.client_id, control_id=self._control_id,
             session_id=self._external_session_id,
             sequence=self._next_external_sequence,
         )
@@ -380,7 +417,7 @@ class ExternalController:
         """
         with self._condition:
             status = self._require_owned_status()
-            return _ControlContext(self.client_id, self._lease_id,
+            return _ControlContext(self.client_id, self._control_id,
                                    status.generation, self._request_id)
 
     @staticmethod
@@ -389,6 +426,21 @@ class ExternalController:
             "robot runtime changed; create a new connection, acquire a "
             "new control context, and recreate EndEffectorClient"
         )
+
+    def _retire_runtime_locked(self) -> list[Any]:
+        """Retire the existing connection after an authoritative runtime change."""
+        failure = self._end_effector_runtime_changed()
+        self._end_effector_runtime_error = str(failure)
+        self._latest_body_state = None
+        self._latest_status = None
+        self._cancel_sent = True
+        handles = []
+        for client in tuple(self._end_effector_clients):
+            with client._condition:
+                if not client._closed and client._fatal is None:
+                    handles.extend(client._retire_descriptor_locked(failure))
+        self._condition.notify_all()
+        return handles
 
     def _register_end_effector_client(self, client: Any) -> None:
         """Attach one EE client to this connection's existing lifecycle."""
@@ -418,33 +470,18 @@ class ExternalController:
         if self._end_effector_runtime_id != robot_runtime_id:
             raise self._end_effector_runtime_changed()
 
-    def _bind_end_effector_runtime(self, client: Any, robot_runtime_id: int) -> None:
-        """Bind one live EE client and retire every EE writer on mismatch."""
+    def _bind_end_effector_runtime(self, client: Any, robot_runtime_id: int) -> bool:
+        """Accept a topic only when it matches the discovered process."""
         if (type(robot_runtime_id) is not int or
                 not 0 < robot_runtime_id <= _MAX_UINT64):
             raise ValueError("robot_runtime_id must be a nonzero uint64")
-        handles: list[Any] = []
-        failure = None
         with self._condition:
             self._ensure_open()
             with client._condition:
                 client._ensure_open()
                 if client not in self._end_effector_clients:
                     raise ControllerClosedError("end-effector client is detached")
-            if self._end_effector_runtime_error is not None:
-                failure = ValueError(self._end_effector_runtime_error)
-            elif self._end_effector_runtime_id is None:
-                self._end_effector_runtime_id = robot_runtime_id
-            elif self._end_effector_runtime_id != robot_runtime_id:
-                failure = self._end_effector_runtime_changed()
-                self._end_effector_runtime_error = str(failure)
-                for attached in tuple(self._end_effector_clients):
-                    with attached._condition:
-                        if not attached._closed and attached._fatal is None:
-                            handles.extend(attached._retire_descriptor_locked(failure))
-        client._close_handles(handles)
-        if failure is not None:
-            raise failure
+            return self._end_effector_runtime_id == robot_runtime_id
 
     def _run_end_effector_gate(
         self, client: Any, robot_runtime_id: int, operation: Callable[[], _T]
@@ -474,7 +511,7 @@ class ExternalController:
                 self._require_end_effector_runtime_locked(client, robot_runtime_id)
                 status = self._require_owned_status()
                 context = _ControlContext(
-                    self.client_id, self._lease_id, status.generation, self._request_id
+                    self.client_id, self._control_id, status.generation, self._request_id
                 )
                 return operation(context)
 
@@ -519,18 +556,30 @@ class ExternalController:
             if self._closed:
                 return
             self._closed = True
-            should_cancel = self._request_id is not None and not self._cancel_sent
+            should_cancel = (self._request_id is not None and not self._cancel_sent
+                             and self._end_effector_runtime_error is None)
             if should_cancel:
                 self._cancel_sent = True
                 cancel = self._request(ControlOperation.CANCEL)
+                self._expected_ack = ControlOperation.CANCEL
             else:
                 cancel = None
+            handles = []
+            for client in tuple(self._end_effector_clients):
+                with client._condition:
+                    handles.extend(client._close_locked())
+            self._end_effector_clients.clear()
             self._condition.notify_all()
 
         if cancel is not None:
             try:
-                self.transport.publish(CONTROL_REQUEST_TOPIC, cancel)
+                self._publish_control(cancel)
             except BaseException:
+                pass
+        for handle in handles:
+            try:
+                handle.close()
+            except Exception:
                 pass
         for subscription in self._subscriptions:
             try:
@@ -555,7 +604,9 @@ class ExternalController:
         if not isinstance(lowstate, BodyState) or lowstate.protocol_version != BODY_STATE_PROTOCOL_VERSION:
             return
         with self._condition:
-            if not self._closed:
+            if (not self._closed and self._end_effector_runtime_error is None
+                    and _valid_ref(lowstate.descriptor_ref)
+                    and lowstate.descriptor_ref.robot_runtime_id == self._end_effector_runtime_id):
                 self._latest_body_state = lowstate
                 self._condition.notify_all()
 
@@ -563,23 +614,49 @@ class ExternalController:
         if (
             not isinstance(ack, ControlAck)
             or ack.protocol_version != PROTOCOL_VERSION
+            or not _valid_uint64(ack.client_id)
+            or not _valid_uint64(ack.control_id)
         ):
             return
+        handles = []
         with self._condition:
             if not self._closed and ack.request_id == self._request_id:
-                key = (ack.request_id, ack.operation)
-                if key not in self._acks:
-                    self._acks[key] = ack
-                    self._condition.notify_all()
+                if ack.operation != self._expected_ack:
+                    return
+                if self._cancel_sent and ack.operation != ControlOperation.CANCEL:
+                    return
+                if ack.operation not in (ControlOperation.PREPARE, ControlOperation.COMMIT, ControlOperation.CANCEL):
+                    return
+                if (ack.operation != ControlOperation.PREPARE and self._control_id
+                        and (ack.client_id != self.client_id or ack.control_id != self._control_id)):
+                    return
+                if not _valid_ref(ack.descriptor_ref):
+                    return
+                if ack.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id:
+                    handles = self._retire_runtime_locked()
+                else:
+                    key = (ack.request_id, ack.operation)
+                    if key not in self._acks:
+                        self._acks[key] = ack
+                        self._condition.notify_all()
+        for handle in handles:
+            try:
+                handle.close()
+            except Exception:
+                pass
 
     def _on_status(self, status: Any) -> None:
         if (
             not isinstance(status, ControlStatus)
             or status.protocol_version != PROTOCOL_VERSION
+            or not _valid_uint64(status.client_id)
+            or not _valid_uint64(status.control_id)
         ):
             return
         with self._condition:
-            if not self._closed:
+            if (not self._closed and self._end_effector_runtime_error is None
+                    and _valid_ref(status.descriptor_ref)
+                    and status.descriptor_ref.robot_runtime_id == self._end_effector_runtime_id):
                 if _status_is_newer(status, self._latest_status):
                     self._latest_status = status
                     self._condition.notify_all()
@@ -618,11 +695,12 @@ class ExternalController:
             raise ExternalControlError("no active request identity")
         return ControlRequest(
             request_id=self._request_id,
-            client_id=self.client_id,
+            client_id=self.client_id or self._proposed_client_id,
             operation=operation,
             action_name=self._request_action,
-            lease_id=self._lease_id,
+            control_id=self._control_id,
             requested_lease_ms=0,
+            descriptor_ref=DescriptorRef(self._end_effector_runtime_id),
         )
 
     def _best_effort_cancel(self, *, request_id: str | None = None) -> None:
@@ -633,10 +711,32 @@ class ExternalController:
                 return
             self._cancel_sent = True
             cancel = self._request(ControlOperation.CANCEL)
+            self._expected_ack = ControlOperation.CANCEL
         try:
-            self.transport.publish(CONTROL_REQUEST_TOPIC, cancel)
+            self._publish_control(cancel)
         except BaseException:
             pass
+
+    def _publish_control(self, request: ControlRequest) -> None:
+        def guard(fill):
+            with self._condition:
+                if self._end_effector_runtime_error is not None:
+                    raise self._end_effector_runtime_changed()
+                if request.request_id != self._request_id or request.descriptor_ref != DescriptorRef(self._end_effector_runtime_id):
+                    raise NotRunningError('control request context changed before encoding')
+                if request.operation != self._expected_ack:
+                    raise NotRunningError('control request phase changed before encoding')
+                if request.operation == ControlOperation.CANCEL:
+                    if not self._cancel_sent:
+                        raise NotRunningError('cancellation is no longer active')
+                elif self._closed or self._cancel_sent:
+                    raise NotRunningError('control request was cancelled or closed')
+                if request.control_id != self._control_id:
+                    raise NotRunningError('control identity changed before encoding')
+                if request.client_id != (self.client_id or self._proposed_client_id):
+                    raise NotRunningError('client identity changed before encoding')
+                return fill()
+        self.transport._publish_control(request, guard)
 
     def _owned_running_status_after(
         self, status_before_commit: ControlStatus | None
@@ -655,12 +755,13 @@ class ExternalController:
     def _status_allows_publish(self, status: ControlStatus | None) -> bool:
         return bool(
             self._request_id is not None
-            and self._lease_id
+            and self._control_id
             and status is not None
             and status.current_action == self._request_action
             and status.phase in (ExternalPhase.RUNNING, ExternalPhase.TIMEOUT_HOLD)
             and status.client_id == self.client_id
-            and status.lease_id == self._lease_id
+            and status.control_id == self._control_id
+            and status.descriptor_ref == DescriptorRef(self._end_effector_runtime_id)
         )
 
     def _require_accepted(self, ack: ControlAck) -> None:
@@ -674,14 +775,32 @@ class ExternalController:
     def _clear_session(self) -> None:
         self._request_id = None
         self._request_action = None
-        self._lease_id = ""
+        self.client_id = 0
+        self._control_id = 0
         self._external_session_id = 0
         self._next_external_sequence = 1
         self._cancel_sent = False
+        self._expected_ack = None
 
     def _ensure_open(self) -> None:
         if self._closed:
             raise ControllerClosedError("controller is closed")
+        if self._end_effector_runtime_error is not None:
+            raise self._end_effector_runtime_changed()
+
+
+def _uint64_nonzero(value: int, name: str) -> int:
+    if type(value) is not int or not 0 < value <= _MAX_UINT64:
+        raise ValueError(f'{name} must be a nonzero uint64')
+    return value
+
+
+def _valid_uint64(value: int) -> bool:
+    return type(value) is int and 0 <= value <= _MAX_UINT64
+
+
+def _valid_ref(ref: DescriptorRef | None) -> bool:
+    return isinstance(ref, DescriptorRef) and _valid_generation(ref.robot_runtime_id)
 
 
 def _nonempty_text(value: str, name: str) -> str:
