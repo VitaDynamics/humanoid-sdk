@@ -16,6 +16,7 @@ import flatbuffers
 from locomotion_aorta import BodyCmd, BodyJointCmd, InvalidCommandError
 from locomotion_aorta.controller import _validate_command
 from locomotion_aorta.transport import _fill_body_cmd, _AortaTransport, BODY_CMD_TOPIC
+from locomotion_aorta.body_types import DescriptorRef
 from test_body_codec import make_command
 from test_controller import ControllerHarness
 
@@ -72,7 +73,8 @@ class NativeBodyCmdTest(unittest.TestCase):
             joints = tuple(BodyJointCmd(*(rng.uniform(-20, 20) for _ in range(5))) for _ in range(31))
             command = BodyCmd(joints, session_id=rng.randrange(2**64), sequence=rng.randrange(2**64),
                               input_state_id=rng.randrange(2**64), input_state_ts_real_us=i,
-                              ts_client_created_us=i, ts_client_send_us=i+1)
+                              ts_client_created_us=i, ts_client_send_us=i+1,
+                              descriptor_ref=DescriptorRef(2**64-1), control_id=2**64-2)
             self.assertBytes(command, rng.randrange(2**64), ['codec', '', None, '机器人\x00SDK'][i % 4],
                              [0, 1, 2**64-1][i % 3])
 
@@ -81,7 +83,7 @@ class NativeBodyCmdTest(unittest.TestCase):
             command = dataclasses.replace(make_command(), joints=(BodyJointCmd(q=value),)*31,
                                           root_quat=(1., -0., 0., .5))
             self.assertBytes(command, 0, None, 0)
-        data = self.assertBytes(BodyCmd((BodyJointCmd(),)*31), 0, '', 0)
+        data = self.assertBytes(BodyCmd((BodyJointCmd(),)*31, descriptor_ref=DescriptorRef(11), control_id=13), 0, '', 0)
         view = importlib.import_module('lowlevel.BodyCmd').BodyCmd.GetRootAs(data)
         self.assertNotEqual(view._tab.Offset(6), 0)  # action id1 even at default18
 
@@ -122,7 +124,7 @@ class NativeBodyCmdTest(unittest.TestCase):
             sent = h.controller.publish(command)
             self.assertEqual((sent.input_state_id, sent.input_state_ts_real_us,
                               sent.ts_client_created_us), (5, 6, 7))
-            self.assertIsNone(sent.root_quat)
+            self.assertEqual(sent.root_quat, (1., 0., 0., 0.))
             self.assertIsInstance(sent.ts_client_send_us, int)
             self.assertBytes(sent)
 
@@ -152,7 +154,7 @@ class NativeBodyCmdTest(unittest.TestCase):
         for value in [True, math.nan, math.inf]:
             joints = list(make_command().joints);joints[14] = BodyJointCmd(q=value);c = BodyCmd(tuple(joints))
             _validate_command(c, population)
-            self.assertBytes(c)
+            self.assertBytes(dataclasses.replace(c, descriptor_ref=DescriptorRef(11), control_id=13))
         for count in [0, 30, 32]:
             with self.assertRaises(InvalidCommandError): _validate_command(BodyCmd((BodyJointCmd(),)*count))
             with self.assertRaises(ValueError): native.encode(BodyCmd((BodyJointCmd(),)*count), 0, None, 0)
@@ -161,27 +163,47 @@ class NativeBodyCmdTest(unittest.TestCase):
         from locomotion_aorta._native_body_codec import NativeBodyPublisher
         pub = Publisher();adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
         for node in [True, False]:
-            pub._include_node = node;seq = pub._sequence;adapter.publish(make_command())
+            pub._include_node = node;seq = pub._sequence;adapter.publish(make_command(), guard=lambda send: send())
             self.assertEqual(pub.sent[-1], oracle(make_command(), pub.stamp,
                                                  pub._node_name if node else None, seq))
         pub.failure = OSError('send failed');seq = pub._sequence
-        with self.assertRaisesRegex(OSError, 'send failed'): adapter.publish(make_command())
+        with self.assertRaisesRegex(OSError, 'send failed'): adapter.publish(make_command(), guard=lambda send: send())
         self.assertEqual(pub._sequence, seq+1)
         pub.failure = None;pub._closed = True
-        with self.assertRaises(Exception): adapter.publish(make_command())
+        with self.assertRaises(Exception): adapter.publish(make_command(), guard=lambda send: send())
         self.assertEqual(pub._sequence, seq+1)
 
     def test_schema_mismatch_fails_before_publish(self):
         from locomotion_aorta._native_body_codec import NativeBodyPublisher
         pub = Publisher()
-        with self.assertRaisesRegex(RuntimeError, 'pinned BODY2'):
+        with self.assertRaisesRegex(RuntimeError, 'pinned BodyCmd3'):
             NativeBodyPublisher(pub, SimpleNamespace(SCHEMA_HASH_HEX='wrong', SCHEMA_BFBS=b''))
         self.assertFalse(pub.sent)
+
+    def test_old_native_body2_cannot_pass_matching_metadata_guard(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        pub = Publisher()
+        meta = importlib.import_module('body_cmd_schema_meta')
+        with mock.patch.object(native, 'BODY_CMD_PROTOCOL_VERSION', 2):
+            with self.assertRaisesRegex(RuntimeError, 'BodyCmd3 contract'):
+                NativeBodyPublisher(pub, meta)
+        self.assertFalse(pub.sent)
+
+    def test_native_body3_rejects_missing_identity_and_wrong_wire_version(self):
+        command = make_command()
+        for invalid in (dataclasses.replace(command, descriptor_ref=None),
+                        dataclasses.replace(command, descriptor_ref=DescriptorRef(0)),
+                        dataclasses.replace(command, descriptor_ref=DescriptorRef(True)),
+                        dataclasses.replace(command, control_id=0),
+                        dataclasses.replace(command, control_id=True),
+                        dataclasses.replace(command, protocol_version=2)):
+            with self.subTest(command=invalid), self.assertRaises(ValueError):
+                native.encode(invalid, 0, None, 0)
 
     def test_parallel_encode_owned_buffers_and_header_counter(self):
         from locomotion_aorta._native_body_codec import NativeBodyPublisher
         pub = Publisher();adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
-        with ThreadPoolExecutor(4) as pool:list(pool.map(lambda i:adapter.publish(make_command(i)), range(100)))
+        with ThreadPoolExecutor(4) as pool:list(pool.map(lambda i:adapter.publish(make_command(i), guard=lambda send: send()), range(100)))
         body = importlib.import_module('lowlevel.BodyCmd').BodyCmd
         self.assertEqual(sorted(body.GetRootAs(b).AortaHeader().Sequence() for b in pub.sent), list(range(100)))
         self.assertEqual(len(pub.sent), 100)
@@ -189,18 +211,20 @@ class NativeBodyCmdTest(unittest.TestCase):
     def test_transport_raw_route_profiles_failures_and_no_stale_trace(self):
         transport = object.__new__(_AortaTransport)
         transport._closed = False;transport._publish_trace = threading.local()
-        transport._capture_publish_timing = True;transport._body_publisher = None
+        transport._capture_publish_timing = True
         pub = Publisher();transport.publishers = {BODY_CMD_TOPIC: pub}
         transport._bindings = SimpleNamespace(body_cmd_schema_meta=importlib.import_module('body_cmd_schema_meta'))
-        transport.publish(BODY_CMD_TOPIC, make_command())
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        transport._body_publisher = NativeBodyPublisher(pub, transport._bindings.body_cmd_schema_meta)
+        transport._publish_body(make_command(), lambda send: send())
         trace = transport._last_publish_timing()
         self.assertIn('core_clock_call_wall_ns', trace)
         self.assertIn('send_call_wall_ns', trace)
         pub.failure = OSError('send')
-        with self.assertRaises(OSError):transport.publish(BODY_CMD_TOPIC, make_command())
+        with self.assertRaises(OSError):transport._publish_body(make_command(), lambda send: send())
         self.assertEqual(transport._last_publish_timing()['header_sequence'], 1)
         transport._closed = True
-        with self.assertRaises(RuntimeError):transport.publish(BODY_CMD_TOPIC, make_command())
+        with self.assertRaises(RuntimeError):transport._publish_body(make_command(), lambda send: send())
         self.assertIsNone(transport._last_publish_timing())
 
 

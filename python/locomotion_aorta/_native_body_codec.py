@@ -1,4 +1,4 @@
-"""Pinned Aorta header adapter and native BODY2 encoder; no ownership logic."""
+"""Pinned Aorta header adapter and native BodyCmd3 encoder."""
 import ctypes
 import hashlib
 import time
@@ -28,12 +28,13 @@ class NativeBodyPublisher:
     def __init__(self, publisher, schema_meta):
         from . import _body_cmd_native
         from .body_types import BODY_CMD_PROTOCOL_VERSION
-        if BODY_CMD_PROTOCOL_VERSION != 3:
+        if (BODY_CMD_PROTOCOL_VERSION != 3 or
+                getattr(_body_cmd_native, 'BODY_CMD_PROTOCOL_VERSION', None) != 3):
             raise RuntimeError('native BodyCmd encoder requires the R3 BodyCmd3 contract')
         if (schema_meta.SCHEMA_HASH_HEX != _body_cmd_native.BODY_SCHEMA_SHA256
                 or hashlib.sha256(schema_meta.SCHEMA_BFBS).hexdigest()
                 != _body_cmd_native.BODY_SCHEMA_SHA256):
-            raise RuntimeError('native BodyCmd encoder requires the pinned BODY2 schema')
+            raise RuntimeError('native BodyCmd encoder requires the pinned BodyCmd3 schema')
         # Aorta 2026.10.20 has public publish_bytes but no public header-reserve
         # API. Keep its counter, Core clock and captured node policy exactly.
         for name in ('_seq_lock', '_sequence', '_lib', '_node_name', '_include_node', '_closed'):
@@ -42,7 +43,7 @@ class NativeBodyPublisher:
         self.publisher = publisher
         self.native = _body_cmd_native
 
-    def publish(self, command, trace=None):
+    def publish(self, command, trace=None, guard=None):
         from aorta.errors import AortaError, check_rc
         publisher = self.publisher
         if publisher._closed:
@@ -76,7 +77,9 @@ class NativeBodyPublisher:
                 trace['encode_call_wall_ns'] = time.perf_counter_ns() - begin
         begin = time.perf_counter_ns() if measured else 0
         try:
-            publisher.publish_bytes(payload)
+            if guard is None:
+                raise RuntimeError('BodyCmd submission requires the connection gate')
+            guard(lambda: publisher.publish_bytes(payload))
         finally:
             if measured:
                 # Includes ctypes marshaling/GIL reacquisition; not pure Core

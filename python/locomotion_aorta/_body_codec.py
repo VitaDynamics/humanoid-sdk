@@ -8,7 +8,7 @@ from .body_types import (
     EndEffectorCapability, RobotInfo, GetRobotInfoResponse, HandInfo, GripperInfo,
 )
 
-# Frozen joint layouts: BodyCmd2 and BodyState3 retain the same struct strides.
+# BodyCmd3 and BodyState3 retain the same 31-slot joint struct strides.
 _COMMAND = struct.Struct("<" + "fffff" * BODY_SLOTS)
 _JOINT_STATE = struct.Struct("<QQQfffI")
 _MOTOR = struct.Struct("<fffff")

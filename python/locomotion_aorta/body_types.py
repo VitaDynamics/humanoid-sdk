@@ -11,7 +11,7 @@ from aorta.services.common.ServiceStatus import ServiceStatus
 from .hand_types import HandInfo
 
 BODY_SLOTS = 31
-BODY_CMD_PROTOCOL_VERSION = 2
+BODY_CMD_PROTOCOL_VERSION = 3
 BODY_STATE_PROTOCOL_VERSION = 3
 
 
@@ -40,6 +40,8 @@ class BodyCmd:
     ts_client_created_us: int = 0
     ts_client_send_us: int = 0
     root_quat: tuple[float, float, float, float] | None = None
+    descriptor_ref: DescriptorRef | None = None
+    control_id: int = 0
 
 @dataclass(frozen=True, slots=True)
 class BodyJointState:

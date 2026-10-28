@@ -104,6 +104,83 @@ def make_command(sequence_hint: int, *, q: float = 0.0) -> BodyCmd:
 
 
 class ExternalControllerTest(unittest.TestCase):
+    def test_body3_preserves_selected_callback_state_after_newer_sample(self):
+        import flatbuffers
+        from test_body_codec import module, make_state, encode
+        from locomotion_aorta._body_codec import decode_body_state
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+        h.accept_enter()
+        h.controller.enter_external(.1)
+        def sample(state_id, stamp):
+            obj = module('BodyState').BodyStateT.InitFromObj(make_state(runtime_id=11)[1])
+            obj.stateId, obj.tsStateRealUs = state_id, stamp
+            builder = flatbuffers.Builder(1)
+            builder.Finish(obj.Pack(builder))
+            return decode_body_state(module('BodyState').BodyState.GetRootAs(builder.Output()))
+        selected = sample(100, 1000000)
+        h.controller._on_body_state(selected)
+        command = replace(make_command(0), input_state_id=selected.state_id,
+                          input_state_ts_real_us=selected.ts_state_real_us)
+        h.controller._on_body_state(sample(102, 1002000))
+        sent = h.controller.publish(command)
+        wire = module('BodyCmd').BodyCmd.GetRootAs(encode(sent))
+        self.assertEqual((wire.InputStateId(), wire.InputStateTsRealUs()), (100, 1000000))
+        self.assertEqual((wire.DescriptorRef().RobotRuntimeId(), wire.ControlId()), (11, 13))
+        self.assertEqual(wire.JointsLength(), 31)
+
+    def test_body3_uses_confirmed_runtime_control_and_preserves_selected_input(self):
+        h = ControllerHarness(runtime_id=2**64 - 1)
+        self.addCleanup(h.controller.close)
+        h.accept_enter()
+        h.controller.enter_external(.1)
+        command = replace(make_command(99), input_state_id=100,
+                          input_state_ts_real_us=123456,
+                          descriptor_ref=DescriptorRef(88), control_id=77)
+        sent = h.controller.publish(command)
+        self.assertEqual((sent.protocol_version, sent.descriptor_ref.robot_runtime_id,
+                          sent.control_id, sent.session_id, sent.sequence),
+                         (3, 2**64 - 1, 13, 42, 1))
+        self.assertEqual((sent.input_state_id, sent.input_state_ts_real_us), (100, 123456))
+        self.assertEqual(h.transport.published[-1], (BODY_CMD_TOPIC, sent))
+
+    def test_body_submission_after_close_or_owner_change_is_rejected(self):
+        for transition in ('close', 'owner'):
+            with self.subTest(transition=transition):
+                h = ControllerHarness()
+                self.addCleanup(h.controller.close)
+                h.accept_enter()
+                h.controller.enter_external(.1)
+                entered, release = threading.Event(), threading.Event()
+                original = h.transport._publish_body
+                errors = []
+                def delayed(message, guard):
+                    entered.set()
+                    if not release.wait(2):
+                        raise TimeoutError('test gate not released')
+                    return original(message, guard)
+                h.transport._publish_body = delayed
+                def publish():
+                    try:
+                        h.controller.publish(make_command(0))
+                    except Exception as error:
+                        errors.append(error)
+                worker = threading.Thread(target=publish)
+                worker.start()
+                try:
+                    self.assertTrue(entered.wait(2))
+                    if transition == 'close':
+                        h.controller.close()
+                    else:
+                        h.status(action='EXTERNAL', phase=ExternalPhase.IDLE)
+                finally:
+                    release.set()
+                    worker.join(2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(len(errors), 1)
+                self.assertIsInstance(errors[0], (ControllerClosedError, NotRunningError))
+                self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in h.transport.published))
+
     def test_bound_action_accepts_both_ack_status_orders_without_early_permission(self):
         for action in ("EXTERNAL", "HUMANOID_TELEOP"):
             for status_first in (False, True):

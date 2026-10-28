@@ -68,6 +68,8 @@ class _CommandContext:
     control_id: int
     session_id: int
     sequence: int
+    descriptor_ref: DescriptorRef
+    request_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,7 +337,9 @@ class ExternalController:
             command,
             protocol_version=BODY_CMD_PROTOCOL_VERSION,
             action=BodyCmdAction.EXTERNAL,
-            root_quat=None,
+            root_quat=(1.0, 0.0, 0.0, 0.0),
+            descriptor_ref=context.descriptor_ref,
+            control_id=context.control_id,
             session_id=context.session_id,
             sequence=context.sequence,
             ts_client_created_us=command.ts_client_created_us or time.monotonic_ns() // 1000,
@@ -347,7 +351,20 @@ class ExternalController:
                          session_replace_ns=time.perf_counter_ns() - preparing)
         sending = time.perf_counter_ns() if trace is not None else 0
         try:
-            self.transport.publish(BODY_CMD_TOPIC, external_command)
+            def guard(submit):
+                with self._condition:
+                    self._ensure_open()
+                    status = self._require_owned_status()
+                    if (self._end_effector_runtime_id != context.descriptor_ref.robot_runtime_id
+                            or self._request_id != context.request_id
+                            or self.client_id != context.client_id
+                            or self._control_id != context.control_id
+                            or self._external_session_id != context.session_id
+                            or status.generation != context.session_id
+                            or self._request_action != 'EXTERNAL'):
+                        raise NotRunningError('Body control context changed before submission')
+                    return submit()
+            self.transport._publish_body(external_command, guard)
         finally:
             if trace is not None:
                 trace['transport_call_wall_ns'] = time.perf_counter_ns() - sending
@@ -385,6 +402,8 @@ class ExternalController:
             client_id=self.client_id, control_id=self._control_id,
             session_id=self._external_session_id,
             sequence=self._next_external_sequence,
+            descriptor_ref=DescriptorRef(self._end_effector_runtime_id),
+            request_id=self._request_id,
         )
         self._next_external_sequence += 1
         return context

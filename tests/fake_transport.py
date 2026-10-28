@@ -42,6 +42,10 @@ class FakeTransport:
         guard(lambda: None)
         self.publish(CONTROL_REQUEST_TOPIC, message)
 
+    def _publish_body(self, message, guard) -> None:
+        from locomotion_aorta.transport import BODY_CMD_TOPIC
+        guard(lambda: self.publish(BODY_CMD_TOPIC, message))
+
     def _prepare_body_output(self) -> None:
         self._ensure_open()
 

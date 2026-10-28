@@ -43,6 +43,8 @@ class Transport(Protocol):
 
     def _publish_control(self, message: ControlRequest, guard: Callable[[Callable[[], Any]], Any]) -> None: ...
 
+    def _publish_body(self, message: BodyCmd, guard: Callable[[Callable[[], Any]], Any]) -> None: ...
+
     def _prepare_body_output(self) -> None: ...
 
     def get_robot_info(self, timeout: float) -> GetRobotInfoResponse: ...
@@ -120,13 +122,21 @@ class _AortaTransport:
             raise ValueError(f"unsupported publish topic: {topic}")
         if topic == CONTROL_REQUEST_TOPIC:
             raise ValueError('control requests require the connection gate')
+        if topic == BODY_CMD_TOPIC:
+            raise ValueError('body commands require the connection gate')
+        raise ValueError(f"unsupported publish topic: {topic}")
+
+    def _publish_body(self, message: BodyCmd, guard: Callable[[Callable[[], Any]], Any]) -> None:
+        self._publish_trace.last = None
+        if self._closed:
+            raise RuntimeError('Aorta transport is closed')
         if not isinstance(message, BodyCmd):
-            raise TypeError("body command topic requires BodyCmd")
+            raise TypeError('body command topic requires BodyCmd')
         if self._body_publisher is None:
             raise RuntimeError('Body output was not prepared before control entry')
         trace = {} if self._capture_publish_timing else None
         self._publish_trace.last = trace
-        self._body_publisher.publish(message, trace)
+        self._body_publisher.publish(message, trace, guard)
 
     def _prepare_body_output(self) -> None:
         """Prepare and validate the original Body output before EXTERNAL PREPARE."""
@@ -294,25 +304,37 @@ def _fill_body_cmd(
     bindings: _AortaBindings, command: BodyCmd, builder: Any, header: int,
 ) -> int:
     module = bindings.body_cmd_module
+    if (command.protocol_version != 3 or command.descriptor_ref is None
+            or type(command.descriptor_ref.robot_runtime_id) is not int
+            or not 0 < command.descriptor_ref.robot_runtime_id < 2**64
+            or type(command.control_id) is not int or not 0 < command.control_id < 2**64):
+        raise ValueError('BodyCmd3 requires a nonzero runtime and control ID')
     joints = create_body_cmd(builder, command.joints)
-    module.BodyCmdStart(builder)
-    module.BodyCmdAddAortaHeader(builder, header)
-    module.BodyCmdAddJoints(builder, joints)
-    for name in ("protocol_version", "session_id", "sequence", "input_state_id",
-                 "input_state_ts_real_us", "ts_client_created_us", "ts_client_send_us"):
-        getter = ''.join(part.capitalize() for part in name.split('_'))
-        getattr(module, 'BodyCmdAdd' + getter)(builder, getattr(command, name))
-    # Action is present even when equal to the schema default. Keep other defaults unchanged.
     previous = builder.forceDefaults
-    builder.ForceDefaults(True)
     try:
+        module.BodyCmdStart(builder)
+        module.BodyCmdAddAortaHeader(builder, header)
+        module.BodyCmdAddJoints(builder, joints)
+        builder.ForceDefaults(True)
+        for name in ("protocol_version", "session_id", "sequence", "input_state_id",
+                     "input_state_ts_real_us", "ts_client_created_us", "ts_client_send_us"):
+            getter = ''.join(part.capitalize() for part in name.split('_'))
+            getattr(module, 'BodyCmdAdd' + getter)(builder, getattr(command, name))
         module.BodyCmdAddAction(builder, command.action)
+        from lowlevel.RootQuatWxyz import CreateRootQuatWxyz
+        quat = command.root_quat
+        if quat is None:
+            if command.action == 14:
+                raise ValueError('tracking BodyCmd requires root_quat')
+            quat = (1.0, 0.0, 0.0, 0.0)  # ignored by EXTERNAL; valid fixed struct
+        module.BodyCmdAddRootQuat(builder, CreateRootQuatWxyz(builder, *quat))
+        descriptor = importlib.import_module('lowlevel.ee.DescriptorRef')
+        module.BodyCmdAddDescriptorRef(
+            builder, descriptor.CreateDescriptorRef(builder, command.descriptor_ref.robot_runtime_id))
+        module.BodyCmdAddControlId(builder, command.control_id)
+        return module.BodyCmdEnd(builder)
     finally:
         builder.ForceDefaults(previous)
-    if command.root_quat is not None:
-        from lowlevel.RootQuatWxyz import CreateRootQuatWxyz
-        module.BodyCmdAddRootQuat(builder, CreateRootQuatWxyz(builder, *command.root_quat))
-    return module.BodyCmdEnd(builder)
 
 
 def _fill_robot_info_request(module: Any, builder: Any, header: int) -> int:

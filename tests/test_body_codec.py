@@ -12,6 +12,7 @@ from locomotion_aorta import (
 )
 from locomotion_aorta import _body_codec as codec
 from locomotion_aorta.transport import _fill_body_cmd
+from locomotion_aorta.body_types import DescriptorRef
 
 
 def module(name):
@@ -22,7 +23,8 @@ def make_command(seed=0):
     return BodyCmd(tuple(BodyJointCmd(i + seed + .125, -i - .25, i * .5, i + 1., .75)
                             for i in range(31)), action=BodyCmdAction.EXTERNAL,
                   session_id=42, sequence=7, input_state_id=123, input_state_ts_real_us=456,
-                  ts_client_created_us=789, ts_client_send_us=901)
+                  ts_client_created_us=789, ts_client_send_us=901,
+                  descriptor_ref=DescriptorRef(11), control_id=13)
 
 
 def encode(command, *, generated=False, initial_size=1, prefix=0):
@@ -39,6 +41,7 @@ def encode(command, *, generated=False, initial_size=1, prefix=0):
         m.BodyCmdStart(builder)
         m.BodyCmdAddAortaHeader(builder, 0)
         m.BodyCmdAddJoints(builder, vector)
+        builder.ForceDefaults(True)
         m.BodyCmdAddProtocolVersion(builder, command.protocol_version)
         m.BodyCmdAddSessionId(builder, command.session_id)
         m.BodyCmdAddSequence(builder, command.sequence)
@@ -46,12 +49,14 @@ def encode(command, *, generated=False, initial_size=1, prefix=0):
         m.BodyCmdAddInputStateTsRealUs(builder, command.input_state_ts_real_us)
         m.BodyCmdAddTsClientCreatedUs(builder, command.ts_client_created_us)
         m.BodyCmdAddTsClientSendUs(builder, command.ts_client_send_us)
-        builder.ForceDefaults(True)
         m.BodyCmdAddAction(builder, command.action)
-        builder.ForceDefaults(False)
-        if command.root_quat is not None:
-            m.BodyCmdAddRootQuat(builder, module('RootQuatWxyz').CreateRootQuatWxyz(builder, *command.root_quat))
+        quat = command.root_quat or (1., 0., 0., 0.)
+        m.BodyCmdAddRootQuat(builder, module('RootQuatWxyz').CreateRootQuatWxyz(builder, *quat))
+        ref = importlib.import_module('lowlevel.ee.DescriptorRef')
+        m.BodyCmdAddDescriptorRef(builder, ref.CreateDescriptorRef(builder, command.descriptor_ref.robot_runtime_id))
+        m.BodyCmdAddControlId(builder, command.control_id)
         root = m.BodyCmdEnd(builder)
+        builder.ForceDefaults(False)
     else:
         root = _fill_body_cmd(SimpleNamespace(body_cmd_module=m), command, builder, 0)
     builder.Finish(root)
@@ -134,6 +139,9 @@ class BodyCodecTest(unittest.TestCase):
                         self.assertNotEqual(view._tab.Offset(22), 0)  # action id9 is explicitly present
                         self.assertEqual(view.JointsLength(), 31)
                         self.assertEqual(view.Joints(30).Q(), command.joints[30].q)
+                        self.assertEqual(view.DescriptorRef().RobotRuntimeId(), 11)
+                        self.assertEqual(view.ControlId(), 13)
+                        self.assertIsNotNone(view.RootQuat())
 
     def test_compact_command_vector_id8_is_distinct_from_state_id9(self):
         # Construct the new table directly: this test can run before regenerating
@@ -497,7 +505,7 @@ class BodyCodecTest(unittest.TestCase):
 
     def test_state3_association_preserves_all_sources_zero_keys_and_full_width_ref(self):
         from locomotion_aorta.body_types import DescriptorRef, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION
-        self.assertEqual((BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION), (2, 3))
+        self.assertEqual((BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION), (3, 3))
         ref_module = importlib.import_module('lowlevel.ee.DescriptorRef')
         m = module('BodyState')
         for source in (0, 1, 2, 3, 4, 5, 6, 255):
