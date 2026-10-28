@@ -5,6 +5,7 @@ These exercise the actual CLI and shared Body allocator on synthetic feedback.
 """
 from dataclasses import replace
 import importlib.util
+import importlib
 import os
 from pathlib import Path
 import unittest
@@ -32,7 +33,11 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
         self.root = Path(os.environ['PR2_C2I_PRODUCER_FIXTURES'])
         self.assertTrue(self.root.is_dir(), 'actual robot producer input directory is required')
         self.clock = FakeClock()
-        self.harness = ControllerHarness()
+        name = self._testMethodName
+        group = ('static' if name == 'test_actual_robot_static_info_republish_and_runtime_restart_boundaries'
+                 else 'brainco' if name == 'test_actual_robot_touch_disable_replay_and_true_next_sample'
+                 else 'linker')
+        self.harness = ControllerHarness(info_reply=self.service_reply(group + '/robot_info.fb'))
         self.addCleanup(self.harness.controller.close)
         self.node = Node(); self.harness.transport.node = self.node
         self.client = sdk.EndEffectorClient('left', connection=self.harness.controller,
@@ -40,6 +45,13 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
         self.addCleanup(self.client.close)
         clock_patch = patch('locomotion_aorta.end_effector.time.monotonic', self.clock.monotonic)
         clock_patch.start(); self.addCleanup(clock_patch.stop)
+
+    def service_reply(self, name):
+        from locomotion_aorta._body_codec import decode_robot_info_response
+        payload = (self.root / name).read_bytes()
+        self.assertTrue(payload, 'actual service reply is required')
+        module = importlib.import_module('aorta.services.humanoid_locomotion.GetRobotInfoResponse')
+        return decode_robot_info_response(module.GetRobotInfoResponse.GetRootAs(payload))
 
     def feed(self, kind, name, *, client=None):
         client = self.client if client is None else client
@@ -76,12 +88,32 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
         command = guard.publish(target, continued)
         self.assertEqual(command.descriptor_ref, old_ref)
         sent = len(self.node.commands)
-        with self.assertRaisesRegex(ValueError, 'lifecycle|recreate'):
-            self.feed('info', 'static/left_new_runtime_info.fb')
+        self.assertIs(self.feed('info', 'static/left_new_runtime_info.fb'), info)
+        self.assertEqual(right.info.descriptor_ref, old_ref)
         self.assertEqual(len(self.node.commands), sent)
         self.assertEqual(info.descriptor_ref, old_ref)
+        new_reply = self.service_reply('static/new_runtime_robot_info.fb')
+        self.assertNotEqual(new_reply.descriptor_ref, old_ref)
+        self.harness.transport.get_robot_info = lambda timeout: new_reply
+        with self.assertRaisesRegex(ValueError, 'new connection'):
+            self.harness.controller.get_robot_info(.1)
         with self.assertRaises(ValueError):
             self.client.publish(target, input_observations=(old_sample,))
+        with self.assertRaises(ValueError):
+            right.wait_info(.01)
+        self.assertEqual(len(self.node.commands), sent)
+        from test_controller import ControllerHarness
+        fresh = ControllerHarness(info_reply=new_reply)
+        self.addCleanup(fresh.controller.close)
+        fresh.transport.node = self.node
+        new_client = sdk.EndEffectorClient('left', connection=fresh.controller,
+            observation_sources=((SampleStream.EE_STATE, 1),))
+        self.addCleanup(new_client.close)
+        new_info = self.feed('info', 'static/left_new_runtime_info.fb', client=new_client)
+        self.assertEqual(new_info.descriptor_ref, new_reply.descriptor_ref)
+        fresh.accept_enter(); fresh.controller.enter_external(timeout=.1)
+        with self.assertRaises(ValueError):
+            new_client.publish(target, input_observations=(old_sample,))
         self.assertEqual(len(self.node.commands), sent)
 
     def linker(self):

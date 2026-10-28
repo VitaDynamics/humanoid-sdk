@@ -374,6 +374,8 @@ class PublicBodyCaptureTest(unittest.TestCase):
         row=capture.decode('body_cmd',encode(make_command()),capture.load_bindings())
         self.assertNotIn('cmd_id', row)
         self.assertEqual((row['session_id'], row['sequence']), (42, 7))
+        self.assertEqual(row['descriptor_ref'], {'robot_runtime_id': 11})
+        self.assertEqual(row['control_id'], 13)
         self.assertEqual(row['action'],BodyCmdAction.EXTERNAL)
         self.assertEqual(len(row['joints']),31)
         self.assertEqual(row['input_state_id'],123)

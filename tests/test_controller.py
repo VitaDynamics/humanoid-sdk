@@ -36,11 +36,14 @@ from locomotion_aorta import (
 
 
 class ControllerHarness:
-    def __init__(self, runtime_id: int = 11) -> None:
+    def __init__(self, runtime_id: int = 11, *, info_reply=None) -> None:
         self.transport = FakeTransport()
-        self.runtime_id = runtime_id
-        self.transport.get_robot_info = lambda timeout: replace(
-            robot_info_reply(), descriptor_ref=DescriptorRef(runtime_id))
+        reply = (replace(robot_info_reply(), descriptor_ref=DescriptorRef(runtime_id))
+                 if info_reply is None else info_reply)
+        if reply.descriptor_ref is None:
+            raise ValueError('test service response has no runtime identity')
+        self.runtime_id = reply.descriptor_ref.robot_runtime_id
+        self.transport.get_robot_info = lambda timeout: reply
         self.controller = ExternalController(
             client_id=7, _transport=self.transport
         )

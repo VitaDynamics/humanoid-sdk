@@ -21,7 +21,7 @@ from .transport import _decode_control_status
 from ._body_codec import decode_body_state, unpack_body_cmd
 from ._motor_codec import unpack_motor_states
 from .types import HumanoidLowState
-from .body_types import BodyCmd, BODY_SLOTS
+from .body_types import BodyCmd, DescriptorRef, BODY_SLOTS
 
 
 TOPICS = {
@@ -127,8 +127,11 @@ def decode(kind, payload, bindings):
         if len(motors) != BODY_SLOTS:
             raise ValueError("requires31-slot BodyCmd")
         quat = view.RootQuat()
+        ref = view.DescriptorRef()
         command = BodyCmd(joints=motors,
                          protocol_version=view.ProtocolVersion(), action=view.Action(),
+                         descriptor_ref=None if ref is None else DescriptorRef(ref.RobotRuntimeId()),
+                         control_id=view.ControlId(),
                          session_id=view.SessionId(), sequence=view.Sequence(),
                          input_state_id=view.InputStateId(), input_state_ts_real_us=view.InputStateTsRealUs(),
                          ts_client_created_us=view.TsClientCreatedUs(), ts_client_send_us=view.TsClientSendUs(),

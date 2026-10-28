@@ -26,9 +26,8 @@ Request DecodeRequest(const std::vector<uint8_t>& bytes) {
   return {r->protocol_version(),
           static_cast<int>(r->operation()),
           str(r->request_id()),
-          str(r->client_id()),
-          r->lease_id() ? str(r->lease_id()) : "",
-          r->action_name() ? str(r->action_name()) : ""};
+          str(r->action_name()), r->client_id(), r->control_id(),
+          r->descriptor_ref() ? r->descriptor_ref()->robot_runtime_id() : 0};
 }
 }  // namespace production_mock
 #elif defined(PRODUCTION_MOCK_ACK_CODEC)
@@ -37,10 +36,12 @@ namespace production_mock {
 std::vector<uint8_t> EncodeAck(const Ack& r, uint64_t wall_ns,
                                uint64_t publication_id) {
   locomotion_sdk::ControlAckT ack;
-  ack.protocol_version = 1;
+  ack.protocol_version = 3;
   ack.operation = static_cast<decltype(ack.operation)>(r.operation);
   ack.request_id = r.request_id;
-  ack.lease_id = r.lease_id;
+  ack.client_id = r.client_id;
+  ack.control_id = r.control_id;
+  ack.descriptor_ref = std::make_unique<lowlevel::ee::DescriptorRef>(r.runtime);
   ack.accepted = r.accepted;
   ack.error_code = static_cast<decltype(ack.error_code)>(r.error);
   ack.reason = r.reason;
@@ -60,16 +61,17 @@ namespace production_mock {
 std::vector<uint8_t> EncodeStatus(const Status& s, uint64_t now_ns,
                                   uint64_t wall_ns, uint64_t publication_id) {
   locomotion_sdk::ControlStatusT status;
-  status.protocol_version = 1;
+  status.protocol_version = 3;
   status.status_seq = s.status_seq;
   status.current_action =
       (s.phase == 4 || s.phase == 5) ? "EXTERNAL" : "PASSIVE";
   status.action_phase = static_cast<decltype(status.action_phase)>(s.phase);
   status.client_id = s.client_id;
-  status.lease_id = s.lease_id;
+  status.control_id = s.control_id;
+  status.descriptor_ref = std::make_unique<lowlevel::ee::DescriptorRef>(s.runtime);
   status.generation = s.generation;
   status.last_accepted_cmd_id =
-      static_cast<uint16_t>(s.accepted_sequence & 0xffff);
+      s.accepted_sequence;
   status.reject_count = s.reject_count;
   status.last_reject_code =
       static_cast<decltype(status.last_reject_code)>(s.reject_code);
@@ -95,7 +97,7 @@ bool ValidInfoRequest(const std::vector<uint8_t>& bytes) {
   return aorta::services::humanoid_locomotion::VerifyGetRobotInfoRequestBuffer(
       verifier);
 }
-std::vector<uint8_t> EncodeInfo() {
+std::vector<uint8_t> EncodeInfo(uint64_t runtime) {
   static const std::array<const char*, kSlots> names{
       "left_hip_pitch_joint",
       "left_hip_roll_joint",
@@ -165,6 +167,7 @@ std::vector<uint8_t> EncodeInfo() {
   }
   aorta::services::humanoid_locomotion::GetRobotInfoResponseT reply;
   reply.status = aorta::services::common::ServiceStatus_SUCCESS;
+  reply.descriptor_ref = std::make_unique<lowlevel::ee::DescriptorRef>(runtime);
   reply.info = std::make_unique<lowlevel::RobotInfoT>(std::move(info));
   flatbuffers::FlatBufferBuilder b;
   b.Finish(aorta::services::humanoid_locomotion::GetRobotInfoResponse::Pack(
@@ -191,17 +194,19 @@ Protocol::Protocol(uint64_t seed, uint64_t stream_timeout,
   if (!seed || !stream_timeout || !prepare_timeout)
     throw std::invalid_argument("nonzero generation/timeouts required");
   output_.runtime = runtime_id_;
+  status_.runtime = runtime_id_;
 }
 Ack Protocol::Reply(const Request& r, int error,
                     const std::string& reason) const {
-  return {r.request_id, error ? "" : status_.lease_id,
-          reason,       r.operation,
-          error,        error == 0};
+  return {r.request_id, reason, r.operation, error, error == 0,
+          error ? r.client_id : status_.client_id,
+          error ? r.control_id : status_.control_id, runtime_id_};
 }
 void Protocol::Clear() {
   const auto seq = status_.status_seq + 1;
   const auto rejects = status_.reject_count;
   status_ = Status{};
+  status_.runtime = runtime_id_;
   status_.status_seq = seq;
   status_.reject_count = rejects;
   has_pending_ = false;
@@ -228,9 +233,10 @@ void Protocol::Watchdog(uint64_t now) {
 }
 Ack Protocol::RequestControl(const Request& r, uint64_t now) {
   Watchdog(now);
-  if (r.version != 2) return Reply(r, 1001, "unsupported request version");
-  if (r.request_id.empty() || r.client_id.empty() ||
-      r.request_id.size() > 256 || r.client_id.size() > 256 ||
+  if (r.version != 3) return Reply(r, 1001, "unsupported request version");
+  if (r.runtime != runtime_id_) return Reply(r, 1005, "runtime mismatch");
+  if (r.request_id.empty() || !r.client_id ||
+      r.request_id.size() > 256 ||
       r.operation < 1 || r.operation > 3)
     return Reply(r, 1002, "invalid request identity/operation");
   if (r.action != "EXTERNAL")
@@ -238,29 +244,30 @@ Ack Protocol::RequestControl(const Request& r, uint64_t now) {
   if (r.operation == reject_operation_)
     return Reply(r, 1003, "scripted rejection");
   if (r.operation == 1) {
-    if (!status_.client_id.empty()) {
+    if (status_.client_id) {
       if (r.client_id != status_.client_id) return Reply(r, 1008, "mock busy");
       if (r.request_id != status_.request_id)
         return Reply(r, 1004, "request conflict");
       return Reply(r, 0, "idempotent PREPARE");
     }
+    if (r.control_id) return Reply(r, 1006, "PREPARE has existing control ID");
     if (generation_ == std::numeric_limits<uint64_t>::max())
       return Reply(r, 1009, "generation exhausted");
     status_.request_id = r.request_id;
     status_.client_id = r.client_id;
-    status_.lease_id = "mock-lease-" + std::to_string(++generation_);
+    status_.control_id = ++generation_;
     status_.phase = 2;
     ++status_.status_seq;
     prepared_ns_ = now;
     return Reply(r, 0, "armed; no automatic running lease expiry");
   }
-  if (r.operation == 3 && status_.client_id.empty())
+  if (r.operation == 3 && !status_.client_id)
     return Reply(r, 0, "already idle");
   if (status_.client_id != r.client_id)
     return Reply(r, 1005, "identity mismatch");
   if (status_.request_id != r.request_id)
     return Reply(r, 1004, "request conflict");
-  if (r.lease_id != status_.lease_id) return Reply(r, 1006, "lease mismatch");
+  if (!r.control_id || r.control_id != status_.control_id) return Reply(r, 1006, "control mismatch");
   if (r.operation == 3) {
     Ack ack = Reply(r, 0, "cancelled to PASSIVE");
     Clear();
@@ -280,6 +287,8 @@ Ack Protocol::RequestControl(const Request& r, uint64_t now) {
 bool Protocol::Accept(const Command& cmd, uint64_t now) {
   Watchdog(now);
   bool valid = (status_.phase == 4 || status_.phase == 5) &&
+               cmd.runtime == runtime_id_ && cmd.control_id != 0 &&
+               cmd.control_id == status_.control_id &&
                cmd.session == status_.generation &&
                cmd.sequence > status_.accepted_sequence && cmd.sequence &&
                cmd.input_state_real_us;
@@ -326,7 +335,7 @@ bool Protocol::Tick(uint64_t now, uint64_t wall_us) {
 }
 
 void Protocol::ConfigureEE(const EEInfo& info, const std::vector<float>& initial) {
-  if (status_.phase != 0 || !status_.client_id.empty() || info.side < 1 || info.side > 2 ||
+  if (status_.phase != 0 || status_.client_id || info.side < 1 || info.side > 2 ||
       info.axes.empty() || info.axes.size() > 64 || initial.size() != info.axes.size() ||
       info.device_model < 1 || info.device_model > 3 || !info.layout_id)
     throw std::invalid_argument("invalid synthetic EE fixture or active owner");
@@ -355,9 +364,9 @@ void Protocol::ConfigureEE(const EEInfo& info, const std::vector<float>& initial
   endpoint.snapshot.runtime = runtime_id_;
 }
 
-bool Protocol::OwnedEE(const std::string& client, const std::string& lease) const {
-  return (status_.phase == 4 || status_.phase == 5) && !client.empty() && !lease.empty() &&
-         client == status_.client_id && lease == status_.lease_id;
+bool Protocol::OwnedEE(uint64_t control_id) const {
+  return (status_.phase == 4 || status_.phase == 5) && control_id &&
+         control_id == status_.control_id;
 }
 
 void Protocol::InvalidateEE() {
@@ -384,10 +393,10 @@ bool Protocol::AcceptEE(const EECommand& cmd, uint64_t now, uint64_t wall_us) {
   s.received_valid = true;
   s.received_us = wall_us;
   auto reject = [&](uint16_t reason) { ++s.reject_count; s.reject_code = reason; return false; };
-  if (cmd.version != 1) return reject(8);
+  if (cmd.version != 2) return reject(8);
   if (cmd.runtime != runtime_id_) return reject(9);
   if (cmd.layout_id != s.info.layout_id) return reject(10);
-  if (!OwnedEE(cmd.client_id, cmd.lease_id) || cmd.key.session != status_.generation || !cmd.key.sequence)
+  if (!OwnedEE(cmd.control_id) || cmd.key.session != status_.generation || !cmd.key.sequence)
     return reject(11);
   // Sequence spaces are per endpoint on receive, since independent topics may
   // arrive out of order. There is no endpoint session table or second owner.
@@ -413,9 +422,7 @@ bool Protocol::AcceptEE(const EECommand& cmd, uint64_t now, uint64_t wall_us) {
   if (!requested) return reject(12);
   for (size_t col = 0; col < bits.size(); ++col) {
     const auto bit = bits[col];
-    const bool supported = std::any_of(s.info.axes.begin(), s.info.axes.end(),
-        [bit](const auto& a) { return a.command_fields & bit; });
-    if (cmd.columns[col].size() != (supported ? n : 0)) return reject(2);
+    if (cmd.columns[col].size() != n) return reject(2);
     for (size_t i = 0; i < cmd.columns[col].size(); ++i) {
       const auto v = cmd.columns[col][i];
       if (!std::isfinite(v)) return reject(3);
@@ -493,9 +500,9 @@ TouchReply Protocol::SetTouch(const TouchRequest& request, uint64_t now) {
     return reply;
   }
   auto& s = endpoints_[request.side - 1].snapshot;
-  if (request.version != 1 || request.runtime != runtime_id_ ||
+  if (request.version != 2 || request.runtime != runtime_id_ ||
       request.layout_id != s.info.layout_id) reply.reason = 3;
-  else if (!OwnedEE(request.client_id, request.lease_id)) reply.reason = 2;
+  else if (!OwnedEE(request.control_id)) reply.reason = 2;
   else if (!s.info.touch_available) reply.reason = 1;
   else {
     s.touch_enabled = request.enabled;

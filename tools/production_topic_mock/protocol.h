@@ -21,20 +21,24 @@ uint64_t NextApplyTick(uint64_t accepted_wall_ns, uint64_t period_ns);
 struct Request {
   uint32_t version = 0;
   int operation = 0;
-  std::string request_id, client_id, lease_id, action;
+  std::string request_id, action;
+  uint64_t client_id = 0, control_id = 0, runtime = 0;
 };
 struct Ack {
-  std::string request_id, lease_id, reason;
+  std::string request_id, reason;
   int operation = 0, error = 0;
   bool accepted = false;
+  uint64_t client_id = 0, control_id = 0, runtime = 0;
 };
 struct Status {
   uint64_t status_seq = 1, generation = 0, accepted_sequence = 0;
   uint64_t reject_count = 0, last_valid_ns = 0;
   int phase = 0, reject_code = 0;
-  std::string request_id, client_id, lease_id;
+  std::string request_id;
+  uint64_t client_id = 0, control_id = 0, runtime = 0;
 };
 struct Command {
+  uint64_t runtime = 0, control_id = 0;
   uint64_t session = 0, sequence = 0, input_state_id = 0;
   uint64_t input_state_real_us = 0, client_created_us = 0, client_send_us = 0;
   std::array<float, kSlots> q{}, dq{}, tau{}, kp{}, kd{};
@@ -67,11 +71,11 @@ struct EECommand {
   uint64_t runtime = 0;
   uint8_t side = 0;
   uint64_t client_created_us = 0, client_send_us = 0;
-  std::string client_id, lease_id;
+  uint64_t control_id = 0;
   EEKey key;
   std::vector<uint16_t> modes;
   std::vector<uint32_t> fields;
-  // POS, VEL, VEL_LIMIT, TAU, CURRENT: fixed N iff supported, otherwise 0.
+  // POS, VEL, VEL_LIMIT, TAU, CURRENT: one stored value per axis.
   std::array<std::vector<float>, 5> columns;
   std::vector<EEObservation> observations;
 };
@@ -93,7 +97,7 @@ struct TouchRequest {
   uint32_t version = 0, layout_id = 0;
   uint64_t runtime = 0;
   uint8_t side = 0;
-  std::string client_id, lease_id;
+  uint64_t control_id = 0;
   bool enabled = false;
 };
 struct TouchReply {
@@ -137,7 +141,7 @@ class Protocol {
   Ack Reply(const Request&, int error, const std::string& reason) const;
   void InvalidateApplied();
   void Clear();
-  bool OwnedEE(const std::string& client, const std::string& lease) const;
+  bool OwnedEE(uint64_t control_id) const;
   void InvalidateEE();
   struct Endpoint {
     EESnapshot snapshot;
@@ -162,7 +166,7 @@ std::vector<uint8_t> EncodeAck(const Ack&, uint64_t wall_ns,
                                uint64_t publication_id);
 std::vector<uint8_t> EncodeStatus(const Status&, uint64_t now_ns,
                                   uint64_t wall_ns, uint64_t publication_id);
-std::vector<uint8_t> EncodeInfo();
+std::vector<uint8_t> EncodeInfo(uint64_t runtime);
 bool ValidInfoRequest(const std::vector<uint8_t>&);
 std::vector<uint8_t> EncodeState(uint64_t state_id, const Output&,
                                  uint64_t wall_us);

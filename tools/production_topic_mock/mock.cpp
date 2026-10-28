@@ -97,11 +97,13 @@ void ReceiveCommand(const aorta_bytes_view_t *view,
     if (!lowlevel::VerifyBodyCmdBuffer(verifier))
       throw std::runtime_error("invalid BodyCmd FlatBuffer");
     const auto *value = lowlevel::GetBodyCmd(bytes.data());
-    if (value->protocol_version() != 2 ||
+    if (value->protocol_version() != 3 || !value->descriptor_ref() ||
         value->action() != lowlevel::BodyCmdAction_EXTERNAL ||
         !value->joints() || value->joints()->size() != pm::kSlots)
       throw std::runtime_error("invalid BodyCmd protocol/action/slot count");
     pm::Command cmd;
+    cmd.runtime = value->descriptor_ref()->robot_runtime_id();
+    cmd.control_id = value->control_id();
     cmd.session = value->session_id();
     cmd.sequence = value->sequence();
     cmd.input_state_id = value->input_state_id();
@@ -172,7 +174,12 @@ void ReplyInfo(const aorta_bytes_view_t *view, aorta_service_request_t request,
   try {
     if (!pm::ValidInfoRequest(Copy(view)))
       throw std::runtime_error("invalid info request");
-    const auto bytes = pm::EncodeInfo();
+    uint64_t runtime = 0;
+    {
+      std::lock_guard<std::mutex> lock(ctx.mutex);
+      runtime = ctx.protocol.runtime_id();
+    }
+    const auto bytes = pm::EncodeInfo(runtime);
     aorta_owned_bytes_slice_t slice{bytes.data(), bytes.size(), nullptr,
                                     nullptr};
     aorta_owned_bytes_view_t owned{&slice, 1, bytes.size()};
@@ -543,7 +550,7 @@ int main(int argc, char **argv) {
                 const auto us=Wall()/1000;
                 const auto id=++stream.samples[role];
                 const auto bytes=role==0 ? pm::EncodeEEState(snapshot,id,us) : role==1 ?
-                    pm::EncodeEEInfo(stream.info_bytes,context.protocol.runtime_id(),ee_started_us,us) :
+                    pm::EncodeEEInfo(stream.info_bytes,snapshot.runtime,ee_started_us,us) :
                     pm::EncodeEETouch(stream.touch_bytes,snapshot,id,us);
                 Check(aorta_publisher_publish(stream.publishers[role],bytes.data(),bytes.size()),"synthetic EE publish");
               }

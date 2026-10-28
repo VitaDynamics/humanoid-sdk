@@ -41,6 +41,21 @@ class LatencyReportTest(unittest.TestCase):
         self.assertEqual(result["mock_send_hz"], 1)
         self.assertEqual(result["missing_reply"], 0)
 
+    def test_actual_command_keys_are_distinct_from_selected_state_identity(self):
+        for rows in (self.client, self.received):
+            for row in rows:
+                row['input_state_id'] = row['sequence']
+                row['sequence'] += 10
+                row['session'] = 456  # Actual owner generation, not window id 123.
+        self.assertEqual(self.analyze()['rtt']['n'], 3)
+        self.received[1]['sequence'] += 1
+        with self.assertRaisesRegex(ValueError, 'command key mismatch'):
+            self.analyze()
+        self.received[1]['sequence'] -= 1
+        self.client[1]['sequence'] = self.client[0]['sequence']
+        with self.assertRaisesRegex(ValueError, 'invalid actual command keys'):
+            self.analyze()
+
     def add_realtime(self):
         for rows in (self.sent,self.client,self.received):
             for row in rows:
