@@ -1121,6 +1121,7 @@ class ExternalControllerTest(unittest.TestCase):
                         phase=ExternalPhase.RUNNING,
                         client_id=9,
                         control_id=harness.control_id,
+                        generation=harness.generation,
                         protocol_version=2,
                     ),
                 )
@@ -1129,6 +1130,7 @@ class ExternalControllerTest(unittest.TestCase):
                     ControlStatus(runtime_id=11, status_seq=2,
                         current_action="EXTERNAL", phase=ExternalPhase.RUNNING,
                         client_id=9, control_id=harness.control_id,
+                        generation=harness.generation,
                         protocol_version=3),
                 )
 
