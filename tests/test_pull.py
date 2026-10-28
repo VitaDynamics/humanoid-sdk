@@ -100,6 +100,9 @@ class PullTest(unittest.TestCase):
         t=PullTransport.__new__(PullTransport);t._closed=False;t._state_lock=threading.Lock();t._status_lock=threading.RLock();t._status=None;t._latest_state=None;t._latest_sample=None;t._latest_body_state=None
         t._pulls={BODY_STATE_TOPIC:Ring(),CONTROL_STATUS_TOPIC:Ring()};t._callbacks={BODY_STATE_TOPIC:[],CONTROL_STATUS_TOPIC:[]}
         t._bindings=S(control_status_decoder=lambda v:v);t._subscriber_spec=lambda topic:(None,lambda v:v,None)
+        # These original transport-only tests exercise receive mechanics; the
+        # connection-bound tests below install the real identity gate instead.
+        t._candidate_gate=lambda candidate, commit:(commit() or True)
         return t
 
     def test_constructor_no_publishers_two_native_depth1_rings(self):
@@ -475,3 +478,122 @@ class RuntimeIdentityPullR3Test(unittest.TestCase):
         transport.state = S(descriptor_ref=DescriptorRef(11))
         with self.assertRaisesRegex(ValueError, 'runtime changed'):
             source.wait_state(.1)
+
+class PullCandidateCommitR3Test(unittest.TestCase):
+    def make_source(self):
+        from body_fixtures import robot_info_reply
+        transport = PullTest().transport()
+        transport._candidate_gate = None
+        transport.get_robot_info = lambda timeout: robot_info_reply()
+        transport.close = lambda: setattr(transport, '_closed', True)
+        source = PullStateSource(_transport=transport)
+        self.addCleanup(source.close)
+        source.get_robot_info(.1)
+        return source, transport
+
+    def test_real_ring_rejects_foreign_runtime_before_both_state_caches(self):
+        from test_body_codec import make_state
+        source, transport = self.make_source()
+        ring = transport._pulls[BODY_STATE_TOPIC]
+        def sample(runtime, error, stamp):
+            payload, _ = make_state(runtime_id=runtime, error_codes=(error,) * 31)
+            return S(payload=payload, context=S(receive_stamp_ns=stamp))
+
+        ring.samples.append(sample(11, 3, 41))
+        arrays_a = source.wait_state(0)
+        body_a = transport._wait_body_state(0)
+        accepted_a = transport._latest_sample
+        self.assertEqual((int(arrays_a.error_code[0]), body_a.joints[0].error_code), (3, 3))
+        clocks = (arrays_a.received_monotonic_ns, arrays_a.received_realtime_ns,
+                  arrays_a.pull_context_receive_stamp_ns)
+        self.assertEqual(clocks[2], 41)
+
+        ring.samples.append(sample(99, 7, 42))
+        self.assertIs(source.wait_state(0), arrays_a)
+        self.assertIs(transport._latest_sample, accepted_a)
+        self.assertIs(transport._latest_body_state, body_a)
+        self.assertIs(source.wait_state(0), arrays_a)
+        self.assertEqual((arrays_a.received_monotonic_ns, arrays_a.received_realtime_ns,
+                          arrays_a.pull_context_receive_stamp_ns), clocks)
+
+        ring.samples.append(sample(99, 8, 43))
+        self.assertIs(transport._wait_body_state(0), body_a)
+        self.assertIs(transport._latest_sample, accepted_a)
+        self.assertIs(transport._latest_state, arrays_a)
+        self.assertIs(transport._wait_body_state(0), body_a)
+
+        ring.samples.append(sample(11, 9, 44))
+        body_c = transport._wait_body_state(0)
+        self.assertEqual(body_c.joints[0].error_code, 9)
+        arrays_c = source.wait_state(0)
+        self.assertEqual(int(arrays_c.error_code[0]), 9)
+        self.assertEqual(arrays_c.pull_context_receive_stamp_ns, 44)
+        self.assertIsNot(transport._latest_sample, accepted_a)
+        self.assertIsNot(arrays_c, arrays_a)
+
+    def test_real_status_ring_keeps_last_valid_on_foreign_runtime(self):
+        source, transport = self.make_source()
+        ring = transport._pulls[CONTROL_STATUS_TOPIC]
+        a = ControlStatus(1, 'PASSIVE', ExternalPhase.IDLE, descriptor_ref=DescriptorRef(11))
+        b = ControlStatus(2, 'EXTERNAL', ExternalPhase.RUNNING, descriptor_ref=DescriptorRef(99))
+        c = ControlStatus(3, 'PASSIVE', ExternalPhase.IDLE, descriptor_ref=DescriptorRef(11))
+        ring.samples.append(S(payload=a))
+        self.assertIs(source.control_status, a)
+        ring.samples.append(S(payload=b))
+        self.assertIs(source.control_status, a)
+        self.assertIs(source.control_status, a)
+        ring.samples.append(S(payload=replace(a, status_seq=2, protocol_version=2)))
+        self.assertIs(source.control_status, a)
+        ring.samples.append(S(payload=c))
+        self.assertIs(source.control_status, c)
+
+    def test_pull_controller_validates_client_before_its_transport_construction(self):
+        created = []
+        class Constructed(FakeTransport, PullTransport):
+            def __init__(self, **kwargs):
+                FakeTransport.__init__(self)
+                self._candidate_gate = None
+                created.append((kwargs, self))
+        with patch('locomotion_aorta.pull.PullTransport', Constructed):
+            for client_id in (True, 0, -1, '7', 1 << 64):
+                with self.subTest(client_id=client_id), self.assertRaises(ValueError):
+                    PullController(client_id=client_id)
+                self.assertEqual(created, [])
+            for client_id in (None, 7):
+                controller = PullController(client_id=client_id)
+                transport = created[-1][1]
+                controller.close()
+                controller.close()
+                self.assertEqual(transport.close_count, 1)
+            self.assertEqual(len(created), 2)
+
+    def test_controller_uses_same_gate_for_native_and_array_ring_reads(self):
+        from body_fixtures import robot_info_reply
+        from test_body_codec import make_state
+        transport = PullTest().transport()
+        transport._candidate_gate = None
+        transport.node = S(create_subscriber_typed=lambda *a, **kw: S(close=lambda: None))
+        transport.subscriptions = []
+        transport.get_robot_info = lambda timeout: robot_info_reply()
+        transport.close = lambda: setattr(transport, '_closed', True)
+        controller = PullController(client_id=7, _transport=transport)
+        self.addCleanup(controller.close)
+        controller.get_robot_info(.1)
+        ring = transport._pulls[BODY_STATE_TOPIC]
+        def sample(runtime, error, stamp):
+            payload, _ = make_state(runtime_id=runtime, error_codes=(error,) * 31)
+            return S(payload=payload, context=S(receive_stamp_ns=stamp))
+        ring.samples.append(sample(11, 4, 61))
+        body_a = controller.wait_body_state(0)
+        arrays_a = controller.wait_state(0)
+        accepted_a = transport._latest_sample
+        ring.samples.append(sample(99, 8, 62))
+        self.assertIs(controller.wait_body_state(0), body_a)
+        self.assertIs(controller.wait_state(0), arrays_a)
+        self.assertIs(transport._latest_sample, accepted_a)
+        self.assertEqual(arrays_a.pull_context_receive_stamp_ns, 61)
+        ring.samples.append(sample(11, 6, 63))
+        arrays_c = controller.wait_state(0)
+        self.assertEqual(int(arrays_c.error_code[0]), 6)
+        self.assertEqual(controller.wait_body_state(0).joints[0].error_code, 6)
+        self.assertEqual(arrays_c.pull_context_receive_stamp_ns, 63)

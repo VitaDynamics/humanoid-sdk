@@ -6,8 +6,10 @@ import uuid
 from dataclasses import replace
 
 from .controller import (ExternalController, ExternalControlTimeoutError,
-                         ControllerClosedError, _deadline, _nonempty_text, _valid_ref)
-from .body_types import ServiceStatus
+                         ControllerClosedError, _deadline, _nonempty_text,
+                         _uint64_nonzero, _valid_ref)
+from .body_types import BODY_STATE_PROTOCOL_VERSION, ServiceStatus
+from .types import ControlStatus, PROTOCOL_VERSION
 from .transport import _AortaTransport, BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC
 from .state_arrays import decode_body_state_arrays
 from ._native_body_codec import decode_body_state_native
@@ -33,6 +35,7 @@ class PullTransport(_AortaTransport):
         self._latest_body_state = None
         self._state_lock = threading.Lock()
         self._status_lock = threading.RLock()
+        self._candidate_gate = None
         try:
             from aorta.options import SubscriberOptions
             for topic, qos in ((BODY_STATE_TOPIC, self._bindings.aorta.QoS.sensor_data()),
@@ -70,9 +73,9 @@ class PullTransport(_AortaTransport):
                     # not turn one incompatible phase/frame into CANCEL/PASSIVE.
                     self.status_decode_errors += 1
                     return self._status
-                self._status = status
-                for callback in tuple(self._callbacks[CONTROL_STATUS_TOPIC]):
-                    callback(status)
+                if self._accept_candidate(status, lambda: setattr(self, '_status', status)):
+                    for callback in tuple(self._callbacks[CONTROL_STATUS_TOPIC]):
+                        callback(status)
             return self._status
 
     @property
@@ -89,31 +92,51 @@ class PullTransport(_AortaTransport):
         Core receive_stamp_ns is dequeue/assembly time, not network arrival.
         """
         with self._state_lock:
-            received = self._receive_state(timeout)
-            if received is not self._latest_sample or self._latest_state is None:
-                sample, wall, mono = received
-                state = replace(decode_body_state_arrays(sample.payload),
-                    received_monotonic_ns=mono, received_realtime_ns=wall,
-                    pull_context_receive_stamp_ns=sample.context.receive_stamp_ns)
-                self._ensure_open()
-                if received is not self._latest_sample:
-                    self._latest_body_state = None
-                self._latest_sample = received
-                self._latest_state = state
-            return self._latest_state
+            return self._accept_state(self._receive_state(timeout), arrays=True)
 
     def _wait_body_state(self, timeout):
         with self._state_lock:
-            received = self._receive_state(timeout)
-            if received is not self._latest_sample or self._latest_body_state is None:
-                sample, _, _ = received
-                state = decode_body_state_native(sample.payload)
-                self._ensure_open()
+            return self._accept_state(self._receive_state(timeout), arrays=False)
+
+    def _accept_candidate(self, candidate, commit):
+        self._ensure_open()
+        if self._candidate_gate is None:
+            raise ValueError('Pull transport has no bound connection identity')
+        return self._candidate_gate(candidate, commit)
+
+    def _accept_state(self, received, *, arrays):
+        """Commit only under the owning connection's existing identity gate."""
+        # At most the new candidate and the previously accepted sample.
+        for _ in range(2):
+            cached = self._latest_state if arrays else self._latest_body_state
+            if received is self._latest_sample and cached is not None:
+                state = cached
+            else:
+                sample, wall, mono = received
+                if arrays:
+                    state = replace(decode_body_state_arrays(sample.payload),
+                        received_monotonic_ns=mono, received_realtime_ns=wall,
+                        pull_context_receive_stamp_ns=sample.context.receive_stamp_ns)
+                else:
+                    state = decode_body_state_native(sample.payload)
+
+            def commit():
                 if received is not self._latest_sample:
-                    self._latest_state = None
+                    self._latest_state = self._latest_body_state = None
                 self._latest_sample = received
-                self._latest_body_state = state
-            return self._latest_body_state
+                if arrays:
+                    self._latest_state = state
+                else:
+                    self._latest_body_state = state
+
+            if self._accept_candidate(state, commit):
+                return state
+            # The candidate has never been committed; retain the old original
+            # sample and receipt clocks, including its other representation.
+            if self._latest_sample is None or received is self._latest_sample:
+                raise ValueError('BodyState does not belong to the discovered runtime')
+            received = self._latest_sample
+        raise ValueError('BodyState does not belong to the discovered runtime')
 
     def _receive_state(self, timeout):
         if type(timeout) in (int, float) and timeout == 0:
@@ -168,6 +191,20 @@ class PullStateSource:
         self._runtime_changed = False
         self._closed = False
         self._end_effector_clients = set()
+        if isinstance(self.transport, PullTransport):
+            if self.transport._candidate_gate is not None:
+                raise ValueError('Pull transport already has a connection')
+            self.transport._candidate_gate = self._commit_pull_candidate
+
+    def _commit_pull_candidate(self, candidate, commit):
+        with self._end_effector_runtime_lock:
+            self._ensure_runtime_locked()
+            version = PROTOCOL_VERSION if isinstance(candidate, ControlStatus) else BODY_STATE_PROTOCOL_VERSION
+            if (candidate.protocol_version != version or not _valid_ref(candidate.descriptor_ref)
+                    or candidate.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id):
+                return False
+            commit()
+            return True
 
     @property
     def group(self):
@@ -275,10 +312,27 @@ class PullController(ExternalController):
         _nonempty_text(group, 'group')
         node_name = node_name or 'locomotion-pull-'+uuid.uuid4().hex
         _nonempty_text(node_name, 'node_name')
+        if client_id is not None:
+            _uint64_nonzero(client_id, 'client_id')
         transport = _transport if _transport is not None else PullTransport(
             node_name=node_name, group=group)
+        if isinstance(transport, PullTransport) and transport._candidate_gate is not None:
+            raise ValueError('Pull transport already has a connection')
         super().__init__(group=group, node_name=node_name, client_id=client_id,
                          _transport=transport, _subscribe_body_state=False)
+        if isinstance(transport, PullTransport):
+            transport._candidate_gate = self._commit_pull_candidate
+
+    def _commit_pull_candidate(self, candidate, commit):
+        with self._condition:
+            self._ensure_open()
+            self.transport._ensure_open()
+            version = PROTOCOL_VERSION if isinstance(candidate, ControlStatus) else BODY_STATE_PROTOCOL_VERSION
+            if (candidate.protocol_version != version or not _valid_ref(candidate.descriptor_ref)
+                    or candidate.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id):
+                return False
+            commit()
+            return True
 
     def wait_state(self, timeout=5.0):
         with self._condition:
@@ -286,6 +340,7 @@ class PullController(ExternalController):
         state = self.transport.wait_state(timeout)
         with self._condition:
             self._ensure_open()
+            self.transport._ensure_open()
             if not _valid_ref(state.descriptor_ref) or state.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id:
                 raise ValueError('BodyState does not belong to the discovered runtime')
             return state
@@ -297,6 +352,7 @@ class PullController(ExternalController):
             state = self.transport._wait_body_state(timeout)
             with self._condition:
                 self._ensure_open()
+                self.transport._ensure_open()
                 if not _valid_ref(state.descriptor_ref) or state.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id:
                     raise ValueError('BodyState does not belong to the discovered runtime')
                 return state
