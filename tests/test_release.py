@@ -26,6 +26,17 @@ class ReleaseTest(unittest.TestCase):
         })
         self.assertEqual(manifest["python_requires"], "==3.10.*")
         self.assertEqual(manifest["platforms"], ["manylinux_2_35_x86_64", "manylinux_2_35_aarch64"])
+        self.assertEqual(manifest["body_protocol_version"], 3)
+        self.assertEqual(manifest["control_request_version"], 4)
+        self.assertEqual(set(manifest["schema_sha256"]), {
+            "body_cmd", "body_state", "control_ack", "control_request", "control_status",
+            "end_effector_cmd", "end_effector_info", "end_effector_set_touch",
+            "end_effector_state", "end_effector_touch", "get_robot_info",
+            "humanoid_low_state", "joy", "low_cmd", "robot_info",
+        })
+        version = manifest["humanoid_msgs_version"]
+        self.assertIn(f'"vbot-humanoid-msgs=={version}"', (ROOT / "pyproject.toml").read_text())
+        self.assertIn(f"vbot_humanoid_msgs-{version}-py3-none-any.whl", manifest["wheel_sha256"])
         self.assertEqual(sorted(n.split("-")[0] for n in manifest["wheel_sha256"]),
                          ["aorta_msgs", "aorta_sdk", "aorta_sdk", "flatbuffers", "vbot_humanoid_msgs"])
 

@@ -1,10 +1,11 @@
 # Humanoid SDK
 
 SDK **0.2.1** is in preparation; packaging and release are pending. This source
-targets the reviewed Schema73 direct-runtime contract. The existing S91220 pins
-and vendored headers are historical inputs, not a matching dependency set for
-this source. The dedicated messages wheel, matching native headers and final
-dependency manifest remain pending; do not install or release this intermediate tree.
+targets the reviewed Schema73 direct-runtime contract. The manifest identifies
+the dedicated `g993f2f9de12b` messages wheel observed in CI; its source tree
+matches the reviewed schema head. Vendored S91220 native headers are historical
+inputs, not a matching dependency set. Matching headers and the official
+dependency release remain pending; do not install or release this intermediate tree.
 
 The nonzero startup `runtime_id` is carried directly, and RobotInfo has no
 descriptor-confirmation field. The connection first discovers its runtime via
@@ -21,11 +22,11 @@ client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
 aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 
 The Aorta SDK and messages target `2026.10.20` (ABI 13) and FlatBuffers targets
-`25.12.19`. The current `vbot-humanoid-msgs` entry in
-[compatibility.json](compatibility.json) and `pyproject.toml` is the older S91220
-reference, not the final Schema73 wheel. Do not substitute a product wheel for
-the dedicated messages distribution. Final wheel names and SHA-256s must be
-bound from the verified matching artifacts before installation.
+`25.12.19`. The `vbot-humanoid-msgs` entry in
+[compatibility.json](compatibility.json) and `pyproject.toml` names the actual
+dedicated CI wheel and its SHA-256, retaining its `g993f2f9de12b` version.
+It is not an official release asset, and the matching native headers have not
+yet been integrated. Do not substitute a product wheel for this distribution.
 `dependency_release_tag` is null, so the existing release downloader refuses
 before downloading anything. No replacement release, URL or fallback is chosen.
 
@@ -45,8 +46,9 @@ sequence-gap counts. See [the Joy reader contract](examples/velocity_mode/README
 Joy retains its prior public contract. SDK release publication remains pending;
 the complete new matching bundle is not yet available.
 
-After the dependency manifest is rebound, match its public schema hashes and
-roster to the robot. Control requests, ACK and Status use protocol 4; BodyCmd
+After the matching native headers and official dependency release are bound,
+match the public schema hashes and roster to the robot. Control requests, ACK
+and Status use protocol 4; BodyCmd
 and BodyState use protocol 3. The generated EXTERNAL action field does not
 activate control: the connection uses the existing PREPARE/COMMIT lifecycle,
 with no lease-duration field or automatic expiry. There is no downgrade or
