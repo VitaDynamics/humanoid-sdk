@@ -6,7 +6,7 @@ Do not substitute an older wheel for the matching generated dependency.
 
 `end_effector_external.py` uses one shared controller for Body and both selected
 end effectors. The default and `--dry-run` use a read-only source: no control
-control request, command publisher or touch switch. `--side none` reads/controls Body only;
+request, command publisher or touch switch. `--side none` reads/controls Body only;
 `--ee-only` still queries RobotInfo for the shared startup identity but omits Body
 motion preflight and Body commands. Each endpoint uses its own
 explicit `--left-hz`/`--right-hz`; missed deadlines are not replayed. A combined
@@ -77,7 +77,7 @@ waits for a new valid State; enabling additionally requires a new Touch sample.
 Info is never used as dynamic touch confirmation. The synchronous API separately
 bounds service matching and RPC; the observation budget is not a strict total
 RPC deadline. On failure or interrupt the original lifecycle attempts CANCEL
-once before joining the service worker. No retry, second lease, autonomous
+once before joining the service worker. No retry, second control owner, autonomous
 heartbeat or neutral end-effector target is sent. An unconfirmed CANCEL is an
 error; PASSIVE may let unsupported limbs fall.
 
@@ -104,7 +104,7 @@ explicit matching archive path; they are never decoded as live fallback data.
 ## Robot-local TELEOP balance with remote EE input (source candidate)
 
 The Python controller also exposes `enter_control("HUMANOID_TELEOP", timeout)`
-and `exit_control(timeout)`. These use the same request/lease/COMMIT connection
+and `exit_control(timeout)`. These use the same request/control/COMMIT connection
 as EXTERNAL. Entry returns only after both accepted COMMIT and a fresh matching
 RUNNING status with a valid generation; ACK and status can arrive in either
 order. An already running robot action does not authorize this connection.

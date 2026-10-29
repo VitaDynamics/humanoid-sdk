@@ -1,5 +1,6 @@
 import importlib
 import unittest
+from unittest import mock
 
 import locomotion_aorta.transport as transport_module
 from locomotion_aorta import (
@@ -45,6 +46,7 @@ class AortaBindingContractTest(unittest.TestCase):
             "locomotion_sdk.ControlRequest",
             "locomotion_sdk.ControlAck",
             "locomotion_sdk.ControlStatus",
+            "aorta.services.humanoid_locomotion.GetRobotInfoResponse",
         )
         missing = []
         modules = {}
@@ -64,10 +66,12 @@ class AortaBindingContractTest(unittest.TestCase):
                 "ProtocolVersion", "RosterVersion", "StateId", "TsStateRealUs",
                 "TsStatePubUs", "TsConsumedUs", "AttitudeValid", "ImuStates",
                 "Joints", "AppliedSessionId", "AppliedSequence", "TsFirstOutputUs",
+                "RuntimeId", "TsControlUs", "AppliedKeyValid", "AssociationSourceType",
             ),
             "lowlevel.BodyCmd": (
                 "Joints", "ProtocolVersion", "SessionId", "Sequence",
                 "InputStateId", "InputStateTsRealUs", "Action", "RootQuat",
+                "RuntimeId", "ControlId", "TsClientCreatedUs", "TsClientSendUs",
             ),
             "locomotion_sdk.ControlRequest": (
                 "ProtocolVersion",
@@ -107,6 +111,9 @@ class AortaBindingContractTest(unittest.TestCase):
                 "IngressDropCount",
                 "StampMonotonicNs",
             ),
+            "aorta.services.humanoid_locomotion.GetRobotInfoResponse": (
+                "Status", "Info", "ErrorMessage", "RuntimeId",
+            ),
         }
         missing_accessors = []
         for module_name, accessors in required_accessors.items():
@@ -126,6 +133,25 @@ class AortaBindingContractTest(unittest.TestCase):
             "M0 Aorta Python binding fields are incomplete: "
             + ", ".join(missing_accessors),
         )
+
+    def test_missing_direct_runtime_accessor_fails_before_node_creation(self):
+        import aorta
+        from lowlevel.BodyState import BodyState
+        with mock.patch.object(BodyState, 'RuntimeId', None), mock.patch.object(aorta, 'Node') as node:
+            with self.assertRaisesRegex(transport_module.AortaBindingsUnavailableError,
+                                        'BodyState.RuntimeId'):
+                transport_module.create_aorta_transport(node_name='binding-test', group='default')
+            node.assert_not_called()
+
+    def test_retired_control_lease_accessor_fails_before_node_creation(self):
+        import aorta
+        from locomotion_sdk.ControlRequest import ControlRequest as WireRequest
+        with mock.patch.object(WireRequest, 'RequestedLeaseMs', object(), create=True), \
+             mock.patch.object(aorta, 'Node') as node:
+            with self.assertRaisesRegex(transport_module.AortaBindingsUnavailableError,
+                                        'ControlRequest.RequestedLeaseMs'):
+                transport_module.create_aorta_transport(node_name='binding-test', group='default')
+            node.assert_not_called()
 
     def test_transport_encoders_use_the_generated_message_contract(self) -> None:
         import flatbuffers

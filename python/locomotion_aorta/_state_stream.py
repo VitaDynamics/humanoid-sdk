@@ -12,7 +12,13 @@ from ._group import require_node_group
 class _StateStream:
     def __init__(self, *, node_name, group, callback):
         aorta = importlib.import_module("aorta")
-        decoder = importlib.import_module("lowlevel.BodyState").BodyState.GetRootAs
+        body_state = importlib.import_module("lowlevel.BodyState").BodyState
+        if (not callable(getattr(body_state, 'GetRootAs', None))
+                or not callable(getattr(body_state, 'RuntimeId', None))
+                or not callable(getattr(body_state, 'Joints', None))
+                or hasattr(body_state, 'DescriptorRef')):
+            raise AortaBindingsUnavailableError('incompatible BodyState direct-runtime bindings')
+        decoder = body_state.GetRootAs
         self.node = aorta.Node(node_name, group)
         self._aorta = aorta
         self._info_lock = threading.Lock()

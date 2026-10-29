@@ -42,6 +42,15 @@ class StateSourceTest(unittest.TestCase):
         source.get_robot_info(.1)
         return source
 
+    def test_readonly_stream_rejects_missing_runtime_before_node(self):
+        import aorta
+        from lowlevel.BodyState import BodyState as WireBodyState
+        from locomotion_aorta.transport import AortaBindingsUnavailableError
+        with mock.patch.object(WireBodyState, 'RuntimeId', None), mock.patch.object(aorta, 'Node') as node:
+            with self.assertRaisesRegex(AortaBindingsUnavailableError, 'direct-runtime'):
+                _StateStream(node_name='readonly-test', group='default', callback=lambda *_: None)
+            node.assert_not_called()
+
     def test_snapshot_caches_incompatible_body_revision_error(self):
         import flatbuffers
         from lowlevel import BodyState as module

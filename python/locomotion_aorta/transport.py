@@ -246,6 +246,36 @@ def _load_aorta_bindings() -> _AortaBindings:
     control_status = importlib.import_module("locomotion_sdk.ControlStatus")
     body_state = importlib.import_module("lowlevel.BodyState")
     body_cmd = importlib.import_module("lowlevel.BodyCmd")
+    info_response = importlib.import_module("aorta.services.humanoid_locomotion.GetRobotInfoResponse")
+    # Reject the retired binding surface before opening a node. This only
+    # checks the APIs used below; same-source BFBS and native ABI gates remain.
+    required = (
+        (control_request, 'ControlRequest', ('GetRootAs', 'RuntimeId')),
+        (control_ack, 'ControlAck', ('GetRootAs', 'RuntimeId', 'ClientId', 'ControlId')),
+        (control_status, 'ControlStatus', ('GetRootAs', 'RuntimeId', 'ClientId', 'ControlId', 'Generation')),
+        (body_state, 'BodyState', ('GetRootAs', 'RuntimeId', 'Joints')),
+        (body_cmd, 'BodyCmd', ('GetRootAs', 'RuntimeId', 'ControlId', 'Joints')),
+        (info_response, 'GetRobotInfoResponse', ('GetRootAs', 'RuntimeId', 'Info')),
+    )
+    for module, root, methods in required:
+        view = getattr(module, root, None)
+        for method in methods:
+            if not callable(getattr(view, method, None)):
+                raise AortaBindingsUnavailableError('missing generated binding: ' + root + '.' + method)
+    for module, name in ((control_request, 'ControlRequestAddRuntimeId'),
+                         (body_cmd, 'BodyCmdAddRuntimeId'),
+                         (body_cmd, 'BodyCmdAddControlId')):
+        if not callable(getattr(module, name, None)):
+            raise AortaBindingsUnavailableError('missing generated binding: ' + name)
+    for module, root, name in (
+            (body_cmd, 'BodyCmd', 'DescriptorRef'),
+            (body_state, 'BodyState', 'DescriptorRef'),
+            (info_response, 'GetRobotInfoResponse', 'DescriptorRef'),
+            (control_request, 'ControlRequest', 'RequestedLeaseMs'),
+            (control_ack, 'ControlAck', 'LeaseDeadlineMonotonicNs'),
+            (control_status, 'ControlStatus', 'LeaseDeadlineMonotonicNs')):
+        if hasattr(getattr(module, root), name):
+            raise AortaBindingsUnavailableError('retired generated binding: ' + root + '.' + name)
     return _AortaBindings(
         aorta=aorta,
         control_request_module=control_request,
@@ -256,7 +286,7 @@ def _load_aorta_bindings() -> _AortaBindings:
         body_cmd_schema_meta=importlib.import_module("body_cmd_schema_meta"),
         body_state_decoder=body_state.BodyState.GetRootAs,
         get_robot_info_request=importlib.import_module("aorta.services.humanoid_locomotion.GetRobotInfoRequest"),
-        get_robot_info_response=importlib.import_module("aorta.services.humanoid_locomotion.GetRobotInfoResponse"),
+        get_robot_info_response=info_response,
         get_robot_info_schema_meta=importlib.import_module("get_robot_info_schema_meta"),
         control_ack_decoder=control_ack.ControlAck.GetRootAs,
         control_status_decoder=control_status.ControlStatus.GetRootAs,

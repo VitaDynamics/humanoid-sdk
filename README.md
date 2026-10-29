@@ -1,14 +1,15 @@
 # Humanoid SDK
 
-SDK **0.2.1** is in preparation; packaging and release are pending.
-This source binds the actual S91220 candidate wheel/BFBS/native headers recorded
-in [compatibility.json](compatibility.json), version
-`0.0.0+g91220d520cd0`. That source binding is not an SDK build, native/IPC,
-robot integration or HIL pass; those validations and final packaging remain pending.
+SDK **0.2.1** is in preparation; packaging and release are pending. This source
+targets the reviewed Schema73 direct-runtime contract. The existing S91220 pins
+and vendored headers are historical inputs, not a matching dependency set for
+this source. The dedicated messages wheel, matching native headers and final
+dependency manifest remain pending; do not install or release this intermediate tree.
 
-`DescriptorRef` contains only the nonzero startup `robot_runtime_id`, and
-RobotInfo has no descriptor-confirmation field. `wait_info` accepts the first complete Info for
-that process without a RobotInfo RPC. Static semantic changes are fatal; a
+The nonzero startup `runtime_id` is carried directly, and RobotInfo has no
+descriptor-confirmation field. The connection first discovers its runtime via
+GetRobotInfo; `wait_info` accepts matching endpoint Info without another RPC.
+Static semantic changes are fatal; a
 different runtime requires a new connection, control context and EE client.
 Publication timestamp/valid-bit changes alone are normal republishes.
 
@@ -19,10 +20,12 @@ with **CPython 3.10**, glibc **2.35+** and GLIBCXX **3.4.29+**
 client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
 aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 
-Dependencies are pinned to Aorta SDK and messages `2026.10.20` (ABI 13),
-`vbot-humanoid-msgs==0.0.0+g91220d520cd0`, and `flatbuffers==25.12.19`. Verify wheel filenames
-and SHA-256s against [compatibility.json](compatibility.json). The candidate is supplied through the separately
-verified offline wheelhouse; it is not in the historical dependency Release.
+The Aorta SDK and messages target `2026.10.20` (ABI 13) and FlatBuffers targets
+`25.12.19`. The current `vbot-humanoid-msgs` entry in
+[compatibility.json](compatibility.json) and `pyproject.toml` is the older S91220
+reference, not the final Schema73 wheel. Do not substitute a product wheel for
+the dedicated messages distribution. Final wheel names and SHA-256s must be
+bound from the verified matching artifacts before installation.
 `dependency_release_tag` is null, so the existing release downloader refuses
 before downloading anything. No replacement release, URL or fallback is chosen.
 
@@ -42,14 +45,14 @@ sequence-gap counts. See [the Joy reader contract](examples/velocity_mode/README
 Joy retains its prior public contract. SDK release publication remains pending;
 the complete new matching bundle is not yet available.
 
-Match the robot's public schema hashes and roster to [compatibility.json](compatibility.json).
-Control requests use protocol 2; ACK/Status remain protocol 1. BodyCmd remains
-protocol 2 and BodyState uses protocol 3. BodyCmd action is explicitly encoded using the generated EXTERNAL
-symbol. Entry remains by action name and lease; the command does not activate
-EXTERNAL. Older robots rejecting v2 receive no automatic downgrade or LowCmd
-fallback. Discovery preserves partial body/hand results and actual field/limit
-validity. The logical waist-roll slot can be unpopulated; it is skipped in
-physical validation and output, and never represents a healthy zero sample.
+After the dependency manifest is rebound, match its public schema hashes and
+roster to the robot. Control requests, ACK and Status use protocol 4; BodyCmd
+and BodyState use protocol 3. The generated EXTERNAL action field does not
+activate control: the connection uses the existing PREPARE/COMMIT lifecycle,
+with no lease-duration field or automatic expiry. There is no downgrade or
+LowCmd fallback. Discovery preserves partial Body and endpoint results and
+their actual capability/limit validity. A MOCK target is unavailable; it is
+not silently removed from an intended action or treated as a healthy zero.
 
 BodyJointState contains three acquisition/ingestion/assembly timestamps,
 q, dq, tau_est and the unsigned uint32 JointError error_code. The tuple position is the
@@ -71,22 +74,23 @@ domains to assess feedback freshness.
 BodyImuSample keeps status and rpy (degrees), and removes temperature,
 valid_fields and duplicate device/host timestamps. BodyCmd, BodyState and
 BodyImuSample have no deprecated placeholders: IDs are renumbered contiguously
-while preserving field order (0..10 and 0..6 for Cmd and IMU). BodyState3
+while preserving field order (0..12 and 0..6 for Cmd and IMU). BodyState3
 retains ids0..12 and appends the association fields at ids13..16. There are no
 external consumers of 0.1.3 yet; older unpublished candidates cannot be mixed.
 Both public and internal IMU locations retain HIP=0/TRUNK=1 (chest), adding
 HEAD=2 as a reserved position. The current public list follows the actual
 configured HIP and TRUNK locations. Public state_id and BodyCmd.input_state_id
 remain full uint64 values.
-Command validation uses learned BodyInfo population; until discovery it
-validates all 31 command slots. RobotInfo and its nested HandInfo/GripperInfo
-descriptions remain frozen; online end-effector commands use the new contract.
+Body command validation requires discovered BodyInfo, an explicit nonempty target
+set and required-field mask; all 31 slots must be structurally valid and
+non-target padding must remain neutral. RobotInfo uses the frozen unified
+endpoint Info, with availability and failure reason kept distinct.
 
 BodyCmd has no cmd_id: correlate BODY commands and logs by session_id and
 sequence. ExternalController.publish returns the command with the actual
 assigned session/sequence after its transport publish succeeds.
 BodyState3 retains applied_session_id, applied_sequence and ts_first_output_us,
-and adds descriptor_ref, ts_control_us, applied_key_valid and
+and adds runtime_id, ts_control_us, applied_key_valid and
 association_source_type. These identify the actual same-snapshot association
 across command sources. A valid key may be zero; validity must not be inferred
 from a nonzero number or the current action name. Missing/invalid association
@@ -197,7 +201,7 @@ software supporting unlimited control; an older server rejection is an error.
 
 See [the shared and three vendor EE entries](examples/end_effector/README.md) for explicit per-side
 units, rates and actual descriptor limits. Default and `--dry-run` are read-only.
-Authorized motion borrows the original Body owner/lease/allocator; left and right
+Authorized motion borrows the original Body control authority and allocator; left and right
 have no private control session. Body freshness, ownership and CANCEL→PASSIVE
 remain mandatory. PASSIVE may let unsupported limbs fall.
 
@@ -218,7 +222,7 @@ kind names are `left_ee_*` / `right_ee_*`. It creates no publisher or service
 client. Old Hand/Gripper live decoders are not a fallback.
 
 Touch payload is an exact uint8 list; region stamps, independent sample IDs,
-status/direction/validity, runtime-only DescriptorRef and command SampleRef/key are
+status/direction/validity, direct runtime_id and command SampleRef/key are
 preserved. Missing/nonfinite feedback stays JSON null with its original
 validity, never a healthy zero. Queue drops, partial capture and transport loss
 remain separate. The optional `hil` extra exports MCAP in storage order with
@@ -237,14 +241,19 @@ float32. `imu_state_present` distinguishes an absent sample from numeric zeros.
 The original callback API remains available. Pull depth 1 intentionally skips
 older queued samples; its drop counter is not a packet-loss measurement.
 
-`BodyStateSource` subscribes only to BodyState; it creates no control publisher,
-service client or lease. It is independent of `ExternalController`.
+`BodyStateSource` subscribes only to BodyState and uses a read-only GetRobotInfo
+service client for runtime discovery; it creates no control publisher. It is
+independent of `ExternalController`.
 
 ```python
-from locomotion_aorta import BodyStateSource
+from locomotion_aorta import BodyStateSource, ServiceStatus
 
 source = BodyStateSource(group="default")
 try:
+    reply = source.get_robot_info(timeout=5.0)
+    if (reply.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
+            or reply.info is None or reply.info.body is None or not reply.runtime_id):
+        raise RuntimeError(f"Body discovery failed: {reply.error_message}")
     frame = source.snapshot()  # default timeout: 5 seconds
     state = frame.body_state()  # decode this frame once, on first access
     print(state.state_id, frame.received_monotonic_ns, frame.received_realtime_ns)
@@ -283,18 +292,10 @@ virtual environment. These commands are not an installation or execution GO. `ma
 tests the working tree; a pure Python edit does not require a compiler or an
 editable SDK install.
 
-```bash
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install --no-index --find-links wheelhouse \
-  aorta-sdk==2026.10.20 aorta-msgs==2026.10.20 vbot-humanoid-msgs==0.0.0+g91220d520cd0 flatbuffers==25.12.19
-python -m pip install mcap==1.3.1
-make check
-```
-
-This candidate requires its actual schema wheel from the fixed validation
-handoff, alongside the exact Aorta/message/FlatBuffers wheels. Their names and
-SHA-256s are listed in compatibility.json. The existing offline packager accepts
+The final dedicated schema wheel and native headers are not available yet, so
+the older S91220 install command is not a valid way to exercise this source.
+After the matching dependency manifest is fixed and verified, use the complete
+offline wheelhouse and the existing `make check` entry. The offline packager accepts
 explicit `--wheelhouse` directories and checks every pinned hash. It does not
 fetch or synthesize missing artifacts. `tools/fetch_dependencies.py` remains a
 published-Release-only downloader and intentionally refuses the null candidate
@@ -375,12 +376,12 @@ and reports. It does not establish robot performance or motion acceptance.
 
 `examples/teleop_policy/teleop_policy.py` subscribes to BodyState, discovers the actual body
 roster, drains Aorta `locomotion/joy` through the same JoyReader as velocity,
-runs a local action 17 ONNX policy, and uses the same EXTERNAL lease and
+runs a local action 17 ONNX policy, and uses the same EXTERNAL control and
 CANCEL exit. Before every live inference it waits up to the existing `--timeout`
 for a strictly increasing BodyState `state_id`; unchanged or older feedback is
 not reused for another inference or leg command, and timeout attempts CANCEL.
-The SDK wheel already contains the C++ ONNX Runtime 1.20.1 CPU backend and
-its shared libraries. Only constructing a model loads the bundled inference backend;
+The planned SDK wheel contains the C++ ONNX Runtime 1.20.1 CPU backend and
+its shared libraries, subject to package validation. Only constructing a model loads the bundled inference backend;
 core imports and example `--help` do not load it. There is no Python ONNX
 Runtime fallback. The optional `teleop-demo` extra installs only NumPy from a complete matching demo wheelhouse:
 

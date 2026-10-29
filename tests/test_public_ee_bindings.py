@@ -14,19 +14,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PublicEeBindingTest(unittest.TestCase):
     def test_t021_struct_layouts_and_message_level_clocks(self):
-        from lowlevel.HandJointCmd import HandJointCmd
-        from lowlevel.HandJointState import HandJointState
-        from lowlevel.FingerTouchMeta import FingerTouchMeta
-        from lowlevel.HandState import HandState
-        self.assertEqual((HandJointCmd.SizeOf(), HandJointState.SizeOf(), FingerTouchMeta.SizeOf()),
-                         (8, 28, 32))
+        from lowlevel.ee.AxisCommand import AxisCommand
+        from lowlevel.ee.AxisState import AxisState
+        from lowlevel.ee.SampleRef import SampleRef
+        from lowlevel.ee.EndEffectorState import EndEffectorState
+        self.assertEqual((AxisCommand.SizeOf(), AxisState.SizeOf(), SampleRef.SizeOf()),
+                         (28, 28, 32))
+        for name in ('CommandFields', 'Mode', 'Pos', 'Vel', 'VelLimit', 'Tau', 'Current'):
+            self.assertTrue(hasattr(AxisCommand, name))
+        for name in ('ValidFields', 'Pos', 'Vel', 'Tau', 'Current', 'TemperatureC', 'ErrorCode'):
+            self.assertTrue(hasattr(AxisState, name))
         for name in ('TsAcquiredHwUs', 'TsIngestedUs', 'TsAssembledUs'):
-            self.assertTrue(hasattr(HandState, name))
-            self.assertFalse(hasattr(HandJointState, name))
+            self.assertTrue(hasattr(EndEffectorState, name))
+            self.assertFalse(hasattr(AxisState, name))
         for name in ('Dof', 'TsPollRequestUs', 'TsPollResponseUs', 'CmdDequeuedUs'):
-            self.assertFalse(hasattr(HandState, name))
-        self.assertIsNone(importlib.util.find_spec('lowlevel.HandInfo'))
-        self.assertIsNone(importlib.util.find_spec('lowlevel.GripperInfo'))
+            self.assertFalse(hasattr(EndEffectorState, name))
+        for name in ('HandJointCmd', 'HandJointState', 'FingerTouchMeta', 'HandCmd',
+                     'HandState', 'HandTouch', 'HandInfo', 'GripperCmd',
+                     'GripperState', 'GripperInfo'):
+            with self.subTest(retired=name):
+                self.assertIsNone(importlib.util.find_spec('lowlevel.' + name))
 
     def test_distribution_and_all_pinned_bfbs_match(self):
         manifest = json.loads((ROOT / 'compatibility.json').read_text())
