@@ -128,12 +128,25 @@ def decode_robot_info(view: Any) -> RobotInfo:
     if view.EndEffectorsLength() != 2:
         raise ValueError('RobotInfo requires LEFT and RIGHT endpoint slots')
     from ._end_effector_codec import decode_info
-    endpoints = tuple(_dto(view.EndEffectors(i), EndEffectorCapability,
-                           info=None if view.EndEffectors(i).Info() is None
-                           else decode_info(view.EndEffectors(i).Info()),
-                           reason=_text(view.EndEffectors(i).Reason()))
-                      for i in range(view.EndEffectorsLength()))
-    return _dto(view, RobotInfo, body=body_info, end_effectors=endpoints)
+    endpoints = []
+    for i in range(view.EndEffectorsLength()):
+        slot = view.EndEffectors(i)
+        info_view = slot.Info()
+        info = None if info_view is None else decode_info(info_view)
+        # Schema73 consistency contract: a valid N>0-axis Info's per-axis
+        # is_mock vector must all agree with the slot copy. A conflicting copy
+        # is an inconsistent description, not a valid mock identity.
+        if info is not None and info.axis_names:
+            if len(info.is_mock) != len(info.axis_names):
+                raise ValueError('endpoint Info is_mock length differs from axes')
+            if any(type(value) is not bool for value in info.is_mock):
+                raise ValueError('endpoint Info is_mock must be boolean')
+            if slot.IsMock() != all(info.is_mock):
+                raise ValueError(
+                    'endpoint capability is_mock conflicts with its Info axes')
+        endpoints.append(_dto(slot, EndEffectorCapability, info=info,
+                              reason=_text(slot.Reason())))
+    return _dto(view, RobotInfo, body=body_info, end_effectors=tuple(endpoints))
 
 
 def decode_robot_info_response(view: Any) -> GetRobotInfoResponse:
