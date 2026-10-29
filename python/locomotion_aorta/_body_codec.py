@@ -94,7 +94,6 @@ def _text(value: bytes | str | None) -> str:
 
 
 def decode_body_state(view: Any) -> BodyState:
-    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
     # Check the existing BODY revision before interpreting a fixed-stride struct.
     if view.ProtocolVersion() != BODY_STATE_PROTOCOL_VERSION:
         raise ValueError("incompatible BodyState protocol_version; expected BodyState 3")
@@ -107,13 +106,11 @@ def decode_body_state(view: Any) -> BodyState:
                         for j in range(getattr(state, _getter(name) + 'Length')()))
             for name in ('quaternion', 'gyroscope', 'accelerometer', 'rpy')})
         imus.append(_dto(sample, BodyImuSample, state=imu))
-    ref = view.DescriptorRef()
-    runtime = None if ref is None else ref.RobotRuntimeId()
+    runtime = view.RuntimeId()
     if runtime == 0:
-        raise ValueError("BodyState DescriptorRef requires nonzero robot_runtime_id")
+        raise ValueError("BodyState requires nonzero runtime_id")
     return _dto(view, BodyState, joints=unpack_body_joints(view),
-                imu_states=tuple(imus), descriptor_ref=None if ref is None else
-                DescriptorRef(runtime))
+                imu_states=tuple(imus), runtime_id=runtime)
 
 
 _decode_body_state_python = decode_body_state  # Reference for native golden tests.
@@ -130,13 +127,17 @@ def decode_robot_info(view: Any) -> RobotInfo:
                                for i in range(body.MotorIdentitiesLength())))
     if view.EndEffectorsLength() != 2:
         raise ValueError('RobotInfo requires LEFT and RIGHT endpoint slots')
-    raise RuntimeError('RobotInfo decoder requires verified 713c generated bindings')
+    from ._end_effector_codec import decode_info
+    endpoints = tuple(_dto(view.EndEffectors(i), EndEffectorCapability,
+                           info=None if view.EndEffectors(i).Info() is None
+                           else decode_info(view.EndEffectors(i).Info()),
+                           reason=_text(view.EndEffectors(i).Reason()))
+                      for i in range(view.EndEffectorsLength()))
+    return _dto(view, RobotInfo, body=body_info, end_effectors=endpoints)
 
 
 def decode_robot_info_response(view: Any) -> GetRobotInfoResponse:
-    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
     info = view.Info()
-    ref = view.DescriptorRef()
     return GetRobotInfoResponse(status=view.Status(), info=None if info is None else decode_robot_info(info),
                                 error_message=_text(view.ErrorMessage()),
-                                descriptor_ref=None if ref is None else DescriptorRef(ref.RobotRuntimeId()))
+                                runtime_id=view.RuntimeId())

@@ -122,8 +122,7 @@ class BodyStateSource:
             view = decoder(payload)
             if view.ProtocolVersion() != BODY_STATE_PROTOCOL_VERSION:
                 return
-            ref = view.DescriptorRef()
-            runtime = None if ref is None else ref.RobotRuntimeId()
+            runtime = view.RuntimeId()
             _require_body_joints(view)
         except (ValueError, TypeError, AttributeError, IndexError, OverflowError, struct.error):
             return

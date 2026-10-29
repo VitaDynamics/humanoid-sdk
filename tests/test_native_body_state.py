@@ -56,8 +56,7 @@ def state_buffer(seed, *, count=31, missing_joints=False, missing_imus=False,
     for name in ('StateId', 'TsStateRealUs', 'TsStatePubUs', 'TsConsumedUs',
                  'AppliedSessionId', 'AppliedSequence', 'TsFirstOutputUs', 'TsControlUs'):
         getattr(m, 'BodyStateAdd' + name)(builder, rng.randrange(2**64))
-    ref = importlib.import_module('lowlevel.ee.DescriptorRef')
-    m.BodyStateAddDescriptorRef(builder, ref.CreateDescriptorRef(builder, 2**64-1))
+    m.BodyStateAddRuntimeId(builder, 2**64-1)
     m.BodyStateAddAppliedKeyValid(builder, bool(seed % 2))
     m.BodyStateAddAssociationSourceType(builder, seed % 256)
     m.BodyStateAddAttitudeValid(builder, bool(seed % 2))
@@ -120,31 +119,29 @@ class NativeBodyStateTest(unittest.TestCase):
 
     def test_valid_zero_key_all_source_association_reaches_native_dto(self):
         m = module('BodyState')
-        ref = importlib.import_module('lowlevel.ee.DescriptorRef')
         for source in (0, 1, 2, 3, 4, 5, 6, 255):
             with self.subTest(source=source):
                 obj = m.BodyStateT.InitFromObj(make_state()[1])
-                obj.descriptorRef = ref.DescriptorRefT(2**64-1)
+                obj.runtimeId = 2**64-1
                 obj.tsControlUs, obj.appliedKeyValid, obj.associationSourceType = 2**64-2, True, source
                 b = flatbuffers.Builder(1); b.Finish(obj.Pack(b))
                 state = self.compare(bytes(b.Output()))
                 self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us), (0, 0, 0))
                 self.assertTrue(state.applied_key_valid)
                 self.assertEqual(state.association_source_type, source)
-                self.assertEqual(state.descriptor_ref.robot_runtime_id, 2**64-1)
+                self.assertEqual(state.runtime_id, 2**64-1)
                 self.assertEqual(state.ts_control_us, 2**64-2)
 
-    def test_present_zero_runtime_descriptor_is_rejected_by_python_and_native(self):
+    def test_present_zero_runtime_is_rejected_by_python_and_native(self):
         m = module('BodyState')
-        ref = importlib.import_module('lowlevel.ee.DescriptorRef')
         obj = m.BodyStateT.InitFromObj(make_state()[1])
-        obj.descriptorRef = ref.DescriptorRefT(0)
+        obj.runtimeId = 0
         builder = flatbuffers.Builder(1)
         builder.Finish(obj.Pack(builder))
         payload = bytes(builder.Output())
-        with self.assertRaisesRegex(ValueError, 'nonzero robot_runtime_id'):
+        with self.assertRaisesRegex(ValueError, 'nonzero runtime_id'):
             _decode_body_state_python(m.BodyState.GetRootAs(payload))
-        with self.assertRaisesRegex(ValueError, 'nonzero robot_runtime_id'):
+        with self.assertRaisesRegex(ValueError, 'nonzero runtime_id'):
             native.decode_state(payload, 0)
 
     def test_truncated_corrupt_and_invalid_table_offsets_reject(self):

@@ -145,7 +145,7 @@ class ExternalControllerTest(unittest.TestCase):
         sent = h.controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         wire = module('BodyCmd').BodyCmd.GetRootAs(encode(sent))
         self.assertEqual((wire.InputStateId(), wire.InputStateTsRealUs()), (100, 1000000))
-        self.assertEqual((wire.DescriptorRef().RobotRuntimeId(), wire.ControlId()), (11, 13))
+        self.assertEqual((wire.RuntimeId(), wire.ControlId()), (11, 13))
         self.assertEqual(wire.JointsLength(), 31)
 
     def test_body3_uses_confirmed_runtime_control_and_preserves_selected_input(self):
@@ -796,7 +796,7 @@ class ExternalControllerTest(unittest.TestCase):
     def test_generated_control_views_decode_to_public_values(self) -> None:
         ack = transport_module._decode_control_ack(
             SimpleNamespace(
-                ProtocolVersion=lambda: 3,
+                ProtocolVersion=lambda: 4,
                 Operation=lambda: 2,
                 RequestId=lambda: b"request-1",
                 Accepted=lambda: True,
@@ -804,20 +804,18 @@ class ExternalControllerTest(unittest.TestCase):
                 Reason=lambda: b"",
                 ClientId=lambda: 9,
                 ControlId=lambda: 13,
-                DescriptorRef=lambda: SimpleNamespace(RobotRuntimeId=lambda: 11),
-                LeaseDeadlineMonotonicNs=lambda: 123,
+                RuntimeId=lambda: 11,
             )
         )
         status = transport_module._decode_control_status(
             SimpleNamespace(
-                ProtocolVersion=lambda: 3,
+                ProtocolVersion=lambda: 4,
                 StatusSeq=lambda: 9,
                 CurrentAction=lambda: b"EXTERNAL",
                 ActionPhase=lambda: 4,
                 ClientId=lambda: 9,
                 ControlId=lambda: 13,
-                DescriptorRef=lambda: SimpleNamespace(RobotRuntimeId=lambda: 11),
-                LeaseDeadlineMonotonicNs=lambda: 123,
+                RuntimeId=lambda: 11,
                 Generation=lambda: 42,
                 LastAcceptedCmdId=lambda: 8,
                 LastValidAgeMs=lambda: 10,

@@ -134,7 +134,7 @@ def check_real_binding_packets():
             payload = pack(state)
             decoded_state = codec.decode_state(module('EndEffectorState').EndEffectorState.GetRootAs(payload))
             codec.validate_state(decoded, decoded_state)
-            assert decoded_state.state_id == 2**63+1 and decoded_state.descriptor_ref == decoded.descriptor_ref
+            assert decoded_state.state_id == 2**63+1 and decoded_state.runtime_id == decoded.runtime_id
             records.append(dict(kind=side+' State', bytes=len(payload), passed=True))
         payload = (output/'ee-left-touch.bin').read_bytes()
         touch = codec.decode_touch(module('EndEffectorTouch').EndEffectorTouch.GetRootAs(payload))
@@ -172,7 +172,7 @@ class AuxiliaryWireTest(unittest.TestCase):
                 if failure == 'side': info.side = 2
                 elif failure == 'position': spec['left']['initial_pos'] = [.1]
                 elif failure == 'shape': info.supportedStateFields = []
-                elif failure == 'touch_ref': touch.descriptorRef.robotRuntimeId = 101
+                elif failure == 'touch_ref': touch.runtimeId = 101
                 elif failure == 'touch_length': touch.payload = [0]
                 else: info.deviceModel = DeviceModel.AGILINK_OP3
                 (root/'info.bin').write_bytes(pack(info)); (root/'touch.bin').write_bytes(pack(touch))

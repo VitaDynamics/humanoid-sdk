@@ -12,8 +12,6 @@ from locomotion_aorta import (
 )
 from locomotion_aorta import _body_codec as codec
 from locomotion_aorta.transport import _fill_body_cmd
-from locomotion_aorta.body_types import DescriptorRef
-
 
 def module(name):
     return importlib.import_module('lowlevel.' + name)
@@ -24,7 +22,7 @@ def make_command(seed=0):
                             for i in range(31)), action=BodyCmdAction.EXTERNAL,
                   session_id=42, sequence=7, input_state_id=123, input_state_ts_real_us=456,
                   ts_client_created_us=789, ts_client_send_us=901,
-                  descriptor_ref=DescriptorRef(11), control_id=13)
+                  runtime_id=11, control_id=13)
 
 
 def encode(command, *, generated=False, initial_size=1, prefix=0):
@@ -52,8 +50,7 @@ def encode(command, *, generated=False, initial_size=1, prefix=0):
         m.BodyCmdAddAction(builder, command.action)
         quat = command.root_quat or (1., 0., 0., 0.)
         m.BodyCmdAddRootQuat(builder, module('RootQuatWxyz').CreateRootQuatWxyz(builder, *quat))
-        ref = importlib.import_module('lowlevel.ee.DescriptorRef')
-        m.BodyCmdAddDescriptorRef(builder, ref.CreateDescriptorRef(builder, command.descriptor_ref.robot_runtime_id))
+        m.BodyCmdAddRuntimeId(builder, command.runtime_id)
         m.BodyCmdAddControlId(builder, command.control_id)
         root = m.BodyCmdEnd(builder)
         builder.ForceDefaults(False)
@@ -101,8 +98,7 @@ def make_state(*, error_codes=None, runtime_id=None):
     m.BodyStateAddAttitudeValid(builder, True)
     m.BodyStateAddJoints(builder, joints)
     if runtime_id is not None:
-        ref = importlib.import_module('lowlevel.ee.DescriptorRef')
-        m.BodyStateAddDescriptorRef(builder, ref.CreateDescriptorRef(builder, runtime_id))
+        m.BodyStateAddRuntimeId(builder, runtime_id)
     builder.Finish(m.BodyStateEnd(builder))
     data = bytes(builder.Output())
     return data, m.BodyState.GetRootAs(data)
@@ -170,7 +166,7 @@ class BodyCodecTest(unittest.TestCase):
                         self.assertNotEqual(view._tab.Offset(22), 0)  # action id9 is explicitly present
                         self.assertEqual(view.JointsLength(), 31)
                         self.assertEqual(view.Joints(30).Q(), command.joints[30].q)
-                        self.assertEqual(view.DescriptorRef().RobotRuntimeId(), 11)
+                        self.assertEqual(view.RuntimeId(), 11)
                         self.assertEqual(view.ControlId(), 13)
                         self.assertIsNotNone(view.RootQuat())
 
@@ -293,7 +289,7 @@ class BodyCodecTest(unittest.TestCase):
             ('BodyState', ['JointsLength'], [22]),
             ('BodyImuSample', ['TsSampledUs', 'TsIngestedUs'], [4,8]),
             ('BodyState', ['AppliedSessionId', 'AppliedSequence', 'TsFirstOutputUs'], [24,26,28]),
-            ('BodyState', ['DescriptorRef', 'TsControlUs', 'AppliedKeyValid', 'AssociationSourceType'], [30,32,34,36]),
+            ('BodyState', ['RuntimeId', 'TsControlUs', 'AppliedKeyValid', 'AssociationSourceType'], [30,32,34,36]),
             ('BodyCmd', ['JointsLength','Action','RootQuat'], [20,22,24]),
         ):
             with self.subTest(table=name, getters=getters):
@@ -532,38 +528,36 @@ class BodyCodecTest(unittest.TestCase):
             self.assertFalse(hasattr(state, 'applied_cmd'))
 
     def test_state3_association_preserves_all_sources_zero_keys_and_full_width_ref(self):
-        from locomotion_aorta.body_types import DescriptorRef, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION
+        from locomotion_aorta.body_types import BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION
         self.assertEqual((BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION), (3, 3))
-        ref_module = importlib.import_module('lowlevel.ee.DescriptorRef')
         m = module('BodyState')
         for source in (0, 1, 2, 3, 4, 5, 6, 255):
             for key, valid in (((0, 0), True), ((2**64-1, 2**63+3), True), ((99, 101), False)):
                 with self.subTest(source=source, key=key, valid=valid):
                     obj = m.BodyStateT.InitFromObj(make_state()[1])
                     obj.stateId = 2**64-2
-                    obj.descriptorRef = ref_module.DescriptorRefT(2**64-1)
+                    obj.runtimeId = 2**64-1
                     obj.tsControlUs, obj.appliedKeyValid, obj.associationSourceType = 2**64-3, valid, source
                     obj.appliedSessionId, obj.appliedSequence, obj.tsFirstOutputUs = *key, 0
                     builder = flatbuffers.Builder(1)
                     builder.Finish(obj.Pack(builder))
                     state = codec.decode_body_state(m.BodyState.GetRootAs(builder.Output()))
-                    self.assertEqual(state.descriptor_ref, DescriptorRef(2**64-1))
+                    self.assertEqual(state.runtime_id, 2**64-1)
                     self.assertEqual((state.ts_control_us, state.applied_key_valid, state.association_source_type),
                                      (2**64-3, valid, source))
                     self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us),
                                      (*key, 0))
                     self.assertEqual(state.state_id, 2**64-2)
         state = codec.decode_body_state(make_state()[1])
-        self.assertIsNone(state.descriptor_ref)
+        self.assertEqual(state.runtime_id, 0)
         self.assertEqual((state.ts_control_us, state.applied_key_valid, state.association_source_type), (0, False, 0))
 
-    def test_state3_rejects_present_zero_runtime_descriptor(self):
-        ref_module = importlib.import_module('lowlevel.ee.DescriptorRef')
+    def test_state3_rejects_present_zero_runtime(self):
         obj = module('BodyState').BodyStateT.InitFromObj(make_state()[1])
-        obj.descriptorRef = ref_module.DescriptorRefT(0)
+        obj.runtimeId = 0
         builder = flatbuffers.Builder(1)
         builder.Finish(obj.Pack(builder))
-        with self.assertRaisesRegex(ValueError, 'nonzero robot_runtime_id'):
+        with self.assertRaisesRegex(ValueError, 'nonzero runtime_id'):
             codec.decode_body_state(module('BodyState').BodyState.GetRootAs(builder.Output()))
 
     def test_decoder_preserves_real_error_even_with_nonfinite_feedback(self):
@@ -666,16 +660,15 @@ class BodyCodecTest(unittest.TestCase):
 class RobotInfoRuntimeR3Test(unittest.TestCase):
     def test_partial_info_reply_decodes_same_response_runtime(self):
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
-        from locomotion_aorta.body_types import DescriptorRef
-        ref = importlib.import_module('lowlevel.ee.DescriptorRef')
+
         info = module('RobotInfo').RobotInfoT(protocolVersion=1, tsInfoUs=987)
         response = GetRobotInfoResponseT(
             status=ServiceStatus.PARTIAL_SUCCESS, info=info,
-            errorMessage='right unavailable', descriptorRef=ref.DescriptorRefT(11))
+            errorMessage='right unavailable', runtimeId=11)
         builder = flatbuffers.Builder(1)
         builder.Finish(response.Pack(builder))
         decoded = codec.decode_robot_info_response(GetRobotInfoResponse.GetRootAs(builder.Output()))
         self.assertEqual(decoded.status, ServiceStatus.PARTIAL_SUCCESS)
         self.assertEqual(decoded.error_message, 'right unavailable')
-        self.assertEqual(decoded.descriptor_ref, DescriptorRef(11))
+        self.assertEqual(decoded.runtime_id, 11)
         self.assertEqual(decoded.info.ts_info_us, 987)

@@ -114,8 +114,8 @@ void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
               true};
     row.valid = row.session > 0 && row.sequence > 0 &&
                 row.sequence <= 65000 &&
-                cmd->protocol_version() == 3 && cmd->descriptor_ref() &&
-                cmd->descriptor_ref()->robot_runtime_id() == capture.runtime &&
+                cmd->protocol_version() == 3 &&
+                cmd->runtime_id() == capture.runtime &&
                 cmd->input_state_id() > 0 && cmd->input_state_id() <= 65000 &&
                 cmd->input_state_ts_real_us() > 0 &&
                 cmd->action() == lowlevel::BodyCmdAction_EXTERNAL;
@@ -130,7 +130,7 @@ void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
     }
     std::lock_guard<std::mutex> lock(capture.mutex);
     production_mock::Command command;
-    command.runtime = cmd->descriptor_ref() ? cmd->descriptor_ref()->robot_runtime_id() : 0;
+    command.runtime = cmd->runtime_id();
     command.control_id = cmd->control_id();
     command.session = row.session; command.sequence = row.sequence;
     command.input_state_id = row.input_state_id;

@@ -653,7 +653,7 @@ class EndEffectorExampleTest(unittest.TestCase):
             self.assertEqual(wire.InputObservationsLength(),1)
             sample=wire.InputObservations(0)
             self.assertEqual((sample.Stream(),sample.Side()),(SampleStream.EE_STATE,wire.Side()))
-            self.assertEqual(wire.DescriptorRef().RobotRuntimeId(),100)
+            self.assertEqual(wire.RuntimeId(),100)
             self.assertFalse(hasattr(sample, 'DescriptorRef'))
             self.assertEqual(wire.ControlId(),13)
             self.assertEqual(wire.ProtocolVersion(),2)

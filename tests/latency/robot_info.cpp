@@ -40,7 +40,7 @@ std::vector<uint8_t> MakeInfo(uint64_t runtime) {
   }
   aorta::services::humanoid_locomotion::GetRobotInfoResponseT reply;
   reply.status = aorta::services::common::ServiceStatus_SUCCESS;
-  reply.descriptor_ref = std::make_unique<lowlevel::ee::DescriptorRef>(runtime);
+  reply.runtime_id = runtime;
   reply.info = std::make_unique<lowlevel::RobotInfoT>(std::move(info));
   flatbuffers::FlatBufferBuilder builder;
   builder.Finish(aorta::services::humanoid_locomotion::GetRobotInfoResponse::Pack(builder, &reply));

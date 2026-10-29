@@ -2,7 +2,6 @@ import importlib
 import unittest
 
 import locomotion_aorta.transport as transport_module
-from locomotion_aorta.body_types import DescriptorRef
 from locomotion_aorta import (
     CONTROL_ACK_TOPIC,
     CONTROL_REQUEST_TOPIC,
@@ -34,9 +33,8 @@ class AortaBindingContractTest(unittest.TestCase):
                     self.assertEqual(view.RequestId(), b'bound-request')
                     self.assertEqual(view.ClientId(), 9)
                     self.assertEqual(view.ControlId(), 13)
-                    self.assertEqual(view.DescriptorRef().RobotRuntimeId(), 11)
-                    self.assertEqual(view.RequestedLeaseMs(), 0)
-                    self.assertEqual(view.ProtocolVersion(), 3)
+                    self.assertEqual(view.RuntimeId(), 11)
+                    self.assertEqual(view.ProtocolVersion(), 4)
                     self.assertEqual(view.Operation(), list(ControlOperation).index(operation) + 1)
 
     def test_real_aorta_and_generated_control_bindings_are_available(self) -> None:
@@ -78,8 +76,7 @@ class AortaBindingContractTest(unittest.TestCase):
                 "ClientId",
                 "ActionName",
                 "ControlId",
-                "DescriptorRef",
-                "RequestedLeaseMs",
+                "RuntimeId",
             ),
             "locomotion_sdk.ControlAck": (
                 "ProtocolVersion",
@@ -90,8 +87,7 @@ class AortaBindingContractTest(unittest.TestCase):
                 "Reason",
                 "ControlId",
                 "ClientId",
-                "DescriptorRef",
-                "LeaseDeadlineMonotonicNs",
+                "RuntimeId",
             ),
             "locomotion_sdk.ControlStatus": (
                 "ProtocolVersion",
@@ -100,8 +96,7 @@ class AortaBindingContractTest(unittest.TestCase):
                 "ActionPhase",
                 "ClientId",
                 "ControlId",
-                "DescriptorRef",
-                "LeaseDeadlineMonotonicNs",
+                "RuntimeId",
                 "Generation",
                 "LastAcceptedCmdId",
                 "LastValidAgeMs",
@@ -154,20 +149,19 @@ class AortaBindingContractTest(unittest.TestCase):
         request_view = bindings.control_request_module.ControlRequest.GetRootAs(
             builder.Output()
         )
-        self.assertEqual(request_view.ProtocolVersion(), 3)
+        self.assertEqual(request_view.ProtocolVersion(), 4)
         self.assertEqual(request_view.Operation(), 2)
         self.assertEqual(request_view.RequestId(), b"request-1")
         self.assertEqual(request_view.ClientId(), 9)
         self.assertEqual(request_view.ControlId(), 13)
-        self.assertEqual(request_view.DescriptorRef().RobotRuntimeId(), 11)
-        self.assertEqual(request_view.RequestedLeaseMs(), 0)
+        self.assertEqual(request_view.RuntimeId(), 11)
 
         command = BodyCmd(
             joints=tuple(BodyJointCmd(q=0.25, kp=30.0, kd=1.5) for _ in range(31)),
             protocol_version=3,
             session_id=42,
             sequence=3,
-            descriptor_ref=DescriptorRef(11),
+            runtime_id=11,
             control_id=13,
         )
         builder = flatbuffers.Builder(256)
@@ -178,7 +172,7 @@ class AortaBindingContractTest(unittest.TestCase):
         self.assertEqual(command_view.JointsLength(), 31)
         self.assertAlmostEqual(command_view.Joints(0).Q(), 0.25)
         self.assertEqual(command_view.ProtocolVersion(), 3)
-        self.assertEqual(command_view.DescriptorRef().RobotRuntimeId(), 11)
+        self.assertEqual(command_view.RuntimeId(), 11)
         self.assertEqual(command_view.ControlId(), 13)
         self.assertEqual(command_view.SessionId(), 42)
         self.assertEqual(command_view.Sequence(), 3)
@@ -201,8 +195,7 @@ class AortaBindingContractTest(unittest.TestCase):
         self.assertEqual(view.RequestId(), b"request-unlimited")
         self.assertEqual(view.ClientId(), 7)
         self.assertEqual(view.ControlId(), 0)
-        self.assertEqual(view.DescriptorRef().RobotRuntimeId(), 11)
-        self.assertEqual(view.RequestedLeaseMs(), 0)
+        self.assertEqual(view.RuntimeId(), 11)
 
     def test_body_timestamp_preserves_the_robot_microsecond_clock(self) -> None:
         import lowlevel.BodyState as module
@@ -236,7 +229,7 @@ class R3ControlIdentityBindingTest(unittest.TestCase):
         for changes in ({'client_id': True}, {'client_id': 0}, {'client_id': -1},
                         {'client_id': 1 << 64}, {'control_id': True},
                         {'control_id': 0}, {'control_id': 1 << 64},
-                        {'descriptor_ref': None}, {'descriptor_ref': DescriptorRef(0)}):
+                        {'runtime_id': 0}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 transport_module._fill_control_request(
                     bindings, replace(valid, **changes), flatbuffers.Builder(256), 0)

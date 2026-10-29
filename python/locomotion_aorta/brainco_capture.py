@@ -123,15 +123,13 @@ def decode(kind, payload, bindings):
             raise ValueError("requires31-slot BodyState")
         return _json_feedback(asdict(state))
     if kind == "body_cmd":
-        from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
         motors = unpack_body_cmd(view)
         if len(motors) != BODY_SLOTS:
             raise ValueError("requires31-slot BodyCmd")
         quat = view.RootQuat()
-        ref = view.DescriptorRef()
         command = BodyCmd(joints=motors,
                          protocol_version=view.ProtocolVersion(), action=view.Action(),
-                         descriptor_ref=None if ref is None else DescriptorRef(ref.RobotRuntimeId()),
+                         runtime_id=view.RuntimeId(),
                          control_id=view.ControlId(),
                          session_id=view.SessionId(), sequence=view.Sequence(),
                          input_state_id=view.InputStateId(), input_state_ts_real_us=view.InputStateTsRealUs(),

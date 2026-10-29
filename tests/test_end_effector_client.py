@@ -86,8 +86,7 @@ class TouchRPC(Handle):
             raise self.node.rpc_error
         response = self.node.touch_bindings.response.EndEffectorSetTouchResponseT(
             protocolVersion=2,
-            descriptorRef=self.node.bindings.DescriptorRef.DescriptorRefT(
-                wire.DescriptorRef().RobotRuntimeId()),
+            runtimeId=wire.RuntimeId(),
             side=wire.Side(), status=ServiceStatus.SUCCESS, reason=TouchSetReason.NONE)
         if self.node.reply_edit is not None:
             self.node.reply_edit(response)
@@ -921,7 +920,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual([w.Enable() for w in node.touch_requests], [True, False])
         for wire in node.touch_requests:
             self.assertEqual((wire.ProtocolVersion(), wire.LayoutId(), wire.Side()), (2, 7, 1))
-            self.assertEqual(wire.DescriptorRef().RobotRuntimeId(), 100)
+            self.assertEqual(wire.RuntimeId(), 100)
             self.assertEqual(wire.ControlId(), harness.control_id)
             self.assertFalse(hasattr(wire, 'Key'))
         self.assertEqual(node.commands, [])
@@ -1027,7 +1026,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 client = self.client(harness, node, touch=True)
                 state, touch = client.state, client.touch
                 def edit(reply):
-                    if change == 'runtime': reply.descriptorRef.robotRuntimeId = 101
+                    if change == 'runtime': reply.runtimeId = 101
                     elif change == 'side': reply.side = 2
                     else: reply.protocolVersion = 0
                 node.reply_edit = edit
@@ -1670,7 +1669,7 @@ class EndEffectorClientTest(unittest.TestCase):
         harness, node = self.harness()
         client = self.client(harness, node, feedback=False)
         invalid = info_object()
-        invalid.descriptorRef.robotRuntimeId = 0
+        invalid.runtimeId = 0
         node.emit('left', 'info', invalid)
         with self.assertRaisesRegex(ValueError, 'invalid EE info'):
             client.wait_info(.001)

@@ -16,7 +16,7 @@ import flatbuffers
 from locomotion_aorta import BodyCmd, BodyJointCmd, InvalidCommandError
 from locomotion_aorta.controller import _validate_command
 from locomotion_aorta.transport import _fill_body_cmd, _AortaTransport, BODY_CMD_TOPIC
-from locomotion_aorta.body_types import DescriptorRef
+
 from test_body_codec import make_command
 from test_controller import ControllerHarness
 
@@ -76,7 +76,7 @@ class NativeBodyCmdTest(unittest.TestCase):
             command = BodyCmd(joints, session_id=rng.randrange(2**64), sequence=rng.randrange(2**64),
                               input_state_id=rng.randrange(2**64), input_state_ts_real_us=i,
                               ts_client_created_us=i, ts_client_send_us=i+1,
-                              descriptor_ref=DescriptorRef(2**64-1), control_id=2**64-2)
+                              runtime_id=2**64-1, control_id=2**64-2)
             self.assertBytes(command, rng.randrange(2**64), ['codec', '', None, '机器人\x00SDK'][i % 4],
                              [0, 1, 2**64-1][i % 3])
 
@@ -85,7 +85,7 @@ class NativeBodyCmdTest(unittest.TestCase):
             command = dataclasses.replace(make_command(), joints=(BodyJointCmd(q=value),)*31,
                                           root_quat=(1., -0., 0., .5))
             self.assertBytes(command, 0, None, 0)
-        data = self.assertBytes(BodyCmd((BodyJointCmd(),)*31, descriptor_ref=DescriptorRef(11), control_id=13), 0, '', 0)
+        data = self.assertBytes(BodyCmd((BodyJointCmd(),)*31, runtime_id=11, control_id=13), 0, '', 0)
         view = importlib.import_module('lowlevel.BodyCmd').BodyCmd.GetRootAs(data)
         self.assertNotEqual(view._tab.Offset(6), 0)  # action id1 even at default18
 
@@ -155,7 +155,7 @@ class NativeBodyCmdTest(unittest.TestCase):
         for value in [True, math.nan, math.inf]:
             joints = list(make_command().joints);joints[14] = BodyJointCmd(q=value);c = BodyCmd(tuple(joints))
             with self.assertRaises(InvalidCommandError): _validate_command(c)
-            self.assertBytes(dataclasses.replace(c, descriptor_ref=DescriptorRef(11), control_id=13))
+            self.assertBytes(dataclasses.replace(c, runtime_id=11, control_id=13))
         _validate_command(make_command())
         for count in [0, 30, 32]:
             with self.assertRaises(InvalidCommandError): _validate_command(BodyCmd((BodyJointCmd(),)*count))
@@ -214,9 +214,9 @@ class NativeBodyCmdTest(unittest.TestCase):
 
     def test_native_body3_rejects_missing_identity_and_wrong_wire_version(self):
         command = make_command()
-        for invalid in (dataclasses.replace(command, descriptor_ref=None),
-                        dataclasses.replace(command, descriptor_ref=DescriptorRef(0)),
-                        dataclasses.replace(command, descriptor_ref=DescriptorRef(True)),
+        for invalid in (dataclasses.replace(command, runtime_id=None),
+                        dataclasses.replace(command, runtime_id=0),
+                        dataclasses.replace(command, runtime_id=True),
                         dataclasses.replace(command, control_id=0),
                         dataclasses.replace(command, control_id=True),
                         dataclasses.replace(command, protocol_version=2)):

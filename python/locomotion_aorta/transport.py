@@ -269,8 +269,7 @@ def _fill_control_request(
     builder: Any,
     header: int,
 ) -> int:
-    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
-    for name in ('client_id', 'control_id'):
+    for name in ('client_id', 'control_id', 'runtime_id'):
         value = getattr(request, name)
         if type(value) is not int or not 0 <= value < 2**64:
             raise ValueError(f'{name} must be a uint64')
@@ -278,10 +277,8 @@ def _fill_control_request(
         raise ValueError('client_id must be nonzero')
     if request.operation == ControlOperation.COMMIT and not request.control_id:
         raise ValueError('COMMIT requires a nonzero control_id')
-    if (not isinstance(request.descriptor_ref, DescriptorRef)
-            or type(request.descriptor_ref.robot_runtime_id) is not int
-            or not 0 < request.descriptor_ref.robot_runtime_id < 2**64):
-        raise ValueError('descriptor_ref requires a nonzero uint64 runtime')
+    if not request.runtime_id:
+        raise ValueError('runtime_id must be nonzero')
     module = bindings.control_request_module
     request_id = builder.CreateString(request.request_id)
     action_name = builder.CreateString(request.action_name)
@@ -293,11 +290,7 @@ def _fill_control_request(
     module.ControlRequestAddClientId(builder, request.client_id)
     module.ControlRequestAddActionName(builder, action_name)
     module.ControlRequestAddControlId(builder, request.control_id)
-    module.ControlRequestAddRequestedLeaseMs(builder, request.requested_lease_ms)
-    if request.descriptor_ref is not None:
-        descriptor = importlib.import_module('lowlevel.ee.DescriptorRef')
-        module.ControlRequestAddDescriptorRef(
-            builder, descriptor.CreateDescriptorRef(builder, request.descriptor_ref.robot_runtime_id))
+    module.ControlRequestAddRuntimeId(builder, request.runtime_id)
     return module.ControlRequestEnd(builder)
 
 
@@ -305,9 +298,8 @@ def _fill_body_cmd(
     bindings: _AortaBindings, command: BodyCmd, builder: Any, header: int,
 ) -> int:
     module = bindings.body_cmd_module
-    if (command.protocol_version != 3 or command.descriptor_ref is None
-            or type(command.descriptor_ref.robot_runtime_id) is not int
-            or not 0 < command.descriptor_ref.robot_runtime_id < 2**64
+    if (command.protocol_version != 3 or type(command.runtime_id) is not int
+            or not 0 < command.runtime_id < 2**64
             or type(command.control_id) is not int or not 0 < command.control_id < 2**64):
         raise ValueError('BodyCmd3 requires a nonzero runtime and control ID')
     joints = create_body_cmd(builder, command.joints)
@@ -329,9 +321,7 @@ def _fill_body_cmd(
                 raise ValueError('tracking BodyCmd requires root_quat')
             quat = (1.0, 0.0, 0.0, 0.0)  # ignored by EXTERNAL; valid fixed struct
         module.BodyCmdAddRootQuat(builder, CreateRootQuatWxyz(builder, *quat))
-        descriptor = importlib.import_module('lowlevel.ee.DescriptorRef')
-        module.BodyCmdAddDescriptorRef(
-            builder, descriptor.CreateDescriptorRef(builder, command.descriptor_ref.robot_runtime_id))
+        module.BodyCmdAddRuntimeId(builder, command.runtime_id)
         module.BodyCmdAddControlId(builder, command.control_id)
         return module.BodyCmdEnd(builder)
     finally:
@@ -345,8 +335,6 @@ def _fill_robot_info_request(module: Any, builder: Any, header: int) -> int:
 
 
 def _decode_control_ack(view: Any) -> ControlAck:
-    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
-    ref = view.DescriptorRef()
     return ControlAck(
         request_id=_decode_text(view.RequestId()),
         operation=_decode_operation(view.Operation()),
@@ -354,23 +342,19 @@ def _decode_control_ack(view: Any) -> ControlAck:
         error_code=int(view.ErrorCode()),
         reason=_decode_text(view.Reason()),
         control_id=int(view.ControlId()),
-        lease_deadline_monotonic_ns=int(view.LeaseDeadlineMonotonicNs()),
         protocol_version=int(view.ProtocolVersion()),
-        descriptor_ref=None if ref is None else DescriptorRef(ref.RobotRuntimeId()),
+        runtime_id=int(view.RuntimeId()),
         client_id=int(view.ClientId()),
     )
 
 
 def _decode_control_status(view: Any) -> ControlStatus:
-    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
-    ref = view.DescriptorRef()
     return ControlStatus(
         status_seq=int(view.StatusSeq()),
         current_action=_decode_text(view.CurrentAction()),
         phase=_decode_phase(view.ActionPhase()),
         client_id=int(view.ClientId()),
         control_id=int(view.ControlId()),
-        lease_deadline_monotonic_ns=int(view.LeaseDeadlineMonotonicNs()),
         generation=int(view.Generation()),
         last_accepted_cmd_id=int(view.LastAcceptedCmdId()),
         last_valid_age_ms=int(view.LastValidAgeMs()),
@@ -381,7 +365,7 @@ def _decode_control_status(view: Any) -> ControlStatus:
         ingress_drop_count=int(view.IngressDropCount()),
         stamp_monotonic_ns=int(view.StampMonotonicNs()),
         protocol_version=int(view.ProtocolVersion()),
-        descriptor_ref=None if ref is None else DescriptorRef(ref.RobotRuntimeId()),
+        runtime_id=int(view.RuntimeId()),
     )
 
 

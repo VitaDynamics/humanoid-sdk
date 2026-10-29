@@ -54,9 +54,7 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
   for (size_t i = 0; i < fields.size(); ++i)
     fields[i] = command.attr(names[i]).cast<uint64_t>();
   const auto action = command.attr("action").cast<uint8_t>();
-  py::object ref = command.attr("descriptor_ref");
-  if (ref.is_none()) throw py::value_error("BodyCmd requires DescriptorRef");
-  py::object runtime_value = ref.attr("robot_runtime_id");
+  py::object runtime_value = command.attr("runtime_id");
   py::object control_value = command.attr("control_id");
   if (!PyLong_CheckExact(runtime_value.ptr()) || !PyLong_CheckExact(control_value.ptr()))
     throw py::value_error("BodyCmd runtime and control IDs must be uint64");
@@ -110,8 +108,7 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
                                  (*quat)[3]);
     body.add_root_quat(&value);
   }
-  const lowlevel::ee::DescriptorRef descriptor(runtime);
-  body.add_descriptor_ref(&descriptor);
+  body.add_runtime_id(runtime);
   body.add_control_id(control);
   builder.ForceDefaults(false);
   builder.Finish(body.Finish());

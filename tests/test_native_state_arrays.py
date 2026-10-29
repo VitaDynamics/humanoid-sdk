@@ -70,14 +70,13 @@ class NativeStateArraysTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'pinned BodyState3'):decode_body_state_arrays(state_buffer(3))
         _state_decoder.cache_clear()
 
-    def test_arrays_roundtrip_retains_valid_zero_key_and_full_descriptor(self):
+    def test_arrays_roundtrip_retains_valid_zero_key_and_full_runtime(self):
         import flatbuffers
-        from lowlevel.ee.DescriptorRef import DescriptorRefT
         m = module('BodyState')
         for source in (0, 1, 2, 3, 4, 5, 6, 255):
             with self.subTest(source=source):
                 obj = m.BodyStateT.InitFromObj(make_state()[1])
-                obj.descriptorRef = DescriptorRefT(2**64-1)
+                obj.runtimeId = 2**64-1
                 obj.tsControlUs, obj.appliedKeyValid, obj.associationSourceType = 2**64-2, True, source
                 b = flatbuffers.Builder(1); b.Finish(obj.Pack(b))
                 arrays = self.compare(bytes(b.Output()))
@@ -85,7 +84,7 @@ class NativeStateArraysTest(unittest.TestCase):
                 self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us), (0, 0, 0))
                 self.assertTrue(state.applied_key_valid)
                 self.assertEqual((arrays.association_source_type, state.association_source_type), (source, source))
-                self.assertEqual(arrays.descriptor_ref.robot_runtime_id, 2**64-1)
+                self.assertEqual(arrays.runtime_id, 2**64-1)
                 self.assertEqual(arrays.ts_control_us, 2**64-2)
 
     def test_compatibility_materialization_is_lazy(self):

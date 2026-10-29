@@ -57,7 +57,7 @@ def _schema_meta(stem, root):
 def load_bindings():
     try:
         names = ('EndEffectorInfo', 'EndEffectorState', 'EndEffectorTouch',
-                 'EndEffectorCmd', 'DescriptorRef', 'CommandKey', 'SampleRef', 'AxisCommand')
+                 'EndEffectorCmd', 'CommandKey', 'SampleRef', 'AxisCommand')
         modules = {name: importlib.import_module('lowlevel.ee.' + name) for name in names}
         metas = {}
         for kind in ('info', 'state', 'touch', 'cmd'):
@@ -91,10 +91,9 @@ def _vector(view, name):
 
 
 def _ref(view):
-    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
     if view is None:
-        raise ValueError('missing DescriptorRef')
-    return DescriptorRef(view.RobotRuntimeId())
+        raise ValueError('missing runtime_id')
+    return view.RuntimeId()
 
 
 def _key(view):
@@ -110,7 +109,7 @@ def decode_info(view):
                          components=tuple(_text(v) for v in _vector(view.TouchRegions(i), 'components')),
                          geometry=_vector(view.TouchRegions(i), 'geometry'))
                     for i in range(view.TouchRegionsLength()))
-    return _dto(view, EndEffectorInfo, descriptor_ref=_ref(view.DescriptorRef()),
+    return _dto(view, EndEffectorInfo, runtime_id=_ref(view),
                 axis_names=tuple(_text(v) for v in _vector(view, 'axis_names')),
                 firmware=_text(view.Firmware()), serial=_text(view.Serial()),
                 touch_regions=regions, **{name: _vector(view, name) for name in _INFO_VECTORS})
@@ -122,13 +121,13 @@ def decode_state(view):
     axes = tuple(view.Axes(i) for i in range(view.AxesLength()))
     if not axes:
         raise ValueError('EndEffectorState requires fixed axes')
-    return _dto(view, EndEffectorState, descriptor_ref=_ref(view.DescriptorRef()),
+    return _dto(view, EndEffectorState, runtime_id=_ref(view),
                 **{name: tuple(getattr(axis, _getter(name))() for axis in axes)
                    for name in _STATE_VECTORS})
 
 
 def decode_touch(view):
-    return _dto(view, EndEffectorTouch, descriptor_ref=_ref(view.DescriptorRef()),
+    return _dto(view, EndEffectorTouch, runtime_id=_ref(view),
                 region_stamps=tuple(_dto(view.RegionStamps(i), RegionStamp)
                                     for i in range(view.RegionStampsLength())),
                 payload=bytes(_vector(view, 'payload')))
@@ -387,11 +386,11 @@ def validate_observations(runtime_id, observations, *, sources=None):
 def decode_cmd(view):
     if view.ProtocolVersion() != EE_CMD_PROTOCOL_VERSION:
         raise ValueError('incompatible EndEffectorCmd protocol_version')
-    descriptor = _ref(view.DescriptorRef())
+    runtime = _ref(view)
     observations = []
     for i in range(view.InputObservationsLength()):
         sample = view.InputObservations(i)
-        observations.append(SampleRef(descriptor, sample.Stream(),
+        observations.append(SampleRef(runtime, sample.Stream(),
             sample.Side(), sample.SampleId(), sample.SourceTimeUs(), sample.Validity()))
     axes = tuple(view.Axes(i) for i in range(view.AxesLength()))
     if not axes:
@@ -400,7 +399,7 @@ def decode_cmd(view):
                               tuple(axis.CommandFields() for axis in axes),
                               **{name: tuple(getattr(axis, _getter(name))() for axis in axes)
                                  for name, _ in _COMMAND_COLUMNS})
-    command = _dto(view, EndEffectorSubmission, descriptor_ref=descriptor,
+    command = _dto(view, EndEffectorSubmission, runtime_id=runtime,
                 key=_key(view.Key()), target=target, input_observations=tuple(observations))
     _identity(command, EE_CMD_PROTOCOL_VERSION)
     _uint(command.control_id, 64, 'control_id')
@@ -461,8 +460,7 @@ def fill_command(bindings, command, builder, header):
         module.EndEffectorCmdAddAxes(builder, axes)
         builder.ForceDefaults(True)
         module.EndEffectorCmdAddProtocolVersion(builder, command.protocol_version)
-        module.EndEffectorCmdAddDescriptorRef(builder, bindings.DescriptorRef.CreateDescriptorRef(
-            builder, command.descriptor_ref.robot_runtime_id))
+        module.EndEffectorCmdAddRuntimeId(builder, command.runtime_id)
         module.EndEffectorCmdAddKey(builder, bindings.CommandKey.CreateCommandKey(
             builder, command.key.session_id, command.key.sequence))
         module.EndEffectorCmdAddLayoutId(builder, command.layout_id)
@@ -486,8 +484,7 @@ def fill_set_touch(bindings, service, request, builder, header):
     module.EndEffectorSetTouchRequestStart(builder)
     module.EndEffectorSetTouchRequestAddAortaHeader(builder, header)
     module.EndEffectorSetTouchRequestAddProtocolVersion(builder, request.protocol_version)
-    module.EndEffectorSetTouchRequestAddDescriptorRef(builder, bindings.DescriptorRef.CreateDescriptorRef(
-        builder, request.descriptor_ref.robot_runtime_id))
+    module.EndEffectorSetTouchRequestAddRuntimeId(builder, request.runtime_id)
     module.EndEffectorSetTouchRequestAddLayoutId(builder, request.layout_id)
     module.EndEffectorSetTouchRequestAddSide(builder, request.side)
     module.EndEffectorSetTouchRequestAddControlId(builder, request.control_id)
@@ -496,7 +493,7 @@ def fill_set_touch(bindings, service, request, builder, header):
 
 
 def decode_set_touch(view):
-    return _dto(view, EndEffectorSetTouchResponse, descriptor_ref=_ref(view.DescriptorRef()))
+    return _dto(view, EndEffectorSetTouchResponse, runtime_id=_ref(view))
 
 
 def validate_set_touch_response(request, response):

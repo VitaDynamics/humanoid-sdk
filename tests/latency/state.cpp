@@ -11,7 +11,7 @@ std::vector<uint8_t> MakeState(uint64_t sequence, uint64_t runtime) {
   lowlevel::BodyStateT state;
   state.protocol_version = 3;
   // This producer uses its own fixed synthetic startup R, never a command key.
-  state.descriptor_ref = std::make_unique<lowlevel::ee::DescriptorRef>(runtime);
+  state.runtime_id = runtime;
   state.state_id = sequence;
   state.roster_version = 1;
   state.ts_state_real_us = state.ts_state_pub_us = state.ts_consumed_us = wall_us;
