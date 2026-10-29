@@ -1481,7 +1481,9 @@ class ExternalControllerTest(unittest.TestCase):
         reply = robot_info_reply()
         body = reply.info.body
         joints = list(body.joints)
-        for i in (4, 5, 10, 11):
+        # Slot 0 is a synthetic non-ankle q-only shape: this is local SDK
+        # validation only, not proof of any physical producer or adapter.
+        for i in (0, 4, 5, 10, 11):
             joints[i] = replace(joints[i], supported_fields=31, valid_limits=1,
                 q_min=-.751 if i in (4, 10) else -.43625,
                 q_max=.414 if i in (4, 10) else .43625,
@@ -1516,7 +1518,7 @@ class ExternalControllerTest(unittest.TestCase):
         body = reply.info.body
         targets = tuple(name for i, name in enumerate(body.joint_names) if i != 14)
         for failure in ('mock_target', 'padding', 'undeclared_field', 'empty', 'duplicate', 'unknown',
-                        'missing_q', 'missing_capability', 'unknown_gain_non_ankle',
+                        'missing_q', 'missing_capability',
                         'known_gain_range', 'known_undeclared_range', 'outside_q', 'kp_only'):
             with self.subTest(failure=failure):
                 joints = list(body.joints)
@@ -1527,14 +1529,11 @@ class ExternalControllerTest(unittest.TestCase):
                     joints[0] = replace(joints[0], valid_limits=0x18)
                 elif failure == 'missing_capability':
                     joints[0] = replace(joints[0], supported_fields=0x11)
-                elif failure == 'unknown_gain_non_ankle':
-                    joints[0] = replace(joints[0], valid_limits=1, kp_min=0., kp_max=0.,
-                                        kd_min=0., kd_max=0.)
                 elif failure == 'known_gain_range':
                     joints[0] = replace(joints[0], kp_max=.5)
                 elif failure == 'known_undeclared_range':
                     joints[0] = replace(joints[0], dq_min=.2, dq_max=1.2)
-                elif failure in ('outside_q', 'kp_only'):
+                elif failure == 'outside_q':
                     joints[0] = replace(joints[0], q_min=.2, q_max=1.2)
                 source = replace(reply, info=replace(reply.info, body=replace(body, joints=tuple(joints))))
                 harness = ControllerHarness(info_reply=source)
@@ -1547,6 +1546,9 @@ class ExternalControllerTest(unittest.TestCase):
                     values[0] = BodyJointCmd(kp=1.)
                 if failure in ('known_gain_range', 'outside_q', 'kp_only'):
                     values[0] = BodyJointCmd(q=0., kp=1.)
+                if failure == 'kp_only':
+                    self.assertLessEqual(joints[0].q_min, 0.)
+                    self.assertGreaterEqual(joints[0].q_max, 0.)
                 declared = (() if failure == 'empty' else targets + (targets[0],) if failure == 'duplicate'
                             else targets + ('not-in-roster',) if failure == 'unknown' else targets)
                 with self.assertRaises(InvalidCommandError):

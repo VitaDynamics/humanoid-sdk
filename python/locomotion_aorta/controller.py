@@ -58,10 +58,6 @@ class ControllerClosedError(ExternalControlError):
 
 _T = TypeVar("_T")
 _MAX_UINT64 = (1 << 64) - 1
-_COUPLED_ANKLE_JOINTS = frozenset((
-    'left_ankle_pitch_joint', 'left_ankle_roll_joint',
-    'right_ankle_pitch_joint', 'right_ankle_roll_joint',
-))
 
 
 @dataclass(frozen=True, slots=True)
@@ -925,20 +921,15 @@ def _validate_body_targets(command: BodyCmd, body_info: BodyInfo | None,
         cap = body_info.joints[i]
         if cap.supported_fields & required_fields != required_fields:
             raise InvalidCommandError(f'BodyCmd target capability unavailable: {i}')
-        # The fixed 62f3 parallel-ankle contract delegates non-Q ranges to
-        # the native adapter; do not extend that exception to other shapes.
-        coupled_q_only = (body_info.joint_names[i] in _COUPLED_ANKLE_JOINTS
-                          and cap.supported_fields & 0x1f == 0x1f
-                          and cap.valid_limits == 0x01
-                          and required_fields in (0x19, 0x1f))
+        if required_fields & 0x01 and not cap.valid_limits & 0x01:
+            raise InvalidCommandError(f'BodyCmd target q limit unavailable: {i}')
+        # A missing non-Q range is unknown; native admission remains authoritative.
         for bit, name in enumerate(fields):
             value = getattr(joint, name)
             field_bit = 1 << bit
             if cap.valid_limits & field_bit:
                 if not getattr(cap, name + '_min') <= value <= getattr(cap, name + '_max'):
                     raise InvalidCommandError(f'BodyCmd target {name} outside limit: {i}')
-            elif required_fields & field_bit and (field_bit == 0x01 or not coupled_q_only):
-                raise InvalidCommandError(f'BodyCmd target {name} limit unavailable: {i}')
             if not required_fields & field_bit and value != 0.0:
                 raise InvalidCommandError(f'BodyCmd undeclared field is not neutral: {i}.{name}')
 
