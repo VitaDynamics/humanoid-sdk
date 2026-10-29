@@ -106,7 +106,8 @@ def run(args):
     server_port = port()
     profiles = {"mock": output / "mock-session.json", "client": output / "client-session.json"}
     auxiliary = validate_auxiliary(json.loads(args.auxiliary_fixture.read_text())) if args.auxiliary_fixture else None
-    ee_kinds = prepare_ee_fixture(args.ee_fixture, output) if args.ee_fixture else {}
+    if args.ee_fixture:
+        prepare_ee_fixture(args.ee_fixture, output)
     aux_port = None
     if auxiliary:
         aux_port = port()
@@ -126,8 +127,6 @@ def run(args):
     (output / "initial-imu.txt").write_text(" ".join(str(v) for q in imu for v in q) + "\n")
     envs = {role: child_environment(os.environ, group, uri) for role, uri in profiles.items()}
     envs["mock"]["LD_LIBRARY_PATH"] = str(build) + os.pathsep + str(Path(manifest["core_path"]).parent) + os.pathsep + envs["mock"].get("LD_LIBRARY_PATH", "")
-    for side in ("left", "right"):
-        envs["mock"]["PRODUCTION_MOCK_EE_" + side.upper() + "_KIND"] = str(ee_kinds.get(side, 0))
     exported = {"SDK_GROUP": group, "AORTA_GROUP": group, "AORTA_LOG_TOPIC_ENABLED": "false",
                 "ZENOH_SESSION_CONFIG_URI": str(profiles["client"])}
     (output / "client-environment.json").write_text(json.dumps(exported, indent=2) + "\n")

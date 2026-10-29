@@ -5,7 +5,7 @@ from typing import Any
 from .body_types import (
     BODY_SLOTS, BODY_STATE_PROTOCOL_VERSION, BodyJointState, BodyImuState, BodyImuSample,
     BodyState, BodyJointCmd, BodyJointCapability, BodyMotorIdentity, BodyInfo,
-    EndEffectorCapability, RobotInfo, GetRobotInfoResponse,
+    EndEffectorCapability, RobotInfo, GetRobotInfoResponse, ServiceStatus,
 )
 
 # BodyCmd3 and BodyState3 retain the same 31-slot joint struct strides.
@@ -173,17 +173,23 @@ def decode_robot_info(view: Any) -> RobotInfo:
 def decode_robot_info_response(view: Any) -> GetRobotInfoResponse:
     info = view.Info()
     outer_runtime = view.RuntimeId()
-    if outer_runtime == 0:
-        raise ValueError('GetRobotInfoResponse requires nonzero runtime_id')
-    if info is not None:
-        nested = decode_robot_info(info)
-        for endpoint in nested.end_effectors:
-            if endpoint.info is not None and endpoint.info.runtime_id != outer_runtime:
-                raise ValueError(
-                    'endpoint Info runtime_id differs from the response runtime_id')
-        return GetRobotInfoResponse(status=view.Status(), info=nested,
+    if info is None:
+        # Failure diagnostics stay decodable with a zero runtime: the caller
+        # must be able to read the ServiceStatus and reason. A zero/missing R
+        # cannot bind control, but it is not forbidden as a returned diagnosis.
+        return GetRobotInfoResponse(status=view.Status(), info=None,
                                     error_message=_text(view.ErrorMessage()),
                                     runtime_id=outer_runtime)
-    return GetRobotInfoResponse(status=view.Status(), info=None,
+    nested = decode_robot_info(info)
+    bindable_body = (view.Status() in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
+                     and nested.body is not None)
+    if outer_runtime == 0 and (bindable_body or any(endpoint.info is not None for endpoint in nested.end_effectors)):
+        raise ValueError(
+            'GetRobotInfoResponse with a bindable description requires nonzero runtime_id')
+    for endpoint in nested.end_effectors:
+        if endpoint.info is not None and endpoint.info.runtime_id != outer_runtime:
+            raise ValueError(
+                'endpoint Info runtime_id differs from the response runtime_id')
+    return GetRobotInfoResponse(status=view.Status(), info=nested,
                                 error_message=_text(view.ErrorMessage()),
                                 runtime_id=outer_runtime)

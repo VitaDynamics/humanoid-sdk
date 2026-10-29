@@ -73,20 +73,12 @@ EEInfo DecodeEEInfo(const std::vector<uint8_t>& bytes) {
 std::vector<uint8_t> EncodeEEInfo(const std::vector<uint8_t>& fixture,
     uint64_t runtime,uint64_t startup_us,uint64_t wall_us) {
   (void)DecodeEEInfo(fixture);
+  // The loaded input fixture is the single declared authority for this
+  // endpoint: its own is_mock flags, identity strings and capabilities pass
+  // through unchanged. No environment switch relabels a mock fixture into a
+  // device here; GetInfo and the Info topic serve the same description.
   std::unique_ptr<lowlevel::ee::EndEffectorInfoT> info(lowlevel::ee::GetEndEffectorInfo(fixture.data())->UnPack());
   info->runtime_id=runtime;
-  // Two declared synthetic fixtures, never a runtime MOCK flip: the default
-  // marks every axis explicitly unavailable (mock) for the SDK rejection
-  // negative; PRODUCTION_MOCK_EE_DEVICE=1 selects the synthetic ordinary
-  // ordinary-device positive with real provenance strings.
-  const bool device = [] {
-    const char* requested = std::getenv("PRODUCTION_MOCK_EE_DEVICE");
-    return requested && std::stoi(requested) == 1;
-  }();
-  info->firmware=device?"SYNTHETIC_DEVICE":"SYNTHETIC_NO_DEVICE";
-  info->serial=device?"SYNTHETIC_DEVICE":"SYNTHETIC_NO_DEVICE";
-  info->identity_valid_mask=device?(1|2|4):0;
-  info->is_mock.assign(info->axis_names.size(),!device);
   info->ts_descriptor_acquired_us=startup_us; info->ts_state_pub_us=wall_us; info->time_valid_mask=3;
   info->aorta_header=Header(0,wall_us);
   return Pack<lowlevel::ee::EndEffectorInfo>(*info);

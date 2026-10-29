@@ -96,7 +96,9 @@ bool ValidInfoRequest(const std::vector<uint8_t>& bytes) {
   return aorta::services::humanoid_locomotion::VerifyGetRobotInfoRequestBuffer(
       verifier);
 }
-std::vector<uint8_t> EncodeInfo(uint64_t runtime) {
+std::vector<uint8_t> EncodeInfo(uint64_t runtime,
+                                const std::vector<uint8_t>& left_info,
+                                const std::vector<uint8_t>& right_info) {
   static const std::array<const char*, kSlots> names{
       "left_hip_pitch_joint",
       "left_hip_roll_joint",
@@ -152,21 +154,38 @@ std::vector<uint8_t> EncodeInfo(uint64_t runtime) {
     identity->present = present;
     info.body->motor_identities.push_back(std::move(identity));
   }
+  const std::vector<uint8_t>* ee_info_bytes[2] = {&left_info, &right_info};
   for (int side = 1; side <= 2; ++side) {
     auto ee = std::make_unique<lowlevel::EndEffectorCapabilityT>();
     ee->side = static_cast<lowlevel::ee::EndEffectorSide>(side);
-    const char* requested =
-        std::getenv(side == 1 ? "PRODUCTION_MOCK_EE_LEFT_KIND"
-                              : "PRODUCTION_MOCK_EE_RIGHT_KIND");
-    const int kind = requested ? std::stoi(requested) : 0;
-    if (kind < 0 || kind > 2)
-      throw std::runtime_error("invalid synthetic EE kind");
-    // Unified six-field slot: no attached EE Info in this synthetic reply, so
-    // kind 0 keeps an absent Info and the validated slot configuration marks
-    // it mock; kinds 1/2 keep the same declared absence (no fake Info).
-    ee->is_mock = true;
-    ee->ready = true;
-    ee->status = aorta::services::common::ServiceStatus_SUCCESS;
+    const auto& fixture = *ee_info_bytes[side - 1];
+    if (fixture.empty()) {
+      // No configured endpoint: honest absence — not ready, no Info, the
+      // validated startup configuration marks it mock. Real failures keep
+      // their reason instead of being relabeled as devices.
+      ee->is_mock = true;
+      ee->ready = false;
+      ee->status = aorta::services::common::ServiceStatus_UNAVAILABLE;
+      ee->reason = "synthetic endpoint not configured";
+    } else {
+      // Same startup fixture as the Info topic; later publication timestamps
+      // may differ, while runtime/side/capabilities remain fixed.
+      const auto checked = DecodeEEInfo(fixture);
+      const auto* wire = flatbuffers::GetRoot<lowlevel::ee::EndEffectorInfo>(fixture.data());
+      ee->info.reset(wire->UnPack());
+      if (!ee->info || ee->info->runtime_id != runtime || checked.side != side ||
+          ee->info->is_mock.size() != ee->info->axis_names.size())
+        throw std::runtime_error("startup EE Info runtime/side/mock mismatch");
+      ee->is_mock = [&] {
+        for (const bool flag : ee->info->is_mock)
+          if (!flag) return false;
+        return true;
+      }();
+      ee->ready = !ee->is_mock;
+      ee->status = ee->is_mock ? aorta::services::common::ServiceStatus_UNAVAILABLE
+                               : aorta::services::common::ServiceStatus_SUCCESS;
+      if (ee->is_mock) ee->reason = "synthetic mock endpoint unavailable";
+    }
     info.end_effectors.push_back(std::move(ee));
   }
   aorta::services::humanoid_locomotion::GetRobotInfoResponseT reply;

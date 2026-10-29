@@ -166,7 +166,9 @@ std::vector<uint8_t> EncodeAck(const Ack&, uint64_t wall_ns,
                                uint64_t publication_id);
 std::vector<uint8_t> EncodeStatus(const Status&, uint64_t now_ns,
                                   uint64_t wall_ns, uint64_t publication_id);
-std::vector<uint8_t> EncodeInfo(uint64_t runtime);
+std::vector<uint8_t> EncodeInfo(uint64_t runtime,
+                                const std::vector<uint8_t>& left_info,
+                                const std::vector<uint8_t>& right_info);
 bool ValidInfoRequest(const std::vector<uint8_t>&);
 std::vector<uint8_t> EncodeState(uint64_t state_id, const Output&,
                                  uint64_t wall_us);

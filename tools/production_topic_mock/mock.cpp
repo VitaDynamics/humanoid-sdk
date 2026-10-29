@@ -83,6 +83,8 @@ struct Context {
   uint64_t ee_accepted = 0, ee_rejected = 0, ee_applied = 0, touch_requests = 0;
   uint64_t ack_sequence = 0;
   uint64_t apply_period_ns = 0, pending_tick_ns = 0;
+  // Borrow the immutable Info bytes owned by the two startup EE streams.
+  std::array<const std::vector<uint8_t>*, 2> ee_info{};
   std::atomic<bool> endpoint_failed{false};
   Context(uint64_t seed, uint64_t timeout, uint64_t prepare, int reject)
       : protocol(seed, timeout, prepare, reject) {}
@@ -179,7 +181,10 @@ void ReplyInfo(const aorta_bytes_view_t *view, aorta_service_request_t request,
       std::lock_guard<std::mutex> lock(ctx.mutex);
       runtime = ctx.protocol.runtime_id();
     }
-    const auto bytes = pm::EncodeInfo(runtime);
+    const std::vector<uint8_t> absent;
+    const auto& left = ctx.ee_info[0] ? *ctx.ee_info[0] : absent;
+    const auto& right = ctx.ee_info[1] ? *ctx.ee_info[1] : absent;
+    const auto bytes = pm::EncodeInfo(runtime, left, right);
     aorta_owned_bytes_slice_t slice{bytes.data(), bytes.size(), nullptr,
                                     nullptr};
     aorta_owned_bytes_view_t owned{&slice, 1, bytes.size()};
@@ -433,6 +438,11 @@ int main(int argc, char **argv) {
     auto ee_streams = ConfigureEE(context,directory);
     std::array<EEContext,2> ee_contexts{{{&context,1},{&context,2}}};
     const auto ee_started_us = Wall()/1000;
+    for (auto& stream : ee_streams) {
+      stream.info_bytes = pm::EncodeEEInfo(stream.info_bytes, context.protocol.runtime_id(),
+                                          ee_started_us, ee_started_us);
+      context.ee_info[stream.side - 1] = &stream.info_bytes;
+    }
     // Declare resources after context: callbacks are drained before context
     // dies.
     Resources resources;

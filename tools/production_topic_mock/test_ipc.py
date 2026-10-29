@@ -10,7 +10,7 @@ import unittest
 
 def client():
     from locomotion_aorta import (BodyCmd, BodyJointCmd, PullController,
-                                  PullStateSource)
+                                  PullStateSource, ServiceStatus)
     group = os.environ['AORTA_GROUP']
     with PullController(group=group) as controller:
         source = PullStateSource(group=group)
@@ -18,6 +18,10 @@ def client():
             info = controller.get_robot_info(5)
             if info.info is None or info.info.body.slot_count != 31:
                 raise AssertionError('31-slot RobotInfo missing')
+            for endpoint in info.info.end_effectors:
+                assert endpoint.info is None and not endpoint.ready
+                assert endpoint.status == ServiceStatus.UNAVAILABLE
+                assert endpoint.reason == 'synthetic endpoint not configured'
             state_roster = info.info.body.joint_names
             assert len(state_roster) == 31
             source_info = source.get_robot_info(5)
@@ -53,10 +57,12 @@ def client():
             source.close()
 
 
-def ee_client():
+def ee_client(device):
     from contextlib import ExitStack
+    from dataclasses import replace
     from locomotion_aorta import BodyCmd, BodyJointCmd, PullController
     from locomotion_aorta.end_effector import EndEffectorClient
+    from locomotion_aorta.controller import InvalidCommandError
     from locomotion_aorta.end_effector_types import ControlMode, EndEffectorTarget, Field, SampleStream, ServiceStatus
     with ExitStack() as stack:
         controller = stack.enter_context(PullController(group=os.environ['AORTA_GROUP']))
@@ -70,6 +76,15 @@ def ee_client():
         infos = [endpoint.wait_info(5) for endpoint in endpoints]
         assert infos[0].runtime_id == infos[1].runtime_id
         assert roster.runtime_id == infos[0].runtime_id
+        def description(info):
+            return replace(info, ts_state_pub_us=0, time_valid_mask=info.time_valid_mask & ~2)
+        for slot, info in zip(roster.info.end_effectors, infos):
+            assert slot.info is not None and description(slot.info) == description(info)
+            assert slot.side == info.side and slot.is_mock == (not device)
+            assert slot.ready == device
+            assert slot.status == (ServiceStatus.SUCCESS if device else ServiceStatus.UNAVAILABLE)
+            if not device:
+                assert slot.reason == 'synthetic mock endpoint unavailable'
         state = controller.wait_body_state(5)
         assert state.protocol_version == 3
         assert state.runtime_id == infos[0].runtime_id == infos[1].runtime_id
@@ -85,27 +100,24 @@ def ee_client():
                     target_names=tuple(body_roster[i] for i in range(31) if i != 14),
                     required_fields=0x01 | 0x08 | 0x10)  # q, kp, kd
             first = body_command()
-            # The EE fixture kind is declared by the harness env: mock
-            # (explicit-unavailable, default) or device (synthetic
-            # ordinary-device positive with provenance strings).
-            ee_device = os.environ.get('PRODUCTION_MOCK_EE_DEVICE') == '1'
             submitted = []
             for endpoint, info in zip(endpoints, infos):
                 sample = endpoint.wait_state(5)
                 n = len(info.axis_names)
                 target = EndEffectorTarget((ControlMode.POSITION,)*n, (Field.POS,)*n, pos=(.03125,)*n)
-                if not ee_device:
+                if not device:
                     # Explicit-unavailable MOCK negative: the real SDK gate
                     # rejects selected mock axes before any wire frame.
-                    from locomotion_aorta.controller import InvalidCommandError
                     try:
                         endpoint.publish(target, input_observations=(sample.sample_ref,))
-                    except (ValueError, InvalidCommandError):
+                    except InvalidCommandError as error:
+                        if 'target axis has no physical device' not in str(error):
+                            raise
                         continue
                     raise AssertionError('mock-axis publish was not rejected')
                 assert not any(info.is_mock)
                 submitted.append(endpoint.publish(target, input_observations=(sample.sample_ref,)))
-            if ee_device:
+            if device:
                 assert [s.key.sequence for s in submitted] == [first.sequence+1, first.sequence+2]
                 assert all(s.key.session_id == first.session_id for s in submitted)
                 for endpoint, info in zip(endpoints, infos):
@@ -117,20 +129,21 @@ def ee_client():
                         if time.monotonic() >= deadline: raise AssertionError('synthetic EE position not observed')
                         endpoint.wait_state(deadline-time.monotonic(), after_sample=sample.sample_ref)
                     assert all(q == .03125 for q in sample.pos)
-            left = endpoints[0]
-            before = left.wait_state(1)
-            reply = left.set_touch(True, timeout=1.)
-            assert reply.status == ServiceStatus.SUCCESS and reply.runtime_id == infos[0].runtime_id
-            deadline = time.monotonic()+2
-            sample = before
-            while not (sample.status_valid_mask & 8 and sample.touch_enabled):
-                sample = left.wait_state(max(.001, deadline-time.monotonic()), after_sample=sample.sample_ref)
-                if time.monotonic() >= deadline: raise AssertionError('typed touch did not update State')
-            touch = left.wait_touch(2)
-            assert touch.runtime_id == infos[0].runtime_id and touch.payload == b'\x80\xff'
-            assert all(stamp.validity == 1 and stamp.ts_acquired_hw_us == 0 for stamp in touch.region_stamps)
+            if device:
+                left = endpoints[0]
+                before = left.wait_state(1)
+                reply = left.set_touch(True, timeout=1.)
+                assert reply.status == ServiceStatus.SUCCESS and reply.runtime_id == infos[0].runtime_id
+                deadline = time.monotonic()+2
+                sample = before
+                while not (sample.status_valid_mask & 8 and sample.touch_enabled):
+                    sample = left.wait_state(max(.001, deadline-time.monotonic()), after_sample=sample.sample_ref)
+                    if time.monotonic() >= deadline: raise AssertionError('typed touch did not update State')
+                touch = left.wait_touch(2)
+                assert touch.runtime_id == infos[0].runtime_id and touch.payload == b'\x80\xff'
+                assert all(stamp.validity == 1 and stamp.ts_acquired_hw_us == 0 for stamp in touch.region_stamps)
             second = body_command()
-            assert second.sequence == submitted[-1].key.sequence+1  # RPC consumed no motion key.
+            assert second.sequence == (submitted[-1].key.sequence if device else first.sequence)+1
             deadline = time.monotonic()+2
             while True:
                 state = controller.wait_body_state(1)
@@ -140,11 +153,12 @@ def ee_client():
             assert state.applied_session_id == second.session_id
             assert state.ts_control_us > 0 and state.association_source_type == 1
             assert state.runtime_id == infos[0].runtime_id
-            left.set_touch(False, timeout=1.)
-            deadline = time.monotonic()+2
-            while sample.touch_enabled:
-                sample = left.wait_state(max(.001, deadline-time.monotonic()), after_sample=sample.sample_ref)
-                if time.monotonic() >= deadline: raise AssertionError('disable not reflected in State')
+            if device:
+                left.set_touch(False, timeout=1.)
+                deadline = time.monotonic()+2
+                while sample.touch_enabled:
+                    sample = left.wait_state(max(.001, deadline-time.monotonic()), after_sample=sample.sample_ref)
+                    if time.monotonic() >= deadline: raise AssertionError('disable not reflected in State')
         finally:
             status = controller.exit_external(5)
         assert status.current_action == 'PASSIVE'
@@ -187,46 +201,51 @@ class MockIpcTest(unittest.TestCase):
             builder = flatbuffers.Builder(1024); builder.Finish(obj.Pack(builder))
             path.write_bytes(builder.Output())
         build = Path(os.environ['MOCK_BUILD_DIR']).resolve()
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary); spec = {}
-            for side, number, n in (('left',1,6), ('right',2,1)):
-                region = module('TouchRegionInfo').TouchRegionInfoT(regionId=1, name='synthetic',
-                    frame='synthetic', sensorType=1, shape=[1], components=['raw'], dtype=1,
-                    unit='1', payloadOffset=0, payloadBytes=2, encodingVersion=1)
-                info = module('EndEffectorInfo').EndEffectorInfoT(protocolVersion=1,
-                    runtimeId=100, layoutId=7, side=number,
-                    deviceModel=DeviceModel.BRAINCO_REVO2 if number==1 else DeviceModel.AGX,
-                    axisNames=['synthetic'+str(i) for i in range(n)],
-                    positionDomain=[PositionDomain.JOINT_ANGLE if number==1 else PositionDomain.TOTAL_OPENING]*n,
-                    torqueDomain=[0]*n, supportedModes=[2]*n, supportedCommandFields=[65]*n,
-                    supportedStateFields=[1]*n, validLimits=[1]*n, posMin=[0.]*n, posMax=[.0625]*n,
-                    isMock=[True]*n, touchAvailable=number==1,
-                    touchRegions=[region] if number==1 else [])
-                write(root/(side+'-info.bin'), info)
-                spec[side] = dict(info=side+'-info.bin', initial_pos=[.02]*n,
-                    state_hz=100, info_hz=10, observation_sources=[[2,number]])
-                if number == 1:
-                    touch = module('EndEffectorTouch').EndEffectorTouchT(protocolVersion=1,
-                        runtimeId=100, layoutId=7, side=1,
-                        touchStateId=1, regionStamps=[module('RegionStamp').RegionStampT(validity=1)],
-                        payload=[128,255])
-                    write(root/'left-touch.bin', touch)
-                    spec[side].update(touch='left-touch.bin', touch_hz=20)
-            fixture = root/'fixture.json'; fixture.write_text(json.dumps(spec))
-            output = root/'run'
-            args = run.parser().parse_args(['--mode','production-topics','--build-dir',str(build),
-                '--output',str(output),'--seconds','15','--ee-fixture',str(fixture),'--allow-client',
-                '--client-command',sys.executable,str(Path(__file__).resolve()),'--ee-client'])
-            rc = run.run(args)
-            self.assertEqual(rc,0,'\n'.join(p.read_text() for p in output.glob('*.log')))
-            result = json.loads((output/'mock-result.json').read_text())
-            self.assertEqual(result['endpoint_rc'],0)
-            self.assertEqual(result['parse_errors'],0)
-            self.assertEqual(result['ee_accepted'],2)
-            self.assertEqual(result['ee_rejected'],0)
-            self.assertEqual(result['touch_requests'],2)
-            self.assertEqual(result['control_phase_at_stop'],0)
-            self.assertFalse((output/'auxiliary.json').exists())
+        for device in (True, False):
+            with self.subTest(device=device), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); spec = {}
+                for side, number, n in (('left',1,6), ('right',2,1)):
+                    region = module('TouchRegionInfo').TouchRegionInfoT(regionId=1, name='synthetic',
+                        frame='synthetic', sensorType=1, shape=[1], components=['raw'], dtype=1,
+                        unit='1', payloadOffset=0, payloadBytes=2, encodingVersion=1)
+                    info = module('EndEffectorInfo').EndEffectorInfoT(protocolVersion=1,
+                        runtimeId=100, layoutId=7, side=number,
+                        deviceModel=DeviceModel.BRAINCO_REVO2 if number==1 else DeviceModel.AGX,
+                        axisNames=['synthetic'+str(i) for i in range(n)],
+                        positionDomain=[PositionDomain.JOINT_ANGLE if number==1 else PositionDomain.TOTAL_OPENING]*n,
+                        torqueDomain=[0]*n, supportedModes=[2]*n, supportedCommandFields=[65]*n,
+                        supportedStateFields=[1]*n, validLimits=[1]*n, posMin=[0.]*n, posMax=[.0625]*n,
+                        firmware='SYNTHETIC_DEVICE' if device else 'SYNTHETIC_MOCK',
+                        serial='SYNTHETIC_DEVICE' if device else 'SYNTHETIC_MOCK',
+                        identityValidMask=7 if device else 0,
+                        isMock=[not device]*n, touchAvailable=number==1,
+                        touchRegions=[region] if number==1 else [])
+                    write(root/(side+'-info.bin'), info)
+                    spec[side] = dict(info=side+'-info.bin', initial_pos=[.02]*n,
+                        state_hz=100, info_hz=10, observation_sources=[[2,number]])
+                    if number == 1:
+                        touch = module('EndEffectorTouch').EndEffectorTouchT(protocolVersion=1,
+                            runtimeId=100, layoutId=7, side=1,
+                            touchStateId=1, regionStamps=[module('RegionStamp').RegionStampT(validity=1)],
+                            payload=[128,255])
+                        write(root/'left-touch.bin', touch)
+                        spec[side].update(touch='left-touch.bin', touch_hz=20)
+                fixture = root/'fixture.json'; fixture.write_text(json.dumps(spec))
+                output = root/'run'
+                args = run.parser().parse_args(['--mode','production-topics','--build-dir',str(build),
+                    '--output',str(output),'--seconds','15','--ee-fixture',str(fixture),'--allow-client',
+                    '--client-command',sys.executable,str(Path(__file__).resolve()),'--ee-client',
+                    'device' if device else 'mock'])
+                rc = run.run(args)
+                self.assertEqual(rc,0,'\n'.join(p.read_text() for p in output.glob('*.log')))
+                result = json.loads((output/'mock-result.json').read_text())
+                self.assertEqual(result['endpoint_rc'],0)
+                self.assertEqual(result['parse_errors'],0)
+                self.assertEqual(result['ee_accepted'],2 if device else 0)
+                self.assertEqual(result['ee_rejected'],0)
+                self.assertEqual(result['touch_requests'],2 if device else 0)
+                self.assertEqual(result['control_phase_at_stop'],0)
+                self.assertFalse((output/'auxiliary.json').exists())
 
     def test_real_typed_waits_keep_body_live_then_cancel_join_and_close(self):
         from . import run
@@ -256,6 +275,8 @@ if __name__ == '__main__':
     if sys.argv[1:2] == ['--client']:
         client()
     elif sys.argv[1:2] == ['--ee-client']:
-        ee_client()
+        if sys.argv[2:] not in (['device'], ['mock']):
+            raise ValueError('explicit device or mock fixture required')
+        ee_client(sys.argv[2] == 'device')
     else:
         unittest.main()

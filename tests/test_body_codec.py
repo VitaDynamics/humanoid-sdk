@@ -107,10 +107,11 @@ def make_state(*, error_codes=None, runtime_id=None):
 
 
 def _minimal_joints_vector(builder):
-    m = module('BodyJointState')
+    m = module('BodyState')
+    joint = module('BodyJointState')
     m.BodyStateStartJointsVector(builder, 31)
     for _ in range(31):
-        m.CreateBodyJointState(builder, 0, 0, 0, 0., 0., 0., 0)
+        joint.CreateBodyJointState(builder, 0, 0, 0, 0., 0., 0., 0)
     return builder.EndVector()
 
 
@@ -148,9 +149,12 @@ class BodyCodecTest(unittest.TestCase):
 
     def test_robot_info_preserves_service_status_without_descriptor_confirmation(self):
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
-        info = module('RobotInfo').RobotInfoT(protocolVersion=1, tsInfoUs=987)
+        info = module('RobotInfo').RobotInfoT(protocolVersion=2, tsInfoUs=987, endEffectors=[
+            module('EndEffectorCapability').EndEffectorCapabilityT(
+                side=side, isMock=True, ready=False, status=ServiceStatus.UNAVAILABLE,
+                reason='no endpoint') for side in (1, 2)])
         reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS,
-            info=info, errorMessage='right unavailable')
+            runtimeId=11, info=info, errorMessage='right unavailable')
         builder = flatbuffers.Builder(1)
         builder.Finish(reply.Pack(builder))
         wire = GetRobotInfoResponse.GetRootAs(builder.Output())
@@ -158,8 +162,8 @@ class BodyCodecTest(unittest.TestCase):
         self.assertFalse(hasattr(result.info, 'committed_descriptor_ref'))
         self.assertEqual((result.status, result.error_message, result.info.protocol_version,
                           result.info.ts_info_us),
-            (ServiceStatus.PARTIAL_SUCCESS, 'right unavailable', 1, 987))
-        self.assertEqual(result.info.end_effectors, ())
+            (ServiceStatus.PARTIAL_SUCCESS, 'right unavailable', 2, 987))
+        self.assertEqual(tuple(e.side for e in result.info.end_effectors), (1, 2))
         self.assertIsNone(result.info.body)
 
     def test_bulk_is_byte_identical_to_real_factory_with_growth_padding_and_actions(self):
@@ -330,13 +334,13 @@ class BodyCodecTest(unittest.TestCase):
         info.validLimits = [1] * n
         info.posMin = [0.] * n
         info.posMax = [.0625] * n
-        info.velMin = [0.] * n
-        info.velMax = [1.] * n
-        info.velLimitMax = [1.] * n
-        info.tauMin = [0.] * n
-        info.tauMax = [1.] * n
-        info.currentMin = [0.] * n
-        info.currentMax = [1.] * n
+        info.velMin = []
+        info.velMax = []
+        info.velLimitMax = []
+        info.tauMin = []
+        info.tauMax = []
+        info.currentMin = []
+        info.currentMax = []
         info.touchAvailable = False
         info.touchRegions = []
         info.isMock = [mock] * n
@@ -393,7 +397,10 @@ class BodyCodecTest(unittest.TestCase):
                     self.assertIsNone(right.info)
 
     def test_nested_unified_info_preserves_every_frozen_field(self):
+        from copy import deepcopy
         from lowlevel.ee.EndEffectorInfo import EndEffectorInfoT, EndEffectorInfo
+        from locomotion_aorta.end_effector_types import EndEffectorInfo as InfoDTO
+        from locomotion_aorta._end_effector_codec import decode_info, validate_info
         expected = dict(
             protocol_version=1, runtime_id=2**64-1, layout_id=65538, side=1,
             device_model=2, firmware='固件-μ', serial='serial-Ω',
@@ -402,14 +409,14 @@ class BodyCodecTest(unittest.TestCase):
             time_valid_mask=3,
         )
         vectors = dict(
-            axis_names=('thumb_pitch', '食指', '', 'ring'),
+            axis_names=('thumb_pitch', '食指', 'middle', 'ring'),
             position_domain=(1, 1, 1, 2),
             torque_domain=(1, 2, 3, 0),
             supported_modes=(0x2, 0x6, 0x2, 0x2),
-            supported_command_fields=(0x2B, 0x2F, 0x2B, 0x23),
-            supported_state_fields=(0xBB, 0xBF, 0xBB, 0xB3),
-            valid_limits=(0x1F, 0x0F, 0x07, 0x01),
-            pos_min=(-.5, -0., math.nan, .125),
+            supported_command_fields=(0x5F, 0x5F, 0x5F, 0x5F),
+            supported_state_fields=(0xBB, 0xBB, 0xBB, 0xBB),
+            valid_limits=(0x1F, 0x0F, 0x03, 0x01),
+            pos_min=(-.5, -0., -.25, .125),
             pos_max=(.5, .625, 1., 1.125),
             vel_min=(0., -0., -2., 0.),
             vel_max=(2., 4., 6., 8.),
@@ -434,23 +441,25 @@ class BodyCodecTest(unittest.TestCase):
         obj.tsStatePubUs = expected['ts_state_pub_us']
         obj.timeValidMask = expected['time_valid_mask']
         for name, value in vectors.items():
-            setattr(obj, {k: ''.join(p.capitalize() for p in k.split('_'))
-                          for k in vectors}[name], list(value))
+            parts = name.split('_')
+            setattr(obj, parts[0] + ''.join(p.capitalize() for p in parts[1:]), list(value))
         info = module('RobotInfo').RobotInfoT(protocolVersion=2, tsInfoUs=1234, endEffectors=[
             module('EndEffectorCapability').EndEffectorCapabilityT(
                 side=1, isMock=False, info=obj, ready=True,
-                status=ServiceStatus.SUCCESS, reason='unified fidelity')])
+                status=ServiceStatus.SUCCESS, reason='unified fidelity'),
+            module('EndEffectorCapability').EndEffectorCapabilityT(
+                side=2, isMock=True, ready=False, status=ServiceStatus.UNAVAILABLE,
+                reason='no endpoint')])
         builder = flatbuffers.Builder(1)
         builder.Finish(info.Pack(builder))
         wire = module('RobotInfo').RobotInfo.GetRootAs(builder.Output())
         nested = codec.decode_robot_info(wire).end_effectors[0].info
         standalone_builder = flatbuffers.Builder(1)
         standalone_builder.Finish(obj.Pack(standalone_builder))
-        from ._end_effector_codec import decode_info
         standalone = decode_info(EndEffectorInfo.GetRootAs(standalone_builder.Output()))
 
         for result in (nested, standalone):
-            self.assertIs(type(result), codec.EndEffectorInfo)
+            self.assertIs(type(result), InfoDTO)
             for name, value in expected.items():
                 with self.subTest(path='nested' if result is nested else 'standalone', field=name):
                     self.assertEqual(getattr(result, name), value)
@@ -464,6 +473,13 @@ class BodyCodecTest(unittest.TestCase):
                                                for item in actual),
                                          tuple(struct.pack('<f', item) if isinstance(item, float) else item
                                                for item in value))
+        raw = deepcopy(obj)
+        raw.posMin[2] = math.nan
+        builder = flatbuffers.Builder(1); builder.Finish(raw.Pack(builder))
+        decoded_raw = decode_info(EndEffectorInfo.GetRootAs(builder.Output()))
+        self.assertTrue(math.isnan(decoded_raw.pos_min[2]))
+        with self.assertRaises(ValueError):
+            validate_info(decoded_raw)
 
     def test_robot_info_preserves_real_body_and_failed_end_effector_in_partial_reply(self):
         # The actual final public object API packs regular tables/vector structs.
@@ -478,9 +494,11 @@ class BodyCodecTest(unittest.TestCase):
                                                       isMock=i == 14, supportedFields=31 if i != 14 else 0,
                                                       validLimits=1 if i != 14 else 0, qMin=-.5, qMax=1.5) for i in range(31)],
                          motorIdentities=[BodyMotorIdentityT(bus='can5', nodeId=i+1, present=i != 14) for i in range(31)])
-        info = RobotInfoT(protocolVersion=2, tsInfoUs=1234, body=body,
-                         endEffectors=[EndEffectorCapabilityT(side=side, isMock=True, ready=False,
-                                                              status=ServiceStatus.UNAVAILABLE, reason='modbus unavailable') for side in (1,2)])
+        info = RobotInfoT(protocolVersion=2, tsInfoUs=1234, body=body, endEffectors=[
+            EndEffectorCapabilityT(side=1, isMock=True, ready=False,
+                                   status=ServiceStatus.UNAVAILABLE, reason='no endpoint'),
+            EndEffectorCapabilityT(side=2, isMock=False, ready=False,
+                                   status=ServiceStatus.INTERNAL_ERROR, reason='initialization failed')])
         reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS, runtimeId=11, info=info, errorMessage='hands unavailable')
         b = flatbuffers.Builder(1); b.Finish(reply.Pack(b))
         result = codec.decode_robot_info_response(GetRobotInfoResponse.GetRootAs(b.Output()))
@@ -488,8 +506,13 @@ class BodyCodecTest(unittest.TestCase):
         self.assertEqual(result.info.body.joint_names, tuple('j'+str(i) for i in range(31)))
         self.assertEqual(result.info.body.joints[0].q_max, 1.5)
         self.assertFalse(result.info.body.motor_identities[14].present)
-        self.assertEqual(result.info.end_effectors[0].reason, 'modbus unavailable')
+        self.assertEqual(result.info.end_effectors[0].reason, 'no endpoint')
         self.assertIsNone(result.info.end_effectors[0].info)
+        failed = result.info.end_effectors[1]
+        self.assertFalse(failed.is_mock)
+        self.assertFalse(failed.ready)
+        self.assertEqual((failed.status, failed.reason),
+                         (ServiceStatus.INTERNAL_ERROR, 'initialization failed'))
 
     def test_robot_info2_endpoints_use_six_fields_with_optional_info(self):
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
@@ -537,36 +560,67 @@ class BodyCodecTest(unittest.TestCase):
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
         from lowlevel.RobotInfo import RobotInfoT
         from lowlevel.EndEffectorCapability import EndEffectorCapabilityT
-        def reply_for(info_version, endpoint_is_mock, info_mock, runtime=11):
-            obj = self._synthetic_endpoint_info(side=1, runtime=runtime, mock=info_mock) \
+        def reply_for(info_version=2, endpoint_is_mock=True, info_mock=True,
+                      outer_runtime=11, inner_runtime=11, n=1, side=1, bad_shape=False):
+            obj = self._synthetic_endpoint_info(side=side, runtime=inner_runtime, n=n, mock=info_mock) \
                 if info_mock is not None else None
+            if obj is not None and bad_shape:
+                obj.isMock = []
             info = RobotInfoT(protocolVersion=info_version, tsInfoUs=1, endEffectors=[
                 EndEffectorCapabilityT(side=1, isMock=endpoint_is_mock, info=obj,
                                       ready=False, status=ServiceStatus.UNAVAILABLE, reason='x'),
                 EndEffectorCapabilityT(side=2, isMock=True, ready=False,
                                       status=ServiceStatus.UNAVAILABLE, reason='y'),
             ])
-            reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS, runtimeId=runtime,
+            reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS, runtimeId=outer_runtime,
                                           info=info, errorMessage='n/a')
             b = flatbuffers.Builder(1); b.Finish(reply.Pack(b))
             return GetRobotInfoResponse.GetRootAs(b.Output())
-        for kwargs in ({'info_version': 1}, {'info_version': 3},
-                       {'endpoint_is_mock': False, 'info_mock': True},
-                       {'endpoint_is_mock': True, 'info_mock': False},
-                       {'runtime': 99}):
+        cases = (({'info_version': 1}, 'RobotInfo protocol_version'),
+                 ({'info_version': 3}, 'RobotInfo protocol_version'),
+                 ({'endpoint_is_mock': False, 'info_mock': True}, 'is_mock conflicts'),
+                 ({'endpoint_is_mock': True, 'info_mock': False}, 'is_mock conflicts'),
+                 ({'inner_runtime': 99}, 'runtime_id differs'),
+                 ({'outer_runtime': 0}, 'requires nonzero runtime_id'),
+                 ({'n': 0}, 'axis_names must be nonempty'),
+                 ({'bad_shape': True}, 'is_mock.*fixed length'),
+                 ({'side': 2}, 'side differs'))
+        for kwargs, message in cases:
             with self.subTest(**kwargs):
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, message):
                     codec.decode_robot_info_response(reply_for(**kwargs))
         # Valid mock agreement decodes.
-        result = codec.decode_robot_info_response(reply_for(2, True, True))
+        result = codec.decode_robot_info_response(reply_for())
         self.assertTrue(result.info.end_effectors[0].is_mock)
-        # BodyOnly (info=None) stays legal with nonzero outer R.
+        # A diagnostic None reply stays distinct from a BodyOnly description.
         b = flatbuffers.Builder(1)
         reply = GetRobotInfoResponseT(status=ServiceStatus.SUCCESS, runtimeId=11, info=None,
                                       errorMessage='')
         b.Finish(reply.Pack(b))
+        no_info = codec.decode_robot_info_response(GetRobotInfoResponse.GetRootAs(b.Output()))
+        self.assertIsNone(no_info.info)
+        from lowlevel.BodyInfo import BodyInfoT
+        from lowlevel.BodyJointCapability import BodyJointCapabilityT
+        from lowlevel.BodyMotorIdentity import BodyMotorIdentityT
+        body = BodyInfoT(slotCount=31, jointNames=['j'+str(i) for i in range(31)],
+                         joints=[BodyJointCapabilityT(bodyIndex=i) for i in range(31)],
+                         motorIdentities=[BodyMotorIdentityT() for _ in range(31)])
+        info = RobotInfoT(protocolVersion=2, body=body, endEffectors=[
+            EndEffectorCapabilityT(side=side, isMock=True, ready=False,
+                                   status=ServiceStatus.UNAVAILABLE, reason='no endpoint')
+            for side in (1, 2)])
+        b = flatbuffers.Builder(1)
+        b.Finish(GetRobotInfoResponseT(status=ServiceStatus.SUCCESS, runtimeId=11, info=info).Pack(b))
         body_only = codec.decode_robot_info_response(GetRobotInfoResponse.GetRootAs(b.Output()))
-        self.assertIsNone(body_only.info)
+        self.assertEqual(body_only.info.body.slot_count, 31)
+        self.assertTrue(all(slot.info is None and not slot.ready for slot in body_only.info.end_effectors))
+        b = flatbuffers.Builder(1)
+        b.Finish(GetRobotInfoResponseT(status=ServiceStatus.UNAVAILABLE, runtimeId=0,
+                                       info=info, errorMessage='startup failed').Pack(b))
+        unbound = codec.decode_robot_info_response(GetRobotInfoResponse.GetRootAs(b.Output()))
+        self.assertEqual((unbound.runtime_id, unbound.status, unbound.error_message),
+                         (0, ServiceStatus.UNAVAILABLE, 'startup failed'))
+        self.assertEqual(unbound.info.body.slot_count, 31)
 
     def test_applied_correlation_keeps_zero_defaults_and_full_uint64_keys(self):
         m = module('BodyState')
@@ -611,17 +665,18 @@ class BodyCodecTest(unittest.TestCase):
         # both decoders reject it; the ordinary positive above uses a nonzero R.
         builder = flatbuffers.Builder(1)
         m = module('BodyState')
+        joints = _minimal_joints_vector(builder)
         m.BodyStateStart(builder)
         m.BodyStateAddProtocolVersion(builder, 3)
         m.BodyStateAddStateId(builder, 7)
-        m.BodyStateAddJoints(builder, _minimal_joints_vector(builder))
+        m.BodyStateAddJoints(builder, joints)
         builder.Finish(m.BodyStateEnd(builder))
         payload = bytes(builder.Output())
         with self.assertRaisesRegex(ValueError, 'nonzero runtime_id'):
-            _decode_body_state_python(m.BodyState.GetRootAs(payload))
-        if native is not None:
-            with self.assertRaisesRegex(ValueError, 'nonzero runtime_id'):
-                native.decode_state(payload, 0)
+            codec._decode_body_state_python(m.BodyState.GetRootAs(payload))
+        from locomotion_aorta._native_body_codec import decode_body_state_native
+        with self.assertRaisesRegex(ValueError, 'nonzero runtime_id'):
+            decode_body_state_native(payload)
 
     def test_state3_rejects_present_zero_runtime(self):
         obj = module('BodyState').BodyStateT.InitFromObj(make_state()[1])
@@ -668,9 +723,9 @@ class BodyCodecTest(unittest.TestCase):
                 b = flatbuffers.Builder(1); b.Finish(fill(b,0))
                 request_module.GetRobotInfoRequest.GetRootAs(b.Output())
                 b = flatbuffers.Builder(1)
-                reply_module.GetRobotInfoResponseStart(b)
-                reply_module.GetRobotInfoResponseAddStatus(b, ServiceStatus.UNAVAILABLE)
-                b.Finish(reply_module.GetRobotInfoResponseEnd(b))
+                response = reply_module.GetRobotInfoResponseT(status=ServiceStatus.UNAVAILABLE,
+                    runtimeId=0, info=None, errorMessage='startup unavailable')
+                b.Finish(response.Pack(b))
                 view = reply_module.GetRobotInfoResponse.GetRootAs(b.Output())
                 return SimpleNamespace(decode=lambda: view)
         client = Client()
@@ -694,10 +749,22 @@ class BodyCodecTest(unittest.TestCase):
                 reply = t.get_robot_info(.5)
                 self.assertEqual(reply.status, ServiceStatus.UNAVAILABLE)
                 self.assertIsNone(reply.info)
+                self.assertEqual((reply.runtime_id, reply.error_message), (0, 'startup unavailable'))
             self.assertEqual(len(t.node.calls),1)
             self.assertEqual(t.node.calls[0][0][0],transport.GET_ROBOT_INFO_SERVICE)
             self.assertEqual(client.matches,[500,500])
             self.assertEqual(set(t.publishers),{transport.BODY_CMD_TOPIC, transport.CONTROL_REQUEST_TOPIC})
+            from fake_transport import FakeTransport
+            from locomotion_aorta.controller import ExternalController
+            fake = FakeTransport()
+            fake.get_robot_info = lambda timeout: reply
+            controller = ExternalController(client_id=7, _transport=fake)
+            try:
+                self.assertEqual(controller.get_robot_info(.1), reply)
+                self.assertIsNone(controller._end_effector_runtime_id)
+                self.assertFalse(any(topic == transport.CONTROL_REQUEST_TOPIC for topic, _ in fake.published))
+            finally:
+                controller.close()
         finally: t.close()
 
     def test_corrupt_parent_vtable_and_vector_offsets_are_rejected(self):
@@ -732,7 +799,10 @@ class RobotInfoRuntimeR3Test(unittest.TestCase):
     def test_partial_info_reply_decodes_same_response_runtime(self):
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
 
-        info = module('RobotInfo').RobotInfoT(protocolVersion=1, tsInfoUs=987)
+        info = module('RobotInfo').RobotInfoT(protocolVersion=2, tsInfoUs=987, endEffectors=[
+            module('EndEffectorCapability').EndEffectorCapabilityT(
+                side=side, isMock=True, ready=False, status=ServiceStatus.UNAVAILABLE,
+                reason='no endpoint') for side in (1, 2)])
         response = GetRobotInfoResponseT(
             status=ServiceStatus.PARTIAL_SUCCESS, info=info,
             errorMessage='right unavailable', runtimeId=11)

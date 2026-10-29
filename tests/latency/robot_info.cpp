@@ -34,8 +34,9 @@ std::vector<uint8_t> MakeInfo(uint64_t runtime) {
     auto entry = std::make_unique<lowlevel::EndEffectorCapabilityT>();
     entry->side = static_cast<lowlevel::ee::EndEffectorSide>(side);
     entry->is_mock = true;  // no attached EE Info in this synthetic reply
-    entry->ready = true;
-    entry->status = aorta::services::common::ServiceStatus_SUCCESS;
+    entry->ready = false;
+    entry->status = aorta::services::common::ServiceStatus_UNAVAILABLE;
+    entry->reason = "synthetic endpoint not configured";
     info.end_effectors.push_back(std::move(entry));
   }
   aorta::services::humanoid_locomotion::GetRobotInfoResponseT reply;
