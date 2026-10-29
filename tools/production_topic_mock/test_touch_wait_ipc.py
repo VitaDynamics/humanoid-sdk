@@ -80,11 +80,10 @@ def touch_wait_client(mode, output):
     try:
         controller.get_robot_info(5)
         actual_body = controller.wait_body_state(5)
-        ref = actual_body.descriptor_ref
+        ref = actual_body.runtime_id
         assert actual_body.protocol_version == 3
         bindings, rpc_bindings = codec.load_bindings(), codec.load_touch_bindings()
-        wire_ref = module('DescriptorRef').DescriptorRefT(ref.robot_runtime_id)
-        info = module('EndEffectorInfo').EndEffectorInfoT(protocolVersion=1, descriptorRef=wire_ref,
+        info = module('EndEffectorInfo').EndEffectorInfoT(protocolVersion=1, runtimeId=ref,
             layoutId=7, side=1, deviceModel=DeviceModel.AGX, firmware='synthetic', serial='synthetic',
             axisNames=['synthetic'], positionDomain=[PositionDomain.TOTAL_OPENING], torqueDomain=[0], supportedModes=[1 << ControlMode.POSITION],
             supportedCommandFields=[Field.POS | Field.MODE], supportedStateFields=[Field.POS], validLimits=[Field.POS],
@@ -107,7 +106,7 @@ def touch_wait_client(mode, output):
             nonlocal sample_id
             sample_id += 1
             state = module('EndEffectorState').EndEffectorStateT(protocolVersion=2,
-                descriptorRef=wire_ref, layoutId=7, side=1, stateId=sample_id, sampleStatus=SampleStatus.OK,
+                runtimeId=ref, layoutId=7, side=1, stateId=sample_id, sampleStatus=SampleStatus.OK,
                 axes=[module('AxisState').AxisStateT(validFields=Field.POS, pos=.03125)],
                 ready=True, outputAllowed=True,
                 inhibitReason=0, touchEnabled=False, statusValidMask=15)
@@ -169,7 +168,7 @@ def touch_wait_client(mode, output):
                 assert len(held) == 1
                 request, responder = held[0]
                 response = rpc_bindings.response.EndEffectorSetTouchResponseT(
-                    protocolVersion=2, descriptorRef=wire_ref, side=1, status=ServiceStatus.SUCCESS,
+                    protocolVersion=2, runtimeId=ref, side=1, status=ServiceStatus.SUCCESS,
                     reason=TouchSetReason.NONE)
                 mark('late_reply_begin')
                 responder.reply_bytes(pack(response, 1))

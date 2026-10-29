@@ -97,12 +97,12 @@ void ReceiveCommand(const aorta_bytes_view_t *view,
     if (!lowlevel::VerifyBodyCmdBuffer(verifier))
       throw std::runtime_error("invalid BodyCmd FlatBuffer");
     const auto *value = lowlevel::GetBodyCmd(bytes.data());
-    if (value->protocol_version() != 3 || !value->descriptor_ref() ||
+    if (value->protocol_version() != 3 || !value->runtime_id() ||
         value->action() != lowlevel::BodyCmdAction_EXTERNAL ||
         !value->joints() || value->joints()->size() != pm::kSlots)
       throw std::runtime_error("invalid BodyCmd protocol/action/slot count");
     pm::Command cmd;
-    cmd.runtime = value->descriptor_ref()->robot_runtime_id();
+    cmd.runtime = value->runtime_id();
     cmd.control_id = value->control_id();
     cmd.session = value->session_id();
     cmd.sequence = value->sequence();

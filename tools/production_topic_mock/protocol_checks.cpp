@@ -26,19 +26,19 @@ int main() {
   assert(NextApplyTick(2000001, 2000000) == 4000000);
   assert(NextApplyTick(4000000, 2000000) == 4000000);
   Protocol p(10, 100, 50);
-  Request r{3, 1, "req", "EXTERNAL", 7, 0, 10};
+  Request r{4, 1, "req", "EXTERNAL", 7, 0, 10};
   auto nonempty_prepare = r;
   nonempty_prepare.control_id = 1;
   assert(p.RequestControl(nonempty_prepare, 998).error == 1006);
   assert(p.status().phase == 0);
-  for (const uint32_t version : {uint32_t{3}, uint32_t{0x80000003},
+  for (const uint32_t version : {uint32_t{4}, uint32_t{0x80000003},
                                  std::numeric_limits<uint32_t>::max()}) {
     locomotion_sdk::ControlRequestT wire;
     wire.protocol_version = version;
     wire.operation = locomotion_sdk::ControlOperation_PREPARE;
     wire.request_id = "version-check";
     wire.client_id = 7;
-    wire.descriptor_ref = std::make_unique<lowlevel::ee::DescriptorRef>(10);
+    wire.runtime_id = 10;
     wire.action_name = "EXTERNAL";
     flatbuffers::FlatBufferBuilder builder;
     builder.Finish(locomotion_sdk::ControlRequest::Pack(builder, &wire));
@@ -47,7 +47,7 @@ int main() {
         builder.GetBufferPointer() + builder.GetSize());
     const auto decoded = DecodeRequest(bytes);
     assert(decoded.version == version);
-    if (version != 3) {
+    if (version != 4) {
       assert(p.RequestControl(decoded, 999).error == 1001);
       assert(p.status().phase == 0);
     }

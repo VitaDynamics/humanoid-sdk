@@ -19,7 +19,7 @@ def client():
             if info.info is None or info.info.body.slot_count != 31:
                 raise AssertionError('31-slot RobotInfo missing')
             source_info = source.get_robot_info(5)
-            if source_info.descriptor_ref != info.descriptor_ref:
+            if source_info.runtime_id != info.runtime_id:
                 raise AssertionError('source and controller runtime differ')
             state = source.wait_state(5)
             controller.enter_external(5)
@@ -62,11 +62,11 @@ def ee_client():
             observation_sources=((SampleStream.EE_STATE, number),)))
             for side, number in (('left',1), ('right',2))]
         infos = [endpoint.wait_info(5) for endpoint in endpoints]
-        assert infos[0].descriptor_ref == infos[1].descriptor_ref
-        assert roster.descriptor_ref == infos[0].descriptor_ref
+        assert infos[0].runtime_id == infos[1].runtime_id
+        assert roster.runtime_id == infos[0].runtime_id
         state = controller.wait_body_state(5)
         assert state.protocol_version == 3
-        assert state.descriptor_ref == infos[0].descriptor_ref == infos[1].descriptor_ref
+        assert state.runtime_id == infos[0].runtime_id == infos[1].runtime_id
         assert not state.applied_key_valid
         controller.enter_external(5)
         try:
@@ -97,14 +97,14 @@ def ee_client():
             left = endpoints[0]
             before = left.wait_state(1)
             reply = left.set_touch(True, timeout=1.)
-            assert reply.status == ServiceStatus.SUCCESS and reply.descriptor_ref == infos[0].descriptor_ref
+            assert reply.status == ServiceStatus.SUCCESS and reply.runtime_id == infos[0].runtime_id
             deadline = time.monotonic()+2
             sample = before
             while not (sample.status_valid_mask & 8 and sample.touch_enabled):
                 sample = left.wait_state(max(.001, deadline-time.monotonic()), after_sample=sample.sample_ref)
                 if time.monotonic() >= deadline: raise AssertionError('typed touch did not update State')
             touch = left.wait_touch(2)
-            assert touch.descriptor_ref == infos[0].descriptor_ref and touch.payload == b'\x80\xff'
+            assert touch.runtime_id == infos[0].runtime_id and touch.payload == b'\x80\xff'
             assert all(stamp.validity == 1 and stamp.ts_acquired_hw_us == 0 for stamp in touch.region_stamps)
             second = body_command()
             assert second.sequence == submitted[-1].key.sequence+1  # RPC consumed no motion key.
@@ -116,7 +116,7 @@ def ee_client():
                 time.sleep(.005)
             assert state.applied_session_id == second.session_id
             assert state.ts_control_us > 0 and state.association_source_type == 1
-            assert state.descriptor_ref == infos[0].descriptor_ref
+            assert state.runtime_id == infos[0].runtime_id
             left.set_touch(False, timeout=1.)
             deadline = time.monotonic()+2
             while sample.touch_enabled:
@@ -171,7 +171,7 @@ class MockIpcTest(unittest.TestCase):
                     frame='synthetic', sensorType=1, shape=[1], components=['raw'], dtype=1,
                     unit='1', payloadOffset=0, payloadBytes=2, encodingVersion=1)
                 info = module('EndEffectorInfo').EndEffectorInfoT(protocolVersion=1,
-                    descriptorRef=module('DescriptorRef').DescriptorRefT(100), layoutId=7, side=number,
+                    runtimeId=100, layoutId=7, side=number,
                     deviceModel=DeviceModel.BRAINCO_REVO2 if number==1 else DeviceModel.AGX,
                     axisNames=['synthetic'+str(i) for i in range(n)],
                     positionDomain=[PositionDomain.JOINT_ANGLE if number==1 else PositionDomain.TOTAL_OPENING]*n,
@@ -184,7 +184,7 @@ class MockIpcTest(unittest.TestCase):
                     state_hz=100, info_hz=10, observation_sources=[[2,number]])
                 if number == 1:
                     touch = module('EndEffectorTouch').EndEffectorTouchT(protocolVersion=1,
-                        descriptorRef=module('DescriptorRef').DescriptorRefT(100), layoutId=7, side=1,
+                        runtimeId=100, layoutId=7, side=1,
                         touchStateId=1, regionStamps=[module('RegionStamp').RegionStampT(validity=1)],
                         payload=[128,255])
                     write(root/'left-touch.bin', touch)

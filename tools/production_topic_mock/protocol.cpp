@@ -27,7 +27,7 @@ Request DecodeRequest(const std::vector<uint8_t>& bytes) {
           static_cast<int>(r->operation()),
           str(r->request_id()),
           str(r->action_name()), r->client_id(), r->control_id(),
-          r->descriptor_ref() ? r->descriptor_ref()->robot_runtime_id() : 0};
+          r->runtime_id()};
 }
 }  // namespace production_mock
 #elif defined(PRODUCTION_MOCK_ACK_CODEC)
@@ -36,16 +36,15 @@ namespace production_mock {
 std::vector<uint8_t> EncodeAck(const Ack& r, uint64_t wall_ns,
                                uint64_t publication_id) {
   locomotion_sdk::ControlAckT ack;
-  ack.protocol_version = 3;
+  ack.protocol_version = 4;
   ack.operation = static_cast<decltype(ack.operation)>(r.operation);
   ack.request_id = r.request_id;
   ack.client_id = r.client_id;
   ack.control_id = r.control_id;
-  ack.descriptor_ref = std::make_unique<lowlevel::ee::DescriptorRef>(r.runtime);
+  ack.runtime_id = r.runtime;
   ack.accepted = r.accepted;
   ack.error_code = static_cast<decltype(ack.error_code)>(r.error);
   ack.reason = r.reason;
-  ack.lease_deadline_monotonic_ns = 0;
   ack.aorta_header = std::make_unique<aorta::sys::AortaHeaderT>();
   ack.aorta_header->sequence = publication_id;
   ack.aorta_header->publish_stamp_ns = wall_ns;
@@ -61,14 +60,14 @@ namespace production_mock {
 std::vector<uint8_t> EncodeStatus(const Status& s, uint64_t now_ns,
                                   uint64_t wall_ns, uint64_t publication_id) {
   locomotion_sdk::ControlStatusT status;
-  status.protocol_version = 3;
+  status.protocol_version = 4;
   status.status_seq = s.status_seq;
   status.current_action =
       (s.phase == 4 || s.phase == 5) ? "EXTERNAL" : "PASSIVE";
   status.action_phase = static_cast<decltype(status.action_phase)>(s.phase);
   status.client_id = s.client_id;
   status.control_id = s.control_id;
-  status.descriptor_ref = std::make_unique<lowlevel::ee::DescriptorRef>(s.runtime);
+  status.runtime_id = s.runtime;
   status.generation = s.generation;
   status.last_accepted_cmd_id =
       s.accepted_sequence;
@@ -167,7 +166,7 @@ std::vector<uint8_t> EncodeInfo(uint64_t runtime) {
   }
   aorta::services::humanoid_locomotion::GetRobotInfoResponseT reply;
   reply.status = aorta::services::common::ServiceStatus_SUCCESS;
-  reply.descriptor_ref = std::make_unique<lowlevel::ee::DescriptorRef>(runtime);
+  reply.runtime_id = runtime;
   reply.info = std::make_unique<lowlevel::RobotInfoT>(std::move(info));
   flatbuffers::FlatBufferBuilder b;
   b.Finish(aorta::services::humanoid_locomotion::GetRobotInfoResponse::Pack(
@@ -233,7 +232,7 @@ void Protocol::Watchdog(uint64_t now) {
 }
 Ack Protocol::RequestControl(const Request& r, uint64_t now) {
   Watchdog(now);
-  if (r.version != 3) return Reply(r, 1001, "unsupported request version");
+  if (r.version != 4) return Reply(r, 1001, "unsupported request version");
   if (r.runtime != runtime_id_) return Reply(r, 1005, "runtime mismatch");
   if (r.request_id.empty() || !r.client_id ||
       r.request_id.size() > 256 ||
