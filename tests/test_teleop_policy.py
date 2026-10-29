@@ -156,7 +156,13 @@ class ObservationTests(unittest.TestCase):
 
     def test_no_new_fallback_limit_from_joint_target_metadata(self):
         self.assertIsNone(self.policy.limits)
-        self.assertAlmostEqual(self.policy.targets([100]*12,self.body)[0].q,24.8)
+        with self.assertRaisesRegex(ValueError, 'outside BodyInfo limit'):
+            self.policy.targets([100]*12, self.body)
+        joints = tuple(NS(**(dict(vars(cap), q_min=-100., q_max=100.)
+                              if name in self.policy.legs else vars(cap)))
+                       for name, cap in zip(self.body.joint_names, self.body.joints))
+        wide = NS(slot_count=31, joint_names=self.body.joint_names, joints=joints)
+        self.assertAlmostEqual(self.policy.targets([100]*12, wide)[0].q,24.8)
 
     def test_declared_clipping_and_leg_limits(self):
         md=dict(METADATA,clip_actions='2',joint_pos_limit_lower=','.join(['-.1']*12),joint_pos_limit_upper=','.join(['.1']*12))
@@ -209,7 +215,7 @@ class LifecycleTests(unittest.TestCase):
                 events.append('enter')
                 if mode=='entry_error':raise TimeoutError('entry interrupted after PREPARE')
                 return status
-            def publish(self,cmd):
+            def publish(self,cmd, *, target_names, required_fields):
                 if mode=='sdk_guard':raise ValueError('existing SDK command/capability guard')
                 events.append('publish');stop.set()
             def exit_external(self,timeout):
@@ -251,7 +257,7 @@ class LifecycleTests(unittest.TestCase):
             def enter_external(self, timeout):
                 events.append('enter')
                 return status
-            def publish(self, command):
+            def publish(self, command, *, target_names, required_fields):
                 # Exercise the real controller guard at startup and both sides
                 # of the uint16 boundary, without transport or a real model.
                 if len(commands) in (0, 65534, 65535, 65536):
@@ -311,7 +317,7 @@ class LifecycleTests(unittest.TestCase):
             def enter_external(self, timeout):
                 events.append('enter')
                 return status
-            def publish(self, command):
+            def publish(self, command, *, target_names, required_fields):
                 published.append(command)
                 if command.input_state_id == ids[-1] and len(set(ids)) > 2:
                     stop.set()
@@ -363,7 +369,7 @@ class LifecycleTests(unittest.TestCase):
                     def enter_external(self, timeout):
                         events.append('enter')
                         return status
-                    def publish(self, command):
+                    def publish(self, command, *, target_names, required_fields):
                         outputs.append(command)
                     def exit_external(self, timeout):
                         events.append('cancel')

@@ -37,6 +37,8 @@ def oracle(command, stamp=123, node='codec', sequence=0):
     return bytes(builder.Output())
 
 
+_BODY_TEST_TARGETS = tuple('fake_joint_' + str(i) for i in range(31))
+
 class Publisher:
     def __init__(self):
         self._seq_lock = threading.Lock()
@@ -106,7 +108,7 @@ class NativeBodyCmdTest(unittest.TestCase):
             with self.subTest(created=created), mock.patch(
                     'locomotion_aorta.controller.time.monotonic_ns', return_value=1234567890):
                 sent = h.controller.publish(dataclasses.replace(
-                    make_command(), ts_client_created_us=created))
+                    make_command(), ts_client_created_us=created), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
             self.assertEqual(sent.ts_client_created_us, 1234567)
             self.assertIsInstance(sent.ts_client_created_us, int)
             self.assertBytes(sent)
@@ -121,7 +123,7 @@ class NativeBodyCmdTest(unittest.TestCase):
             command = dataclasses.replace(make_command(), input_state_id=integer(5),
                 input_state_ts_real_us=integer(6), ts_client_created_us=integer(7),
                 ts_client_send_us='ignored', root_quat=object())
-            sent = h.controller.publish(command)
+            sent = h.controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
             self.assertEqual((sent.input_state_id, sent.input_state_ts_real_us,
                               sent.ts_client_created_us), (5, 6, 7))
             self.assertEqual(sent.root_quat, (1., 0., 0., 0.))
@@ -256,27 +258,27 @@ class PublishTimingTest(unittest.TestCase):
         return h
 
     def test_returned_key_validation_failure_and_send_error_trace(self):
-        h=self.harness();sent=h.controller.publish(make_command())
+        h=self.harness();sent=h.controller.publish(make_command(), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         trace=h.controller.publish_timing
         self.assertEqual((trace['session_id'],trace['sequence']), (sent.session_id,sent.sequence))
         self.assertEqual(trace['outcome'], 'returned')
         for field in ['condition_wait_ns','validation_ns','session_replace_ns','transport_call_wall_ns','publish_total_ns']:
             self.assertGreaterEqual(trace[field],0)
         bad=dataclasses.replace(make_command(),joints=(BodyJointCmd(q=True),)*31)
-        with self.assertRaises(InvalidCommandError):h.controller.publish(bad)
+        with self.assertRaises(InvalidCommandError):h.controller.publish(bad, target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         trace=h.controller.publish_timing;self.assertNotIn('session_id',trace)
         self.assertEqual(trace['error_type'],'InvalidCommandError')
         def fail(topic,message):
             if topic==BODY_CMD_TOPIC:raise OSError('send failed')
         h.transport.on_publish=fail
-        with self.assertRaises(OSError):h.controller.publish(make_command())
+        with self.assertRaises(OSError):h.controller.publish(make_command(), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         trace=h.controller.publish_timing;self.assertEqual(trace['outcome'],'raised')
         self.assertIn('session_id',trace);self.assertEqual(trace['error_type'],'OSError')
 
     def test_diagnostic_getter_cannot_change_success_or_mask_send_failure(self):
         h = self.harness()
         h.transport._last_publish_timing = lambda: (_ for _ in ()).throw(ValueError('diagnostic'))
-        sent = h.controller.publish(make_command())
+        sent = h.controller.publish(make_command(), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual(h.controller.publish_timing['sequence'], sent.sequence)
         self.assertEqual(h.controller.publish_timing['timing_error_type'], 'ValueError')
         def fail(topic, message):
@@ -284,12 +286,12 @@ class PublishTimingTest(unittest.TestCase):
                 raise OSError('actual send failure')
         h.transport.on_publish = fail
         with self.assertRaisesRegex(OSError, 'actual send failure'):
-            h.controller.publish(make_command())
+            h.controller.publish(make_command(), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
     def test_thread_local_profiles_do_not_cross_threads(self):
         h=self.harness()
         def publish(i):
-            sent=h.controller.publish(make_command(i));trace=h.controller.publish_timing
+            sent=h.controller.publish(make_command(i), target_names=_BODY_TEST_TARGETS, required_fields=0x1f);trace=h.controller.publish_timing
             return sent.sequence,trace['sequence']
         with ThreadPoolExecutor(4) as pool:keys=list(pool.map(publish,range(40)))
         self.assertTrue(all(a==b for a,b in keys));self.assertEqual(len({a for a,b in keys}),40)

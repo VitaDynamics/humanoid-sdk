@@ -98,7 +98,7 @@ def main():
                                     for i, m in enumerate(state.joints)))
                 built_ns = time.monotonic_ns()
                 built_realtime_ns = time.time_ns()
-                sent = controller.publish(command)
+                sent = controller.publish(command, target_names=target_names, required_fields=0x1f)
                 returned_ns = time.monotonic_ns()
                 returned_realtime_ns = time.time_ns()
                 rows.append((sent.session_id, sent.sequence, state.state_id, timing.decode_ns, timing.decoded_ns,
@@ -126,9 +126,7 @@ def main():
         if any(body.joints[i].supported_fields & 0x19 != 0x19
                or not body.joints[i].valid_limits & 1 for i in target_slots):
             raise ValueError('synthetic benchmark target capability is unavailable')
-        if any(j.is_mock or j.supported_fields & 0x1f != 0x1f
-               or j.valid_limits & 0x1f != 0x1f for j in body.joints):
-            raise ValueError('generic BodyCmd target scope is not bound for this fixture')
+        target_names = tuple(body.joint_names[i] for i in target_slots)
         running = controller.enter_external(timeout=15.0)
         entered = True
         if not transport.publishers[sdk.BODY_CMD_TOPIC].wait_for_matching(15000):

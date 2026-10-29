@@ -13,6 +13,8 @@ from locomotion_aorta.transport import BODY_CMD_TOPIC,BODY_STATE_TOPIC,CONTROL_S
 from fake_transport import FakeTransport
 from locomotion_aorta.body_types import DescriptorRef
 
+_BODY_TEST_TARGETS = tuple('fake_joint_' + str(i) for i in range(31) if i != 14)
+
 class Ring:
     def __init__(self):self.samples=deque();self.waits=[];self.closed=False
     def recv(self,timeout):self.waits.append(timeout);return self.samples.popleft() if self.samples else None
@@ -67,7 +69,7 @@ class PullTest(unittest.TestCase):
                 c.enter_external(.2)
                 def publish():
                     try:
-                        c.publish(BodyCmd(tuple(BodyJointCmd() for _ in range(31))))
+                        c.publish(BodyCmd(tuple(BodyJointCmd() for _ in range(31))), target_names=_BODY_TEST_TARGETS, required_fields=0x19)
                     except Exception as error:
                         errors.append(error)
                 worker = threading.Thread(target=publish)
@@ -103,7 +105,7 @@ class PullTest(unittest.TestCase):
             active = c.enter_control('HUMANOID_TELEOP', .2)
             before = list(t.published)
             with self.assertRaises(NotRunningError):
-                c.publish(BodyCmd(tuple(BodyJointCmd() for _ in range(31))))
+                c.publish(BodyCmd(tuple(BodyJointCmd() for _ in range(31))), target_names=_BODY_TEST_TARGETS, required_fields=0x19)
             self.assertEqual(t.published, before)
             self.assertEqual(c._next_external_sequence, 1)
             self.assertEqual(c._control_context().generation, active.generation)
@@ -287,22 +289,22 @@ class PullTest(unittest.TestCase):
         c,t=self.fixture()
         c.enter_external(.2)
         command=BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31)))
-        first=c.publish(command)
+        first=c.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
         t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
             status_seq=2,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
             client_id=9,control_id=13,generation=84,runtime_id=11))
-        second=c.publish(command)
+        second=c.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
         self.assertEqual((first.session_id,first.sequence),(42,1))
         self.assertEqual((second.session_id,second.sequence),(84,1))
         t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
             status_seq=3,current_action='PASSIVE',phase=ExternalPhase.IDLE,
             client_id=9,control_id=13,generation=84,runtime_id=11))
-        with self.assertRaises(NotRunningError):c.publish(command)
+        with self.assertRaises(NotRunningError):c.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
         self.assertEqual([m for topic,m in t.published if topic==BODY_CMD_TOPIC],[first,second])
         t.emit(CONTROL_STATUS_TOPIC,ControlStatus(
             status_seq=4,current_action='EXTERNAL',phase=ExternalPhase.RUNNING,
             client_id=9,control_id=13,generation=84,runtime_id=11))
-        resumed=c.publish(command)
+        resumed=c.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
         self.assertEqual((resumed.session_id,resumed.sequence),(84,2))
 
     def test_closed_controller_never_drains_pending_status_or_publishes(self):
@@ -319,7 +321,7 @@ class PullTest(unittest.TestCase):
             with self.assertRaises(ControllerClosedError):
                 controller._reserve_command()
             with self.assertRaises(ControllerClosedError):
-                controller.publish(command)
+                controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
             self.assertIs(controller.status, owned)
             poll.assert_not_called()
 
@@ -334,7 +336,7 @@ class PullTest(unittest.TestCase):
                     controller, transport = self.fixture()
                     owned = controller.enter_external(.2)
                     command = BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31)))
-                    first = controller.publish(command)
+                    first = controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
                     requests = [message for topic, message in transport.published
                                 if topic == CONTROL_REQUEST_TOPIC]
                     transport.emit(CONTROL_STATUS_TOPIC, replace(
@@ -345,7 +347,7 @@ class PullTest(unittest.TestCase):
                     with self.assertRaises(NotRunningError):
                         controller._reserve_command()
                     with self.assertRaises(NotRunningError):
-                        controller.publish(command)
+                        controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
                     self.assertEqual(
                         [message for topic, message in transport.published
                          if topic == BODY_CMD_TOPIC], [first])
@@ -354,7 +356,7 @@ class PullTest(unittest.TestCase):
                          if topic == CONTROL_REQUEST_TOPIC], requests)
 
                     transport.emit(CONTROL_STATUS_TOPIC, replace(owned, status_seq=3))
-                    resumed = controller.publish(command)
+                    resumed = controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
                     self.assertEqual((resumed.session_id, resumed.sequence), (42, 2))
 
     def test_pending_invalid_generation_does_not_reset_or_consume_key(self):
@@ -363,36 +365,36 @@ class PullTest(unittest.TestCase):
                 controller, transport = self.fixture()
                 owned = controller.enter_external(.2)
                 command = BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31)))
-                first = controller.publish(command)
+                first = controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
                 transport.emit(CONTROL_STATUS_TOPIC, replace(
                     owned, status_seq=2, generation=generation))
 
                 with self.assertRaises(NotRunningError):
-                    controller.publish(command)
+                    controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
                 self.assertEqual(
                     [message for topic, message in transport.published
                      if topic == BODY_CMD_TOPIC], [first])
 
                 transport.emit(CONTROL_STATUS_TOPIC, replace(owned, status_seq=3))
-                resumed = controller.publish(command)
+                resumed = controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
                 self.assertEqual((resumed.session_id, resumed.sequence), (42, 2))
 
     def test_status_poll_failure_does_not_send_retry_cancel_or_consume_key(self):
         controller, transport = self.fixture()
         controller.enter_external(.2)
         command = BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31)))
-        first = controller.publish(command)
+        first = controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
         sent_before_poll = list(transport.published)
 
         with patch.object(transport, 'poll_control_status',
                           side_effect=OSError('status receive failed')) as poll:
             with self.assertRaisesRegex(OSError, 'status receive failed'):
-                controller.publish(command)
+                controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
             self.assertEqual(poll.call_count, 1)
 
         self.assertEqual(transport.published, sent_before_poll)
         self.assertEqual(transport.close_count, 0)
-        resumed = controller.publish(command)
+        resumed = controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x19)
         self.assertEqual((resumed.session_id, resumed.sequence), (42, 2))
         self.assertEqual(
             [message for topic, message in transport.published
@@ -434,7 +436,7 @@ class PullTest(unittest.TestCase):
             except BaseException as error:errors.append(error)
 
         def publish():
-            try:published.append(c.publish(BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31)))))
+            try:published.append(c.publish(BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31))), target_names=_BODY_TEST_TARGETS, required_fields=0x19))
             except BaseException as error:errors.append(error)
 
         receiver=threading.Thread(target=drain,daemon=True)
@@ -470,7 +472,7 @@ class PullTest(unittest.TestCase):
         t.poll_control_status=pull.poll_control_status
 
         def publish():
-            try:c.publish(BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31))))
+            try:c.publish(BodyCmd(joints=tuple(BodyJointCmd() for _ in range(31))), target_names=_BODY_TEST_TARGETS, required_fields=0x19)
             except BaseException as error:errors.append(error)
 
         def close():

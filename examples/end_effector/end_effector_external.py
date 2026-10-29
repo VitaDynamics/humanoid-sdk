@@ -98,7 +98,8 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
     pose = ()
     if body_enabled:
         info = body.require_body_info(controller, timeout)
-        hold_slots = body._body_target_slots(info)
+        hold_slots = body._body_target_slots(info, require_zero=body_pose == 'zero')
+        hold_names = tuple(info.joint_names[i] for i in hold_slots)
         plan = None
         if body_pose == 'zero':
             spec = importlib.util.spec_from_file_location(
@@ -191,7 +192,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
                 plan.measured(state)
                 q = pose if target is None else target(now) if callable(target) else target
                 command = plan.command(q, state)
-            published = controller.publish(command)
+            published = controller.publish(command, target_names=hold_names, required_fields=0x19)
             if plan is not None:
                 emit(f'BODY stage={stage} session_id={published.session_id} sequence={published.sequence} input_state={state.state_id} '
                      f'q_cmd={tuple(j.q for j in command.joints)!r} '

@@ -294,14 +294,14 @@ class ExternalController:
             self._best_effort_cancel(request_id=request_id)
             raise
 
-    def publish(self, command: BodyCmd) -> BodyCmd:
+    def publish(self, command: BodyCmd, *, target_names=None, required_fields=None) -> BodyCmd:
         if not self._capture_publish_timing:
-            return self._publish(command)
+            return self._publish(command, target_names=target_names, required_fields=required_fields)
         trace = {'clock': 'monotonic_ns', 'outcome': 'raised'}
         begin = time.perf_counter_ns()
         self._publish_trace.last = trace
         try:
-            result = self._publish(command, trace)
+            result = self._publish(command, trace, target_names=target_names, required_fields=required_fields)
             trace['outcome'] = 'returned'
             return result
         except BaseException as error:
@@ -316,7 +316,7 @@ class ExternalController:
         trace = getattr(self._publish_trace, 'last', None)
         return dict(trace) if trace is not None else None
 
-    def _publish(self, command: BodyCmd, trace=None) -> BodyCmd:
+    def _publish(self, command: BodyCmd, trace=None, *, target_names=None, required_fields=None) -> BodyCmd:
         waiting = time.perf_counter_ns() if trace is not None else 0
         with self._condition:
             if trace is not None:
@@ -329,16 +329,28 @@ class ExternalController:
                         (not _valid_ref(command.descriptor_ref) or
                          command.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id)):
                     raise InvalidCommandError('BodyCmd belongs to a different robot runtime')
-                if self._body_info is None or len(self._body_info.joints) != BODY_SLOTS:
-                    raise InvalidCommandError('validated BodyInfo is required before publish')
-                if any(j.is_mock or j.supported_fields & 0x1f != 0x1f
-                       or j.valid_limits & 0x1f != 0x1f for j in self._body_info.joints):
-                    raise InvalidCommandError('BodyCmd target scope is unknown with unavailable or unproven slots')
             finally:
                 if trace is not None:
                     trace['validation_ns'] = time.perf_counter_ns() - validation
         preparing = time.perf_counter_ns() if trace is not None else 0
-        context = self._reserve_command(for_body=True, expected_ref=command.descriptor_ref)
+        # PullController's _control_context pumps status outside _condition.
+        current = self._control_context()
+        with self._condition:
+            self._ensure_open()
+            status = self._require_owned_status()
+            if (current.request_id != self._request_id or current.client_id != self.client_id
+                    or current.control_id != self._control_id or current.generation != status.generation):
+                raise NotRunningError('Body control context changed before reservation')
+            _validate_command(command)
+            body_info = self._body_info
+            runtime_id = self._end_effector_runtime_id
+            _validate_body_targets(command, body_info, target_names, required_fields)
+            status = self._require_owned_status()
+            if (self._body_info is not body_info or self._end_effector_runtime_id != runtime_id
+                    or current.request_id != self._request_id or current.client_id != self.client_id
+                    or current.control_id != self._control_id or current.generation != status.generation):
+                raise NotRunningError('Body context changed during target validation')
+            context = self._reserve_command_locked(for_body=True, expected_ref=command.descriptor_ref)
         external_command = replace(
             command,
             protocol_version=BODY_CMD_PROTOCOL_VERSION,
@@ -364,6 +376,7 @@ class ExternalController:
                     self._ensure_open()
                     status = self._require_owned_status()
                     if (self._end_effector_runtime_id != context.descriptor_ref.robot_runtime_id
+                            or self._body_info is not body_info
                             or self._request_id != context.request_id
                             or current.request_id != context.request_id
                             or current.client_id != context.client_id
@@ -875,6 +888,45 @@ def _status_is_newer(
     ):
         return status.stamp_monotonic_ns > previous.stamp_monotonic_ns
     return status.status_seq > previous.status_seq
+
+
+def _validate_body_targets(command: BodyCmd, body_info: BodyInfo | None,
+                           target_names, required_fields) -> None:
+    if (body_info is None or body_info.slot_count != BODY_SLOTS
+            or len(body_info.joint_names) != BODY_SLOTS or len(body_info.joints) != BODY_SLOTS
+            or len(set(body_info.joint_names)) != BODY_SLOTS
+            or any(cap.body_index != i for i, cap in enumerate(body_info.joints))):
+        raise InvalidCommandError('validated BodyInfo is required before publish')
+    if (not isinstance(target_names, tuple) or not target_names
+            or any(not isinstance(name, str) or not name for name in target_names)
+            or len(set(target_names)) != len(target_names)):
+        raise InvalidCommandError('BodyCmd target scope must be explicitly declared')
+    if type(required_fields) is not int or not 0 < required_fields <= 0x1f:
+        raise InvalidCommandError('BodyCmd required fields must be explicitly declared')
+    roster = {name: i for i, name in enumerate(body_info.joint_names)}
+    if any(name not in roster for name in target_names):
+        raise InvalidCommandError('BodyCmd target is not in the confirmed roster')
+    slots = frozenset(roster[name] for name in target_names)
+    unavailable = [body_info.joint_names[i] for i in slots if body_info.joints[i].is_mock]
+    if unavailable:
+        raise InvalidCommandError('BodyCmd targets unavailable: ' + ', '.join(unavailable))
+    fields = ('q', 'dq', 'tau', 'kp', 'kd')
+    for i, joint in enumerate(command.joints):
+        if i not in slots:
+            if any(getattr(joint, name) != 0.0 for name in fields):
+                raise InvalidCommandError(f'BodyCmd non-target padding is not neutral: {i}')
+            continue
+        cap = body_info.joints[i]
+        if (cap.supported_fields & required_fields != required_fields
+                or cap.valid_limits & required_fields != required_fields):
+            raise InvalidCommandError(f'BodyCmd target capability or limit unavailable: {i}')
+        for bit, name in enumerate(fields):
+            value = getattr(joint, name)
+            if required_fields & (1 << bit):
+                if not getattr(cap, name + '_min') <= value <= getattr(cap, name + '_max'):
+                    raise InvalidCommandError(f'BodyCmd target {name} outside limit: {i}')
+            elif value != 0.0:
+                raise InvalidCommandError(f'BodyCmd undeclared field is not neutral: {i}.{name}')
 
 
 def _validate_command(command: BodyCmd) -> None:

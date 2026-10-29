@@ -96,7 +96,7 @@ class TimedDemoTests(unittest.TestCase):
                 events.append('enter')
                 return status
 
-            def publish(self, command):
+            def publish(self, command, *, target_names=None, required_fields=None):
                 commands.append(command)
                 times.append(clock.monotonic())
                 return NS(session_id=37, sequence=len(commands))

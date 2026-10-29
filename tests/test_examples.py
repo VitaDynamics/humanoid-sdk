@@ -89,9 +89,10 @@ class RecordingController:
         self.calls.append("enter_external")
         return self.controller.enter_external(timeout)
 
-    def publish(self, command):
+    def publish(self, command, *, target_names=None, required_fields=None):
         self.calls.append("publish")
-        published = self.controller.publish(command)
+        published = self.controller.publish(command, target_names=target_names,
+                                            required_fields=required_fields)
         if self.follow_commands:
             self.measured_q = [motor.q for motor in command.joints]
         return published

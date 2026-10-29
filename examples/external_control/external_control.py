@@ -46,7 +46,8 @@ def run(
     emit: Callable[[str], None] = print,
 ) -> None:
     info = require_body_info(controller, timeout)
-    target_slots = _body_target_slots(info)
+    target_slots = _body_target_slots(info, require_zero=True)
+    target_names = tuple(info.joint_names[i] for i in target_slots)
     start_state = _wait_for_stationary_body_state(
         controller,
         body_info=info,
@@ -120,7 +121,7 @@ def run(
             elif now - last_state_change >= LOWSTATE_WINDOW_S:
                 raise RuntimeError("body state became stale during the trajectory")
 
-            controller.publish(_position_command(q, state))
+            controller.publish(_position_command(q, state), target_names=target_names, required_fields=0x19)
             next_publish = max(next_publish + PERIOD_S, monotonic() + PERIOD_S)
             return state
 
@@ -171,7 +172,7 @@ def require_body_info(controller: PullController, timeout: float):
     return body
 
 
-def _body_target_slots(body_info):
+def _body_target_slots(body_info, *, require_zero=False):
     """Validate the existing FIXED_STAND 30-joint action profile, not slot presence."""
     path = Path(__file__).resolve().parents[1] / 'fixed_stand_pose/fixed_stand_profile.json'
     names = tuple(body_info.joint_names)
@@ -189,8 +190,10 @@ def _body_target_slots(body_info):
         cap = body_info.joints[i]
         if (cap.supported_fields & 0x19 != 0x19 or not cap.valid_limits & 1
                 or not math.isfinite(cap.q_min) or not math.isfinite(cap.q_max)
-                or not cap.q_min <= 0.0 <= cap.q_max):
-            raise ValueError(f'{names[i]}: position capability or zero limit unavailable')
+                or cap.q_min > cap.q_max):
+            raise ValueError(f'{names[i]}: position capability or limit unavailable')
+        if require_zero and not cap.q_min <= 0.0 <= cap.q_max:
+            raise ValueError(f'{names[i]}: zero outside position limit')
     return slots
 
 
@@ -255,6 +258,9 @@ def _validate_body_state(
             raise RuntimeError(f"body state motor[{index}] error_code={error}")
         if not math.isfinite(position) or not math.isfinite(velocity):
             raise RuntimeError(f"body state motor[{index}] q/dq is not finite")
+        cap = body_info.joints[index]
+        if not cap.q_min <= position <= cap.q_max:
+            raise RuntimeError(f"body state motor[{index}] q is outside BodyInfo limit")
         if require_stationary and abs(velocity) > STATIONARY_DQ_RAD_S:
             raise RuntimeError(f"body state motor[{index}] is moving at {velocity:.3f} rad/s")
 

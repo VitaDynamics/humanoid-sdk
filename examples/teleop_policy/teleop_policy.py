@@ -345,7 +345,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
                     if previous_publish_ns is not None else NOT_MEASURED)
                 previous_publish_ns = publish_mono
                 try:
-                    sent = controller.publish(msg)
+                    sent = controller.publish(msg, target_names=tuple(policy.names), required_fields=0x19)
                     row['publish_result'] = 'returned'
                     publish_log_fields(row,sent)
                 except BaseException:

@@ -35,6 +35,8 @@ from locomotion_aorta import (
 )
 
 
+_BODY_TEST_TARGETS = tuple('fake_joint_' + str(i) for i in range(31))
+
 class ControllerHarness:
     def __init__(self, runtime_id: int = 11, *, info_reply=None) -> None:
         self.transport = FakeTransport()
@@ -43,7 +45,10 @@ class ControllerHarness:
             reply = robot_info_reply()
             body = reply.info.body
             body = replace(body,
-                joints=tuple(replace(j, is_mock=False, supported_fields=31, valid_limits=31)
+                joints=tuple(replace(j, is_mock=False, supported_fields=31, valid_limits=31,
+                                     q_min=-100., q_max=100., dq_min=-100., dq_max=100.,
+                                     tau_min=-100., tau_max=100., kp_min=-100., kp_max=100.,
+                                     kd_min=-100., kd_max=100.)
                              for j in body.joints),
                 motor_identities=tuple(replace(m, present=True) for m in body.motor_identities))
             reply = replace(reply, runtime_id=runtime_id, info=replace(reply.info, body=body))
@@ -136,7 +141,7 @@ class ExternalControllerTest(unittest.TestCase):
                           input_state_ts_real_us=selected.ts_state_real_us,
                           descriptor_ref=selected.descriptor_ref)
         h.controller._on_body_state(sample(102, 1002000))
-        sent = h.controller.publish(command)
+        sent = h.controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         wire = module('BodyCmd').BodyCmd.GetRootAs(encode(sent))
         self.assertEqual((wire.InputStateId(), wire.InputStateTsRealUs()), (100, 1000000))
         self.assertEqual((wire.DescriptorRef().RobotRuntimeId(), wire.ControlId()), (11, 13))
@@ -150,7 +155,7 @@ class ExternalControllerTest(unittest.TestCase):
         command = replace(make_command(99), input_state_id=100,
                           input_state_ts_real_us=123456,
                           control_id=77)
-        sent = h.controller.publish(command)
+        sent = h.controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual((sent.protocol_version, sent.descriptor_ref.robot_runtime_id,
                           sent.control_id, sent.session_id, sent.sequence),
                          (3, 2**64 - 1, 13, 42, 1))
@@ -165,14 +170,14 @@ class ExternalControllerTest(unittest.TestCase):
         for ref in (DescriptorRef(11), DescriptorRef(0), DescriptorRef(True)):
             with self.subTest(ref=ref), self.assertRaises(InvalidCommandError):
                 h.controller.publish(replace(make_command(0), descriptor_ref=ref,
-                    input_state_id=100, input_state_ts_real_us=123456))
+                    input_state_id=100, input_state_ts_real_us=123456), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual(h.controller._next_external_sequence, 1)
         self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in h.transport.published))
-        sent = h.controller.publish(replace(make_command(0), descriptor_ref=DescriptorRef(22)))
+        sent = h.controller.publish(replace(make_command(0), descriptor_ref=DescriptorRef(22)), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual((sent.descriptor_ref, sent.sequence), (DescriptorRef(22), 1))
 
     def test_body_submission_after_close_or_owner_change_is_rejected(self):
-        for transition in ('close', 'owner'):
+        for transition in ('close', 'owner', 'runtime', 'body_info'):
             with self.subTest(transition=transition):
                 h = ControllerHarness()
                 self.addCleanup(h.controller.close)
@@ -189,7 +194,8 @@ class ExternalControllerTest(unittest.TestCase):
                 h.transport._publish_body = delayed
                 def publish():
                     try:
-                        h.controller.publish(make_command(0))
+                        h.controller.publish(make_command(0),
+                            target_names=tuple(h.controller._body_info.joint_names), required_fields=0x1f)
                     except Exception as error:
                         errors.append(error)
                 worker = threading.Thread(target=publish)
@@ -198,14 +204,26 @@ class ExternalControllerTest(unittest.TestCase):
                     self.assertTrue(entered.wait(2))
                     if transition == 'close':
                         h.controller.close()
-                    else:
+                    elif transition == 'owner':
                         h.status(action='EXTERNAL', phase=ExternalPhase.IDLE)
+                    else:
+                        reply = h.transport.get_robot_info(.1)
+                        if transition == 'runtime':
+                            reply = replace(reply, runtime_id=12)
+                        else:
+                            reply = replace(reply, info=replace(reply.info, body=replace(reply.info.body)))
+                        h.transport.get_robot_info = lambda _: reply
+                        if transition == 'runtime':
+                            with self.assertRaisesRegex(ValueError, 'new connection'):
+                                h.controller.get_robot_info(.1)
+                        else:
+                            h.controller.get_robot_info(.1)
                 finally:
                     release.set()
                     worker.join(2)
                 self.assertFalse(worker.is_alive())
                 self.assertEqual(len(errors), 1)
-                self.assertIsInstance(errors[0], (ControllerClosedError, NotRunningError))
+                self.assertIsInstance(errors[0], (ControllerClosedError, NotRunningError, ValueError))
                 self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in h.transport.published))
 
     def test_bound_action_accepts_both_ack_status_orders_without_early_permission(self):
@@ -390,7 +408,7 @@ class ExternalControllerTest(unittest.TestCase):
         h.status(action="HUMANOID_TELEOP", phase=ExternalPhase.RUNNING, generation=84)
         before = list(h.transport.published)
         with self.assertRaisesRegex(NotRunningError, "BodyCmd"):
-            h.controller.publish(make_command(0))
+            h.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual(h.transport.published, before)
         self.assertEqual((h.controller._external_session_id, h.controller._next_external_sequence), (42, 2))
         second = h.controller._reserve_command()
@@ -437,7 +455,7 @@ class ExternalControllerTest(unittest.TestCase):
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)
         harness.accept_enter(); harness.controller.enter_external(.1)
-        first = harness.controller.publish(make_command(0))
+        first = harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         before = list(harness.transport.published)
         context = harness.controller._control_context()
         self.assertEqual((context.client_id, context.control_id, context.generation, context.request_id),
@@ -448,11 +466,11 @@ class ExternalControllerTest(unittest.TestCase):
         self.assertEqual(harness.controller._control_context().generation, 84)
         self.assertEqual((harness.controller._external_session_id, harness.controller._next_external_sequence), (42, 2))
         self.assertEqual(harness.transport.published, before)
-        second = harness.controller.publish(make_command(0))
+        second = harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual((first.session_id, first.sequence, second.session_id, second.sequence), (42, 1, 84, 1))
         harness.controller._next_external_sequence = 1 << 64
         self.assertEqual(harness.controller._control_context().generation, 84)
-        with self.assertRaises(ExternalControlError): harness.controller.publish(make_command(0))
+        with self.assertRaises(ExternalControlError): harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
     def test_rpc_control_context_reuses_owned_status_guards_and_rejects_local_cancel(self):
         for phase, changed in ((ExternalPhase.RUNNING, {'client_id': 17}),
@@ -487,7 +505,7 @@ class ExternalControllerTest(unittest.TestCase):
                     self.addCleanup(harness.controller.close)
                     harness.accept_enter()
                     owned = harness.controller.enter_external(timeout=0.1)
-                    first = harness.controller.publish(make_command(0))
+                    first = harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
                     requests = [message for topic, message in harness.transport.published
                                 if topic == CONTROL_REQUEST_TOPIC]
 
@@ -498,7 +516,7 @@ class ExternalControllerTest(unittest.TestCase):
                     with self.assertRaises(NotRunningError):
                         harness.controller._reserve_command()
                     with self.assertRaises(NotRunningError):
-                        harness.controller.publish(make_command(0))
+                        harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
                     self.assertEqual(
                         [message for topic, message in harness.transport.published
                          if topic == BODY_CMD_TOPIC], [first])
@@ -508,7 +526,7 @@ class ExternalControllerTest(unittest.TestCase):
 
                     harness.transport.emit(
                         CONTROL_STATUS_TOPIC, replace(owned, status_seq=3))
-                    resumed = harness.controller.publish(make_command(0))
+                    resumed = harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
                     self.assertEqual((resumed.session_id, resumed.sequence), (42, 2))
 
     def test_invalid_running_generation_does_not_reset_or_consume_key(self):
@@ -518,21 +536,21 @@ class ExternalControllerTest(unittest.TestCase):
                 self.addCleanup(harness.controller.close)
                 harness.accept_enter()
                 owned = harness.controller.enter_external(timeout=0.1)
-                first = harness.controller.publish(make_command(0))
+                first = harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
                 harness.transport.emit(CONTROL_STATUS_TOPIC, replace(
                     owned, status_seq=2, generation=generation))
 
                 with self.assertRaises(NotRunningError):
                     harness.controller._reserve_command()
                 with self.assertRaises(NotRunningError):
-                    harness.controller.publish(make_command(0))
+                    harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
                 self.assertEqual(
                     [message for topic, message in harness.transport.published
                      if topic == BODY_CMD_TOPIC], [first])
 
                 harness.transport.emit(
                     CONTROL_STATUS_TOPIC, replace(owned, status_seq=3))
-                resumed = harness.controller.publish(make_command(0))
+                resumed = harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
                 self.assertEqual((resumed.session_id, resumed.sequence), (42, 2))
 
     def test_closed_controller_cannot_reserve_publish_or_accept_late_status(self):
@@ -548,7 +566,7 @@ class ExternalControllerTest(unittest.TestCase):
         with self.assertRaises(ControllerClosedError):
             harness.controller._reserve_command()
         with self.assertRaises(ControllerClosedError):
-            harness.controller.publish(make_command(0))
+            harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
         self.assertIs(harness.controller.status, owned)
         self.assertEqual(harness.transport.published, sent_at_close)
@@ -567,7 +585,7 @@ class ExternalControllerTest(unittest.TestCase):
             try:
                 for _ in range(8):
                     start.wait()
-                    command = (harness.controller.publish(make_command(999)) if index == 0
+                    command = (harness.controller.publish(make_command(999), target_names=_BODY_TEST_TARGETS, required_fields=0x1f) if index == 0
                                else harness.controller._reserve_command())
                     results[index].append((command.session_id, command.sequence))
             except BaseException as error:
@@ -598,7 +616,7 @@ class ExternalControllerTest(unittest.TestCase):
         harness.controller.enter_external(timeout=0.1)
 
         first = harness.controller._reserve_command()
-        body = harness.controller.publish(make_command(999))
+        body = harness.controller.publish(make_command(999), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         last = harness.controller._reserve_command()
 
         self.assertEqual(
@@ -625,7 +643,7 @@ class ExternalControllerTest(unittest.TestCase):
 
         harness.transport.on_publish = fail_body
         with self.assertRaisesRegex(OSError, 'transport send failed'):
-            harness.controller.publish(make_command(0))
+            harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         reserved = harness.controller._reserve_command()
         self.assertEqual((attempted[0].session_id, attempted[0].sequence), (42, 1))
         self.assertEqual((reserved.session_id, reserved.sequence), (42, 2))
@@ -870,7 +888,7 @@ class ExternalControllerTest(unittest.TestCase):
             self.assertIs(harness.controller.wait_body_state(.01), state)
         harness.accept_enter()
         harness.controller.enter_external(timeout=.1)
-        self.assertEqual(harness.controller.publish(make_command(0)).protocol_version, 3)
+        self.assertEqual(harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).protocol_version, 3)
 
     def test_status_cache_does_not_regress_or_replace_a_sequence(self) -> None:
         harness = ControllerHarness()
@@ -1014,7 +1032,7 @@ class ExternalControllerTest(unittest.TestCase):
         )
         self.assertTrue(all(not hasattr(request, "requested_lease_ms") for request in requests))
         with self.assertRaises(NotRunningError):
-            harness.controller.publish(make_command(1))
+            harness.controller.publish(make_command(1), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
     def test_entry_wait_timeout_still_validated_before_sending(self) -> None:
         harness = ControllerHarness()
@@ -1263,13 +1281,13 @@ class ExternalControllerTest(unittest.TestCase):
         first_command = make_command(1, q=0.1)
 
         with self.assertRaises(NotRunningError):
-            harness.controller.publish(first_command)
+            harness.controller.publish(first_command, target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
         harness.accept_enter()
         harness.controller.enter_external(timeout=0.1)
-        harness.controller.publish(first_command)
+        harness.controller.publish(first_command, target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         harness.status(action="EXTERNAL", phase=ExternalPhase.TIMEOUT_HOLD)
-        harness.controller.publish(make_command(2, q=0.2))
+        harness.controller.publish(make_command(2, q=0.2), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
         published_commands = [
             message
@@ -1290,7 +1308,7 @@ class ExternalControllerTest(unittest.TestCase):
 
         harness.status(action="FIXED_STAND", phase=ExternalPhase.IDLE)
         with self.assertRaises(NotRunningError):
-            harness.controller.publish(first_command)
+            harness.controller.publish(first_command, target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
     def test_publish_requires_a_locally_started_request_even_with_running_status(
         self,
@@ -1310,7 +1328,7 @@ class ExternalControllerTest(unittest.TestCase):
         )
 
         with self.assertRaises(NotRunningError):
-            harness.controller.publish(make_command(1))
+            harness.controller.publish(make_command(1), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
     def test_publish_assigns_sequence_independently_of_caller_hint(self) -> None:
         harness = ControllerHarness()
@@ -1318,8 +1336,8 @@ class ExternalControllerTest(unittest.TestCase):
         harness.accept_enter()
         harness.controller.enter_external(timeout=0.1)
 
-        harness.controller.publish(make_command(60000))
-        harness.controller.publish(make_command(7))
+        harness.controller.publish(make_command(60000), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
+        harness.controller.publish(make_command(7), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
         published_commands = [
             message
@@ -1337,7 +1355,7 @@ class ExternalControllerTest(unittest.TestCase):
         harness.accept_enter()
         harness.controller.enter_external(timeout=.1)
         harness.controller._next_external_sequence = 65535
-        published = [harness.controller.publish(make_command(0)) for _ in range(3)]
+        published = [harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f) for _ in range(3)]
         self.assertEqual([(m.session_id, m.sequence) for m in published],
                          [(42, 65535), (42, 65536), (42, 65537)])
         actual = [m for topic, m in harness.transport.published if topic == BODY_CMD_TOPIC]
@@ -1348,14 +1366,14 @@ class ExternalControllerTest(unittest.TestCase):
         self.addCleanup(harness.controller.close)
         harness.accept_enter()
         harness.controller.enter_external(timeout=0.1)
-        harness.controller.publish(make_command(1))
+        harness.controller.publish(make_command(1), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
         harness.status(
             action="EXTERNAL",
             phase=ExternalPhase.RUNNING,
             generation=84,
         )
-        harness.controller.publish(make_command(2))
+        harness.controller.publish(make_command(2), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
         published_commands = [
             message
@@ -1376,18 +1394,18 @@ class ExternalControllerTest(unittest.TestCase):
         harness.accept_enter()
         harness.controller.enter_external(timeout=0.1)
         harness.controller._next_external_sequence = (1 << 64) - 1
-        last = harness.controller.publish(make_command(1))
+        last = harness.controller.publish(make_command(1), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual((last.session_id, last.sequence), (42, (1 << 64) - 1))
 
         with self.assertRaisesRegex(ExternalControlError, "sequence exhausted"):
-            harness.controller.publish(make_command(1))
+            harness.controller.publish(make_command(1), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         with self.assertRaisesRegex(ExternalControlError, "sequence exhausted"):
             harness.controller._reserve_command()
 
         self.assertEqual([m for topic, m in harness.transport.published if topic == BODY_CMD_TOPIC],
                          [last])
 
-    def test_publish_rejects_invalid_structure_but_not_robot_side_ranges(self) -> None:
+    def test_publish_rejects_invalid_structure_and_declared_target_ranges(self) -> None:
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)
         harness.accept_enter()
@@ -1407,13 +1425,15 @@ class ExternalControllerTest(unittest.TestCase):
         for invalid_command in invalid_commands:
             with self.subTest(command=invalid_command):
                 with self.assertRaises(InvalidCommandError):
-                    harness.controller.publish(invalid_command)
+                    harness.controller.publish(invalid_command, target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
+        with self.assertRaises(InvalidCommandError):
+            harness.controller.publish(
+                BodyCmd(joints=tuple(BodyJointCmd(q=1e9, tau=-1e9) for _ in range(31))),
+                target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         published = harness.controller.publish(
-            BodyCmd(
-                joints=tuple(BodyJointCmd(q=1e9, tau=-1e9) for _ in range(31)),
-            )
-        )
+            BodyCmd(joints=tuple(BodyJointCmd(q=.5, tau=-.5) for _ in range(31))),
+            target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual((published.session_id, published.sequence), (42, 1))
 
     def test_v3_request_uses_v3_ack_and_status_without_fallback(self):
@@ -1432,8 +1452,8 @@ class ExternalControllerTest(unittest.TestCase):
         harness.controller.enter_external(timeout=0.1)
         for count in (0, 1, 30, 32, 42, 44, 45):
             with self.subTest(count=count), self.assertRaises(InvalidCommandError):
-                harness.controller.publish(BodyCmd(tuple(BodyJointCmd() for _ in range(count))))
-        harness.controller.publish(make_command(1))
+                harness.controller.publish(BodyCmd(tuple(BodyJointCmd() for _ in range(count))), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
+        harness.controller.publish(make_command(1), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
 
     def test_unknown_body_targets_and_nonfinite_slot_are_rejected_before_key(self):
         harness = ControllerHarness(info_reply=robot_info_reply())
@@ -1451,10 +1471,55 @@ class ExternalControllerTest(unittest.TestCase):
             harness.controller.publish(BodyCmd(tuple(motors)))
         self.assertEqual(harness.controller._next_external_sequence, 1)
         self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in harness.transport.published))
-        with self.assertRaisesRegex(InvalidCommandError, 'target scope is unknown'):
+        with self.assertRaisesRegex(InvalidCommandError, 'target scope must be explicitly declared'):
             harness.controller.publish(make_command(1))
         self.assertEqual(harness.controller._next_external_sequence, 1)
         self.assertTrue(harness.controller.get_robot_info().info.body.joints[14].is_mock)
+
+    def test_declared_thirty_targets_publish_and_cancel_with_mock_padding(self):
+        harness = ControllerHarness(info_reply=robot_info_reply())
+        self.addCleanup(harness.controller.close)
+        harness.accept_enter()
+        harness.controller.enter_external(.1)
+        info = harness.controller.get_robot_info(.1).info.body
+        targets = tuple(name for i, name in enumerate(info.joint_names) if i != 14)
+        command = BodyCmd(tuple(BodyJointCmd(q=.5, kp=1., kd=.5) if i != 14
+                                else BodyJointCmd() for i in range(31)))
+        sent = harness.controller.publish(command, target_names=targets, required_fields=0x19)
+        self.assertEqual((sent.session_id, sent.sequence), (42, 1))
+        def cancel(topic, request):
+            if topic == CONTROL_REQUEST_TOPIC and request.operation == ControlOperation.CANCEL:
+                harness.ack(request)
+                harness.status(action='PASSIVE', phase=ExternalPhase.IDLE)
+        harness.transport.on_publish = cancel
+        self.assertEqual(harness.controller.exit_external(.1).phase, ExternalPhase.IDLE)
+
+    def test_declared_mock_target_and_non_target_padding_reject_before_key(self):
+        reply = robot_info_reply()
+        body = reply.info.body
+        targets = tuple(name for i, name in enumerate(body.joint_names) if i != 14)
+        for failure in ('mock_target', 'padding', 'undeclared_field', 'empty', 'duplicate', 'unknown'):
+            with self.subTest(failure=failure):
+                joints = list(body.joints)
+                if failure == 'mock_target':
+                    joints[0] = replace(joints[0], is_mock=True)
+                    self.assertNotEqual(joints[0].supported_fields, 0)
+                source = replace(reply, info=replace(reply.info, body=replace(body, joints=tuple(joints))))
+                harness = ControllerHarness(info_reply=source)
+                self.addCleanup(harness.controller.close)
+                harness.accept_enter(); harness.controller.enter_external(.1)
+                values = [BodyJointCmd() for _ in range(31)]
+                if failure == 'padding':
+                    values[14] = BodyJointCmd(q=.1)
+                if failure == 'undeclared_field':
+                    values[0] = BodyJointCmd(kp=1.)
+                declared = (() if failure == 'empty' else targets + (targets[0],) if failure == 'duplicate'
+                            else targets + ('not-in-roster',) if failure == 'unknown' else targets)
+                with self.assertRaises(InvalidCommandError):
+                    harness.controller.publish(BodyCmd(tuple(values)), target_names=declared,
+                                               required_fields=1 if failure == 'undeclared_field' else 0x19)
+                self.assertEqual(harness.controller._next_external_sequence, 1)
+                self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in harness.transport.published))
 
     def test_exit_waits_until_status_no_longer_reports_external(self) -> None:
         harness = ControllerHarness()

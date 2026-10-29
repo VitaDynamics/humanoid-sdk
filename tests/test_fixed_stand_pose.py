@@ -31,8 +31,14 @@ class ZeroPoseTest(unittest.TestCase):
         c = RecordingController(clock, **options)
         self.addCleanup(c.close)
         reply = robot_info_reply()
+        selected = info or body_info()
+        # The live synthetic controller fixture declares its kp/kd limits;
+        # body_info() itself retains the original q-only preflight coverage.
+        selected = replace(selected, joints=tuple(
+            replace(cap, valid_limits=cap.valid_limits | 0x18)
+            if cap.valid_limits & 1 else cap for cap in selected.joints))
         c.transport.get_robot_info = lambda timeout: replace(
-            reply, runtime_id=100, info=replace(reply.info, body=info or body_info()))
+            reply, runtime_id=100, info=replace(reply.info, body=selected))
         return c, clock
 
     def run_zero(self, c, clock, loop, events=None):
@@ -70,6 +76,26 @@ class ZeroPoseTest(unittest.TestCase):
             gripper_demo._observe_zero_dwell(lambda _: self.fail('must not request feedback'),
                 (0.,) * 31, body=body, body_info=body_info(), monotonic=lambda: 0., emit=events.append)
         self.assertEqual(events, [])
+
+    def test_measured_hold_accepts_positive_range_but_zero_mode_rejects(self):
+        info = body_info()
+        caps = list(info.joints)
+        caps[0] = replace(caps[0], q_min=.2, q_max=1.2)
+        info = replace(info, joints=tuple(caps))
+        c, clock = self.controller(info=info)
+        c.measured_q[0] = .7
+        run_external(c, lambda frame: frame(), body=body, body_pose='measured',
+                     timeout=1, sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
+        self.assertTrue(self.commands(c))
+        self.assertEqual(c.calls.count('exit_external'), 1)
+        c2, clock2 = self.controller(info=info)
+        c2.measured_q[0] = .7
+        with self.assertRaisesRegex(ValueError, 'zero outside'):
+            run_external(c2, lambda frame: self.fail('zero mode must not enter'), body=body,
+                         body_pose='zero', timeout=1, sleep=clock2.sleep,
+                         monotonic=clock2.monotonic, emit=lambda _: None)
+        self.assertNotIn('enter_external', c2.calls)
+        self.assertFalse(self.commands(c2))
 
     def test_native_transition_duration_and_actual_time_curve(self):
         plan = FixedStandPose(body_info())
