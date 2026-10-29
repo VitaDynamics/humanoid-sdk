@@ -147,14 +147,14 @@ class NativeBodyCmdTest(unittest.TestCase):
             self.assertEqual(provenance[stem + '_bfbs_sha256'], compatibility['schema_sha256'][stem])
 
     def test_controller_validation_population_and_type_rules_retained(self):
-        population = tuple(i != 14 for i in range(31))
         for value in [True, 'x', math.nan, math.inf]:
             joints = list(make_command().joints);joints[0] = BodyJointCmd(q=value)
-            with self.assertRaises(InvalidCommandError): _validate_command(BodyCmd(tuple(joints)), population)
+            with self.assertRaises(InvalidCommandError): _validate_command(BodyCmd(tuple(joints)))
         for value in [True, math.nan, math.inf]:
             joints = list(make_command().joints);joints[14] = BodyJointCmd(q=value);c = BodyCmd(tuple(joints))
-            _validate_command(c, population)
+            with self.assertRaises(InvalidCommandError): _validate_command(c)
             self.assertBytes(dataclasses.replace(c, descriptor_ref=DescriptorRef(11), control_id=13))
+        _validate_command(make_command())
         for count in [0, 30, 32]:
             with self.assertRaises(InvalidCommandError): _validate_command(BodyCmd((BodyJointCmd(),)*count))
             with self.assertRaises(ValueError): native.encode(BodyCmd((BodyJointCmd(),)*count), 0, None, 0)

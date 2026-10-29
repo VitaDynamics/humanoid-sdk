@@ -24,10 +24,11 @@ from test_wbc_tracking_policy import FakeClock, FakeController, FakeModel, examp
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def body_info(names=ASAMPLE_BODY_JOINT_NAMES, unpopulated=()):
+def body_info(names=ASAMPLE_BODY_JOINT_NAMES, unavailable=()):
     return SimpleNamespace(joint_names=names, slot_count=len(names), roster_version=1,
-        joints=[SimpleNamespace(populated=name != 'waist_roll_joint' and name not in unpopulated,
-                                is_mock=False) for name in names])
+        joints=[SimpleNamespace(body_index=i, is_mock=name == 'waist_roll_joint' or name in unavailable,
+                                supported_fields=31, valid_limits=31, q_min=-3., q_max=3.)
+                for i, name in enumerate(names)])
 
 
 class PolicyPreflightTest(unittest.TestCase):
@@ -114,21 +115,21 @@ class PolicyPreflightTest(unittest.TestCase):
 
     def test_velocity_unpopulated_policy_joint_never_enters(self):
         name = ASAMPLE_BODY_JOINT_NAMES[0]
-        self.velocity(body_info(unpopulated=[name]), [name])
+        self.velocity(body_info(unavailable=[name]), [name])
 
     def test_velocity_missing_policy_name_never_enters(self):
         name = ASAMPLE_BODY_JOINT_NAMES[0]
         self.velocity(body_info(ASAMPLE_BODY_JOINT_NAMES[1:]), [name])
 
     def test_velocity_unpopulated_fixed_neck_never_enters(self):
-        self.velocity(body_info(unpopulated=['neck_pitch_joint']), ['neck_pitch_joint'])
+        self.velocity(body_info(unavailable=['neck_pitch_joint']), ['neck_pitch_joint'])
 
     def test_velocity_complete_permuted_roster_enters(self):
         self.velocity(body_info(tuple(reversed(ASAMPLE_BODY_JOINT_NAMES))))
 
     def test_wbc_unpopulated_policy_joint_never_enters(self):
         name = ASAMPLE_BODY_JOINT_NAMES[0]
-        self.wbc(body_info(unpopulated=[name]), [name])
+        self.wbc(body_info(unavailable=[name]), [name])
 
     def test_wbc_missing_policy_name_never_enters(self):
         name = ASAMPLE_BODY_JOINT_NAMES[0]
@@ -141,7 +142,7 @@ class PolicyPreflightTest(unittest.TestCase):
                 self.wbc(body_info(tuple(n for n in ASAMPLE_BODY_JOINT_NAMES if n not in missing)), missing)
 
     def test_wbc_unpopulated_fixed_neck_never_enters(self):
-        self.wbc(body_info(unpopulated=['neck_yaw_joint']), ['neck_yaw_joint'])
+        self.wbc(body_info(unavailable=['neck_yaw_joint']), ['neck_yaw_joint'])
 
     def test_wbc_complete_permuted_roster_enters(self):
         self.wbc(body_info(tuple(reversed(ASAMPLE_BODY_JOINT_NAMES))))

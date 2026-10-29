@@ -30,7 +30,8 @@ NAMES = (
 
 def fixture():
     body = NS(slot_count=31,joint_names=NAMES,
-              joints=tuple(NS(populated=n!='waist_roll_joint') for n in NAMES))
+              joints=tuple(NS(body_index=i, is_mock=n=='waist_roll_joint', supported_fields=31,
+                              valid_limits=31, q_min=-3., q_max=3.) for i,n in enumerate(NAMES)))
     motors = tuple(NS(error_code=0,
                       q=float(i),dq=float(100+i)) for i,n in enumerate(NAMES))
     # TRUNK first and deliberately different, preventing accidental imu_states[0].
@@ -52,6 +53,20 @@ class ObservationTests(unittest.TestCase):
     def setUp(self):
         self.policy = Policy(METADATA,CONTRACT)
         self.body,self.state = fixture()
+
+    def test_required_leg_and_upper_mock_are_rejected_before_target_selection(self):
+        self.assertEqual(len(self.policy.names), 30)
+        self.assertTrue(self.body.joints[14].is_mock)
+        self.assertEqual(len(self.policy.roster(self.body)), 31)
+        for name in (self.policy.legs[0], self.policy.upper[-1]):
+            with self.subTest(name=name):
+                joints = list(self.body.joints)
+                i = self.body.joint_names.index(name)
+                joints[i] = NS(body_index=i, is_mock=True, supported_fields=31, valid_limits=31,
+                               q_min=-3., q_max=3.)
+                changed = NS(slot_count=31, joint_names=self.body.joint_names, joints=tuple(joints))
+                with self.assertRaisesRegex(ValueError, 'unavailable'):
+                    self.policy.roster(changed)
 
     def test_named_full_frame_and_initial_backfill(self):
         obs = self.policy.observation(self.state,self.body,(.25,-.5,.125,.75),'HIP')
@@ -429,11 +444,11 @@ class ActualSdkDtoIntegration(unittest.TestCase):
         import flatbuffers
         import lowlevel.BodyCmd as command_module
         body, state = fixture()
-        capability = tuple(api.BodyJointCapability(i,api.BodySlotRole.ACTIVE,False,j.populated,
-                              31 if j.populated else 0,0,0.,0.,0.,0.,0.,0.,0.,0.,0.,0.)
+        capability = tuple(api.BodyJointCapability(i,api.BodySlotRole.ACTIVE,j.is_mock,
+                              j.supported_fields,j.valid_limits,-3.,3.,0.,0.,0.,0.,0.,0.,0.,0.)
                            for i,j in enumerate(body.joints))
         typed_body = api.BodyInfo(0,31,body.joint_names,capability,
-                                 tuple(api.BodyMotorIdentity('synthetic',i+1,j.populated) for i,j in enumerate(capability)))
+                                 tuple(api.BodyMotorIdentity('synthetic',i+1,i != 14) for i in range(31)))
         motors = tuple(api.BodyJointState(q=m.q,dq=m.dq) for m in state.joints)
         imus = tuple(api.BodyImuSample(getattr(api.BodyImuLocation,m.location),
                          api.BodyImuState(m.state.quaternion,m.state.gyroscope,(0.,0.,9.81),(0.,0.,0.)),

@@ -94,8 +94,8 @@ def main():
                 command = BodyCmd(
                     descriptor_ref=state.descriptor_ref,
                     input_state_id=state.state_id, input_state_ts_real_us=state.ts_state_real_us,
-                    joints=tuple(BodyJointCmd(m.q, m.dq, m.tau_est, 1., .5) if cap.populated else BodyJointCmd()
-                                    for m, cap in zip(state.joints, body.joints)))
+                    joints=tuple(BodyJointCmd(m.q, m.dq, m.tau_est, 1., .5) if i in target_slots else BodyJointCmd()
+                                    for i, m in enumerate(state.joints)))
                 built_ns = time.monotonic_ns()
                 built_realtime_ns = time.time_ns()
                 sent = controller.publish(command)
@@ -116,8 +116,19 @@ def main():
         body = None if info.info is None else info.info.body
         if (info.status != ServiceStatus.SUCCESS or body is None or body.slot_count != 31
                 or len(body.joints) != 31 or len(body.motor_identities) != 31
-                or len(info.info.end_effectors) != 2 or body.joints[14].populated):
+                or len(info.info.end_effectors) != 2
+                or tuple(body.joint_names) != tuple(f'mock_joint_{i}' for i in range(31))):
             raise ValueError("invalid actual Mock RobotInfo reply")
+        # This synthetic benchmark fixture explicitly targets all slots except 14.
+        target_slots = tuple(i for i in range(31) if i != 14)
+        if any(body.joints[i].is_mock for i in target_slots):
+            raise ValueError('synthetic benchmark target is unavailable')
+        if any(body.joints[i].supported_fields & 0x19 != 0x19
+               or not body.joints[i].valid_limits & 1 for i in target_slots):
+            raise ValueError('synthetic benchmark target capability is unavailable')
+        if any(j.is_mock or j.supported_fields & 0x1f != 0x1f
+               or j.valid_limits & 0x1f != 0x1f for j in body.joints):
+            raise ValueError('generic BodyCmd target scope is not bound for this fixture')
         running = controller.enter_external(timeout=15.0)
         entered = True
         if not transport.publishers[sdk.BODY_CMD_TOPIC].wait_for_matching(15000):
@@ -125,9 +136,10 @@ def main():
         transport.subscribe(sdk.BODY_STATE_TOPIC, callback)
         (args.directory / "client_info.json").write_text(json.dumps({
             "status": info.status, "slot_count": body.slot_count,
-            "joint_names": body.joint_names, "populated": [j.populated for j in body.joints],
+            "joint_names": body.joint_names, "is_mock": [j.is_mock for j in body.joints],
+            "supported_fields": [j.supported_fields for j in body.joints],
             "motor_identity_count": len(body.motor_identities), "end_effector_count": len(info.info.end_effectors),
-            "runtime_id": info.descriptor_ref.robot_runtime_id, "client_id": running.client_id,
+            "runtime_id": info.runtime_id, "client_id": running.client_id,
             "control_id": running.control_id, "generation": running.generation}))
         (args.directory / "client.ready").write_text("ready\n")
         deadline = time.monotonic() + args.duration + 30

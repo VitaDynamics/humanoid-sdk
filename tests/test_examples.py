@@ -22,6 +22,13 @@ from locomotion_aorta import (
     DescriptorRef,
 )
 from fake_transport import FakeTransport
+from locomotion_aorta._policy_state import ASAMPLE_BODY_JOINT_NAMES
+
+
+def example_robot_info_reply():
+    reply = robot_info_reply()
+    body = replace(reply.info.body, joint_names=ASAMPLE_BODY_JOINT_NAMES)
+    return replace(reply, info=replace(reply.info, body=body))
 
 
 class RecordingController:
@@ -49,7 +56,7 @@ class RecordingController:
         self.follow_commands = follow_commands
         self.transport = FakeTransport()
         self.transport.get_robot_info = lambda timeout: replace(
-            robot_info_reply(), runtime_id=100)
+            example_robot_info_reply(), runtime_id=100)
         self.controller = ExternalController(
             client_id=7, _transport=self.transport
         )
@@ -117,7 +124,7 @@ class RecordingController:
                 descriptor_ref=DescriptorRef(100),
                 ts_state_real_us=int(self.clock.monotonic() * 1_000_000),
                 joints=tuple(
-                    sample_motor(q=q, dq=dq, body_index=i, populated=i != 14)
+                    sample_motor(q=q, dq=dq, body_index=i)
                     for i, (q, dq) in enumerate(zip(emitted_q, self.measured_dq))
                 ),
                 attitude_valid=self.attitude_valid,
@@ -240,8 +247,8 @@ class FakeClock:
 class ExamplesSmokeTest(unittest.TestCase):
     def test_body_state_example_prints_snapshot_without_entering_external(self):
         state = BodyState(state_id=8, ts_state_real_us=0, attitude_valid=True,
-                          joints=tuple(sample_motor(q=0.1, dq=0.0, body_index=i,
-                                                    populated=i != 14) for i in range(31)))
+                          joints=tuple(sample_motor(q=0.1, dq=0.0, body_index=i)
+                                       for i in range(31)))
         source = SimpleNamespace(wait_state=mock.Mock(return_value=body_array_frame(state)))
         output: list[str] = []
         body_state_subscriber.run_once(source, timeout=0.1, emit=output.append)
@@ -260,13 +267,29 @@ class ExamplesSmokeTest(unittest.TestCase):
         motors = [sample_motor() for _ in range(31)]
         motors[14] = sample_motor(q=math.nan, dq=math.inf)
         state = BodyState(1, tuple(motors), attitude_valid=True)
-        info = robot_info_reply().info.body
+        info = example_robot_info_reply().info.body
         external_control._validate_body_state(body_array_frame(state), body_info=info, require_stationary=True)
         for error in (3, 20, 255):
             motors[0] = replace(motors[0], error_code=error)
             with self.subTest(error=error), self.assertRaisesRegex(RuntimeError, f'error_code={error}'):
                 external_control._validate_body_state(body_array_frame(replace(state, joints=tuple(motors))),
                                                       body_info=info, require_stationary=False)
+
+    def test_profile_rejects_mock_target_and_keeps_non_target_readonly(self):
+        info = example_robot_info_reply().info.body
+        slots = external_control._body_target_slots(info)
+        self.assertEqual(len(slots), 30)
+        self.assertNotIn(14, slots)
+        self.assertTrue(info.joints[14].is_mock)
+        joints = list(info.joints)
+        joints[0] = replace(joints[0], is_mock=True)
+        self.assertNotEqual(joints[0].supported_fields, 0)
+        with self.assertRaisesRegex(ValueError, 'targets unavailable'):
+            external_control._body_target_slots(replace(info, joints=tuple(joints)))
+        state = BodyState(1, tuple(sample_motor() for _ in range(31)), attitude_valid=True)
+        with self.assertRaisesRegex(ValueError, 'no target slots'):
+            external_control._validate_body_state(body_array_frame(state), body_info=info,
+                                                  require_stationary=True, target_slots=())
 
     def test_external_example_runs_full_body_round_trip_and_enters_passive(self):
         clock = FakeClock()
@@ -633,7 +656,7 @@ class ExamplesSmokeTest(unittest.TestCase):
 
                 sleep_with_feedback(0)
                 state = external_control._wait_for_stationary_body_state(
-                    harness, body_info=robot_info_reply().info.body, timeout=5.0, sleep=sleep_with_feedback,
+                    harness, body_info=example_robot_info_reply().info.body, timeout=5.0, sleep=sleep_with_feedback,
                     monotonic=clock.monotonic,
                 )
                 self.assertEqual(state.joints[26].dq, 0.0)

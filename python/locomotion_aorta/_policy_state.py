@@ -1,5 +1,6 @@
 """Shared public-body policy input; no inference or control ownership."""
 from dataclasses import dataclass, fields
+import math
 from .body_types import BodyState
 
 ASAMPLE_BODY_JOINT_NAMES = (
@@ -46,11 +47,20 @@ def body_joint_order(body_info=None, *, required_names=()):
     if len(names) != 31 or len(set(names)) != 31:
         raise ValueError("expected 31 unique public body joint names")
     if body_info is not None and required_names:
-        if len(body_info.joints) != len(names):
+        if (len(body_info.joints) != len(names)
+                or any(cap.body_index != i for i, cap in enumerate(body_info.joints))):
             raise ValueError('get_robot_info capability count differs from roster')
-        missing = [name for name in required_names if not body_info.joints[names.index(name)].populated]
+        unavailable = [name for name in required_names if body_info.joints[names.index(name)].is_mock]
+        if unavailable:
+            raise ValueError('policy joints are unavailable: ' + ', '.join(unavailable))
+        missing = [name for name in required_names
+                   if (body_info.joints[names.index(name)].supported_fields & 0x19) != 0x19
+                   or not body_info.joints[names.index(name)].valid_limits & 1
+                   or not math.isfinite(body_info.joints[names.index(name)].q_min)
+                   or not math.isfinite(body_info.joints[names.index(name)].q_max)
+                   or body_info.joints[names.index(name)].q_min > body_info.joints[names.index(name)].q_max]
         if missing:
-            raise ValueError('policy joints are unpopulated: ' + ', '.join(missing))
+            raise ValueError('policy joint position capability or limit unavailable: ' + ', '.join(missing))
     return names
 
 

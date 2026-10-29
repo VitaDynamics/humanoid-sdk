@@ -2,13 +2,14 @@
 from dataclasses import replace
 import signal
 import unittest
+from unittest import mock
 
 from body_fixtures import robot_info_reply
 from examples.external_control import external_control as body
 from examples.fixed_stand_pose.fixed_stand_pose import FixedStandPose
 from examples.end_effector.end_effector_external import run_external
 from examples.end_effector import end_effector_external as gripper_demo
-from locomotion_aorta import BODY_CMD_TOPIC, DescriptorRef
+from locomotion_aorta import BODY_CMD_TOPIC
 from test_examples import FakeClock, RecordingController
 from test_end_effector_external import Endpoint
 from test_teleop_policy import NAMES
@@ -31,7 +32,7 @@ class ZeroPoseTest(unittest.TestCase):
         self.addCleanup(c.close)
         reply = robot_info_reply()
         c.transport.get_robot_info = lambda timeout: replace(
-            reply, descriptor_ref=DescriptorRef(100), info=replace(reply.info, body=info or body_info()))
+            reply, runtime_id=100, info=replace(reply.info, body=info or body_info()))
         return c, clock
 
     def run_zero(self, c, clock, loop, events=None):
@@ -50,6 +51,25 @@ class ZeroPoseTest(unittest.TestCase):
         self.assertEqual(gains['left_elbow_joint']['kp'], 40)
         self.assertEqual(gains['right_wrist_pitch_joint']['kd'], 4)
         self.assertEqual(gains['neck_pitch_joint']['kp'], 20)
+
+    def test_target_mock_is_rejected_but_non_target_slot_is_retained(self):
+        info = body_info()
+        plan = FixedStandPose(info)
+        self.assertEqual(len(plan.targets), 30)
+        self.assertTrue(info.joints[14].is_mock)
+        self.assertNotIn(info.joint_names[14], plan.targets)
+        caps = list(info.joints)
+        caps[0] = replace(caps[0], is_mock=True)
+        self.assertNotEqual(caps[0].supported_fields, 0)
+        with self.assertRaisesRegex(ValueError, 'targets unavailable'):
+            FixedStandPose(replace(info, joints=tuple(caps)))
+
+    def test_zero_dwell_cannot_succeed_without_a_sample(self):
+        events = []
+        with mock.patch.object(body, 'DWELL_S', 0), self.assertRaisesRegex(ValueError, 'at least one'):
+            gripper_demo._observe_zero_dwell(lambda _: self.fail('must not request feedback'),
+                (0.,) * 31, body=body, body_info=body_info(), monotonic=lambda: 0., emit=events.append)
+        self.assertEqual(events, [])
 
     def test_native_transition_duration_and_actual_time_curve(self):
         plan = FixedStandPose(body_info())

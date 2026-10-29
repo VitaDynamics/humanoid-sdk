@@ -38,8 +38,17 @@ from locomotion_aorta import (
 class ControllerHarness:
     def __init__(self, runtime_id: int = 11, *, info_reply=None) -> None:
         self.transport = FakeTransport()
-        reply = (replace(robot_info_reply(), runtime_id=runtime_id)
-                 if info_reply is None else info_reply)
+        if info_reply is None:
+            # Synthetic all-targets-proven fixture for generic BodyCmd positive tests.
+            reply = robot_info_reply()
+            body = reply.info.body
+            body = replace(body,
+                joints=tuple(replace(j, is_mock=False, supported_fields=31, valid_limits=31)
+                             for j in body.joints),
+                motor_identities=tuple(replace(m, present=True) for m in body.motor_identities))
+            reply = replace(reply, runtime_id=runtime_id, info=replace(reply.info, body=body))
+        else:
+            reply = info_reply
         if not reply.runtime_id:
             raise ValueError('test service response has no runtime identity')
         self.runtime_id = reply.runtime_id
@@ -1426,18 +1435,26 @@ class ExternalControllerTest(unittest.TestCase):
                 harness.controller.publish(BodyCmd(tuple(BodyJointCmd() for _ in range(count))))
         harness.controller.publish(make_command(1))
 
-    def test_unpopulated_slot_is_not_physically_validated(self):
-        harness = ControllerHarness()
+    def test_unknown_body_targets_and_nonfinite_slot_are_rejected_before_key(self):
+        harness = ControllerHarness(info_reply=robot_info_reply())
         self.addCleanup(harness.controller.close)
         harness.accept_enter()
         harness.controller.enter_external(timeout=0.1)
         harness.controller.get_robot_info()
         motors = list(make_command(1).joints)
         motors[14] = BodyJointCmd(q=math.nan, dq=math.inf)
-        harness.controller.publish(BodyCmd(tuple(motors)))
+        with self.assertRaises(InvalidCommandError):
+            harness.controller.publish(BodyCmd(tuple(motors)))
+        motors[14] = BodyJointCmd()
         motors[13] = BodyJointCmd(q=math.nan)
         with self.assertRaises(InvalidCommandError):
             harness.controller.publish(BodyCmd(tuple(motors)))
+        self.assertEqual(harness.controller._next_external_sequence, 1)
+        self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in harness.transport.published))
+        with self.assertRaisesRegex(InvalidCommandError, 'target scope is unknown'):
+            harness.controller.publish(make_command(1))
+        self.assertEqual(harness.controller._next_external_sequence, 1)
+        self.assertTrue(harness.controller.get_robot_info().info.body.joints[14].is_mock)
 
     def test_exit_waits_until_status_no_longer_reports_external(self) -> None:
         harness = ControllerHarness()

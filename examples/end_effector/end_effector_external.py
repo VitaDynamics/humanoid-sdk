@@ -59,15 +59,17 @@ def stop_signals():
 
 def _observe_zero_dwell(frame, target, *, body, body_info, monotonic, emit):
     """Record the existing example dwell without a feedback-arrival gate."""
+    target_slots = body._body_target_slots(body_info)
     began = monotonic()
     peak_error = 0.0
     peak_speed = 0.0
     samples = math.ceil(body.DWELL_S / body.PERIOD_S)
+    if samples <= 0:
+        raise ValueError('zero dwell requires at least one feedback sample')
     for sample in range(samples):
         state = frame(target)  # Retains the lifecycle's safety/protocol checks.
-        error = max((abs(actual - q) for actual, q, cap in zip(state.q, target, body_info.joints)
-                     if cap.populated), default=0.0)
-        speed = max((abs(dq) for dq, cap in zip(state.dq, body_info.joints) if cap.populated), default=0.0)
+        error = max(abs(state.q[i] - target[i]) for i in target_slots)
+        speed = max(abs(state.dq[i]) for i in target_slots)
         peak_error = max(peak_error, error)
         peak_speed = max(peak_speed, speed)
         emit(f'ZERO_DWELL observation_only=true sample={sample + 1} '
@@ -96,6 +98,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
     pose = ()
     if body_enabled:
         info = body.require_body_info(controller, timeout)
+        hold_slots = body._body_target_slots(info)
         plan = None
         if body_pose == 'zero':
             spec = importlib.util.spec_from_file_location(
@@ -104,8 +107,9 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             spec.loader.exec_module(module)
             plan = module.FixedStandPose(info)  # Reject all bad/missing zero limits before PREPARE.
         initial = body._wait_for_stationary_body_state(
-            controller, body_info=info, timeout=timeout, sleep=sleep, monotonic=monotonic)
-        pose = tuple(float(q) if cap.populated else 0.0 for q, cap in zip(initial.q, info.joints))
+            controller, body_info=info, timeout=timeout, sleep=sleep, monotonic=monotonic,
+            target_slots=hold_slots)
+        pose = tuple(float(q) if i in hold_slots else 0.0 for i, q in enumerate(initial.q))
         if plan is not None:
             plan.measured(initial)
         hold = body._position_command(pose)
@@ -115,12 +119,12 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
     else:
         # Even EE-only control must bind the startup runtime before PREPARE.
         _bind_runtime(controller, timeout)
+        hold_slots = ()
     attempted = False
     active = False
     traces = []
     hold_samples = 0
     hold_peak_abs_error = [0.0] * len(pose)
-    hold_slots = tuple(i for i, cap in enumerate(info.joints) if cap.populated) if info else ()
     try:
         if plan is not None:
             from locomotion_aorta import CONTROL_ACK_TOPIC, CONTROL_STATUS_TOPIC
@@ -134,7 +138,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             # Use the latest real sample after the owned RUNNING transition,
             # never the model pose or a pre-entry commanded pose.
             initial = controller.wait_state(timeout)
-            body._validate_body_state(initial, body_info=info, require_stationary=False)
+            body._validate_body_state(initial, body_info=info, require_stationary=False, target_slots=hold_slots)
             pose = plan.measured(initial)
         last_id = initial.state_id if initial is not None else None
         last_change = monotonic()
@@ -162,7 +166,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
                     next_publish = monotonic() + body.PERIOD_S
                 return None
             state = controller.wait_state(timeout)
-            body._validate_body_state(state, body_info=info, require_stationary=False)
+            body._validate_body_state(state, body_info=info, require_stationary=False, target_slots=hold_slots)
             now = monotonic()
             if state.state_id != last_id:
                 last_id, last_change = state.state_id, now
@@ -225,7 +229,7 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
                 emit(f'BODY_HOLD summary observation_only=true samples={hold_samples} '
                      f'slots={hold_slots!r} '
                      f'peak_abs_q_error_rad={tuple(hold_peak_abs_error[i] for i in hold_slots)!r} '
-                     f'max_abs_q_error_rad={max(hold_peak_abs_error, default=0.0):.6f}')
+                     f'max_abs_q_error_rad={max(hold_peak_abs_error[i] for i in hold_slots):.6f}')
         finally:
             try:
                 if attempted:

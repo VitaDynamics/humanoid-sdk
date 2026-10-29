@@ -322,16 +322,18 @@ class ExternalController:
             if trace is not None:
                 trace['condition_wait_ns'] = time.perf_counter_ns() - waiting
             self._ensure_open()
-            population = None
-            if self._body_info is not None and len(self._body_info.joints) == BODY_SLOTS:
-                population = tuple(j.populated for j in self._body_info.joints)
             validation = time.perf_counter_ns() if trace is not None else 0
             try:
-                _validate_command(command, population)
+                _validate_command(command)
                 if (command.descriptor_ref is not None and
                         (not _valid_ref(command.descriptor_ref) or
                          command.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id)):
                     raise InvalidCommandError('BodyCmd belongs to a different robot runtime')
+                if self._body_info is None or len(self._body_info.joints) != BODY_SLOTS:
+                    raise InvalidCommandError('validated BodyInfo is required before publish')
+                if any(j.is_mock or j.supported_fields & 0x1f != 0x1f
+                       or j.valid_limits & 0x1f != 0x1f for j in self._body_info.joints):
+                    raise InvalidCommandError('BodyCmd target scope is unknown with unavailable or unproven slots')
             finally:
                 if trace is not None:
                     trace['validation_ns'] = time.perf_counter_ns() - validation
@@ -875,7 +877,7 @@ def _status_is_newer(
     return status.status_seq > previous.status_seq
 
 
-def _validate_command(command: BodyCmd, populated: tuple[bool, ...] | None = None) -> None:
+def _validate_command(command: BodyCmd) -> None:
     if not isinstance(command, BodyCmd):
         raise InvalidCommandError("command must be a BodyCmd")
     if not isinstance(command.joints, tuple) or len(command.joints) != BODY_SLOTS:
@@ -895,8 +897,6 @@ def _validate_command(command: BodyCmd, populated: tuple[bool, ...] | None = Non
     for index, motor in enumerate(command.joints):
         if not isinstance(motor, BodyJointCmd):
             raise InvalidCommandError(f"joints[{index}] must be a BodyJointCmd")
-        if populated is not None and not populated[index]:
-            continue
         for field in ("q", "dq", "tau", "kp", "kd"):
             value = getattr(motor, field)
             if isinstance(value, bool) or not isinstance(value, (int, float)):

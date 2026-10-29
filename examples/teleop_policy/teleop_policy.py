@@ -100,12 +100,19 @@ class Policy:
             raise ValueError('get_robot_info must provide 31 unique public joint names')
         if set(names) != set(self.names) | {'waist_roll_joint'}:
             raise ValueError('get_robot_info roster differs from model plus unpopulated roll')
-        if len(body.joints) != 31:
+        if (len(body.joints) != 31 or
+                any(cap.body_index != i for i, cap in enumerate(body.joints))):
             raise ValueError('get_robot_info capability count differs from roster')
         indices = {name: i for i, name in enumerate(names)}
+        unavailable = [name for name in self.names if body.joints[indices[name]].is_mock]
+        if unavailable:
+            raise ValueError('policy joints are unavailable: ' + ', '.join(unavailable))
         for name in self.names:
-            if not body.joints[indices[name]].populated:
-                raise ValueError(f'policy joint is unpopulated: {name}')
+            cap = body.joints[indices[name]]
+            if (cap.supported_fields & 0x19 != 0x19 or not cap.valid_limits & 1
+                    or not math.isfinite(cap.q_min) or not math.isfinite(cap.q_max)
+                    or cap.q_min > cap.q_max):
+                raise ValueError(f'policy joint position capability or limit unavailable: {name}')
         return indices
 
     def observation(self, state: Any, body: Any, command: Sequence[float], hip: Any) -> tuple[float, ...]:
@@ -173,9 +180,11 @@ class Policy:
                 q = clamp(q, *self.contract['joint_limits'][name])
             kp = self.contract['joint_kp'].get(name, self.kp[p])
             kd = self.contract['joint_kd'].get(name, self.kd[p])
+            cap = body.joints[indices[name]]
+            if not cap.q_min <= q <= cap.q_max:
+                raise ValueError(f'policy target outside BodyInfo limit: {name}')
             targets[indices[name]] = MotorTarget(q=q, kp=kp, kd=kd)
-        # Unpopulated roll stays placeholder; D2 codec/server populated mask skips dispatch.
-        # Do not add a physical range/zero/finite gate for that slot.
+        # The profile does not target waist roll; its fixed wire slot is a command placeholder.
         return tuple(targets)
 
 
