@@ -267,7 +267,7 @@ class EndEffectorSequenceTest(unittest.TestCase):
                 if zero:
                     self.assertTrue(all(joint.q == 0 for joint in body[-1].joints))
 
-    def test_public_upgrade_has_no_legacy_online_fallback_but_keeps_nested_descriptions(self):
+    def test_public_upgrade_has_no_legacy_online_or_info_types(self):
         for name in ('HandClient', 'HandCmd', 'HandState', 'HandTouch', 'HandJointCmd',
                      'HandJointState', 'FingerTouchMeta', 'HAND_TOPIC_PREFIX', 'GripperClient',
                      'GripperCmd', 'GripperState', 'GripperSample', 'GripperHostTarget', 'GRIPPER_TOPIC_PREFIX'):
@@ -277,8 +277,11 @@ class EndEffectorSequenceTest(unittest.TestCase):
         for name in ('hand', '_hand_codec', 'gripper', '_gripper_codec', '_gripper_lifecycle'):
             with self.subTest(module=name):
                 self.assertIsNone(importlib.util.find_spec('locomotion_aorta.' + name))
-        for name in ('HandInfo', 'HandSide', 'HandType', 'InhibitReason', 'GripperInfo',
-                     'GripperType', 'GripperLimitSource', 'EndEffectorClient'):
+        for name in ('HandInfo', 'GripperInfo', 'EndEffectorKind', 'GripperLimitSource'):
+            self.assertFalse(hasattr(sdk, name))
+            self.assertNotIn(name, sdk.__all__)
+        for name in ('HandSide', 'HandType', 'InhibitReason',
+                     'GripperType', 'EndEffectorClient'):
             self.assertIn(name, sdk.__all__)
             self.assertIsNotNone(getattr(sdk, name))
         root = Path(__file__).resolve().parents[1]

@@ -52,26 +52,26 @@ __all__ = [
     "CONTROL_REQUEST_VERSION",
 ]
 
-from .hand_types import HandInfo, HandSide, HandType, InhibitReason
-__all__ += ["HandInfo", "HandSide", "HandType", "InhibitReason"]
+from .hand_types import HandSide, HandType, InhibitReason
+__all__ += ["HandSide", "HandType", "InhibitReason"]
 
 from .body_types import (
     BODY_SLOTS, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION, BodyJointCmd, BodyCmd, BodyCmdAction,
     BodyState, BodyJointState, BodyImuState, BodyImuSample, BodyImuLocation,
     BodySampleStatus, JointError, BodySlotRole, BodyJointCapability,
-    BodyMotorIdentity, BodyInfo, RobotInfo, EndEffectorKind, EndEffectorCapability,
-    GripperInfo, GetRobotInfoResponse, ServiceStatus, DescriptorRef,
+    BodyMotorIdentity, BodyInfo, RobotInfo, EndEffectorCapability,
+    GetRobotInfoResponse, ServiceStatus, DescriptorRef,
 )
 __all__ += [
     "BODY_SLOTS", "BODY_CMD_PROTOCOL_VERSION", "BODY_STATE_PROTOCOL_VERSION", "BodyJointCmd", "BodyCmd", "BodyCmdAction",
     "BodyState", "BodyJointState", "BodyImuState", "BodyImuSample", "BodyImuLocation",
     "BodySampleStatus", "JointError", "BodySlotRole", "BodyJointCapability",
-    "BodyMotorIdentity", "BodyInfo", "RobotInfo", "EndEffectorKind", "EndEffectorCapability",
-    "GripperInfo", "GetRobotInfoResponse", "ServiceStatus", "DescriptorRef",
+    "BodyMotorIdentity", "BodyInfo", "RobotInfo", "EndEffectorCapability",
+    "GetRobotInfoResponse", "ServiceStatus", "DescriptorRef",
 ]
 
-from .gripper_types import GripperLimitSource, GripperType
-__all__ += ["GripperLimitSource", "GripperType"]
+from .gripper_types import GripperType
+__all__ += ["GripperType"]
 
 from .state import BodyStateSource, BodyStateSnapshot
 __all__ += ["BodyStateSource", "BodyStateSnapshot"]

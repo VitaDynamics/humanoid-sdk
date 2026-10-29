@@ -1,5 +1,4 @@
-"""Frozen hand description nested in Body/RobotInfo; no online hand client."""
-from dataclasses import dataclass
+"""Existing hand protocol enums; no online hand client."""
 from enum import IntEnum
 
 
@@ -21,21 +20,3 @@ class InhibitReason(IntEnum):
     EMERGENCY = 2
     DOMAIN_FAULT = 3
     NOT_READY = 4
-
-
-@dataclass(frozen=True, slots=True)
-class HandInfo:
-    ts_info_us: int
-    hand_type: int
-    firmware: str
-    side: int
-    dof: int
-    joint_names: tuple[str, ...]
-    q_min: tuple[float, ...]
-    q_max: tuple[float, ...]
-    dq_max: tuple[float, ...]
-    touch_available: bool = False
-    touch_enabled: bool = False
-    touch_fingers: int = 0
-    touch_words_per_finger: int = 0
-    ts_state_pub_us: int = 0

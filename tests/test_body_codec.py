@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import flatbuffers
 from locomotion_aorta import (
     BodyCmd, BodyJointCmd, BodyCmdAction, BodySampleStatus, BodyImuLocation,
-    BodySlotRole, EndEffectorKind, ServiceStatus, BodyStateSnapshot,
+    BodySlotRole, ServiceStatus, BodyStateSnapshot,
 )
 from locomotion_aorta import _body_codec as codec
 from locomotion_aorta.transport import _fill_body_cmd
@@ -109,6 +109,37 @@ def make_state(*, error_codes=None, runtime_id=None):
 
 
 class BodyCodecTest(unittest.TestCase):
+    def test_plain_body_capability_valid_zero_and_unknown_limits(self):
+        from locomotion_aorta import BodyJointCapability
+        absent = BodyJointCapability(14, BodySlotRole.ACTIVE, True, 0, 0,
+                                     math.nan, math.nan, 0., 0., 0., 0., 0., 0., 0., 0.)
+        self.assertTrue(absent.is_mock)
+        self.assertEqual(absent.valid_limits, 0)
+        zero = BodyJointCapability(0, BodySlotRole.ACTIVE, False, 1, 1,
+                                   0., 0., 0., 0., 0., 0., 0., 0., 0., 0.)
+        self.assertEqual((zero.q_min, zero.q_max), (0., 0.))
+        with self.assertRaisesRegex(ValueError, 'invalid valid limit: q'):
+            dataclasses.replace(zero, q_min=math.nan)
+        with self.assertRaisesRegex(ValueError, 'invalid valid limit: q'):
+            dataclasses.replace(zero, q_min=1.)
+
+    def test_plain_endpoint_results_preserve_no_device_and_hardware_failure(self):
+        from locomotion_aorta import EndEffectorCapability, RobotInfo
+        no_device = EndEffectorCapability(1, True, None, False,
+                                           ServiceStatus.UNAVAILABLE, 'no device')
+        failed = EndEffectorCapability(2, False, None, False,
+                                       ServiceStatus.INTERNAL_ERROR, 'initialization failed')
+        info = RobotInfo(2, 0, None, (no_device, failed))
+        self.assertTrue(info.end_effectors[0].is_mock)
+        self.assertFalse(info.end_effectors[0].ready)
+        self.assertFalse(info.end_effectors[1].is_mock)
+        self.assertFalse(info.end_effectors[1].ready)
+        self.assertEqual(info.end_effectors[1].reason, 'initialization failed')
+        with self.assertRaisesRegex(ValueError, 'ordered LEFT and RIGHT'):
+            RobotInfo(2, 0, None, (failed, no_device))
+        with self.assertRaisesRegex(ValueError, 'boolean'):
+            EndEffectorCapability(1, 1, None, False, ServiceStatus.UNAVAILABLE, 'no device')
+
     def test_robot_info_preserves_service_status_without_descriptor_confirmation(self):
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
         info = module('RobotInfo').RobotInfoT(protocolVersion=1, tsInfoUs=987)

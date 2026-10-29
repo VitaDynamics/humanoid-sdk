@@ -1,6 +1,7 @@
 """Real public wheel checks; generated messages only, no robot connection."""
 import hashlib
 import importlib
+import importlib.util
 import importlib.metadata
 import json
 from pathlib import Path
@@ -17,7 +18,6 @@ class PublicEeBindingTest(unittest.TestCase):
         from lowlevel.HandJointState import HandJointState
         from lowlevel.FingerTouchMeta import FingerTouchMeta
         from lowlevel.HandState import HandState
-        from lowlevel.HandInfo import HandInfo
         self.assertEqual((HandJointCmd.SizeOf(), HandJointState.SizeOf(), FingerTouchMeta.SizeOf()),
                          (8, 28, 32))
         for name in ('TsAcquiredHwUs', 'TsIngestedUs', 'TsAssembledUs'):
@@ -25,7 +25,8 @@ class PublicEeBindingTest(unittest.TestCase):
             self.assertFalse(hasattr(HandJointState, name))
         for name in ('Dof', 'TsPollRequestUs', 'TsPollResponseUs', 'CmdDequeuedUs'):
             self.assertFalse(hasattr(HandState, name))
-        self.assertFalse(hasattr(HandInfo, 'Model'))
+        self.assertIsNone(importlib.util.find_spec('lowlevel.HandInfo'))
+        self.assertIsNone(importlib.util.find_spec('lowlevel.GripperInfo'))
 
     def test_distribution_and_all_pinned_bfbs_match(self):
         manifest = json.loads((ROOT / 'compatibility.json').read_text())

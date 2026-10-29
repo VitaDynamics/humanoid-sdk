@@ -5,7 +5,7 @@ from typing import Any
 from .body_types import (
     BODY_SLOTS, BODY_STATE_PROTOCOL_VERSION, DescriptorRef, BodyJointState, BodyImuState, BodyImuSample,
     BodyState, BodyJointCmd, BodyJointCapability, BodyMotorIdentity, BodyInfo,
-    EndEffectorCapability, RobotInfo, GetRobotInfoResponse, HandInfo, GripperInfo,
+    EndEffectorCapability, RobotInfo, GetRobotInfoResponse,
 )
 
 # BodyCmd3 and BodyState3 retain the same 31-slot joint struct strides.
@@ -118,22 +118,6 @@ def decode_body_state(view: Any) -> BodyState:
 _decode_body_state_python = decode_body_state  # Reference for native golden tests.
 
 
-def _decode_hand_info(view: Any) -> HandInfo:
-    """Decode the frozen HandInfo table shared with RobotInfo discovery."""
-    vectors = {name: tuple(getattr(view, getter)(i) for i in
-                          range(getattr(view, getter + 'Length')()))
-               for name, getter in (('q_min', 'QMin'), ('q_max', 'QMax'), ('dq_max', 'DqMax'))}
-    return _dto(view, HandInfo, firmware=_text(view.Firmware()),
-                joint_names=tuple(_text(view.JointNames(i))
-                                  for i in range(view.JointNamesLength())), **vectors)
-
-
-def _decode_gripper_info(view: Any) -> GripperInfo:
-    """Decode the frozen GripperInfo table shared with RobotInfo discovery."""
-    return _dto(view, GripperInfo, model=_text(view.Model()),
-                firmware=_text(view.Firmware()))
-
-
 def decode_robot_info(view: Any) -> RobotInfo:
     body = view.Body()
     body_info = None if body is None else _dto(
@@ -143,15 +127,9 @@ def decode_robot_info(view: Any) -> RobotInfo:
         motor_identities=tuple(_dto(body.MotorIdentities(i), BodyMotorIdentity,
                                    bus=_text(body.MotorIdentities(i).Bus()))
                                for i in range(body.MotorIdentitiesLength())))
-    effectors = []
-    for i in range(view.EndEffectorsLength()):
-        entry = view.EndEffectors(i)
-        hand, gripper = entry.Hand(), entry.Gripper()
-        grip = None if gripper is None else _decode_gripper_info(gripper)
-        effectors.append(_dto(entry, EndEffectorCapability,
-                             hand=None if hand is None else _decode_hand_info(hand),
-                             gripper=grip, reason=_text(entry.Reason())))
-    return _dto(view, RobotInfo, body=body_info, end_effectors=tuple(effectors))
+    if view.EndEffectorsLength() != 2:
+        raise ValueError('RobotInfo requires LEFT and RIGHT endpoint slots')
+    raise RuntimeError('RobotInfo decoder requires verified 713c generated bindings')
 
 
 def decode_robot_info_response(view: Any) -> GetRobotInfoResponse:

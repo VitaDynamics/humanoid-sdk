@@ -82,10 +82,10 @@ heartbeat or neutral end-effector target is sent. An unconfirmed CANCEL is an
 error; PASSIVE may let unsupported limbs fall.
 
 The old HandClient/GripperClient, their online DTOs/codecs and separate motion
-entries are removed. RobotInfo's nested HandInfo/GripperInfo and the explicit
-LowState offline path remain. Migrate callers to EndEffectorClient with the
-existing connection; legacy private sequence counters, numeric host-target
-poses and `pull_feedback` are not adapters to the new contract.
+entries are removed. RobotInfo uses unified endpoint Info; the explicit
+LowState offline path remains. Use EndEffectorClient with the existing
+connection; legacy private sequence counters, numeric host-target poses and
+`pull_feedback` are not adapters to the new contract.
 
 The common streaming duration defaults to 1 second; select `--duration 30
 --period-s 10` explicitly for three sine periods (transitions add time).

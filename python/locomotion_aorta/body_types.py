@@ -1,14 +1,18 @@
 """Public body DTOs. Angles rad; robot/client clocks are explicitly microseconds."""
+from __future__ import annotations
+
 from dataclasses import dataclass
-from .gripper_types import GripperInfo
+import math
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .end_effector_types import EndEffectorInfo
 from lowlevel.BodyCmdAction import BodyCmdAction
 from lowlevel.BodySampleStatus import BodySampleStatus
 from lowlevel.JointError import JointError
 from lowlevel.BodyImuLocation import BodyImuLocation
 from lowlevel.BodySlotRole import BodySlotRole
-from lowlevel.EndEffectorKind import EndEffectorKind
 from aorta.services.common.ServiceStatus import ServiceStatus
-from .hand_types import HandInfo
 
 BODY_SLOTS = 31
 BODY_CMD_PROTOCOL_VERSION = 3
@@ -95,7 +99,6 @@ class BodyJointCapability:
     body_index: int
     slot_role: int
     is_mock: bool
-    populated: bool
     supported_fields: int
     valid_limits: int
     q_min: float
@@ -108,6 +111,24 @@ class BodyJointCapability:
     kp_max: float
     kd_min: float
     kd_max: float
+
+    def __post_init__(self) -> None:
+        if type(self.body_index) is not int or not 0 <= self.body_index < BODY_SLOTS:
+            raise ValueError('body_index must identify a Body slot')
+        if type(self.is_mock) is not bool:
+            raise ValueError('is_mock must be boolean')
+        for name in ('supported_fields', 'valid_limits'):
+            value = getattr(self, name)
+            if type(value) is not int or not 0 <= value < 2**16:
+                raise ValueError(name + ' must be uint16')
+        for bit, name in enumerate(('q', 'dq', 'tau', 'kp', 'kd')):
+            if not self.valid_limits & (1 << bit):
+                continue
+            low, high = getattr(self, name + '_min'), getattr(self, name + '_max')
+            if (isinstance(low, bool) or isinstance(high, bool)
+                    or not isinstance(low, (int, float)) or not isinstance(high, (int, float))
+                    or not math.isfinite(low) or not math.isfinite(high) or low > high):
+                raise ValueError('invalid valid limit: ' + name)
 
 @dataclass(frozen=True, slots=True)
 class BodyMotorIdentity:
@@ -126,14 +147,25 @@ class BodyInfo:
 @dataclass(frozen=True, slots=True)
 class EndEffectorCapability:
     side: int
-    kind: int
-    configured: bool
     is_mock: bool
-    hand: HandInfo | None
-    gripper: GripperInfo | None
+    info: EndEffectorInfo | None
     ready: bool
     status: int
     reason: str
+
+    def __post_init__(self) -> None:
+        if type(self.side) is not int or self.side not in (1, 2):
+            raise ValueError('endpoint side must be LEFT or RIGHT')
+        if type(self.is_mock) is not bool or type(self.ready) is not bool:
+            raise ValueError('endpoint is_mock and ready must be boolean')
+        if type(self.status) is not int or not -128 <= self.status <= 127:
+            raise ValueError('endpoint status must fit the service status byte')
+        if not isinstance(self.reason, str):
+            raise ValueError('endpoint reason must be text')
+        if self.info is not None:
+            from .end_effector_types import EndEffectorInfo
+            if not isinstance(self.info, EndEffectorInfo) or self.info.side != self.side:
+                raise ValueError('endpoint Info must match its side')
 
 @dataclass(frozen=True, slots=True)
 class RobotInfo:
@@ -141,6 +173,11 @@ class RobotInfo:
     ts_info_us: int
     body: BodyInfo | None
     end_effectors: tuple[EndEffectorCapability, ...]
+
+    def __post_init__(self) -> None:
+        if (not isinstance(self.end_effectors, tuple) or len(self.end_effectors) != 2 or
+                tuple(endpoint.side for endpoint in self.end_effectors) != (1, 2)):
+            raise ValueError('RobotInfo requires ordered LEFT and RIGHT endpoint slots')
 
 @dataclass(frozen=True, slots=True)
 class GetRobotInfoResponse:
