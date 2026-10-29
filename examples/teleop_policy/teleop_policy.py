@@ -272,6 +272,8 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
         raise RuntimeError('get_robot_info did not return real body capabilities')
     body = reply.info.body
     policy.roster(body)
+    from locomotion_aorta._policy_state import format_robot_info
+    print(format_robot_info(reply))
     initial = controller.wait_state(timeout=timeout)
     command = JoyCommand(policy.contract)
     # Validate the real observation before requesting ownership; don't consume history yet.

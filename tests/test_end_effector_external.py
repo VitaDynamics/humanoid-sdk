@@ -573,9 +573,11 @@ class EndEffectorExampleTest(unittest.TestCase):
         source.return_value.__enter__=Mock(return_value=connection)
         source.return_value.__exit__=Mock(return_value=False)
         connection.get_robot_info.return_value=robot_info_reply()
-        with patch('builtins.print'):
+        with patch('builtins.print') as printed:
             demo.main(['--side','none'],_state_source_factory=source,
                       _client_factory=client,_controller_factory=controller)
+        self.assertEqual(sum(str(call.args[0]).startswith('Body Info:') for call in printed.call_args_list), 1)
+        connection.get_robot_info.assert_called_once_with(5.0)
         client.assert_not_called(); controller.assert_not_called()
         connection.wait_state.assert_called_once_with(5.0)
 

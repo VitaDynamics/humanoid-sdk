@@ -45,7 +45,7 @@ def run(
     monotonic: Callable[[], float] = time.monotonic,
     emit: Callable[[str], None] = print,
 ) -> None:
-    info = require_body_info(controller, timeout)
+    info = require_body_info(controller, timeout, emit_info=emit)
     target_slots = _body_target_slots(info, require_zero=True)
     target_names = tuple(info.joint_names[i] for i in target_slots)
     start_state = _wait_for_stationary_body_state(
@@ -160,7 +160,7 @@ def run(
             emit("CANCEL confirmed PASSIVE")
 
 
-def require_body_info(controller: PullController, timeout: float):
+def require_body_info(controller: PullController, timeout: float, *, emit_info=None):
     response = controller.get_robot_info(timeout)
     if response.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS):
         raise RuntimeError(f"get_robot_info failed: status={response.status} {response.error_message}")
@@ -169,6 +169,9 @@ def require_body_info(controller: PullController, timeout: float):
     if (body is None or body.slot_count != COMMAND_SLOTS
             or any(len(v) != COMMAND_SLOTS for v in (body.joint_names, body.joints, body.motor_identities))):
         raise RuntimeError("get_robot_info did not provide the public31 body roster")
+    if emit_info is not None:
+        from locomotion_aorta._policy_state import format_robot_info
+        emit_info(format_robot_info(response))
     return body
 
 

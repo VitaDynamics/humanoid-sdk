@@ -74,6 +74,19 @@ class PolicyTest(unittest.TestCase):
     def setUp(self):
         self.policy = policy_fixture()
 
+    def test_fixed_body_target_missing_or_mock_is_not_filtered_out(self):
+        from dataclasses import replace
+        from body_fixtures import robot_info_reply
+        body = replace(robot_info_reply().info.body, joint_names=tuple(self.policy.order))
+        joints = list(body.joints)
+        joints[29] = replace(joints[29], is_mock=True)
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            self.policy.bind_body_info(replace(body, joints=tuple(joints)))
+        names = list(body.joint_names)
+        names[29] = 'unrelated_joint'
+        with self.assertRaisesRegex(ValueError, 'missing joints'):
+            self.policy.bind_body_info(replace(body, joint_names=tuple(names)))
+
     def test_asymmetric_joy_endpoints_and_no_lateral_motion(self):
         np.testing.assert_array_equal(self.policy.command((1., 1., 0., -1.)), [0.9, 0., -0.8])
         np.testing.assert_array_equal(self.policy.command((-1., -1., 0., 1.)), [-0.6, 0., 0.8])
@@ -127,15 +140,19 @@ class PolicyTest(unittest.TestCase):
 
 class LoggingTest(unittest.TestCase):
     def test_run_header_uses_the_bound_robot_roster(self):
+        from dataclasses import replace
+        from body_fixtures import robot_info_reply
         policy = policy_fixture()
         policy.inventory = dict(body_joint_names=policy.order,
                                 policy_to_body_slot=policy.policy_to_body,
                                 fixed_joints={})
         names = tuple(reversed(policy.order))
-        body = SimpleNamespace(joint_names=names, roster_version=1,
-                               joints=[SimpleNamespace(populated=True, is_mock=False)]*31)
+        reply = robot_info_reply()
+        body = replace(reply.info.body, joint_names=names, roster_version=1,
+                       joints=tuple(replace(cap, is_mock=False, supported_fields=31,
+                                            valid_limits=31) for cap in reply.info.body.joints))
         transport, directions = Mock(), Mock()
-        transport.get_robot_info.return_value = SimpleNamespace(info=SimpleNamespace(body=body))
+        transport.get_robot_info.return_value = replace(reply, info=replace(reply.info, body=body))
         source = Mock()
         source.get_robot_info.return_value = transport.get_robot_info.return_value
         transport.observed_status = SimpleNamespace(current_action="PASSIVE",
@@ -331,7 +348,9 @@ class CycleTest(unittest.TestCase):
         directions = SimpleNamespace(read=joy_sample)
         records, times = [], []
 
-        def publish(command):
+        def publish(command, *, target_names, required_fields):
+            self.assertEqual(target_names, tuple(policy.order[i] for i in sorted(policy.driven_slots)))
+            self.assertEqual(required_fields, 0x1b)
             times.append(clock.now)
             if fail:
                 raise RuntimeError("publish failed")
@@ -428,7 +447,9 @@ class CycleTest(unittest.TestCase):
             inferred.append(clock.now)
             return np.zeros(2,dtype=np.float32)
         policy.infer=infer
-        def publish(command):
+        def publish(command, *, target_names, required_fields):
+            self.assertEqual(target_names, tuple(policy.order[i] for i in sorted(policy.driven_slots)))
+            self.assertEqual(required_fields, 0x1b)
             published.append(clock.now)
             return replace(command,session_id=7,sequence=len(published))
         def sleep(delay):clock.now+=round(delay*1e9)

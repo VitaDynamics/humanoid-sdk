@@ -34,6 +34,7 @@ def _bind_runtime(connection, timeout):
             or type(reply.runtime_id) is not int
             or not 0 < reply.runtime_id < 2**64):
         raise RuntimeError('get_robot_info did not confirm a robot startup identity')
+    return reply
 
 
 @contextmanager
@@ -811,7 +812,9 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     state_factory = PullStateSource if _state_source_factory is None else _state_source_factory
     with ExitStack() as stack:
         connection = stack.enter_context((state_factory if readonly else controller_factory)(group=args.group))
-        _bind_runtime(connection, args.timeout)
+        reply = _bind_runtime(connection, args.timeout)
+        from locomotion_aorta._policy_state import format_robot_info
+        print(format_robot_info(reply))
         clients = [stack.enter_context(client_factory(side, connection=connection, read_only=readonly,
             observation_sources=() if readonly else ((SampleStream.EE_STATE, 1 if side == 'left' else 2),))) for side in sides]
         if _expected_device_model is not None:

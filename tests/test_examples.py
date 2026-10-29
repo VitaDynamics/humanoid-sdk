@@ -31,6 +31,36 @@ def example_robot_info_reply():
     return replace(reply, info=replace(reply.info, body=body))
 
 
+class InfoDisplayTest(unittest.TestCase):
+    def test_real_info_reports_valid_zero_unknown_and_failure_separately(self):
+        from locomotion_aorta._policy_state import format_robot_info
+        reply = example_robot_info_reply()
+        joints = list(reply.info.body.joints)
+        joints[0] = replace(joints[0], q_min=0.0, q_max=0.0)
+        joints[1] = replace(joints[1], valid_limits=joints[1].valid_limits & ~1)
+        body = replace(reply.info.body, joints=tuple(joints))
+        endpoints = list(reply.info.end_effectors)
+        endpoints[0] = replace(endpoints[0], is_mock=False, reason='initialization failed')
+        text = format_robot_info(replace(reply, info=replace(reply.info, body=body,
+                                      end_effectors=tuple(endpoints))))
+        self.assertIn('0 left_hip_pitch_joint is_mock=False q=[0.0, 0.0] rad', text)
+        self.assertIn('1 left_hip_roll_joint is_mock=False q=unknown', text)
+        self.assertIn('LEFT: is_mock=False ready=False', text)
+        self.assertIn('initialization failed', text)
+        self.assertIn('RIGHT: is_mock=True ready=False', text)
+
+    def test_invalid_roster_is_rejected_before_any_table_is_emitted(self):
+        reply = example_robot_info_reply()
+        bad = replace(reply.info.body, joints=reply.info.body.joints[:-1])
+        controller = mock.Mock()
+        controller.get_robot_info.return_value = replace(reply, info=replace(reply.info, body=bad))
+        emit = mock.Mock()
+        with self.assertRaises(RuntimeError):
+            external_control.require_body_info(controller, 1.0, emit_info=emit)
+        emit.assert_not_called()
+        controller.get_robot_info.assert_called_once_with(1.0)
+
+
 class RecordingController:
     def __init__(
         self,
@@ -305,6 +335,7 @@ class ExamplesSmokeTest(unittest.TestCase):
             monotonic=clock.monotonic,
             emit=output.append,
         )
+        self.assertEqual(sum(text.startswith('Body Info:') for text in output), 1)
 
         self.assertEqual(harness.calls[0], "wait_body_state")
         self.assertIn("enter_external", harness.calls)

@@ -7,6 +7,7 @@ import signal
 import threading
 from types import SimpleNamespace as NS
 import unittest
+from unittest.mock import patch
 
 from examples.teleop_policy.teleop_policy import JoyCommand, Policy, bodycmd, live, objects
 
@@ -197,6 +198,13 @@ class JoyTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.TestCase):
+    def setUp(self):
+        # These lifecycle cases use symbolic service DTOs; formatting is tested
+        # separately with a real public Info DTO.
+        formatter = patch('locomotion_aorta._policy_state.format_robot_info', return_value='Info')
+        formatter.start()
+        self.addCleanup(formatter.stop)
+
     def run_case(self,mode,reply_status=API.ServiceStatus.PARTIAL_SUCCESS):
         body,state=fixture()
         # Ordinary synthetic stand values; no robot-captured evidence claimed.

@@ -104,6 +104,10 @@ def require_running(controller, expected=None):
 
 
 def run_cycles(policy, frames, directions, log, *, controller, duration, transition, stop=None):
+    target_names = tuple(name for i, name in enumerate(policy.order) if i in policy.driven_slots)
+    if not target_names:
+        raise ValueError('velocity policy has no declared Body targets')
+    required_fields = 0x1b | (0x04 if policy.config.get('ankle_clamp_feedforward', False) else 0)
     initial = frames()
     target, transition_s = transition
     policy.reset()
@@ -183,7 +187,7 @@ def run_cycles(policy, frames, directions, log, *, controller, duration, transit
                     if previous_publish_ns is not None else NOT_MEASURED)
                 previous_publish_ns = publish_mono
                 try:
-                    sent = controller.publish(command)
+                    sent = controller.publish(command, target_names=target_names, required_fields=required_fields)
                     publish_log_fields(record, sent)
                     record["publish_result"] = "returned"
                 except BaseException:
@@ -263,11 +267,14 @@ def main():
         status = wait_ready(transport, args.timeout)
         frames = lambda: read_frame(reader, args.timeout)
         policy.bind_body_info(response.info.body)
+        from locomotion_aorta._policy_state import format_robot_info
+        print(format_robot_info(response))
         log = CycleLog(args.log, metadata)
         log.write(dict(record_type="roster", joint_names=policy.order,
                        roster_version=response.info.body.roster_version,
-                       populated=[j.populated for j in response.info.body.joints],
-                       is_mock=[j.is_mock for j in response.info.body.joints]))
+                       is_mock=[j.is_mock for j in response.info.body.joints],
+                       supported_fields=[j.supported_fields for j in response.info.body.joints],
+                       valid_limits=[j.valid_limits for j in response.info.body.joints]))
         log.write(dict(record_type="preflight", timestamp_ns=realtime_ns(),
                        current_action=status.current_action,
                        phase=status.phase.value,

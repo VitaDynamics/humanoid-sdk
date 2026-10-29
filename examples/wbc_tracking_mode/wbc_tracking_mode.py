@@ -294,6 +294,10 @@ def live(model, policy, args, recorder, controller, *,
          source, stop=None, monotonic=time.monotonic, sleep=time.sleep):
     from locomotion_aorta import ExternalPhase
     from locomotion_aorta.wbc_tracking_policy import Motion
+    target_names = tuple(policy.contract.names) + tuple(policy.profile['fixed_joints'])
+    if not target_names or len(set(target_names)) != len(target_names):
+        raise ValueError('WBC policy targets must be nonempty and unique')
+    required_fields = 0x1b | (0x04 if policy.profile['ankle_clamp_feedforward'] else 0)
     stop = stop if stop is not None else threading.Event()
     clip = Motion.from_npz(args.motion, policy.contract.names) if args.motion else None
     initial = wait_fresh(source, policy, previous_ns=0, timeout=args.timeout,
@@ -354,7 +358,7 @@ def live(model, policy, args, recorder, controller, *,
             row['control_interval_ns'] = (publish_mono-previous_publish_ns if previous_publish_ns is not None else NOT_MEASURED)
             previous_publish_ns = publish_mono
             try:
-                sent = controller.publish(command)
+                sent = controller.publish(command, target_names=target_names, required_fields=required_fields)
             except BaseException:
                 row['S6'] = time.time_ns()
                 row['publish_result'] = 'raised'
@@ -462,10 +466,13 @@ def main():
                     if source_info.runtime_id != response.runtime_id:
                         raise RuntimeError('BodyState source and controller have different robot runtimes')
                     policy.bind_body_info(response.info.body)
+                    from locomotion_aorta._policy_state import format_robot_info
+                    print(format_robot_info(response))
                     recorder.write(dict(kind='roster', names=policy.order,
                                         roster_version=response.info.body.roster_version,
-                                        populated=[j.populated for j in response.info.body.joints],
-                                        is_mock=[j.is_mock for j in response.info.body.joints]))
+                                        is_mock=[j.is_mock for j in response.info.body.joints],
+                                        supported_fields=[j.supported_fields for j in response.info.body.joints],
+                                        valid_limits=[j.valid_limits for j in response.info.body.joints]))
                     summary = live(model, policy, args, recorder, controller, stop=stop,
                                    source=source)
             finally:
