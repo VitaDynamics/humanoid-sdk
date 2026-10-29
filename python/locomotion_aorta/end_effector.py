@@ -13,7 +13,7 @@ from . import _end_effector_codec as codec
 from .controller import ControllerClosedError, ExternalController, InvalidCommandError, NotRunningError, _deadline
 from .pull import PullStateSource
 from .end_effector_types import (
-    CommandKey, DescriptorRef, EndEffectorSide, EndEffectorSubmission,
+    CommandKey, EndEffectorSide, EndEffectorSubmission,
     SampleRef, SampleStream, Field, SampleStatus,
     EndEffectorSetTouchRequest, ServiceStatus, TouchSetReason,
 )
@@ -231,7 +231,7 @@ class EndEffectorClient:
                     raise ValueError('Info side differs from endpoint')
                 try:
                     if not self.connection._bind_end_effector_runtime(
-                        self, value.descriptor_ref.robot_runtime_id
+                        self, value.runtime_id
                     ):
                         return
                 except (ValueError, ControllerClosedError) as error:
@@ -242,14 +242,14 @@ class EndEffectorClient:
                 if self._closed or self._fatal is not None:
                     return
                 info = self._latest['info']
-                if kind == 'info' and info is not None and value.descriptor_ref != info.descriptor_ref:
+                if kind == 'info' and info is not None and value.runtime_id != info.runtime_id:
                     retired = self._retire_descriptor_locked(ValueError(
                         'robot runtime changed; recreate the client on a new connection'))
                 elif kind == 'info' and info is not None and _description(value) != _description(info):
                     retired = self._retire_descriptor_locked(ValueError(
                         'immutable Info changed within one robot runtime'))
                 elif kind != 'info':
-                    if info is None or value.descriptor_ref != info.descriptor_ref:
+                    if info is None or value.runtime_id != info.runtime_id:
                         return
                     getattr(codec, 'validate_' + kind)(info, value)
                     previous = self._latest[kind]
@@ -339,9 +339,11 @@ class EndEffectorClient:
                 if kind == 'touch' and self._latest['info'] is not None and not self._latest['info'].touch_available:
                     raise ValueError('endpoint has no touch capability')
                 if value is not None:
-                    identity = value.descriptor_ref if kind == 'info' else value.sample_ref
+                    identity = value.runtime_id if kind == 'info' else value.sample_ref
+                    if kind == 'info' and after is not None and identity != after:
+                        raise ValueError('after_runtime_id differs from the current robot runtime')
                     if kind != 'info' and after is not None:
-                        if identity.descriptor_ref != after.descriptor_ref:
+                        if identity.runtime_id != after.runtime_id:
                             raise ValueError('after_sample is not from this static descriptor')
                         if identity.sample_id > after.sample_id:
                             return value
@@ -353,27 +355,23 @@ class EndEffectorClient:
                     raise TimeoutError('timed out waiting for EE ' + kind)
                 self._condition.wait(remaining)
 
-    def wait_info(self, timeout=5.0, *, after_descriptor=None):
+    def wait_info(self, timeout=5.0, *, after_runtime_id=None):
         """Wait for the first immutable Info publication for this robot process."""
-        if after_descriptor is not None:
-            if not isinstance(after_descriptor, DescriptorRef):
-                raise TypeError('after_descriptor must be DescriptorRef')
-            codec._uint(after_descriptor.robot_runtime_id, 64, 'robot_runtime_id')
-            if not after_descriptor.robot_runtime_id:
-                raise ValueError('robot_runtime_id must be nonzero')
-        return self._wait('info', timeout, after_descriptor)
+        if after_runtime_id is not None:
+            codec._uint(after_runtime_id, 64, 'runtime_id')
+            if not after_runtime_id:
+                raise ValueError('runtime_id must be nonzero')
+        return self._wait('info', timeout, after_runtime_id)
 
     def _after_sample(self, sample, stream):
         if sample is not None:
             if not isinstance(sample, SampleRef) or sample.stream != stream or sample.side != self._side:
                 raise ValueError('after_sample must identify this endpoint and stream')
-            if not isinstance(sample.descriptor_ref, DescriptorRef):
-                raise ValueError('after_sample has no DescriptorRef')
-            for value, bits, name in ((sample.descriptor_ref.robot_runtime_id, 64, 'robot_runtime_id'),
+            for value, bits, name in ((sample.runtime_id, 64, 'runtime_id'),
                     (sample.sample_id, 64, 'sample_id'), (sample.source_time_us, 64, 'source_time_us'),
                     (sample.validity, 8, 'validity')):
                 codec._uint(value, bits, name)
-            if not sample.descriptor_ref.robot_runtime_id:
+            if not sample.runtime_id:
                 raise ValueError('robot_runtime_id must be nonzero')
 
     def wait_state(self, timeout=5.0, *, after_sample=None):
@@ -394,7 +392,7 @@ class EndEffectorClient:
                 if info is None:
                     raise InvalidCommandError('validated EE Info is required before publish')
                 try:
-                    codec.validate_observations(info.descriptor_ref, input_observations,
+                    codec.validate_observations(info.runtime_id, input_observations,
                                                 sources=self._observation_sources)
                     prepared = codec.prepare_target(info, target)
                 except (ValueError, TypeError, OverflowError) as error:
@@ -402,20 +400,20 @@ class EndEffectorClient:
 
             def prepare_send():
                 self._ensure_open()
-                if self._latest['info'].descriptor_ref != info.descriptor_ref:
-                    raise InvalidCommandError('DescriptorRef changed before reservation')
+                if self._latest['info'].runtime_id != info.runtime_id:
+                    raise InvalidCommandError('runtime_id changed before reservation')
                 if self._publisher is None:
                     self._publisher = self._node.create_publisher_typed(
                         self._bindings.metas['cmd'], self._topic + '/cmd',
                         qos=self._bindings.aorta.QoS.realtime_control())
                 return self._publisher
 
-            runtime_id = info.descriptor_ref.robot_runtime_id
+            runtime_id = info.runtime_id
             context, publisher = self.connection._reserve_end_effector_command(
                 self, runtime_id, prepare_send
             )
             submission = EndEffectorSubmission(
-                info.descriptor_ref, info.layout_id, info.side,
+                info.runtime_id, info.layout_id, info.side,
                 context.control_id,
                 CommandKey(context.session_id, context.sequence), prepared, input_observations)
 
@@ -427,9 +425,9 @@ class EndEffectorClient:
                         current.request_id != context.request_id):
                     raise NotRunningError('control context changed before EE submission')
                 latest = self._latest['info']
-                if latest is None or (latest.descriptor_ref, latest.layout_id, latest.side) != (
-                        info.descriptor_ref, info.layout_id, info.side):
-                    raise InvalidCommandError('DescriptorRef changed during reservation')
+                if latest is None or (latest.runtime_id, latest.layout_id, latest.side) != (
+                        info.runtime_id, info.layout_id, info.side):
+                    raise InvalidCommandError('runtime_id changed during reservation')
                 if self._publisher is not publisher:
                     raise InvalidCommandError('EE publisher retired before submission')
                 publisher.publish_typed(
@@ -445,15 +443,15 @@ class EndEffectorClient:
         def check(current):
             self._ensure_open()
             latest = self._get('info')
-            if latest is None or (latest.descriptor_ref, latest.layout_id, latest.side) != (
-                    info.descriptor_ref, info.layout_id, info.side):
-                raise InvalidCommandError('DescriptorRef changed during set_touch')
+            if latest is None or (latest.runtime_id, latest.layout_id, latest.side) != (
+                    info.runtime_id, info.layout_id, info.side):
+                raise InvalidCommandError('runtime_id changed during set_touch')
             if context is not None and current != context:
                 raise NotRunningError('control context changed during set_touch')
             return operation() if operation is not None else current
 
         return self.connection._end_effector_control_context(
-            self, info.descriptor_ref.robot_runtime_id, check
+            self, info.runtime_id, check
         )
 
     def set_touch(self, enable: bool, timeout: float = 5.0):
@@ -495,7 +493,7 @@ class EndEffectorClient:
             if not matched:
                 raise TimeoutError('EE set_touch service provider not found')
             request = EndEffectorSetTouchRequest(
-                info.descriptor_ref, info.layout_id, info.side,
+                info.runtime_id, info.layout_id, info.side,
                 context.control_id, enable)
             def fill(builder, header):
                 return self._check_touch_context(

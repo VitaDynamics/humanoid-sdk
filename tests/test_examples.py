@@ -32,6 +32,50 @@ def example_robot_info_reply():
 
 
 class InfoDisplayTest(unittest.TestCase):
+    def test_endpoint_axis_table_uses_same_runtime_and_valid_zero(self):
+        from locomotion_aorta import EndEffectorCapability, EndEffectorInfo
+        from locomotion_aorta.end_effector_types import Field, PositionDomain, TorqueDomain
+        from locomotion_aorta._policy_state import format_robot_info
+        reply = example_robot_info_reply()
+        info = EndEffectorInfo(runtime_id=reply.runtime_id, layout_id=7, side=1,
+            axis_names=('finger',), position_domain=(PositionDomain.TOTAL_OPENING,),
+            torque_domain=(TorqueDomain.VENDOR_UNCONFIRMED,), supported_modes=(2,),
+            supported_command_fields=(Field.POS | Field.VEL,), supported_state_fields=(Field.POS,),
+            valid_limits=(Field.POS,), pos_min=(0.,), pos_max=(0.,),
+            vel_min=(0.,), vel_max=(0.,), is_mock=(False,))
+        left = EndEffectorCapability(1, False, info, True, 0, '')
+        reply = replace(reply, info=replace(reply.info, end_effectors=(left, reply.info.end_effectors[1])))
+        text = format_robot_info(reply)
+        self.assertIn('LEFT 0 finger is_mock=False pos=[0.0, 0.0] m vel=unknown', text)
+        self.assertIn('tau=unsupported', text)
+        with self.assertRaisesRegex(ValueError, 'runtime_id/side'):
+            format_robot_info(replace(reply, runtime_id=reply.runtime_id + 1))
+        with self.assertRaisesRegex(ValueError, 'runtime_id must be nonzero'):
+            format_robot_info(replace(reply, info=replace(reply.info, end_effectors=(
+                replace(left, info=replace(info, runtime_id=0)), reply.info.end_effectors[1]))))
+
+    def test_selected_observation_keeps_its_own_runtime_and_identity(self):
+        from locomotion_aorta._end_effector_codec import validate_observations
+        from locomotion_aorta.end_effector_types import SampleRef, SampleStream
+        selected = SampleRef(100, SampleStream.EE_STATE, 1, 100, 20, 3)
+        validate_observations(100, (selected,), sources=((SampleStream.EE_STATE, 1),))
+        self.assertEqual((selected.runtime_id, selected.sample_id, selected.source_time_us), (100, 100, 20))
+        for sample in (replace(selected, runtime_id=101), replace(selected, runtime_id=0)):
+            with self.assertRaises(ValueError):
+                validate_observations(100, (sample,), sources=((SampleStream.EE_STATE, 1),))
+
+    def test_mock_endpoint_axis_cannot_be_a_motion_target(self):
+        from locomotion_aorta import EndEffectorInfo, EndEffectorTarget
+        from locomotion_aorta._end_effector_codec import prepare_target
+        from locomotion_aorta.end_effector_types import Field, PositionDomain, TorqueDomain, ControlMode
+        info = EndEffectorInfo(runtime_id=100, layout_id=7, side=1, axis_names=('finger',),
+            position_domain=(PositionDomain.TOTAL_OPENING,), torque_domain=(TorqueDomain.MOTOR_SHAFT,),
+            supported_modes=(2,), supported_command_fields=(Field.POS,), supported_state_fields=(Field.POS,),
+            valid_limits=(Field.POS,), pos_min=(0.,), pos_max=(1.,), is_mock=(True,))
+        target = EndEffectorTarget(mode=(ControlMode.POSITION,), command_fields=(Field.POS,), pos=(0.,))
+        with self.assertRaisesRegex(ValueError, 'no physical device'):
+            prepare_target(info, target)
+
     def test_real_info_reports_valid_zero_unknown_and_failure_separately(self):
         from locomotion_aorta._policy_state import format_robot_info
         reply = example_robot_info_reply()

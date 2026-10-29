@@ -104,7 +104,36 @@ def format_robot_info(response):
         lines.append(f'{label}: is_mock={endpoint.is_mock} ready={endpoint.ready} '
                      f'status={endpoint.status} reason={endpoint.reason}')
         if endpoint.info is not None:
-            lines.append(f'{label} axis limits: pending direct runtime_id Info validation')
+            from ._end_effector_codec import validate_info
+            from .end_effector_types import Field, PositionDomain, TorqueDomain
+
+            info = endpoint.info
+            validate_info(info)
+            if info.runtime_id != response.runtime_id or info.side != endpoint.side:
+                raise ValueError('endpoint Info runtime_id/side differs from service reply')
+            for i, name in enumerate(info.axis_names):
+                position_unit = {PositionDomain.JOINT_ANGLE: 'rad',
+                                 PositionDomain.MOTOR_SHAFT: 'rad',
+                                 PositionDomain.TOTAL_OPENING: 'm'}.get(info.position_domain[i], 'unknown unit')
+                velocity_unit = position_unit + '/s' if position_unit != 'unknown unit' else 'unknown unit'
+                torque_unit = ('N*m' if info.torque_domain[i] in
+                               (TorqueDomain.JOINT_AXIS, TorqueDomain.MOTOR_SHAFT) else 'unknown unit')
+                specs = ((Field.POS, 'pos', 'pos_min', 'pos_max', position_unit),
+                         (Field.VEL, 'vel', 'vel_min', 'vel_max', velocity_unit),
+                         (Field.VEL_LIMIT, 'vel_limit', None, 'vel_limit_max', velocity_unit),
+                         (Field.TAU, 'tau', 'tau_min', 'tau_max', torque_unit),
+                         (Field.CURRENT, 'current', 'current_min', 'current_max', 'A'))
+                limits = []
+                for bit, field, lower, upper, unit in specs:
+                    if info.valid_limits[i] & bit:
+                        high = getattr(info, upper)[i]
+                        value = (f'<={high} {unit}' if lower is None else
+                                 f'[{getattr(info, lower)[i]}, {high}] {unit}')
+                    else:
+                        supported = info.supported_command_fields[i] | info.supported_state_fields[i]
+                        value = 'unknown' if supported & bit else 'unsupported'
+                    limits.append(f'{field}={value}')
+                lines.append(f'{label} {i} {name} is_mock={info.is_mock[i]} ' + ' '.join(limits))
     return '\n'.join(lines)
 
 

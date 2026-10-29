@@ -13,13 +13,13 @@ def run_once(client, *, timeout, include_touch=False, emit=print):
 
     info = client.wait_info(timeout)
     state = client.wait_state(timeout)
-    if (state.descriptor_ref, state.layout_id, state.side) != (info.descriptor_ref, info.layout_id, info.side):
-        raise ValueError('EE State DescriptorRef/layout/side changed while reading; rerun for matching Info')
+    if (state.runtime_id, state.layout_id, state.side) != (info.runtime_id, info.layout_id, info.side):
+        raise ValueError('EE State runtime_id/layout/side changed while reading; rerun for matching Info')
     touch = client.wait_touch(timeout) if include_touch else None
-    if touch is not None and (touch.descriptor_ref, touch.layout_id, touch.side) != (
-            info.descriptor_ref, info.layout_id, info.side):
-        raise ValueError('EE Touch DescriptorRef/layout/side changed while reading; rerun for matching Info')
-    emit(f'side={client.side} descriptor={state.descriptor_ref} layout={state.layout_id} '
+    if touch is not None and (touch.runtime_id, touch.layout_id, touch.side) != (
+            info.runtime_id, info.layout_id, info.side):
+        raise ValueError('EE Touch runtime_id/layout/side changed while reading; rerun for matching Info')
+    emit(f'side={client.side} runtime_id={state.runtime_id} layout={state.layout_id} '
          f'state_id={state.state_id} sample_status={state.sample_status}')
     for i, name in enumerate(info.axis_names):
         # valid_fields is authoritative: a placeholder zero is not a reading.
@@ -29,7 +29,7 @@ def run_once(client, *, timeout, include_touch=False, emit=print):
         fault = str(state.error_code[i]) if state.valid_fields[i] & Field.ERROR_CODE else 'unknown'
         emit(f'axis[{i}] {name} pos={pos} error_code={fault} mock={info.is_mock[i]}')
     if touch is not None:
-        emit(f'side={client.side} descriptor={touch.descriptor_ref} layout={touch.layout_id} '
+        emit(f'side={client.side} runtime_id={touch.runtime_id} layout={touch.layout_id} '
              f'touch_state_id={touch.touch_state_id} payload_bytes={len(touch.payload)} '
              f'region_validity={[stamp.validity for stamp in touch.region_stamps]}')
 

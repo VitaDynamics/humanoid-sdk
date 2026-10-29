@@ -15,7 +15,7 @@ from examples.end_effector import end_effector_external as demo
 from locomotion_aorta import BODY_CMD_TOPIC
 from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector_types import (
-    CommandKey, ControlMode, DescriptorRef, DeviceModel, EndEffectorSubmission,
+    CommandKey, ControlMode, DeviceModel, EndEffectorSubmission,
     Field, InhibitReason, PositionDomain, SampleStatus,
     SampleStream,
 )
@@ -72,10 +72,10 @@ class Endpoint:
         return self.state
 
     def publish(self, target, *, input_observations):
-        codec.validate_observations(self.info.descriptor_ref, input_observations, sources=self.observation_sources)
+        codec.validate_observations(self.info.runtime_id, input_observations, sources=self.observation_sources)
         prepared = codec.prepare_target(self.info, target)
         context = self.connection.controller._reserve_command()
-        submission = EndEffectorSubmission(self.info.descriptor_ref, self.info.layout_id, self.info.side,
+        submission = EndEffectorSubmission(self.info.runtime_id, self.info.layout_id, self.info.side,
             context.control_id, CommandKey(context.session_id, context.sequence),
             prepared, input_observations=input_observations)
         self.commands.append(submission)
@@ -134,7 +134,7 @@ class EndEffectorExampleTest(unittest.TestCase):
                 self.assertLessEqual(cmd.target.pos[0], .0625)
                 self.assertEqual(cmd.target.vel_limit, (0.,))
                 self.assertFalse(cmd.target.command_fields[0] & Field.TAU)
-                self.assertEqual(cmd.input_observations[0].descriptor_ref, client.info.descriptor_ref)
+                self.assertEqual(cmd.input_observations[0].runtime_id, client.info.runtime_id)
                 self.assertEqual((cmd.input_observations[0].stream,cmd.input_observations[0].side),
                                  (SampleStream.EE_STATE,client.info.side))
         self.assertEqual(len(keys),len(set(keys)))
@@ -390,7 +390,7 @@ class EndEffectorExampleTest(unittest.TestCase):
     def test_unknown_faulted_nonfinite_wrong_ref_and_bad_target_fail_before_prepare(self):
         for changes,target_options in (({'sample_status':SampleStatus.NO_SNAPSHOT},{}),
                 ({'valid_fields':(0,)},{}),({'pos':(math.nan,)},{}),
-                ({'descriptor_ref':DescriptorRef(101)},{}),
+                ({'runtime_id':101},{}),
                 ({'error_code':(1,)},{}),({}, {'positions':(.2,)})):
             with self.subTest(changes=changes):
                 c=self.controller(); e=Endpoint(c); e._state=replace(e._state,**changes)
@@ -417,7 +417,7 @@ class EndEffectorExampleTest(unittest.TestCase):
 
     def test_descriptor_change_after_first_send_stops_and_cancels(self):
         c=self.controller(); e=Endpoint(c)
-        e.after_publish=lambda _: setattr(e,'_state',replace(e._state,descriptor_ref=DescriptorRef(999)))
+        e.after_publish=lambda _: setattr(e,'_state',replace(e._state,runtime_id=999))
         with self.assertRaises(ValueError): self.run_case(c,[e])
         self.assertEqual(len(e.commands),1)
         self.assertEqual(c.calls.count('exit_external'),1)
@@ -791,8 +791,8 @@ class TouchObservationTest(unittest.TestCase):
         for failure in ('state','touch','rpc'):
             c=self.make_client(); updated=replace(c.state,ts_state_pub_us=120,touch_enabled=True)
             c.wait_touch.return_value=replace(c.touch,touch_state_id=2)
-            if failure=='state': updated=replace(updated,descriptor_ref=DescriptorRef(2))
-            elif failure=='touch': c.wait_touch.return_value=replace(c.touch,descriptor_ref=DescriptorRef(2))
+            if failure=='state': updated=replace(updated,runtime_id=2)
+            elif failure=='touch': c.wait_touch.return_value=replace(c.touch,runtime_id=2)
             c.set_touch.side_effect=(OSError('RPC failure') if failure=='rpc' else
                                     lambda *_a,**_k:setattr(c,'state',updated))
             with self.assertRaises((ValueError,OSError)): demo.set_touch_and_observe(c,True,1.)
@@ -909,7 +909,7 @@ class PartialFeedbackGuardTest(unittest.TestCase):
         self.assertEqual(position.state_id,2)
         from test_end_effector_client import confirm_info
         self.node.emit('left','info',info_object(runtime=101))
-        self.assertEqual(self.client.info.descriptor_ref, DescriptorRef(100))
+        self.assertEqual(self.client.info.runtime_id, 100)
         self.harness.transport.get_robot_info = lambda timeout: replace(
             robot_info_reply(), runtime_id=101)
         with self.assertRaises(ValueError):

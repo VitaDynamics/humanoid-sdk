@@ -339,7 +339,7 @@ def print_feedback(client, emit=print):
     if state is None:
         emit(f'{client.side}: no EndEffectorState')
         return
-    emit(f'{client.side}: ref={state.descriptor_ref} sample={state.state_id} '
+    emit(f'{client.side}: ref={state.runtime_id} sample={state.state_id} '
          f'pos={state.pos} vel={state.vel} tau={state.tau} current_A={state.current} '
          f'valid={state.valid_fields} status_valid={state.status_valid_mask} '
          f'output={state.output_allowed} inhibit={state.inhibit_reason} '
@@ -350,7 +350,7 @@ def observe(clients, *, timeout, emit=print):
     for client in clients:
         info = client.wait_info(timeout)
         state = client.wait_state(timeout)
-        if state.descriptor_ref != info.descriptor_ref:
+        if state.runtime_id != info.runtime_id:
             raise ValueError('State belongs to another descriptor')
         emit(f'{client.side}: Info={info}; read-only, no lease/cmd/set_touch')
         print_feedback(client, emit)
@@ -379,7 +379,7 @@ def set_touch_and_observe(client, enabled, timeout, *, monotonic=time.monotonic,
         state = client.state
         if state is None:
             raise ValueError('State disappeared while confirming touch switch')
-        if state.descriptor_ref != before_state.descriptor_ref:
+        if state.runtime_id != before_state.runtime_id:
             raise ValueError('descriptor changed while confirming touch switch')
         if (state.ts_state_pub_us > before_state.ts_state_pub_us
                 and state.status_valid_mask & 8 and state.touch_enabled == enabled):
@@ -393,7 +393,7 @@ def set_touch_and_observe(client, enabled, timeout, *, monotonic=time.monotonic,
         if remaining <= 0:
             raise TimeoutError('touch enabled but no new valid Touch was observed')
         touch = client.wait_touch(remaining, after_sample=previous)
-        if touch.descriptor_ref != state.descriptor_ref:
+        if touch.runtime_id != state.runtime_id:
             raise ValueError('Touch belongs to another descriptor')
         previous = touch.sample_ref
         if touch.touch_state_id and touch.region_stamps and all(

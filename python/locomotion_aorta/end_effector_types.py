@@ -6,7 +6,6 @@ AortaHeader remains owned by the typed transport.
 from dataclasses import dataclass
 
 from .transport import AortaBindingsUnavailableError
-from .body_types import DescriptorRef
 
 try:
     from lowlevel.ee.ControlMode import ControlMode
@@ -43,7 +42,7 @@ class CommandKey:
 
 @dataclass(frozen=True, slots=True)
 class SampleRef:
-    descriptor_ref: DescriptorRef
+    runtime_id: int
     stream: int
     side: int
     sample_id: int
@@ -70,7 +69,7 @@ class TouchRegionInfo:
 
 @dataclass(frozen=True, slots=True)
 class EndEffectorInfo:
-    descriptor_ref: DescriptorRef
+    runtime_id: int
     layout_id: int
     side: int
     axis_names: tuple[str, ...]
@@ -104,7 +103,7 @@ class EndEffectorInfo:
 
 @dataclass(frozen=True, slots=True)
 class EndEffectorState:
-    descriptor_ref: DescriptorRef
+    runtime_id: int
     layout_id: int
     side: int
     state_id: int
@@ -133,7 +132,7 @@ class EndEffectorState:
         validity = 1 | (2 if self.ts_state_real_us else 0)
         validity |= 4 if self.sample_status == SampleStatus.OK else 0
         validity |= 8 if self.sample_status == SampleStatus.STALE else 0
-        return SampleRef(self.descriptor_ref, SampleStream.EE_STATE, self.side,
+        return SampleRef(self.runtime_id, SampleStream.EE_STATE, self.side,
                          self.state_id, self.ts_state_real_us if validity & 2 else 0,
                          validity)
 
@@ -152,7 +151,7 @@ class RegionStamp:
 
 @dataclass(frozen=True, slots=True)
 class EndEffectorTouch:
-    descriptor_ref: DescriptorRef
+    runtime_id: int
     layout_id: int
     side: int
     touch_state_id: int
@@ -168,7 +167,7 @@ class EndEffectorTouch:
         # not acquisition; never invent a simultaneous Touch source timestamp.
         validity = 1 | (4 if all(s.validity & 1 for s in self.region_stamps) else 0)
         validity |= 8 if any(s.validity & 64 for s in self.region_stamps) else 0
-        return SampleRef(self.descriptor_ref, SampleStream.EE_TOUCH, self.side,
+        return SampleRef(self.runtime_id, SampleStream.EE_TOUCH, self.side,
                          self.touch_state_id, 0, validity)
 
 
@@ -191,7 +190,7 @@ class EndEffectorTarget:
 @dataclass(frozen=True, slots=True)
 class EndEffectorSubmission:
     """Returned after local typed publish returns; not robot/TX/ACK evidence."""
-    descriptor_ref: DescriptorRef
+    runtime_id: int
     layout_id: int
     side: int
     control_id: int
@@ -205,7 +204,7 @@ class EndEffectorSubmission:
 
 @dataclass(frozen=True, slots=True)
 class EndEffectorSetTouchRequest:
-    descriptor_ref: DescriptorRef
+    runtime_id: int
     layout_id: int
     side: int
     control_id: int
@@ -215,7 +214,7 @@ class EndEffectorSetTouchRequest:
 
 @dataclass(frozen=True, slots=True)
 class EndEffectorSetTouchResponse:
-    descriptor_ref: DescriptorRef
+    runtime_id: int
     side: int
     status: int
     reason: int

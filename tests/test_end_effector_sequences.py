@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 import locomotion_aorta as sdk
-from locomotion_aorta import BODY_CMD_TOPIC, DescriptorRef
+from locomotion_aorta import BODY_CMD_TOPIC
 from locomotion_aorta.end_effector_types import CommandKey, Field, SampleStream
 from examples.end_effector import end_effector_external as demo
 from test_examples import FakeClock, RecordingController
@@ -70,14 +70,14 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
             self.feed('info', 'static/' + client.side + '_info.fb', client=client)
             self.feed('state', 'static/' + client.side + '_state.fb', client=client)
         info, state, feedback = self.client.info, self.client.state, self.client.motion_feedback()
-        old_ref = info.descriptor_ref
+        old_ref = info.runtime_id
         old_sample = state.sample_ref
         republished = self.feed('info', 'static/left_info_republished.fb')
-        self.assertEqual(republished.descriptor_ref, old_ref)
+        self.assertEqual(republished.runtime_id, old_ref)
         self.assertIs(self.client.state, state)
         self.assertEqual(self.client.motion_feedback(), feedback)
         continued = self.feed('state', 'static/left_next_state.fb')
-        self.assertEqual(continued.descriptor_ref, old_ref)
+        self.assertEqual(continued.runtime_id, old_ref)
         self.assertGreater(continued.state_id, state.state_id)
         self.feed('state', 'static/right_inhibited.fb', client=right)
         with self.assertRaisesRegex(RuntimeError, 'inhibited|permission|ready'):
@@ -86,14 +86,14 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
         guard = demo._EndpointGuard(self.client, info, 1., self.clock.monotonic)
         target = demo.position_target(info, continued.pos, unit='rad')
         command = guard.publish(target, continued)
-        self.assertEqual(command.descriptor_ref, old_ref)
+        self.assertEqual(command.runtime_id, old_ref)
         sent = len(self.node.commands)
         self.assertIs(self.feed('info', 'static/left_new_runtime_info.fb'), republished)
-        self.assertEqual(right.info.descriptor_ref, old_ref)
+        self.assertEqual(right.info.runtime_id, old_ref)
         self.assertEqual(len(self.node.commands), sent)
-        self.assertEqual(info.descriptor_ref, old_ref)
+        self.assertEqual(info.runtime_id, old_ref)
         new_reply = self.service_reply('static/new_runtime_robot_info.fb')
-        self.assertNotEqual(new_reply.runtime_id, old_ref.robot_runtime_id)
+        self.assertNotEqual(new_reply.runtime_id, old_ref)
         self.harness.transport.get_robot_info = lambda timeout: new_reply
         with self.assertRaisesRegex(ValueError, 'new connection'):
             self.harness.controller.get_robot_info(.1)
@@ -110,7 +110,7 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
             observation_sources=((SampleStream.EE_STATE, 1),))
         self.addCleanup(new_client.close)
         new_info = self.feed('info', 'static/left_new_runtime_info.fb', client=new_client)
-        self.assertEqual(new_info.descriptor_ref.robot_runtime_id, new_reply.runtime_id)
+        self.assertEqual(new_info.runtime_id, new_reply.runtime_id)
         fresh.accept_enter(); fresh.controller.enter_external(timeout=.1)
         with self.assertRaises(ValueError):
             new_client.publish(target, input_observations=(old_sample,))
@@ -241,8 +241,8 @@ class EndEffectorSequenceTest(unittest.TestCase):
                     self.assertTrue(e.commands)
                     keys.extend(command.key for command in e.commands)
                     for command in e.commands:
-                        self.assertEqual((command.descriptor_ref, command.layout_id, command.side),
-                                         (e.info.descriptor_ref, e.info.layout_id, e.info.side))
+                        self.assertEqual((command.runtime_id, command.layout_id, command.side),
+                                         (e.info.runtime_id, e.info.layout_id, e.info.side))
                         self.assertEqual(command.control_id, 13)
                         self.assertEqual(command.target.tau, (0.,))
                         self.assertTrue(command.target.command_fields[0] & Field.TAU)
@@ -251,8 +251,8 @@ class EndEffectorSequenceTest(unittest.TestCase):
                         self.assertLessEqual(command.target.pos[0], e.info.pos_max[0])
                         self.assertEqual(len(command.input_observations), 1)
                         sample = command.input_observations[0]
-                        self.assertEqual((sample.descriptor_ref, sample.stream, sample.side),
-                                         (e.info.descriptor_ref, SampleStream.EE_STATE, e.info.side))
+                        self.assertEqual((sample.runtime_id, sample.stream, sample.side),
+                                         (e.info.runtime_id, SampleStream.EE_STATE, e.info.side))
                         self.assertEqual((command.ts_client_created_us, command.ts_client_send_us), (0, 0))
                     self.assertTrue(all(b-a >= .02-1e-9 for a, b in zip(e.times, e.times[1:])))
                     if not reject:

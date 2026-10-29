@@ -7,9 +7,10 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from ._body_codec import _dto, _getter, _text
+from .body_types import DescriptorRef
 from .transport import AortaBindingsUnavailableError
 from .end_effector_types import (
-    CommandKey, ControlMode, DescriptorRef, EE_INFO_PROTOCOL_VERSION,
+    CommandKey, ControlMode, EE_INFO_PROTOCOL_VERSION,
     EE_STATE_PROTOCOL_VERSION, EE_TOUCH_PROTOCOL_VERSION, EE_CMD_PROTOCOL_VERSION,
     EE_SET_TOUCH_REQUEST_VERSION, EE_SET_TOUCH_RESPONSE_VERSION, EndEffectorInfo,
     EndEffectorState, EndEffectorTarget, EndEffectorTouch,
@@ -157,11 +158,9 @@ def _identity(value, version):
     _uint(value.protocol_version, 32, 'protocol_version')
     if value.protocol_version != version:
         raise ValueError('incompatible new EE protocol_version')
-    if not isinstance(value.descriptor_ref, DescriptorRef):
-        raise ValueError('missing DescriptorRef')
-    _uint(value.descriptor_ref.robot_runtime_id, 64, 'robot_runtime_id')
-    if not value.descriptor_ref.robot_runtime_id:
-        raise ValueError('robot_runtime_id must be nonzero')
+    _uint(value.runtime_id, 64, 'runtime_id')
+    if not value.runtime_id:
+        raise ValueError('runtime_id must be nonzero')
     _uint(value.layout_id, 32, 'layout_id')
     if value.side not in (1, 2) or type(value.side) is not int:
         raise ValueError('invalid EE side')
@@ -236,8 +235,8 @@ def validate_info(info):
 def _same_endpoint(info, value):
     _identity(value, EE_STATE_PROTOCOL_VERSION if isinstance(value, EndEffectorState)
               else EE_TOUCH_PROTOCOL_VERSION)
-    if (value.descriptor_ref, value.layout_id, value.side) != (info.descriptor_ref, info.layout_id, info.side):
-        raise ValueError('sample DescriptorRef/layout/side does not match Info')
+    if (value.runtime_id, value.layout_id, value.side) != (info.runtime_id, info.layout_id, info.side):
+        raise ValueError('sample runtime_id/layout/side does not match Info')
 
 
 def _validate_key(key, valid):
@@ -306,6 +305,8 @@ def prepare_target(info, target):
         raise ValueError('target has no requested command fields')
     for i, (mode, mask) in enumerate(zip(target.mode, target.command_fields)):
         _uint(mode, 16, 'mode'); _uint(mask, 32, 'command_fields')
+        if mask and info.is_mock[i]:
+            raise ValueError('target axis has no physical device')
         if mode not in (ControlMode.POSITION, ControlMode.POSITION_TORQUE) or not info.supported_modes[i] & (1 << mode):
             raise ValueError('unsupported mode')
         if mask & ~_COMMAND_FIELDS or mask & ~info.supported_command_fields[i]:
@@ -356,22 +357,25 @@ def validate_observation_sources(sources):
         raise ValueError('duplicate observation source')
 
 
-def validate_observations(descriptor_ref, observations, *, sources=None):
+def validate_observations(runtime_id, observations, *, sources=None):
+    _uint(runtime_id, 64, 'runtime_id')
+    if not runtime_id:
+        raise ValueError('runtime_id must be nonzero')
     if not isinstance(observations, tuple):
         raise ValueError('input_observations must be a tuple')
     for sample in observations:
-        if not isinstance(sample, SampleRef) or not isinstance(sample.descriptor_ref, DescriptorRef):
+        if not isinstance(sample, SampleRef):
             raise ValueError('input_observations must contain actual SampleRef values')
-        _uint(sample.descriptor_ref.robot_runtime_id, 64, 'robot_runtime_id')
-        if not sample.descriptor_ref.robot_runtime_id:
-            raise ValueError('robot_runtime_id must be nonzero')
+        _uint(sample.runtime_id, 64, 'runtime_id')
+        if not sample.runtime_id:
+            raise ValueError('runtime_id must be nonzero')
         for name in ('sample_id', 'source_time_us'):
             _uint(getattr(sample, name), 64, name)
         _uint(sample.validity, 8, 'sample validity')
         if sample.validity & ~15:
             raise ValueError('unknown SampleRef validity bits')
-        if sample.descriptor_ref != descriptor_ref:
-            raise ValueError('observation DescriptorRef differs from command descriptor')
+        if sample.runtime_id != runtime_id:
+            raise ValueError('observation runtime_id differs from command runtime_id')
     actual = tuple((sample.stream, sample.side) for sample in observations)
     validate_observation_sources(actual)
     if sources is not None and actual != sources:
@@ -403,7 +407,7 @@ def decode_cmd(view):
     if not command.control_id:
         raise ValueError('control_id must be nonzero')
     _validate_key(command.key, True)
-    validate_observations(command.descriptor_ref, command.input_observations)
+    validate_observations(command.runtime_id, command.input_observations)
     _uint(command.ts_client_created_us, 64, 'ts_client_created_us')
     _uint(command.ts_client_send_us, 64, 'ts_client_send_us')
     return command
@@ -415,7 +419,7 @@ def fill_command(bindings, command, builder, header):
     if not command.control_id:
         raise ValueError('control_id must be nonzero')
     _validate_key(command.key, True)
-    validate_observations(command.descriptor_ref, command.input_observations)
+    validate_observations(command.runtime_id, command.input_observations)
     _uint(command.ts_client_created_us, 64, 'ts_client_created_us')
     _uint(command.ts_client_send_us, 64, 'ts_client_send_us')
     if command.ts_client_created_us or command.ts_client_send_us:
@@ -499,13 +503,11 @@ def validate_set_touch_response(request, response):
     _uint(response.protocol_version, 32, 'protocol_version')
     if response.protocol_version != EE_SET_TOUCH_RESPONSE_VERSION:
         raise ValueError('incompatible set_touch response protocol_version')
-    if not isinstance(response.descriptor_ref, DescriptorRef):
-        raise ValueError('missing set_touch response DescriptorRef')
-    _uint(response.descriptor_ref.robot_runtime_id, 64, 'robot_runtime_id')
-    if not response.descriptor_ref.robot_runtime_id:
-        raise ValueError('robot_runtime_id must be nonzero')
-    if (response.descriptor_ref, response.side) != (request.descriptor_ref, request.side):
-        raise ValueError('set_touch response DescriptorRef/side differs from request')
+    _uint(response.runtime_id, 64, 'runtime_id')
+    if not response.runtime_id:
+        raise ValueError('runtime_id must be nonzero')
+    if (response.runtime_id, response.side) != (request.runtime_id, request.side):
+        raise ValueError('set_touch response runtime_id/side differs from request')
     _uint(response.side, 8, 'side')
     if type(response.status) is not int or not -128 <= response.status < 128:
         raise ValueError('status must fit shared ServiceStatus int8')

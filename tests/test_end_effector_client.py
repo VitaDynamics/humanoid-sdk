@@ -26,7 +26,7 @@ from locomotion_aorta import (
 from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector import EndEffectorClient, TouchSetError
 from locomotion_aorta.end_effector_types import (
-    CommandKey, DescriptorRef, Field, SampleRef, SampleStream, ServiceStatus, TouchSetReason,
+    CommandKey, Field, SampleRef, SampleStream, ServiceStatus, TouchSetReason,
 )
 
 
@@ -268,7 +268,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual((first.sequence, second.key.sequence, third.key.sequence, fourth.sequence), (1, 2, 3, 4))
         self.assertEqual((first.session_id, second.key.session_id, third.key.session_id), (2**64-1,)*3)
         self.assertEqual(second.control_id, harness.control_id)
-        self.assertEqual(second.descriptor_ref, DescriptorRef(100))
+        self.assertEqual(second.runtime_id, 100)
         self.assertEqual((second.ts_client_created_us, second.ts_client_send_us), (0, 0))
         for (topic, wire), expected in zip(node.commands, (second, third)):
             self.assertTrue(topic.endswith('/cmd'))
@@ -332,7 +332,7 @@ class EndEffectorClientTest(unittest.TestCase):
             client.publish(target())
         harness.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
         self.assertEqual(client.publish(target()).key, CommandKey(84, 1))
-        self.assertEqual(client.info.descriptor_ref, DescriptorRef(100))
+        self.assertEqual(client.info.runtime_id, 100)
 
     def test_invalid_target_empty_info_read_only_closed_and_unconfigured_k_never_reserve(self):
         for reason in ('target', 'no-info', 'read-only', 'closed', 'observations'):
@@ -343,7 +343,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 if reason == 'closed':
                     client.close()
                 command = dataclasses.replace(target(), pos=(1.,)) if reason == 'target' else target()
-                kwargs = {'input_observations': (SampleRef(DescriptorRef(100), 2, 1, 1),)} if reason == 'observations' else {}
+                kwargs = {'input_observations': (SampleRef(100, 2, 1, 1),)} if reason == 'observations' else {}
                 with self.assertRaises((InvalidCommandError, ControllerClosedError)):
                     client.publish(command, **kwargs)
                 self.assertEqual(node.commands, [])
@@ -417,7 +417,7 @@ class EndEffectorClientTest(unittest.TestCase):
         sample = client.state.sample_ref
         for bad in (dataclasses.replace(sample, stream=SampleStream.EE_TOUCH),
                     dataclasses.replace(sample, side=2), dataclasses.replace(sample, sample_id=2**64),
-                    dataclasses.replace(sample, descriptor_ref=None)):
+                    dataclasses.replace(sample, runtime_id=None)):
             with self.subTest(sample=bad), self.assertRaises(ValueError):
                 client.wait_state(0.01, after_sample=bad)
         obj = state_object(sample=2); obj.tsStateRealUs = 0
@@ -425,7 +425,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(client.state.sample_ref.source_time_us, 0)
         self.assertFalse(client.state.sample_ref.validity & 2)
         with self.assertRaises(TimeoutError):
-            client.wait_info(0.01, after_descriptor=client.info.descriptor_ref)
+            client.wait_info(0.01, after_runtime_id=client.info.runtime_id)
         for timeout in (-1, True, float('nan')):
             with self.subTest(timeout=timeout), self.assertRaises(ValueError):
                 client.wait_state(timeout)
@@ -435,7 +435,7 @@ class EndEffectorClientTest(unittest.TestCase):
         client = self.client(harness, node)
         sibling = self.client(harness, node, 'right')
         node.emit('left', 'info', info_object(runtime=101))
-        self.assertEqual(client.info.descriptor_ref, DescriptorRef(100))
+        self.assertEqual(client.info.runtime_id, 100)
         self.confirm_restart(harness)
         with self.assertRaisesRegex(ValueError, 'lifecycle'):
             client.wait_state(0.01)
@@ -452,8 +452,8 @@ class EndEffectorClientTest(unittest.TestCase):
 
         fresh, fresh_node = self.harness(runtime_id=101)
         fresh_client = self.client(fresh, fresh_node, feedback=False)
-        self.assertEqual(confirm_info(fresh_client, fresh_node, info_object(runtime=101)).descriptor_ref,
-                         DescriptorRef(101))
+        self.assertEqual(confirm_info(fresh_client, fresh_node, info_object(runtime=101)).runtime_id,
+                         101)
         fresh_node.emit('left', 'state', state_object(runtime=101))
         self.assertEqual(fresh_client.publish(target()).key, CommandKey(42, 1))
 
@@ -578,8 +578,8 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(harness.controller._end_effector_runtime_id, 100)
         self.assertIsNone(harness.controller._end_effector_runtime_error)
         self.assertEqual(
-            confirm_info(right, node, info_object(side=2)).descriptor_ref,
-            DescriptorRef(100),
+            confirm_info(right, node, info_object(side=2)).runtime_id,
+            100,
         )
         self.assertIsNone(harness.controller._end_effector_runtime_error)
 
@@ -592,13 +592,13 @@ class EndEffectorClientTest(unittest.TestCase):
         self.addCleanup(source.close)
         self.addCleanup(right.close)
         self.addCleanup(left.close)
-        self.assertEqual(confirm_info(left, node, info_object()).descriptor_ref,
-                         DescriptorRef(100))
+        self.assertEqual(confirm_info(left, node, info_object()).runtime_id,
+                         100)
         node.emit('right', 'info', info_object(side=2, runtime=101))
         with self.assertRaises(TimeoutError):
             right.wait_info(0.01)
-        self.assertEqual(confirm_info(right, node, info_object(side=2)).descriptor_ref,
-                         DescriptorRef(100))
+        self.assertEqual(confirm_info(right, node, info_object(side=2)).runtime_id,
+                         100)
 
     def test_read_only_fake_transport_enforces_the_real_closed_gate(self):
         harness, node = self.harness(running=False)
@@ -619,7 +619,7 @@ class EndEffectorClientTest(unittest.TestCase):
         republished.tsStatePubUs = initial.tsStatePubUs + 1
         republished.timeValidMask ^= 2
         node.emit('left', 'info', republished)
-        self.assertEqual(client.info.descriptor_ref, accepted.descriptor_ref)
+        self.assertEqual(client.info.runtime_id, accepted.runtime_id)
         self.assertEqual(client.info.ts_state_pub_us, republished.tsStatePubUs)
         changed = info_object()
         changed.firmware = 'changed-static-description'
@@ -669,8 +669,8 @@ class EndEffectorClientTest(unittest.TestCase):
         harness, node = self.harness(running=False)
         client = self.client(harness, node, feedback=False)
         with patch.object(harness.transport, 'get_robot_info', side_effect=AssertionError('unexpected RPC')) as rpc:
-            self.assertEqual(confirm_info(client, node, info_object()).descriptor_ref,
-                             DescriptorRef(100))
+            self.assertEqual(confirm_info(client, node, info_object()).runtime_id,
+                             100)
             rpc.assert_not_called()
 
     def test_wrong_side_malformed_state_and_column_resize_do_not_replace_last_sample(self):
@@ -892,9 +892,9 @@ class EndEffectorClientTest(unittest.TestCase):
         cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
         lines = []
         cli.run_once(client, timeout=0.01, include_touch=True, emit=lines.append)
-        self.assertIn(f'descriptor={client.state.descriptor_ref}', lines[0])
+        self.assertIn(f'runtime_id={client.state.runtime_id}', lines[0])
         self.assertIn(f'state_id={2**64-1}', lines[0])
-        self.assertIn(f'descriptor={client.touch.descriptor_ref}', lines[-1])
+        self.assertIn(f'runtime_id={client.touch.runtime_id}', lines[-1])
         self.assertIn(f'touch_state_id={2**63+3}', lines[-1])
         self.assertTrue(all('side=left' in lines[i] and 'layout=7' in lines[i] for i in (0, -1)))
         self.assertEqual(node.commands, [])
@@ -911,7 +911,7 @@ class EndEffectorClientTest(unittest.TestCase):
             response = client.set_touch(enable, timeout=.125)
             self.assertEqual((response.status, response.reason), (ServiceStatus.SUCCESS, TouchSetReason.NONE))
             self.assertFalse(hasattr(response, 'enabled_valid'))
-            self.assertEqual(response.descriptor_ref, DescriptorRef(100))
+            self.assertEqual(response.runtime_id, 100)
             self.assertIs(client.state, state)
             self.assertIs(client.touch, touch)
             self.assertEqual(harness.transport.published, traffic)
@@ -1198,7 +1198,7 @@ class EndEffectorClientTest(unittest.TestCase):
         harness, node = self.harness(running=False)
         client = self.client(harness, node, touch=True, read_only=True)
         cases = (
-            (client.wait_info, client.info, {'after_descriptor': client.info.descriptor_ref}),
+            (client.wait_info, client.info, {'after_runtime_id': client.info.runtime_id}),
             (client.wait_state, client.state, {'after_sample': client.state.sample_ref}),
             (client.wait_touch, client.touch, {'after_sample': client.touch.sample_ref}),
         )
@@ -1257,7 +1257,7 @@ class EndEffectorClientTest(unittest.TestCase):
         sources = ((SampleStream.BODY_STATE, 0), (SampleStream.EE_STATE, 1))
         client = self.client(harness, node, observation_sources=sources)
         body = decode_body_state(make_state(runtime_id=100)[1])
-        body_ref = SampleRef(body.descriptor_ref, SampleStream.BODY_STATE, 0,
+        body_ref = SampleRef(body.descriptor_ref.robot_runtime_id, SampleStream.BODY_STATE, 0,
                              body.state_id, body.ts_state_real_us, 3)
         node.emit('left', 'state', state_object(sample=100))
         selected = client.state.sample_ref
@@ -1311,7 +1311,7 @@ class EndEffectorClientTest(unittest.TestCase):
 
     def test_ee_pull_ring_revocation_after_reservation_before_typed_submit(self):
         from test_pull import PullTest
-        for change in (None, {'descriptor_ref': DescriptorRef(101)},
+        for change in (None, {'runtime_id': 101},
                        {'client_id': 17}, {'control_id': 19}, {'generation': 84}):
             with self.subTest(change=change):
                 t = PullTest().transport()
@@ -1366,7 +1366,7 @@ class EndEffectorClientTest(unittest.TestCase):
                         release.set()
                         thread.join(2)
                 self.assertFalse(thread.is_alive())
-                allowed = change is None or 'descriptor_ref' in change
+                allowed = change is None or 'runtime_id' in change
                 self.assertEqual(len(errors), 0 if allowed else 1)
                 if not allowed:
                     self.assertIsInstance(errors[0], NotRunningError)
@@ -1383,8 +1383,8 @@ class EndEffectorClientTest(unittest.TestCase):
         actual = (left.state.sample_ref, right.state.sample_ref)
         malformed = ((), actual[:1], tuple(reversed(actual)), (actual[0], actual[0]), list(actual),
             (None, actual[1]),
-            (dataclasses.replace(actual[0], descriptor_ref=DescriptorRef(101)), actual[1]),
-            (dataclasses.replace(actual[0], descriptor_ref=DescriptorRef(0)), actual[1]),
+            (dataclasses.replace(actual[0], runtime_id=101), actual[1]),
+            (dataclasses.replace(actual[0], runtime_id=0), actual[1]),
             (dataclasses.replace(actual[0], sample_id=-1), actual[1]),
             (dataclasses.replace(actual[0], sample_id=2**64), actual[1]),
             (dataclasses.replace(actual[0], source_time_us=True), actual[1]),
@@ -1588,7 +1588,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 future = dataclasses.replace(current.sample_ref, sample_id=100)
                 with self.assertRaises(TimeoutError):
                     getattr(client, 'wait_' + kind)(.001, after_sample=future)
-                future_ref = dataclasses.replace(current.sample_ref, descriptor_ref=DescriptorRef(101))
+                future_ref = dataclasses.replace(current.sample_ref, runtime_id=101)
                 with self.assertRaisesRegex(ValueError, 'static descriptor'):
                     getattr(client, 'wait_' + kind)(.001, after_sample=future_ref)
 
@@ -1650,11 +1650,11 @@ class EndEffectorClientTest(unittest.TestCase):
         republished = info_object(touch=True)
         republished.tsStatePubUs += 1
         node.emit('left', 'info', republished)
-        self.assertEqual(client.info.descriptor_ref, old_info.descriptor_ref)
+        self.assertEqual(client.info.runtime_id, old_info.runtime_id)
         self.assertIs(client.touch, old_touch)
         self.assertEqual(client.motion_feedback(), original)
         self.assertEqual(len(seen), 2)
-        self.assertEqual(client.publish(target()).descriptor_ref, old_info.descriptor_ref)
+        self.assertEqual(client.publish(target()).runtime_id, old_info.runtime_id)
 
     def test_after_descriptor_waits_for_new_process_but_never_queries_robot_info(self):
         harness, node = self.harness(running=False)
@@ -1663,7 +1663,7 @@ class EndEffectorClientTest(unittest.TestCase):
         with patch.object(harness.transport, 'get_robot_info', side_effect=AssertionError('unexpected RPC')) as rpc, \
                 patch.object(client._condition, 'wait', return_value=None):
             with self.assertRaises(TimeoutError):
-                client.wait_info(.001, after_descriptor=original.descriptor_ref)
+                client.wait_info(.001, after_runtime_id=original.runtime_id)
             rpc.assert_not_called()
 
     def test_initial_info_requires_nonzero_runtime_without_service_confirmation(self):
