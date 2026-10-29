@@ -58,6 +58,10 @@ class ControllerClosedError(ExternalControlError):
 
 _T = TypeVar("_T")
 _MAX_UINT64 = (1 << 64) - 1
+_COUPLED_ANKLE_JOINTS = frozenset((
+    'left_ankle_pitch_joint', 'left_ankle_roll_joint',
+    'right_ankle_pitch_joint', 'right_ankle_roll_joint',
+))
 
 
 @dataclass(frozen=True, slots=True)
@@ -903,6 +907,8 @@ def _validate_body_targets(command: BodyCmd, body_info: BodyInfo | None,
         raise InvalidCommandError('BodyCmd target scope must be explicitly declared')
     if type(required_fields) is not int or not 0 < required_fields <= 0x1f:
         raise InvalidCommandError('BodyCmd required fields must be explicitly declared')
+    if required_fields & 0x08 and not required_fields & 0x01:
+        raise InvalidCommandError('position gain requires the declared position field')
     roster = {name: i for i, name in enumerate(body_info.joint_names)}
     if any(name not in roster for name in target_names):
         raise InvalidCommandError('BodyCmd target is not in the confirmed roster')
@@ -917,15 +923,23 @@ def _validate_body_targets(command: BodyCmd, body_info: BodyInfo | None,
                 raise InvalidCommandError(f'BodyCmd non-target padding is not neutral: {i}')
             continue
         cap = body_info.joints[i]
-        if (cap.supported_fields & required_fields != required_fields
-                or cap.valid_limits & required_fields != required_fields):
-            raise InvalidCommandError(f'BodyCmd target capability or limit unavailable: {i}')
+        if cap.supported_fields & required_fields != required_fields:
+            raise InvalidCommandError(f'BodyCmd target capability unavailable: {i}')
+        # The fixed 62f3 parallel-ankle contract delegates non-Q ranges to
+        # the native adapter; do not extend that exception to other shapes.
+        coupled_q_only = (body_info.joint_names[i] in _COUPLED_ANKLE_JOINTS
+                          and cap.supported_fields & 0x1f == 0x1f
+                          and cap.valid_limits == 0x01
+                          and required_fields in (0x19, 0x1f))
         for bit, name in enumerate(fields):
             value = getattr(joint, name)
-            if required_fields & (1 << bit):
+            field_bit = 1 << bit
+            if cap.valid_limits & field_bit:
                 if not getattr(cap, name + '_min') <= value <= getattr(cap, name + '_max'):
                     raise InvalidCommandError(f'BodyCmd target {name} outside limit: {i}')
-            elif value != 0.0:
+            elif required_fields & field_bit and (field_bit == 0x01 or not coupled_q_only):
+                raise InvalidCommandError(f'BodyCmd target {name} limit unavailable: {i}')
+            if not required_fields & field_bit and value != 0.0:
                 raise InvalidCommandError(f'BodyCmd undeclared field is not neutral: {i}.{name}')
 
 

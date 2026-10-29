@@ -21,7 +21,9 @@ def body_info():
     for i in (4, 5, 10, 11):
         caps[i] = replace(caps[i], valid_limits=1,
                           q_min=-.751 if i in (4, 10) else -.43625,
-                          q_max=.414 if i in (4, 10) else .43625)
+                          q_max=.414 if i in (4, 10) else .43625,
+                          dq_min=0., dq_max=0., tau_min=0., tau_max=0.,
+                          kp_min=0., kp_max=0., kd_min=0., kd_max=0.)
     return replace(info, joints=tuple(caps))
 
 
@@ -32,11 +34,6 @@ class ZeroPoseTest(unittest.TestCase):
         self.addCleanup(c.close)
         reply = robot_info_reply()
         selected = info or body_info()
-        # The live synthetic controller fixture declares its kp/kd limits;
-        # body_info() itself retains the original q-only preflight coverage.
-        selected = replace(selected, joints=tuple(
-            replace(cap, valid_limits=cap.valid_limits | 0x18)
-            if cap.valid_limits & 1 else cap for cap in selected.joints))
         c.transport.get_robot_info = lambda timeout: replace(
             reply, runtime_id=100, info=replace(reply.info, body=selected))
         return c, clock
@@ -50,7 +47,10 @@ class ZeroPoseTest(unittest.TestCase):
         return [value for topic, value in c.transport.published if topic == BODY_CMD_TOPIC]
 
     def test_frozen_gain_mapping_and_adapter_q_only_limits(self):
-        plan = FixedStandPose(body_info())
+        info = body_info()
+        self.assertEqual((info.joints[4].supported_fields, info.joints[4].valid_limits,
+                          info.joints[4].kp_min, info.joints[4].kp_max), (31, 1, 0., 0.))
+        plan = FixedStandPose(info)
         self.assertEqual(plan.profile['robot_source_head'], 'fda136e91b47e6771026043ae69a8b48b756122e')
         gains = plan.profile['joint_gains']
         self.assertEqual(gains['left_shoulder_pitch_joint']['kp'], 60)

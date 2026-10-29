@@ -33,6 +33,7 @@ from locomotion_aorta import (
     BodyJointCmd,
     NotRunningError,
 )
+from locomotion_aorta._policy_state import ASAMPLE_BODY_JOINT_NAMES
 
 
 _BODY_TEST_TARGETS = tuple('fake_joint_' + str(i) for i in range(31))
@@ -1477,16 +1478,32 @@ class ExternalControllerTest(unittest.TestCase):
         self.assertTrue(harness.controller.get_robot_info().info.body.joints[14].is_mock)
 
     def test_declared_thirty_targets_publish_and_cancel_with_mock_padding(self):
-        harness = ControllerHarness(info_reply=robot_info_reply())
+        reply = robot_info_reply()
+        body = reply.info.body
+        joints = list(body.joints)
+        for i in (4, 5, 10, 11):
+            joints[i] = replace(joints[i], supported_fields=31, valid_limits=1,
+                q_min=-.751 if i in (4, 10) else -.43625,
+                q_max=.414 if i in (4, 10) else .43625,
+                dq_min=0., dq_max=0., tau_min=0., tau_max=0.,
+                kp_min=0., kp_max=0., kd_min=0., kd_max=0.)
+        body = replace(body, joint_names=ASAMPLE_BODY_JOINT_NAMES, joints=tuple(joints))
+        harness = ControllerHarness(info_reply=replace(reply, info=replace(reply.info, body=body)))
         self.addCleanup(harness.controller.close)
         harness.accept_enter()
         harness.controller.enter_external(.1)
         info = harness.controller.get_robot_info(.1).info.body
         targets = tuple(name for i, name in enumerate(info.joint_names) if i != 14)
-        command = BodyCmd(tuple(BodyJointCmd(q=.5, kp=1., kd=.5) if i != 14
+        self.assertEqual((info.joints[4].supported_fields, info.joints[4].valid_limits,
+                          info.joints[4].kp_min, info.joints[4].kp_max), (31, 1, 0., 0.))
+        command = BodyCmd(tuple(BodyJointCmd(q=.1, kp=1., kd=.5) if i != 14
                                 else BodyJointCmd() for i in range(31)))
         sent = harness.controller.publish(command, target_names=targets, required_fields=0x19)
         self.assertEqual((sent.session_id, sent.sequence), (42, 1))
+        all_fields = BodyCmd(tuple(BodyJointCmd(q=.1, dq=.1, tau=.1, kp=1., kd=.5)
+                                   if i != 14 else BodyJointCmd() for i in range(31)))
+        self.assertEqual(harness.controller.publish(all_fields, target_names=targets,
+                                                    required_fields=0x1f).sequence, 2)
         def cancel(topic, request):
             if topic == CONTROL_REQUEST_TOPIC and request.operation == ControlOperation.CANCEL:
                 harness.ack(request)
@@ -1498,12 +1515,27 @@ class ExternalControllerTest(unittest.TestCase):
         reply = robot_info_reply()
         body = reply.info.body
         targets = tuple(name for i, name in enumerate(body.joint_names) if i != 14)
-        for failure in ('mock_target', 'padding', 'undeclared_field', 'empty', 'duplicate', 'unknown'):
+        for failure in ('mock_target', 'padding', 'undeclared_field', 'empty', 'duplicate', 'unknown',
+                        'missing_q', 'missing_capability', 'unknown_gain_non_ankle',
+                        'known_gain_range', 'known_undeclared_range', 'outside_q', 'kp_only'):
             with self.subTest(failure=failure):
                 joints = list(body.joints)
                 if failure == 'mock_target':
                     joints[0] = replace(joints[0], is_mock=True)
                     self.assertNotEqual(joints[0].supported_fields, 0)
+                elif failure == 'missing_q':
+                    joints[0] = replace(joints[0], valid_limits=0x18)
+                elif failure == 'missing_capability':
+                    joints[0] = replace(joints[0], supported_fields=0x11)
+                elif failure == 'unknown_gain_non_ankle':
+                    joints[0] = replace(joints[0], valid_limits=1, kp_min=0., kp_max=0.,
+                                        kd_min=0., kd_max=0.)
+                elif failure == 'known_gain_range':
+                    joints[0] = replace(joints[0], kp_max=.5)
+                elif failure == 'known_undeclared_range':
+                    joints[0] = replace(joints[0], dq_min=.2, dq_max=1.2)
+                elif failure in ('outside_q', 'kp_only'):
+                    joints[0] = replace(joints[0], q_min=.2, q_max=1.2)
                 source = replace(reply, info=replace(reply.info, body=replace(body, joints=tuple(joints))))
                 harness = ControllerHarness(info_reply=source)
                 self.addCleanup(harness.controller.close)
@@ -1513,11 +1545,14 @@ class ExternalControllerTest(unittest.TestCase):
                     values[14] = BodyJointCmd(q=.1)
                 if failure == 'undeclared_field':
                     values[0] = BodyJointCmd(kp=1.)
+                if failure in ('known_gain_range', 'outside_q', 'kp_only'):
+                    values[0] = BodyJointCmd(q=0., kp=1.)
                 declared = (() if failure == 'empty' else targets + (targets[0],) if failure == 'duplicate'
                             else targets + ('not-in-roster',) if failure == 'unknown' else targets)
                 with self.assertRaises(InvalidCommandError):
                     harness.controller.publish(BodyCmd(tuple(values)), target_names=declared,
-                                               required_fields=1 if failure == 'undeclared_field' else 0x19)
+                                               required_fields=(1 if failure == 'undeclared_field'
+                                                                else 0x08 if failure == 'kp_only' else 0x19))
                 self.assertEqual(harness.controller._next_external_sequence, 1)
                 self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in harness.transport.published))
 
