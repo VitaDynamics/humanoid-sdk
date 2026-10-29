@@ -85,7 +85,7 @@ class EEPullTest(unittest.TestCase):
         wire = node.commands[-1][1]
         self.assertEqual((sent.input_observations[0].sample_id,
                           wire.InputObservations(0).SampleId()), (400, 400))
-        self.assertEqual(sent.descriptor_ref, sample.descriptor_ref)
+        self.assertEqual(sent.runtime_id, sample.runtime_id)
         # No independently generated session/clock and no polling-thread burst.
         self.assertEqual(sent.key.session_id, owner.generation)
         self.assertEqual(sent.ts_client_send_us, 0)

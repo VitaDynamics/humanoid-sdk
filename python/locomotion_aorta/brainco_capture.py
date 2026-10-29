@@ -21,7 +21,7 @@ from .transport import _decode_control_status
 from ._body_codec import decode_body_state, unpack_body_cmd
 from ._motor_codec import unpack_motor_states
 from .types import HumanoidLowState
-from .body_types import BodyCmd, DescriptorRef, BODY_SLOTS
+from .body_types import BodyCmd, BODY_SLOTS
 
 
 TOPICS = {
@@ -123,6 +123,7 @@ def decode(kind, payload, bindings):
             raise ValueError("requires31-slot BodyState")
         return _json_feedback(asdict(state))
     if kind == "body_cmd":
+        from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
         motors = unpack_body_cmd(view)
         if len(motors) != BODY_SLOTS:
             raise ValueError("requires31-slot BodyCmd")

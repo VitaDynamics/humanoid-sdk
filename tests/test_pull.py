@@ -11,7 +11,6 @@ from locomotion_aorta import ControlAck,ControlStatus,ControlOperation,ExternalP
 from locomotion_aorta import BodyCmd,BodyJointCmd,ControllerClosedError,NotRunningError
 from locomotion_aorta.transport import BODY_CMD_TOPIC,BODY_STATE_TOPIC,CONTROL_STATUS_TOPIC,CONTROL_REQUEST_TOPIC
 from fake_transport import FakeTransport
-from locomotion_aorta.body_types import DescriptorRef
 
 _BODY_TEST_TARGETS = tuple('fake_joint_' + str(i) for i in range(31) if i != 14)
 
@@ -506,7 +505,7 @@ class PullTest(unittest.TestCase):
         self.assertEqual(t.published[-1][1].operation,ControlOperation.CANCEL)
 
     def test_state_source_has_one_array_wait_api_and_close_is_readonly(self):
-        calls=[];state=S(descriptor_ref=DescriptorRef(11));status=S(runtime_id=11)
+        calls=[];state=S(runtime_id=11);status=S(runtime_id=11)
         class Transport(FakeTransport):
             control_status=status
             def wait_state(self, timeout):
@@ -522,12 +521,12 @@ class PullTest(unittest.TestCase):
 class RuntimeIdentityPullR3Test(unittest.TestCase):
     def test_readonly_discovery_binds_before_accepting_body_without_control(self):
         from body_fixtures import robot_info_reply
-        from locomotion_aorta.body_types import DescriptorRef
+
         class Reader(FakeTransport):
             def __init__(self):
                 super().__init__()
                 self.reply = replace(robot_info_reply(), runtime_id=11)
-                self.state = S(descriptor_ref=DescriptorRef(11))
+                self.state = S(runtime_id=11)
             def get_robot_info(self, timeout):
                 return self.reply
             def wait_state(self, timeout):
@@ -539,14 +538,15 @@ class RuntimeIdentityPullR3Test(unittest.TestCase):
             source.wait_state(.1)
         self.assertEqual(source.get_robot_info(.1), transport.reply)
         self.assertIs(source.wait_state(.1), transport.state)
-        transport.state = S(descriptor_ref=DescriptorRef(99))
-        with self.assertRaises(ValueError):
-            source.wait_state(.1)
+        for runtime_id in (0, True, 99):
+            transport.state = S(runtime_id=runtime_id)
+            with self.assertRaises(ValueError):
+                source.wait_state(.1)
         self.assertEqual(transport.published, [])
         transport.reply = replace(transport.reply, runtime_id=12)
         with self.assertRaisesRegex(ValueError, 'runtime changed'):
             source.get_robot_info(.1)
-        transport.state = S(descriptor_ref=DescriptorRef(11))
+        transport.state = S(runtime_id=11)
         with self.assertRaisesRegex(ValueError, 'runtime changed'):
             source.wait_state(.1)
 

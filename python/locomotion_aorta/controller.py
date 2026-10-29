@@ -28,7 +28,7 @@ from .types import (
 
 from .body_types import (
     BODY_SLOTS, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION, BodyState, BodyCmd, BodyJointCmd, BodyCmdAction,
-    BodyInfo, DescriptorRef, GetRobotInfoResponse, ServiceStatus,
+    BodyInfo, GetRobotInfoResponse, ServiceStatus,
 )
 
 
@@ -68,7 +68,7 @@ class _CommandContext:
     control_id: int
     session_id: int
     sequence: int
-    descriptor_ref: DescriptorRef
+    runtime_id: int
     request_id: str
 
 
@@ -325,9 +325,9 @@ class ExternalController:
             validation = time.perf_counter_ns() if trace is not None else 0
             try:
                 _validate_command(command)
-                if (command.descriptor_ref is not None and
-                        (not _valid_ref(command.descriptor_ref) or
-                         command.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id)):
+                if (command.runtime_id is not None and
+                        (not _valid_generation(command.runtime_id) or
+                         command.runtime_id != self._end_effector_runtime_id)):
                     raise InvalidCommandError('BodyCmd belongs to a different robot runtime')
             finally:
                 if trace is not None:
@@ -350,13 +350,13 @@ class ExternalController:
                     or current.request_id != self._request_id or current.client_id != self.client_id
                     or current.control_id != self._control_id or current.generation != status.generation):
                 raise NotRunningError('Body context changed during target validation')
-            context = self._reserve_command_locked(for_body=True, expected_ref=command.descriptor_ref)
+            context = self._reserve_command_locked(for_body=True, expected_runtime_id=command.runtime_id)
         external_command = replace(
             command,
             protocol_version=BODY_CMD_PROTOCOL_VERSION,
             action=BodyCmdAction.EXTERNAL,
             root_quat=(1.0, 0.0, 0.0, 0.0),
-            descriptor_ref=context.descriptor_ref,
+            runtime_id=context.runtime_id,
             control_id=context.control_id,
             session_id=context.session_id,
             sequence=context.sequence,
@@ -375,7 +375,7 @@ class ExternalController:
                 with self._condition:
                     self._ensure_open()
                     status = self._require_owned_status()
-                    if (self._end_effector_runtime_id != context.descriptor_ref.robot_runtime_id
+                    if (self._end_effector_runtime_id != context.runtime_id
                             or self._body_info is not body_info
                             or self._request_id != context.request_id
                             or current.request_id != context.request_id
@@ -386,8 +386,8 @@ class ExternalController:
                             or self._control_id != context.control_id
                             or self._external_session_id != context.session_id
                             or status.generation != context.session_id
-                            or (command.descriptor_ref is not None and
-                                command.descriptor_ref != context.descriptor_ref)
+                            or (command.runtime_id is not None and
+                                command.runtime_id != context.runtime_id)
                             or self._request_action != 'EXTERNAL'):
                         raise NotRunningError('Body control context changed before submission')
                     return submit()
@@ -404,7 +404,7 @@ class ExternalController:
         return external_command
 
     def _reserve_command(self, *, for_body: bool = False,
-                         expected_ref: DescriptorRef | None = None) -> _CommandContext:
+                         expected_runtime_id: int | None = None) -> _CommandContext:
         """Reserve from the connection's stream for a validated BODY/EE call.
 
         This never enters control or publishes. Failed sends consume their key;
@@ -413,17 +413,17 @@ class ExternalController:
         Call outside _condition so pull reception cannot invert its lock order.
         """
         with self._condition:
-            return self._reserve_command_locked(for_body=for_body, expected_ref=expected_ref)
+            return self._reserve_command_locked(for_body=for_body, expected_runtime_id=expected_runtime_id)
 
     def _reserve_command_locked(self, *, for_body: bool = False,
-                                expected_ref: DescriptorRef | None = None) -> _CommandContext:
+                                expected_runtime_id: int | None = None) -> _CommandContext:
         """Reserve one key while the caller holds the connection condition."""
         status = self._require_owned_status()
         if for_body and self._request_action != "EXTERNAL":
             raise NotRunningError("BodyCmd requires an owned EXTERNAL session")
-        if expected_ref is not None and (
-                not _valid_ref(expected_ref) or
-                expected_ref.robot_runtime_id != self._end_effector_runtime_id):
+        if expected_runtime_id is not None and (
+                not _valid_generation(expected_runtime_id) or
+                expected_runtime_id != self._end_effector_runtime_id):
             raise InvalidCommandError('BodyCmd belongs to a different robot runtime')
         if status.phase == ExternalPhase.RUNNING:
             if status.generation != self._external_session_id:
@@ -435,7 +435,7 @@ class ExternalController:
             client_id=self.client_id, control_id=self._control_id,
             session_id=self._external_session_id,
             sequence=self._next_external_sequence,
-            descriptor_ref=DescriptorRef(self._end_effector_runtime_id),
+            runtime_id=self._end_effector_runtime_id,
             request_id=self._request_id,
         )
         self._next_external_sequence += 1
@@ -659,8 +659,8 @@ class ExternalController:
             return
         with self._condition:
             if (not self._closed and self._end_effector_runtime_error is None
-                    and _valid_ref(lowstate.descriptor_ref)
-                    and lowstate.descriptor_ref.robot_runtime_id == self._end_effector_runtime_id):
+                    and _valid_generation(lowstate.runtime_id)
+                    and lowstate.runtime_id == self._end_effector_runtime_id):
                 self._latest_body_state = lowstate
                 self._condition.notify_all()
 
@@ -850,10 +850,6 @@ def _uint64_nonzero(value: int, name: str) -> int:
 
 def _valid_uint64(value: int) -> bool:
     return type(value) is int and 0 <= value <= _MAX_UINT64
-
-
-def _valid_ref(ref: DescriptorRef | None) -> bool:
-    return isinstance(ref, DescriptorRef) and _valid_generation(ref.robot_runtime_id)
 
 
 def _nonempty_text(value: str, name: str) -> str:

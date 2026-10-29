@@ -7,7 +7,6 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from ._body_codec import _dto, _getter, _text
-from .body_types import DescriptorRef
 from .transport import AortaBindingsUnavailableError
 from .end_effector_types import (
     CommandKey, ControlMode, EE_INFO_PROTOCOL_VERSION,
@@ -92,6 +91,7 @@ def _vector(view, name):
 
 
 def _ref(view):
+    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
     if view is None:
         raise ValueError('missing DescriptorRef')
     return DescriptorRef(view.RobotRuntimeId())

@@ -32,6 +32,12 @@ def body_info(names=ASAMPLE_BODY_JOINT_NAMES, unavailable=()):
 
 
 class PolicyPreflightTest(unittest.TestCase):
+    def setUp(self):
+        # This fixture tests policy preflight with a minimal synthetic body.
+        formatter = patch('locomotion_aorta._policy_state.format_robot_info', return_value='Info')
+        formatter.start()
+        self.addCleanup(formatter.stop)
+
     def velocity(self, body, expected_missing=()):
         metadata = json.loads((ROOT/'tests/fixtures/velocity_model_metadata.json').read_text())
         p = VelocityModePolicy.__new__(VelocityModePolicy)
@@ -79,14 +85,14 @@ class PolicyPreflightTest(unittest.TestCase):
         p, clock = policy(), FakeClock()
         client = FakeController(p, clock)
         client.get_robot_info = Mock(return_value=SimpleNamespace(
-            info=SimpleNamespace(body=body), descriptor_ref=17))
+            info=SimpleNamespace(body=body), runtime_id=17))
         model = FakeModel()
         model.contract = p.contract
         model.session = SimpleNamespace(metadata={CONTRACT_KEY:
             (ROOT/'tests/fixtures/actor_g1_contract.json').read_text()})
         source = Mock()
         source.wait_state = client.wait_state
-        source.get_robot_info.return_value = SimpleNamespace(descriptor_ref=17)
+        source.get_robot_info.return_value = SimpleNamespace(runtime_id=17)
         with tempfile.TemporaryDirectory() as temp:
             model_path, log_path = Path(temp)/'model.onnx', Path(temp)/'wbc.jsonl'
             model_path.write_bytes(b'explicit unit model; inference mocked')

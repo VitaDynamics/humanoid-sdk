@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
 
-from .body_types import BodyState, BodyJointState, BodyImuState, BodyImuSample, DescriptorRef
+from .body_types import BodyState, BodyJointState, BodyImuState, BodyImuSample
 
 
 @dataclass(frozen=True, eq=False)
@@ -37,7 +37,7 @@ class BodyStateArrays:
     applied_session_id: int
     applied_sequence: int
     ts_first_output_us: int
-    descriptor_ref: DescriptorRef | None
+    runtime_id: int
     ts_control_us: int
     applied_key_valid: bool
     association_source_type: int
@@ -73,7 +73,7 @@ class BodyStateArrays:
                          self.ts_state_pub_us, self.ts_consumed_us,
                          self.attitude_valid, self.imu_states,
                          self.applied_session_id, self.applied_sequence,
-                         self.ts_first_output_us, self.descriptor_ref,
+                         self.ts_first_output_us, self.runtime_id,
                          self.ts_control_us, self.applied_key_valid,
                          self.association_source_type)
 

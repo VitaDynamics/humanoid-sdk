@@ -11,7 +11,7 @@ from functools import cached_property
 
 from ._body_codec import decode_body_state, _require_body_joints
 from .body_types import BODY_STATE_PROTOCOL_VERSION, BodyState, ServiceStatus
-from .controller import _deadline, _nonempty_text, _valid_ref, _valid_generation
+from .controller import _deadline, _nonempty_text, _valid_generation
 from ._state_stream import create_state_stream
 
 

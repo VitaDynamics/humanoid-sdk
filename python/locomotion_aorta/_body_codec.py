@@ -3,7 +3,7 @@ import struct
 from dataclasses import fields
 from typing import Any
 from .body_types import (
-    BODY_SLOTS, BODY_STATE_PROTOCOL_VERSION, DescriptorRef, BodyJointState, BodyImuState, BodyImuSample,
+    BODY_SLOTS, BODY_STATE_PROTOCOL_VERSION, BodyJointState, BodyImuState, BodyImuSample,
     BodyState, BodyJointCmd, BodyJointCapability, BodyMotorIdentity, BodyInfo,
     EndEffectorCapability, RobotInfo, GetRobotInfoResponse,
 )
@@ -94,6 +94,7 @@ def _text(value: bytes | str | None) -> str:
 
 
 def decode_body_state(view: Any) -> BodyState:
+    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
     # Check the existing BODY revision before interpreting a fixed-stride struct.
     if view.ProtocolVersion() != BODY_STATE_PROTOCOL_VERSION:
         raise ValueError("incompatible BodyState protocol_version; expected BodyState 3")
@@ -133,6 +134,7 @@ def decode_robot_info(view: Any) -> RobotInfo:
 
 
 def decode_robot_info_response(view: Any) -> GetRobotInfoResponse:
+    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
     info = view.Info()
     ref = view.DescriptorRef()
     return GetRobotInfoResponse(status=view.Status(), info=None if info is None else decode_robot_info(info),

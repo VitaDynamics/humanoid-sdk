@@ -92,7 +92,7 @@ def main():
                 if state.protocol_version != 3 or len(state.joints) != 31 or not 0 < state.state_id <= 65000:
                     raise ValueError("invalid state slots/sequence")
                 command = BodyCmd(
-                    descriptor_ref=state.descriptor_ref,
+                    runtime_id=state.runtime_id,
                     input_state_id=state.state_id, input_state_ts_real_us=state.ts_state_real_us,
                     joints=tuple(BodyJointCmd(m.q, m.dq, m.tau_est, 1., .5) if i in target_slots else BodyJointCmd()
                                     for i, m in enumerate(state.joints)))

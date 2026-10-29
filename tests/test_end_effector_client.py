@@ -1257,7 +1257,7 @@ class EndEffectorClientTest(unittest.TestCase):
         sources = ((SampleStream.BODY_STATE, 0), (SampleStream.EE_STATE, 1))
         client = self.client(harness, node, observation_sources=sources)
         body = decode_body_state(make_state(runtime_id=100)[1])
-        body_ref = SampleRef(body.descriptor_ref.robot_runtime_id, SampleStream.BODY_STATE, 0,
+        body_ref = SampleRef(body.runtime_id, SampleStream.BODY_STATE, 0,
                              body.state_id, body.ts_state_real_us, 3)
         node.emit('left', 'state', state_object(sample=100))
         selected = client.state.sample_ref

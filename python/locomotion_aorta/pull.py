@@ -7,7 +7,7 @@ from dataclasses import replace
 
 from .controller import (ExternalController, ExternalControlTimeoutError,
                          ControllerClosedError, _deadline, _nonempty_text,
-                         _uint64_nonzero, _valid_ref, _valid_generation)
+                         _uint64_nonzero, _valid_generation)
 from .body_types import BODY_STATE_PROTOCOL_VERSION, ServiceStatus
 from .types import ControlStatus, PROTOCOL_VERSION
 from .transport import _AortaTransport, BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC
@@ -205,8 +205,8 @@ class PullStateSource:
                          and candidate.runtime_id == self._end_effector_runtime_id)
             else:
                 valid = (candidate.protocol_version == BODY_STATE_PROTOCOL_VERSION
-                         and _valid_ref(candidate.descriptor_ref)
-                         and candidate.descriptor_ref.robot_runtime_id == self._end_effector_runtime_id)
+                         and _valid_generation(candidate.runtime_id)
+                         and candidate.runtime_id == self._end_effector_runtime_id)
             if not valid:
                 return False
             commit()
@@ -220,7 +220,7 @@ class PullStateSource:
         state = self.transport.wait_state(timeout)
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
-            if not _valid_ref(state.descriptor_ref) or state.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id:
+            if not _valid_generation(state.runtime_id) or state.runtime_id != self._end_effector_runtime_id:
                 raise ValueError('BodyState does not belong to the discovered runtime')
             return state
 
@@ -339,8 +339,8 @@ class PullController(ExternalController):
                          and candidate.runtime_id == self._end_effector_runtime_id)
             else:
                 valid = (candidate.protocol_version == BODY_STATE_PROTOCOL_VERSION
-                         and _valid_ref(candidate.descriptor_ref)
-                         and candidate.descriptor_ref.robot_runtime_id == self._end_effector_runtime_id)
+                         and _valid_generation(candidate.runtime_id)
+                         and candidate.runtime_id == self._end_effector_runtime_id)
             if not valid:
                 return False
             commit()
@@ -353,7 +353,7 @@ class PullController(ExternalController):
         with self._condition:
             self._ensure_open()
             self.transport._ensure_open()
-            if not _valid_ref(state.descriptor_ref) or state.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id:
+            if not _valid_generation(state.runtime_id) or state.runtime_id != self._end_effector_runtime_id:
                 raise ValueError('BodyState does not belong to the discovered runtime')
             return state
 
@@ -365,7 +365,7 @@ class PullController(ExternalController):
             with self._condition:
                 self._ensure_open()
                 self.transport._ensure_open()
-                if not _valid_ref(state.descriptor_ref) or state.descriptor_ref.robot_runtime_id != self._end_effector_runtime_id:
+                if not _valid_generation(state.runtime_id) or state.runtime_id != self._end_effector_runtime_id:
                     raise ValueError('BodyState does not belong to the discovered runtime')
                 return state
         except TimeoutError as error:
@@ -378,11 +378,11 @@ class PullController(ExternalController):
             self.transport.poll_control_status()
         return super().status
 
-    def _reserve_command(self, *, for_body=False, expected_ref=None):
+    def _reserve_command(self, *, for_body=False, expected_runtime_id=None):
         with self._condition:
             self._ensure_open()
         self.transport.poll_control_status()
-        return super()._reserve_command(for_body=for_body, expected_ref=expected_ref)
+        return super()._reserve_command(for_body=for_body, expected_runtime_id=expected_runtime_id)
 
     def _reserve_end_effector_command(self, client, robot_runtime_id, prepare):
         with self._condition:

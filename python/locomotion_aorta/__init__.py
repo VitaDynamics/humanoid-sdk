@@ -60,14 +60,14 @@ from .body_types import (
     BodyState, BodyJointState, BodyImuState, BodyImuSample, BodyImuLocation,
     BodySampleStatus, JointError, BodySlotRole, BodyJointCapability,
     BodyMotorIdentity, BodyInfo, RobotInfo, EndEffectorCapability,
-    GetRobotInfoResponse, ServiceStatus, DescriptorRef,
+    GetRobotInfoResponse, ServiceStatus,
 )
 __all__ += [
     "BODY_SLOTS", "BODY_CMD_PROTOCOL_VERSION", "BODY_STATE_PROTOCOL_VERSION", "BodyJointCmd", "BodyCmd", "BodyCmdAction",
     "BodyState", "BodyJointState", "BodyImuState", "BodyImuSample", "BodyImuLocation",
     "BodySampleStatus", "JointError", "BodySlotRole", "BodyJointCapability",
     "BodyMotorIdentity", "BodyInfo", "RobotInfo", "EndEffectorCapability",
-    "GetRobotInfoResponse", "ServiceStatus", "DescriptorRef",
+    "GetRobotInfoResponse", "ServiceStatus",
 ]
 
 from .gripper_types import GripperType

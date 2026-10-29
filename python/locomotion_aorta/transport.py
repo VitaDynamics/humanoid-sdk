@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ._body_codec import create_body_cmd, decode_body_state, decode_robot_info_response
-from .body_types import BodyCmd, DescriptorRef, GetRobotInfoResponse
+from .body_types import BodyCmd, GetRobotInfoResponse
 from .types import (
     ControlAck,
     ControlOperation,
@@ -269,6 +269,7 @@ def _fill_control_request(
     builder: Any,
     header: int,
 ) -> int:
+    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
     for name in ('client_id', 'control_id'):
         value = getattr(request, name)
         if type(value) is not int or not 0 <= value < 2**64:
@@ -344,6 +345,7 @@ def _fill_robot_info_request(module: Any, builder: Any, header: int) -> int:
 
 
 def _decode_control_ack(view: Any) -> ControlAck:
+    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
     ref = view.DescriptorRef()
     return ControlAck(
         request_id=_decode_text(view.RequestId()),
@@ -360,6 +362,7 @@ def _decode_control_ack(view: Any) -> ControlAck:
 
 
 def _decode_control_status(view: Any) -> ControlStatus:
+    from .body_types import DescriptorRef  # Old generated ABI: pending same-source replacement.
     ref = view.DescriptorRef()
     return ControlStatus(
         status_seq=int(view.StatusSeq()),

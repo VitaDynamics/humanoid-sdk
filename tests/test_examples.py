@@ -19,7 +19,6 @@ from locomotion_aorta import (
     ExternalController,
     ExternalPhase,
     BodyState,
-    DescriptorRef,
 )
 from fake_transport import FakeTransport
 from locomotion_aorta._policy_state import ASAMPLE_BODY_JOINT_NAMES
@@ -196,7 +195,7 @@ class RecordingController:
             BODY_STATE_TOPIC,
             BodyState(
                 state_id=self.state_id,
-                descriptor_ref=DescriptorRef(100),
+                runtime_id=100,
                 ts_state_real_us=int(self.clock.monotonic() * 1_000_000),
                 joints=tuple(
                     sample_motor(q=q, dq=dq, body_index=i)
