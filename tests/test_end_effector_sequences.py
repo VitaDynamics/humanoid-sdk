@@ -280,10 +280,12 @@ class EndEffectorSequenceTest(unittest.TestCase):
         for name in ('HandInfo', 'GripperInfo', 'EndEffectorKind', 'GripperLimitSource'):
             self.assertFalse(hasattr(sdk, name))
             self.assertNotIn(name, sdk.__all__)
-        for name in ('HandSide', 'HandType', 'InhibitReason',
-                     'GripperType', 'EndEffectorClient'):
+        for name in ('HandSide', 'HandType', 'InhibitReason', 'EndEffectorClient'):
             self.assertIn(name, sdk.__all__)
             self.assertIsNotNone(getattr(sdk, name))
+        # GripperType is retired from the final public schema closure.
+        self.assertNotIn('GripperType', sdk.__all__)
+        self.assertFalse(hasattr(sdk, 'GripperType'))
         root = Path(__file__).resolve().parents[1]
         for path in ('brainco_hand/brainco_hand_external.py', 'gripper/gripper_external.py'):
             self.assertFalse((root/'examples'/path).exists())

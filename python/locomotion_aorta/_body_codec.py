@@ -117,7 +117,18 @@ _decode_body_state_python = decode_body_state  # Reference for native golden tes
 
 
 def decode_robot_info(view: Any) -> RobotInfo:
+    # RobotInfo description revision 2; older layouts are not a supported
+    # decode surface.
+    if view.ProtocolVersion() != 2:
+        raise ValueError('incompatible RobotInfo protocol_version; expected RobotInfo 2')
     body = view.Body()
+    if body is not None:
+        if body.SlotCount() != BODY_SLOTS:
+            raise ValueError('BodyInfo requires exactly 31 slots')
+        if (body.JointsLength() != BODY_SLOTS or
+                body.JointNamesLength() != BODY_SLOTS or
+                body.MotorIdentitiesLength() != BODY_SLOTS):
+            raise ValueError('BodyInfo vectors require exactly 31 entries')
     body_info = None if body is None else _dto(
         body, BodyInfo,
         joint_names=tuple(_text(body.JointNames(i)) for i in range(body.JointNamesLength())),
@@ -127,16 +138,26 @@ def decode_robot_info(view: Any) -> RobotInfo:
                                for i in range(body.MotorIdentitiesLength())))
     if view.EndEffectorsLength() != 2:
         raise ValueError('RobotInfo requires LEFT and RIGHT endpoint slots')
-    from ._end_effector_codec import decode_info
+    from ._end_effector_codec import decode_info, validate_info
     endpoints = []
     for i in range(view.EndEffectorsLength()):
         slot = view.EndEffectors(i)
         info_view = slot.Info()
-        info = None if info_view is None else decode_info(info_view)
+        if info_view is None:
+            info = None
+        else:
+            # Every present Info is validated unconditionally: the original
+            # validate_info enforces N>0, vector lengths, identity masks and
+            # proven limits. An empty-axis Info is an invalid description,
+            # not a skippable one.
+            info = decode_info(info_view)
+            validate_info(info)
+            if info.side != slot.Side():
+                raise ValueError('endpoint Info side differs from its slot')
         # Schema73 consistency contract: a valid N>0-axis Info's per-axis
         # is_mock vector must all agree with the slot copy. A conflicting copy
         # is an inconsistent description, not a valid mock identity.
-        if info is not None and info.axis_names:
+        if info is not None:
             if len(info.is_mock) != len(info.axis_names):
                 raise ValueError('endpoint Info is_mock length differs from axes')
             if any(type(value) is not bool for value in info.is_mock):
@@ -151,6 +172,18 @@ def decode_robot_info(view: Any) -> RobotInfo:
 
 def decode_robot_info_response(view: Any) -> GetRobotInfoResponse:
     info = view.Info()
-    return GetRobotInfoResponse(status=view.Status(), info=None if info is None else decode_robot_info(info),
+    outer_runtime = view.RuntimeId()
+    if outer_runtime == 0:
+        raise ValueError('GetRobotInfoResponse requires nonzero runtime_id')
+    if info is not None:
+        nested = decode_robot_info(info)
+        for endpoint in nested.end_effectors:
+            if endpoint.info is not None and endpoint.info.runtime_id != outer_runtime:
+                raise ValueError(
+                    'endpoint Info runtime_id differs from the response runtime_id')
+        return GetRobotInfoResponse(status=view.Status(), info=nested,
+                                    error_message=_text(view.ErrorMessage()),
+                                    runtime_id=outer_runtime)
+    return GetRobotInfoResponse(status=view.Status(), info=None,
                                 error_message=_text(view.ErrorMessage()),
-                                runtime_id=view.RuntimeId())
+                                runtime_id=outer_runtime)

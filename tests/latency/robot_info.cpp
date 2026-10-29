@@ -12,7 +12,7 @@ std::atomic<uint64_t> requests{0}, errors{0};
 std::vector<uint8_t> MakeInfo(uint64_t runtime) {
   // Synthetic benchmark topology/capabilities, never reported as robot readback.
   lowlevel::RobotInfoT info;
-  info.protocol_version = 1;
+  info.protocol_version = 2;
   info.ts_info_us = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
   info.body = std::make_unique<lowlevel::BodyInfoT>();
@@ -21,7 +21,7 @@ std::vector<uint8_t> MakeInfo(uint64_t runtime) {
   for (uint16_t j = 0; j < 31; ++j) {
     const bool present = j != 14;
     info.body->joint_names.push_back("mock_joint_" + std::to_string(j));
-    info.body->joints.emplace_back(j, lowlevel::BodySlotRole_ACTIVE, false, present,
+    info.body->joints.emplace_back(j, lowlevel::BodySlotRole_ACTIVE, !present,
         present ? 31 : 0, present ? 31 : 0, -3.f, 3.f, -10.f, 10.f,
         -20.f, 20.f, 0.f, 200.f, 0.f, 10.f);
     auto identity = std::make_unique<lowlevel::BodyMotorIdentityT>();
@@ -32,8 +32,8 @@ std::vector<uint8_t> MakeInfo(uint64_t runtime) {
   }
   for (int side = 1; side <= 2; ++side) {
     auto entry = std::make_unique<lowlevel::EndEffectorCapabilityT>();
-    entry->side = static_cast<lowlevel::EndEffectorSide>(side);
-    entry->kind = lowlevel::EndEffectorKind_NONE;
+    entry->side = static_cast<lowlevel::ee::EndEffectorSide>(side);
+    entry->is_mock = true;  // no attached EE Info in this synthetic reply
     entry->ready = true;
     entry->status = aorta::services::common::ServiceStatus_SUCCESS;
     info.end_effectors.push_back(std::move(entry));

@@ -137,8 +137,10 @@ std::vector<uint8_t> EncodeInfo(uint64_t runtime) {
   for (size_t j = 0; j < kSlots; ++j) {
     const bool present = j != 14;
     info.body->joint_names.push_back(names[j]);
-    info.body->joints.emplace_back(j, lowlevel::BodySlotRole_ACTIVE, false,
-                                   present, present ? 31 : 0, present ? 31 : 0,
+    // is_mock marks the uninstalled slot; it never flips on faults. present
+    // stays the private topology bit.
+    info.body->joints.emplace_back(j, lowlevel::BodySlotRole_ACTIVE, !present,
+                                   present ? 31 : 0, present ? 31 : 0,
                                    kJointLimits.q_min, kJointLimits.q_max,
                                    kJointLimits.dq_min, kJointLimits.dq_max,
                                    kJointLimits.tau_min, kJointLimits.tau_max,
@@ -152,21 +154,25 @@ std::vector<uint8_t> EncodeInfo(uint64_t runtime) {
   }
   for (int side = 1; side <= 2; ++side) {
     auto ee = std::make_unique<lowlevel::EndEffectorCapabilityT>();
-    ee->side = static_cast<lowlevel::EndEffectorSide>(side);
+    ee->side = static_cast<lowlevel::ee::EndEffectorSide>(side);
     const char* requested =
         std::getenv(side == 1 ? "PRODUCTION_MOCK_EE_LEFT_KIND"
                               : "PRODUCTION_MOCK_EE_RIGHT_KIND");
     const int kind = requested ? std::stoi(requested) : 0;
     if (kind < 0 || kind > 2)
       throw std::runtime_error("invalid synthetic EE kind");
-    ee->kind = static_cast<lowlevel::EndEffectorKind>(kind);
+    // Unified six-field slot: no attached EE Info in this synthetic reply, so
+    // kind 0 keeps an absent Info and the validated slot configuration marks
+    // it mock; kinds 1/2 keep the same declared absence (no fake Info).
+    ee->is_mock = true;
     ee->ready = true;
     ee->status = aorta::services::common::ServiceStatus_SUCCESS;
     info.end_effectors.push_back(std::move(ee));
   }
   aorta::services::humanoid_locomotion::GetRobotInfoResponseT reply;
   reply.status = aorta::services::common::ServiceStatus_SUCCESS;
-  reply.runtime_id = runtime;
+  reply.runtime_id = runtime;  // same startup R; RobotInfo2 below
+  info.protocol_version = 2;
   reply.info = std::make_unique<lowlevel::RobotInfoT>(std::move(info));
   flatbuffers::FlatBufferBuilder b;
   b.Finish(aorta::services::humanoid_locomotion::GetRobotInfoResponse::Pack(

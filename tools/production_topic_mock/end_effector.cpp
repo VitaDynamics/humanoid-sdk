@@ -75,8 +75,18 @@ std::vector<uint8_t> EncodeEEInfo(const std::vector<uint8_t>& fixture,
   (void)DecodeEEInfo(fixture);
   std::unique_ptr<lowlevel::ee::EndEffectorInfoT> info(lowlevel::ee::GetEndEffectorInfo(fixture.data())->UnPack());
   info->runtime_id=runtime;
-  info->firmware="SYNTHETIC_NO_DEVICE"; info->serial="SYNTHETIC_NO_DEVICE"; info->identity_valid_mask=0;
-  info->is_mock.assign(info->axis_names.size(),true);
+  // Two declared synthetic fixtures, never a runtime MOCK flip: the default
+  // marks every axis explicitly unavailable (mock) for the SDK rejection
+  // negative; PRODUCTION_MOCK_EE_DEVICE=1 selects the synthetic ordinary
+  // ordinary-device positive with real provenance strings.
+  const bool device = [] {
+    const char* requested = std::getenv("PRODUCTION_MOCK_EE_DEVICE");
+    return requested && std::stoi(requested) == 1;
+  }();
+  info->firmware=device?"SYNTHETIC_DEVICE":"SYNTHETIC_NO_DEVICE";
+  info->serial=device?"SYNTHETIC_DEVICE":"SYNTHETIC_NO_DEVICE";
+  info->identity_valid_mask=device?(1|2|4):0;
+  info->is_mock.assign(info->axis_names.size(),!device);
   info->ts_descriptor_acquired_us=startup_us; info->ts_state_pub_us=wall_us; info->time_valid_mask=3;
   info->aorta_header=Header(0,wall_us);
   return Pack<lowlevel::ee::EndEffectorInfo>(*info);

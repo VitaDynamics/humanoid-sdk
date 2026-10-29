@@ -42,7 +42,7 @@ def info_object(*, side=1, n=1, touch=False, runtime=100):
             payloadOffset=i*4, payloadBytes=4, encodingVersion=1,
             geometry=[], geometryValid=False) for i in range(2)]
     return module('EndEffectorInfo').EndEffectorInfoT(
-        protocolVersion=1, runtimeId=runtime),
+        protocolVersion=1, runtimeId=runtime,
         layoutId=7, side=side, deviceModel=0, firmware='synthetic-μ', serial='fixture',
         identityValidMask=0, axisNames=['axis'+str(i) for i in range(n)],
         positionDomain=[PositionDomain.TOTAL_OPENING]*n,
@@ -60,7 +60,7 @@ def info_object(*, side=1, n=1, touch=False, runtime=100):
 def state_object(*, side=1, n=1, sample=1, runtime=100):
     field = Field.POS | Field.VEL | Field.TAU | Field.CURRENT | Field.TEMPERATURE | Field.ERROR_CODE
     return module('EndEffectorState').EndEffectorStateT(
-        protocolVersion=2, runtimeId=runtime),
+        protocolVersion=2, runtimeId=runtime,
         layoutId=7, side=side, stateId=sample, tsStateRealUs=100, tsStatePubUs=110,
         tsAcquiredHwUs=5, tsIngestedUs=101, tsAssembledUs=102,
         sampleStatus=1, axes=[module('AxisState').AxisStateT(
@@ -72,7 +72,7 @@ def state_object(*, side=1, n=1, sample=1, runtime=100):
 
 def touch_object(*, side=1, sample=1, runtime=100):
     return module('EndEffectorTouch').EndEffectorTouchT(
-        protocolVersion=1, runtimeId=runtime),
+        protocolVersion=1, runtimeId=runtime,
         layoutId=7, side=side, touchStateId=sample, tsStatePubUs=200, publishTimeValid=True,
         regionStamps=[module('RegionStamp').RegionStampT(
             sampleSeq=i+1, tsRequestUs=100+i, tsAcquiredHwUs=3+i,
@@ -112,7 +112,7 @@ class EndEffectorCodecTest(unittest.TestCase):
     def test_real_set_touch_response_preserves_default_failure_and_unknown_actual_state(self):
         service = codec.load_touch_bindings()
         obj = service.response.EndEffectorSetTouchResponseT(protocolVersion=2,
-            runtimeId=100), side=1)
+            runtimeId=100, side=1)
         wire = service.response.EndEffectorSetTouchResponse.GetRootAs(pack(obj))
         response = codec.decode_set_touch(wire)
         request = EndEffectorSetTouchRequest(100, 7, 1, 13, False)

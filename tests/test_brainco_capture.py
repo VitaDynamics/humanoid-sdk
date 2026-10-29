@@ -23,7 +23,7 @@ def touch_payload(side=1, length=5):
     # Real new generated objects; preserve independent regions and exact bytes.
     from test_end_effector_codec import module, pack
     touch = module('EndEffectorTouch').EndEffectorTouchT(
-        protocolVersion=1, runtimeId=2**64-1),
+        protocolVersion=1, runtimeId=2**64-1,
         layoutId=7, side=side, touchStateId=2**64-1, tsStatePubUs=1000, publishTimeValid=True,
         regionStamps=[module('RegionStamp').RegionStampT(
             sampleSeq=1, tsRequestUs=990+i, tsAcquiredHwUs=50, tsSourceUs=0,
@@ -323,7 +323,7 @@ class BrainCoCaptureTest(unittest.TestCase):
     def test_new_ee_cmd_capture_keeps_k_keys_and_original_time_validity(self):
         from test_end_effector_codec import module, pack
         obj = module('EndEffectorCmd').EndEffectorCmdT(
-            protocolVersion=2, runtimeId=2**64-1),
+            protocolVersion=2, runtimeId=2**64-1,
             layoutId=7, side=1, controlId=13,
             key=module('CommandKey').CommandKeyT(2**64-1, 0),
             axes=[module('AxisCommand').AxisCommandT(commandFields=5, mode=2,

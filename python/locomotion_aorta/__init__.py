@@ -70,9 +70,6 @@ __all__ += [
     "GetRobotInfoResponse", "ServiceStatus",
 ]
 
-from .gripper_types import GripperType
-__all__ += ["GripperType"]
-
 from .state import BodyStateSource, BodyStateSnapshot
 __all__ += ["BodyStateSource", "BodyStateSnapshot"]
 

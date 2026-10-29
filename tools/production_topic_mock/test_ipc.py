@@ -18,6 +18,8 @@ def client():
             info = controller.get_robot_info(5)
             if info.info is None or info.info.body.slot_count != 31:
                 raise AssertionError('31-slot RobotInfo missing')
+            state_roster = info.info.body.joint_names
+            assert len(state_roster) == 31
             source_info = source.get_robot_info(5)
             if source_info.runtime_id != info.runtime_id:
                 raise AssertionError('source and controller runtime differ')
@@ -31,7 +33,9 @@ def client():
                                      BodyJointCmd(q=float(state.q[i]), kp=1, kd=.5)
                                      for i in range(31)),
                         input_state_id=state.state_id,
-                        input_state_ts_real_us=state.ts_state_real_us))
+                        input_state_ts_real_us=state.ts_state_real_us),
+                        target_names=tuple(state_roster[i] for i in range(31) if i != 14),
+                        required_fields=0x01 | 0x08 | 0x10)  # q, kp, kd
                     time.sleep(.02)
                 deadline = time.monotonic() + 2
                 while time.monotonic() < deadline:
@@ -58,6 +62,8 @@ def ee_client():
         controller = stack.enter_context(PullController(group=os.environ['AORTA_GROUP']))
         roster = controller.get_robot_info(5)
         assert roster.info is not None and roster.info.body.slot_count == 31
+        body_roster = roster.info.body.joint_names
+        assert len(body_roster) == 31
         endpoints = [stack.enter_context(EndEffectorClient(side, connection=controller,
             observation_sources=((SampleStream.EE_STATE, number),)))
             for side, number in (('left',1), ('right',2))]
@@ -75,25 +81,42 @@ def ee_client():
                 return controller.publish(BodyCmd(joints=tuple(
                     BodyJointCmd() if i == 14 else BodyJointCmd(q=j.q, kp=1, kd=.5)
                     for i,j in enumerate(latest.joints)), input_state_id=latest.state_id,
-                    input_state_ts_real_us=latest.ts_state_real_us))
+                    input_state_ts_real_us=latest.ts_state_real_us),
+                    target_names=tuple(body_roster[i] for i in range(31) if i != 14),
+                    required_fields=0x01 | 0x08 | 0x10)  # q, kp, kd
             first = body_command()
+            # The EE fixture kind is declared by the harness env: mock
+            # (explicit-unavailable, default) or device (synthetic
+            # ordinary-device positive with provenance strings).
+            ee_device = os.environ.get('PRODUCTION_MOCK_EE_DEVICE') == '1'
             submitted = []
             for endpoint, info in zip(endpoints, infos):
                 sample = endpoint.wait_state(5)
                 n = len(info.axis_names)
                 target = EndEffectorTarget((ControlMode.POSITION,)*n, (Field.POS,)*n, pos=(.03125,)*n)
+                if not ee_device:
+                    # Explicit-unavailable MOCK negative: the real SDK gate
+                    # rejects selected mock axes before any wire frame.
+                    from locomotion_aorta.controller import InvalidCommandError
+                    try:
+                        endpoint.publish(target, input_observations=(sample.sample_ref,))
+                    except (ValueError, InvalidCommandError):
+                        continue
+                    raise AssertionError('mock-axis publish was not rejected')
+                assert not any(info.is_mock)
                 submitted.append(endpoint.publish(target, input_observations=(sample.sample_ref,)))
-            assert [s.key.sequence for s in submitted] == [first.sequence+1, first.sequence+2]
-            assert all(s.key.session_id == first.session_id for s in submitted)
-            for endpoint, info in zip(endpoints, infos):
-                deadline = time.monotonic()+2
-                while True:
-                    sample = endpoint.wait_state(max(.001, deadline-time.monotonic()))
-                    if all(mask & Field.POS for mask in sample.valid_fields) and all(q == .03125 for q in sample.pos):
-                        break
-                    if time.monotonic() >= deadline: raise AssertionError('synthetic EE position not observed')
-                    endpoint.wait_state(deadline-time.monotonic(), after_sample=sample.sample_ref)
-                assert all(info.is_mock) and all(q == .03125 for q in sample.pos)
+            if ee_device:
+                assert [s.key.sequence for s in submitted] == [first.sequence+1, first.sequence+2]
+                assert all(s.key.session_id == first.session_id for s in submitted)
+                for endpoint, info in zip(endpoints, infos):
+                    deadline = time.monotonic()+2
+                    while True:
+                        sample = endpoint.wait_state(max(.001, deadline-time.monotonic()))
+                        if all(mask & Field.POS for mask in sample.valid_fields) and all(q == .03125 for q in sample.pos):
+                            break
+                        if time.monotonic() >= deadline: raise AssertionError('synthetic EE position not observed')
+                        endpoint.wait_state(deadline-time.monotonic(), after_sample=sample.sample_ref)
+                    assert all(q == .03125 for q in sample.pos)
             left = endpoints[0]
             before = left.wait_state(1)
             reply = left.set_touch(True, timeout=1.)

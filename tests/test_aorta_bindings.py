@@ -229,7 +229,7 @@ class R3ControlIdentityBindingTest(unittest.TestCase):
         for changes in ({'client_id': True}, {'client_id': 0}, {'client_id': -1},
                         {'client_id': 1 << 64}, {'control_id': True},
                         {'control_id': 0}, {'control_id': 1 << 64},
-                        {'runtime_id': 0}):
+                        {'runtime_id': None}, {'runtime_id': 0}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 transport_module._fill_control_request(
                     bindings, replace(valid, **changes), flatbuffers.Builder(256), 0)

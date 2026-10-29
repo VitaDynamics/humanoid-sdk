@@ -13,6 +13,9 @@ from locomotion_aorta import (
 from locomotion_aorta import _body_codec as codec
 from locomotion_aorta.transport import _fill_body_cmd
 
+BODY_RUNTIME_ID = 11
+
+
 def module(name):
     return importlib.import_module('lowlevel.' + name)
 
@@ -97,11 +100,18 @@ def make_state(*, error_codes=None, runtime_id=None):
     m.BodyStateAddImuStates(builder, imus)
     m.BodyStateAddAttitudeValid(builder, True)
     m.BodyStateAddJoints(builder, joints)
-    if runtime_id is not None:
-        m.BodyStateAddRuntimeId(builder, runtime_id)
+    m.BodyStateAddRuntimeId(builder, BODY_RUNTIME_ID if runtime_id is None else runtime_id)
     builder.Finish(m.BodyStateEnd(builder))
     data = bytes(builder.Output())
     return data, m.BodyState.GetRootAs(data)
+
+
+def _minimal_joints_vector(builder):
+    m = module('BodyJointState')
+    m.BodyStateStartJointsVector(builder, 31)
+    for _ in range(31):
+        m.CreateBodyJointState(builder, 0, 0, 0, 0., 0., 0., 0)
+    return builder.EndVector()
 
 
 class BodyCodecTest(unittest.TestCase):
@@ -297,24 +307,62 @@ class BodyCodecTest(unittest.TestCase):
                 for getter in getters: getattr(view, getter)()
                 self.assertEqual(probe.positions, expected)
 
+    def _synthetic_endpoint_info(self, *, side, runtime, n=1, mock=True, layout=7):
+        """Unified six-field endpoint Info fixture (synthetic, schema73)."""
+        from lowlevel.ee.EndEffectorInfo import EndEffectorInfoT
+        from lowlevel.ee.TouchRegionInfo import TouchRegionInfoT
+        from lowlevel.ee.PositionDomain import PositionDomain as PD
+        info = EndEffectorInfoT()
+        info.protocolVersion = 1
+        info.runtimeId = runtime
+        info.layoutId = layout
+        info.side = side
+        info.deviceModel = 0
+        info.firmware = 'synthetic'
+        info.serial = 'synthetic'
+        info.identityValidMask = 0
+        info.axisNames = ['axis' + str(i) for i in range(n)]
+        info.positionDomain = [PD.TOTAL_OPENING] * n
+        info.torqueDomain = [0] * n
+        info.supportedModes = [1 << 1] * n
+        info.supportedCommandFields = [1] * n
+        info.supportedStateFields = [1] * n
+        info.validLimits = [1] * n
+        info.posMin = [0.] * n
+        info.posMax = [.0625] * n
+        info.velMin = [0.] * n
+        info.velMax = [1.] * n
+        info.velLimitMax = [1.] * n
+        info.tauMin = [0.] * n
+        info.tauMax = [1.] * n
+        info.currentMin = [0.] * n
+        info.currentMax = [1.] * n
+        info.touchAvailable = False
+        info.touchRegions = []
+        info.isMock = [mock] * n
+        info.tsDescriptorAcquiredUs = 987
+        info.tsStatePubUs = 988
+        info.timeValidMask = 3
+        return info
+
     def test_robot_info_nested_decode_does_not_import_online_end_effector_codecs(self):
         import builtins
         from unittest.mock import patch
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
 
-        hand = module('HandInfo').HandInfoT(side=1, dof=6, touchEnabled=True)
-        gripper = module('GripperInfo').GripperInfoT(side=2, holdTorqueNm=-.25)
-        for hand_info, gripper_info in ((hand, gripper), (None, None)):
-            with self.subTest(nested_tables=hand_info is not None):
-                info = module('RobotInfo').RobotInfoT(protocolVersion=1, endEffectors=[
+        for nested in (True, False):
+            with self.subTest(nested_tables=nested):
+                left_info = self._synthetic_endpoint_info(side=1, runtime=11) if nested else None
+                right_info = self._synthetic_endpoint_info(side=2, runtime=11) if nested else None
+                info = module('RobotInfo').RobotInfoT(protocolVersion=2, tsInfoUs=1234, endEffectors=[
                     module('EndEffectorCapability').EndEffectorCapabilityT(
-                        side=1, kind=EndEffectorKind.HAND, configured=True, hand=hand_info,
+                        side=1, isMock=nested, info=left_info,
                         ready=False, status=ServiceStatus.UNAVAILABLE, reason='left pending'),
                     module('EndEffectorCapability').EndEffectorCapabilityT(
-                        side=2, kind=EndEffectorKind.GRIPPER, configured=True, gripper=gripper_info,
+                        side=2, isMock=nested, info=right_info,
                         ready=False, status=ServiceStatus.PARTIAL_SUCCESS, reason='right diagnostic'),
                 ])
-                reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS,
+                reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS, runtimeId=11,
                                              info=info, errorMessage='discovery incomplete')
                 builder = flatbuffers.Builder(1)
                 builder.Finish(reply.Pack(builder))
@@ -336,104 +384,86 @@ class BodyCodecTest(unittest.TestCase):
                 self.assertEqual((left.status, left.reason), (ServiceStatus.UNAVAILABLE, 'left pending'))
                 self.assertEqual((right.status, right.reason),
                                  (ServiceStatus.PARTIAL_SUCCESS, 'right diagnostic'))
-                if hand_info is None:
-                    self.assertIsNone(left.hand)
-                    self.assertIsNone(right.gripper)
+                if nested:
+                    self.assertTrue(left.info.touch_available is False)
+                    self.assertEqual(left.info.runtime_id, 11)
+                    self.assertEqual(right.info.runtime_id, 11)
                 else:
-                    self.assertTrue(left.hand.touch_enabled)
-                    self.assertEqual(right.gripper.hold_torque_nm, -.25)
+                    self.assertIsNone(left.info)
+                    self.assertIsNone(right.info)
 
-    def test_nested_hand_info_preserves_every_frozen_field_and_public_type(self):
-        from locomotion_aorta import HandInfo
-        from locomotion_aorta.hand_types import HandInfo as InfoDto
-        from locomotion_aorta._body_codec import _decode_hand_info
-
+    def test_nested_unified_info_preserves_every_frozen_field(self):
+        from lowlevel.ee.EndEffectorInfo import EndEffectorInfoT, EndEffectorInfo
         expected = dict(
-            ts_info_us=2**63+1, hand_type=255, firmware='固件-μ', side=1, dof=6,
-            joint_names=('thumb_pitch', 'thumb_roll', '食指', '', 'ring', 'little'),
-            q_min=(-.5, -0., math.nan, .125, -.25, -1.),
-            q_max=(.5, .625, 1., 1.125, 1.25, math.inf),
-            dq_max=(0., 2., 4., 6., 8., 10.), touch_available=True,
-            touch_enabled=False, touch_fingers=5, touch_words_per_finger=6,
-            ts_state_pub_us=2**64-1,
+            protocol_version=1, runtime_id=2**64-1, layout_id=65538, side=1,
+            device_model=2, firmware='固件-μ', serial='serial-Ω',
+            identity_valid_mask=7, touch_available=False,
+            ts_descriptor_acquired_us=2**63+1, ts_state_pub_us=2**64-1,
+            time_valid_mask=3,
         )
-        hand = module('HandInfo').HandInfoT(
-            tsInfoUs=expected['ts_info_us'], handType=255, firmware='固件-μ', side=1, dof=6,
-            jointNames=list(expected['joint_names']), qMin=list(expected['q_min']),
-            qMax=list(expected['q_max']), dqMax=list(expected['dq_max']),
-            touchAvailable=True, touchEnabled=False, touchFingers=5,
-            touchWordsPerFinger=6, tsStatePubUs=expected['ts_state_pub_us'])
-        aggregate = module('RobotInfo').RobotInfoT(protocolVersion=1, endEffectors=[
+        vectors = dict(
+            axis_names=('thumb_pitch', '食指', '', 'ring'),
+            position_domain=(1, 1, 1, 2),
+            torque_domain=(1, 2, 3, 0),
+            supported_modes=(0x2, 0x6, 0x2, 0x2),
+            supported_command_fields=(0x2B, 0x2F, 0x2B, 0x23),
+            supported_state_fields=(0xBB, 0xBF, 0xBB, 0xB3),
+            valid_limits=(0x1F, 0x0F, 0x07, 0x01),
+            pos_min=(-.5, -0., math.nan, .125),
+            pos_max=(.5, .625, 1., 1.125),
+            vel_min=(0., -0., -2., 0.),
+            vel_max=(2., 4., 6., 8.),
+            vel_limit_max=(0., 1., math.inf, 10.),
+            tau_min=(-1., -0., -4., 0.),
+            tau_max=(1., 2., 4., 8.),
+            current_min=(0., -0., -.5, 0.),
+            current_max=(1., 2., .5, 8.),
+            is_mock=(False, True, False, True),
+        )
+        obj = EndEffectorInfoT()
+        obj.protocolVersion = expected['protocol_version']
+        obj.runtimeId = expected['runtime_id']
+        obj.layoutId = expected['layout_id']
+        obj.side = expected['side']
+        obj.deviceModel = expected['device_model']
+        obj.firmware = expected['firmware']
+        obj.serial = expected['serial']
+        obj.identityValidMask = expected['identity_valid_mask']
+        obj.touchAvailable = expected['touch_available']
+        obj.tsDescriptorAcquiredUs = expected['ts_descriptor_acquired_us']
+        obj.tsStatePubUs = expected['ts_state_pub_us']
+        obj.timeValidMask = expected['time_valid_mask']
+        for name, value in vectors.items():
+            setattr(obj, {k: ''.join(p.capitalize() for p in k.split('_'))
+                          for k in vectors}[name], list(value))
+        info = module('RobotInfo').RobotInfoT(protocolVersion=2, tsInfoUs=1234, endEffectors=[
             module('EndEffectorCapability').EndEffectorCapabilityT(
-                side=1, kind=EndEffectorKind.HAND, configured=True, hand=hand)])
+                side=1, isMock=False, info=obj, ready=True,
+                status=ServiceStatus.SUCCESS, reason='unified fidelity')])
         builder = flatbuffers.Builder(1)
-        builder.Finish(aggregate.Pack(builder))
+        builder.Finish(info.Pack(builder))
         wire = module('RobotInfo').RobotInfo.GetRootAs(builder.Output())
-        nested = codec.decode_robot_info(wire).end_effectors[0].hand
+        nested = codec.decode_robot_info(wire).end_effectors[0].info
         standalone_builder = flatbuffers.Builder(1)
-        standalone_builder.Finish(hand.Pack(standalone_builder))
-        standalone = _decode_hand_info(
-            module('HandInfo').HandInfo.GetRootAs(standalone_builder.Output()))
+        standalone_builder.Finish(obj.Pack(standalone_builder))
+        from ._end_effector_codec import decode_info
+        standalone = decode_info(EndEffectorInfo.GetRootAs(standalone_builder.Output()))
 
-        self.assertIs(HandInfo, InfoDto)
-        self.assertEqual(InfoDto.__module__, 'locomotion_aorta.hand_types')
-        self.assertEqual([field.name for field in dataclasses.fields(InfoDto)], list(expected))
         for result in (nested, standalone):
-            self.assertIs(type(result), InfoDto)
+            self.assertIs(type(result), codec.EndEffectorInfo)
             for name, value in expected.items():
                 with self.subTest(path='nested' if result is nested else 'standalone', field=name):
-                    actual = getattr(result, name)
-                    if name in ('q_min', 'q_max', 'dq_max'):
-                        self.assertEqual(tuple(struct.pack('<f', item) for item in actual),
-                                         tuple(struct.pack('<f', item) for item in value))
-                    else:
-                        self.assertEqual(actual, value)
-
-    def test_nested_gripper_info_preserves_every_frozen_field_and_public_type(self):
-        from locomotion_aorta import GripperInfo
-        from locomotion_aorta.gripper_types import GripperInfo as InfoDto
-        from locomotion_aorta._body_codec import _decode_gripper_info
-
-        expected = dict(
-            ts_info_us=2**63+1, gripper_type=255, model='', firmware='固件-μ', side=2,
-            opening_min_m=-0., opening_max_m=.0625, max_opening_rate_m_s=.015625,
-            hold_torque_nm=-.25, ts_state_pub_us=2**64-1,
-            opening_min_source=255, opening_max_source=1, max_opening_rate_source=2,
-            torque_limit_nm=-0., torque_limit_source=3, hold_torque_source=0,
-        )
-        gripper = module('GripperInfo').GripperInfoT(
-            tsInfoUs=expected['ts_info_us'], gripperType=255, model=None, firmware='固件-μ', side=2,
-            openingMinM=-0., openingMaxM=.0625, maxOpeningRateMS=.015625,
-            holdTorqueNm=-.25, tsStatePubUs=expected['ts_state_pub_us'],
-            openingMinSource=255, openingMaxSource=1, maxOpeningRateSource=2,
-            torqueLimitNm=-0., torqueLimitSource=3, holdTorqueSource=0)
-        aggregate = module('RobotInfo').RobotInfoT(protocolVersion=1, endEffectors=[
-            module('EndEffectorCapability').EndEffectorCapabilityT(
-                side=2, kind=EndEffectorKind.GRIPPER, configured=True, gripper=gripper)])
-        builder = flatbuffers.Builder(1)
-        builder.ForceDefaults(True)
-        builder.Finish(aggregate.Pack(builder))
-        wire = module('RobotInfo').RobotInfo.GetRootAs(builder.Output())
-        nested = codec.decode_robot_info(wire).end_effectors[0].gripper
-        standalone_builder = flatbuffers.Builder(1)
-        standalone_builder.ForceDefaults(True)
-        standalone_builder.Finish(gripper.Pack(standalone_builder))
-        standalone = _decode_gripper_info(
-            module('GripperInfo').GripperInfo.GetRootAs(standalone_builder.Output()))
-
-        self.assertIs(GripperInfo, InfoDto)
-        self.assertEqual(InfoDto.__module__, 'locomotion_aorta.gripper_types')
-        self.assertEqual([field.name for field in dataclasses.fields(InfoDto)], list(expected))
-        for result in (nested, standalone):
-            self.assertIs(type(result), InfoDto)
-            for name, value in expected.items():
+                    self.assertEqual(getattr(result, name), value)
+            for name, value in vectors.items():
                 with self.subTest(path='nested' if result is nested else 'standalone', field=name):
                     actual = getattr(result, name)
-                    if name in ('opening_min_m', 'opening_max_m', 'max_opening_rate_m_s',
-                                'hold_torque_nm', 'torque_limit_nm'):
-                        self.assertEqual(struct.pack('<f', actual), struct.pack('<f', value))
-                    else:
+                    if name == 'axis_names':
                         self.assertEqual(actual, value)
+                    else:
+                        self.assertEqual(tuple(struct.pack('<f', item) if isinstance(item, float) else item
+                                               for item in actual),
+                                         tuple(struct.pack('<f', item) if isinstance(item, float) else item
+                                               for item in value))
 
     def test_robot_info_preserves_real_body_and_failed_end_effector_in_partial_reply(self):
         # The actual final public object API packs regular tables/vector structs.
@@ -445,14 +475,13 @@ class BodyCodecTest(unittest.TestCase):
         from lowlevel.EndEffectorCapability import EndEffectorCapabilityT
         body = BodyInfoT(rosterVersion=8, slotCount=31, jointNames=['j'+str(i) for i in range(31)],
                          joints=[BodyJointCapabilityT(bodyIndex=i, slotRole=BodySlotRole.ACTIVE,
-                                                      populated=i != 14, supportedFields=31 if i != 14 else 0,
+                                                      isMock=i == 14, supportedFields=31 if i != 14 else 0,
                                                       validLimits=1 if i != 14 else 0, qMin=-.5, qMax=1.5) for i in range(31)],
                          motorIdentities=[BodyMotorIdentityT(bus='can5', nodeId=i+1, present=i != 14) for i in range(31)])
-        info = RobotInfoT(protocolVersion=1, tsInfoUs=1234, body=body,
-                         endEffectors=[EndEffectorCapabilityT(side=side, kind=EndEffectorKind.HAND,
-                                                              configured=True, ready=False,
+        info = RobotInfoT(protocolVersion=2, tsInfoUs=1234, body=body,
+                         endEffectors=[EndEffectorCapabilityT(side=side, isMock=True, ready=False,
                                                               status=ServiceStatus.UNAVAILABLE, reason='modbus unavailable') for side in (1,2)])
-        reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS, info=info, errorMessage='hands unavailable')
+        reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS, runtimeId=11, info=info, errorMessage='hands unavailable')
         b = flatbuffers.Builder(1); b.Finish(reply.Pack(b))
         result = codec.decode_robot_info_response(GetRobotInfoResponse.GetRootAs(b.Output()))
         self.assertEqual(result.status, ServiceStatus.PARTIAL_SUCCESS)
@@ -460,60 +489,84 @@ class BodyCodecTest(unittest.TestCase):
         self.assertEqual(result.info.body.joints[0].q_max, 1.5)
         self.assertFalse(result.info.body.motor_identities[14].present)
         self.assertEqual(result.info.end_effectors[0].reason, 'modbus unavailable')
-        self.assertIsNone(result.info.end_effectors[0].hand)
+        self.assertIsNone(result.info.end_effectors[0].info)
 
-    def test_r1_nested_end_effectors_use_nine_fields_without_info_endpoint(self):
+    def test_robot_info2_endpoints_use_six_fields_with_optional_info(self):
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
         from lowlevel.RobotInfo import RobotInfoT
         from lowlevel.EndEffectorCapability import EndEffectorCapabilityT, EndEffectorCapability
-        from lowlevel.HandInfo import HandInfoT
-        from lowlevel.GripperInfo import GripperInfoT
         self.assertFalse(hasattr(EndEffectorCapability, 'GetInfoService'))
         self.assertFalse(hasattr(EndEffectorCapabilityT(), 'getInfoService'))
+        # Final unified capability DTO is the six-field contract.
         self.assertEqual([f.name for f in dataclasses.fields(codec.EndEffectorCapability)],
-                         ['side', 'kind', 'configured', 'is_mock', 'hand', 'gripper',
-                          'ready', 'status', 'reason'])
-        hand = HandInfoT(side=1, dof=6, qMin=[-.5]*6, qMax=[1.25]*6,
-                         dqMax=[2.0]*6)
-        gripper = GripperInfoT(side=2, openingMinM=0., openingMaxM=.0625,
-                              maxOpeningRateMS=.015625, holdTorqueNm=-.25)
-        info = RobotInfoT(protocolVersion=1, endEffectors=[
-            EndEffectorCapabilityT(side=1, kind=EndEffectorKind.HAND, configured=True,
-                                  hand=hand, ready=True, status=ServiceStatus.SUCCESS,
-                                  reason='hand available'),
-            EndEffectorCapabilityT(side=2, kind=EndEffectorKind.GRIPPER, configured=True,
-                                  gripper=gripper, ready=False,
-                                  status=ServiceStatus.PARTIAL_SUCCESS, reason='gripper diagnostic'),
+                         ['side', 'is_mock', 'info', 'ready', 'status', 'reason'])
+        left_info = self._synthetic_endpoint_info(side=1, runtime=11, n=1, mock=False)
+        info = RobotInfoT(protocolVersion=2, tsInfoUs=1234, endEffectors=[
+            EndEffectorCapabilityT(side=1, isMock=False, info=left_info,
+                                  ready=True, status=ServiceStatus.SUCCESS,
+                                  reason='available'),
+            EndEffectorCapabilityT(side=2, isMock=True, ready=False,
+                                  status=ServiceStatus.PARTIAL_SUCCESS, reason='diagnostic'),
         ])
-        response = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS, info=info,
+        response = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS, runtimeId=11, info=info,
                                          errorMessage='preserve aggregate diagnostic')
         b = flatbuffers.Builder(1); b.Finish(response.Pack(b))
         data = bytes(b.Output())
         wire = GetRobotInfoResponse.GetRootAs(data)
         left, right = wire.Info().EndEffectors(0), wire.Info().EndEffectors(1)
-        # Actual generated bytes prove the shifted slots, rather than accepting
-        # an older same-version wheel with the old accessor/field positions.
+        # Actual generated bytes prove the six-field slot layout (vtable size
+        # 4 + 6*2), rather than accepting an older wheel's old positions.
         for view in (left, right):
             vtable = view._tab.Pos - struct.unpack_from('<i', data, view._tab.Pos)[0]
-            self.assertEqual(struct.unpack_from('<H', data, vtable)[0], 4+9*2)
-        self.assertNotEqual(left._tab.Offset(12), 0)   # hand id4
-        self.assertNotEqual(right._tab.Offset(14), 0)  # gripper id5
-        for offset in (16, 18, 20):                   # ready/status/reason ids6/7/8
-            self.assertNotEqual(left._tab.Offset(offset), 0)
+            self.assertEqual(struct.unpack_from('<H', data, vtable)[0], 4+6*2)
         result = codec.decode_robot_info_response(wire)
         self.assertEqual(result.status, ServiceStatus.PARTIAL_SUCCESS)
         self.assertEqual(result.error_message, 'preserve aggregate diagnostic')
-        hand_dto, grip_dto = result.info.end_effectors
-        self.assertEqual((hand_dto.side, hand_dto.ready, hand_dto.status, hand_dto.reason),
-                         (1, True, ServiceStatus.SUCCESS, 'hand available'))
-        self.assertEqual(hand_dto.hand.q_max, (1.25,)*6)
-        self.assertIsNone(hand_dto.gripper)
-        self.assertEqual((grip_dto.side, grip_dto.ready, grip_dto.status, grip_dto.reason),
-                         (2, False, ServiceStatus.PARTIAL_SUCCESS, 'gripper diagnostic'))
-        self.assertEqual(grip_dto.gripper.hold_torque_nm, -.25)
-        self.assertIsNone(grip_dto.hand)
-        self.assertFalse(hasattr(hand_dto, 'get_info_service'))
+        left_dto, right_dto = result.info.end_effectors
+        self.assertEqual((left_dto.side, left_dto.is_mock, left_dto.ready, left_dto.status, left_dto.reason),
+                         (1, False, True, ServiceStatus.SUCCESS, 'available'))
+        self.assertEqual(left_dto.info.axis_names, ('axis0',))
+        self.assertEqual(left_dto.info.runtime_id, 11)
+        self.assertEqual((right_dto.side, right_dto.is_mock, right_dto.ready, right_dto.status, right_dto.reason),
+                         (2, True, False, ServiceStatus.PARTIAL_SUCCESS, 'diagnostic'))
+        self.assertIsNone(right_dto.info)
+        self.assertFalse(hasattr(left_dto, 'get_info_service'))
 
+    def test_robot_info_rejects_wrong_version_and_inconsistent_endpoints(self):
+        # B-52A-INFO-1 negatives at the real decode entry.
+        from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
+        from lowlevel.RobotInfo import RobotInfoT
+        from lowlevel.EndEffectorCapability import EndEffectorCapabilityT
+        def reply_for(info_version, endpoint_is_mock, info_mock, runtime=11):
+            obj = self._synthetic_endpoint_info(side=1, runtime=runtime, mock=info_mock) \
+                if info_mock is not None else None
+            info = RobotInfoT(protocolVersion=info_version, tsInfoUs=1, endEffectors=[
+                EndEffectorCapabilityT(side=1, isMock=endpoint_is_mock, info=obj,
+                                      ready=False, status=ServiceStatus.UNAVAILABLE, reason='x'),
+                EndEffectorCapabilityT(side=2, isMock=True, ready=False,
+                                      status=ServiceStatus.UNAVAILABLE, reason='y'),
+            ])
+            reply = GetRobotInfoResponseT(status=ServiceStatus.PARTIAL_SUCCESS, runtimeId=runtime,
+                                          info=info, errorMessage='n/a')
+            b = flatbuffers.Builder(1); b.Finish(reply.Pack(b))
+            return GetRobotInfoResponse.GetRootAs(b.Output())
+        for kwargs in ({'info_version': 1}, {'info_version': 3},
+                       {'endpoint_is_mock': False, 'info_mock': True},
+                       {'endpoint_is_mock': True, 'info_mock': False},
+                       {'runtime': 99}):
+            with self.subTest(**kwargs):
+                with self.assertRaises(ValueError):
+                    codec.decode_robot_info_response(reply_for(**kwargs))
+        # Valid mock agreement decodes.
+        result = codec.decode_robot_info_response(reply_for(2, True, True))
+        self.assertTrue(result.info.end_effectors[0].is_mock)
+        # BodyOnly (info=None) stays legal with nonzero outer R.
+        b = flatbuffers.Builder(1)
+        reply = GetRobotInfoResponseT(status=ServiceStatus.SUCCESS, runtimeId=11, info=None,
+                                      errorMessage='')
+        b.Finish(reply.Pack(b))
+        body_only = codec.decode_robot_info_response(GetRobotInfoResponse.GetRootAs(b.Output()))
+        self.assertIsNone(body_only.info)
 
     def test_applied_correlation_keeps_zero_defaults_and_full_uint64_keys(self):
         m = module('BodyState')
@@ -549,8 +602,26 @@ class BodyCodecTest(unittest.TestCase):
                                      (*key, 0))
                     self.assertEqual(state.state_id, 2**64-2)
         state = codec.decode_body_state(make_state()[1])
-        self.assertEqual(state.runtime_id, 0)
+        # Ordinary positives carry the fixture's explicit nonzero runtime.
+        self.assertEqual(state.runtime_id, BODY_RUNTIME_ID)
         self.assertEqual((state.ts_control_us, state.applied_key_valid, state.association_source_type), (0, False, 0))
+
+    def test_state3_missing_runtime_field_is_zero_and_rejected(self):
+        # Missing runtime id is a real negative: the scalar decodes to 0 and
+        # both decoders reject it; the ordinary positive above uses a nonzero R.
+        builder = flatbuffers.Builder(1)
+        m = module('BodyState')
+        m.BodyStateStart(builder)
+        m.BodyStateAddProtocolVersion(builder, 3)
+        m.BodyStateAddStateId(builder, 7)
+        m.BodyStateAddJoints(builder, _minimal_joints_vector(builder))
+        builder.Finish(m.BodyStateEnd(builder))
+        payload = bytes(builder.Output())
+        with self.assertRaisesRegex(ValueError, 'nonzero runtime_id'):
+            _decode_body_state_python(m.BodyState.GetRootAs(payload))
+        if native is not None:
+            with self.assertRaisesRegex(ValueError, 'nonzero runtime_id'):
+                native.decode_state(payload, 0)
 
     def test_state3_rejects_present_zero_runtime(self):
         obj = module('BodyState').BodyStateT.InitFromObj(make_state()[1])
