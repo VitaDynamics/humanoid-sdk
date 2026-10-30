@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "body_cmd_vendor/body_cmd_generated.h"
+#include "body_cmd_vendor/message/schemas/topic/lowlevel/body_cmd_generated.h"
 #include "body_state_decoder.h"
 
 namespace py = pybind11;

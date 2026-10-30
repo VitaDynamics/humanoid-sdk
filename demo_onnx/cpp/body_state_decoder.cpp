@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "body_cmd_vendor/body_state_generated.h"
+#include "body_cmd_vendor/message/schemas/topic/lowlevel/body_state_generated.h"
 
 namespace py = pybind11;
 namespace {

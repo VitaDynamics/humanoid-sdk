@@ -143,10 +143,22 @@ class NativeBodyCmdTest(unittest.TestCase):
         self.assertEqual(provenance['generated_source_wheel_version'], compatibility['humanoid_msgs_version'])
         wheel = 'vbot_humanoid_msgs-' + compatibility['humanoid_msgs_version'] + '-py3-none-any.whl'
         self.assertEqual(provenance['generated_source_wheel_sha256'], compatibility['wheel_sha256'][wheel])
+        vendor = root / 'demo_onnx/cpp/body_cmd_vendor'
         for stem in ('body_cmd', 'body_state'):
-            header = root / 'demo_onnx/cpp/body_cmd_vendor' / (stem + '_generated.h')
+            header = vendor / 'message/schemas/topic/lowlevel' / (stem + '_generated.h')
             self.assertEqual(hashlib.sha256(header.read_bytes()).hexdigest(), provenance[stem + '_generated_h_sha256'])
             self.assertEqual(provenance[stem + '_bfbs_sha256'], compatibility['schema_sha256'][stem])
+        self.assertEqual(set(provenance['generated_include_sha256']), {
+            'message/schemas/topic/lowlevel/body_common_generated.h',
+            'message/schemas/topic/lowlevel/end_effector_common_generated.h',
+            'declared-headers/generated/external/aorta~/message/schemas/system/aorta_base_generated.h',
+        })
+        for path, expected in provenance['generated_include_sha256'].items():
+            with self.subTest(generated_include=path):
+                self.assertEqual(hashlib.sha256((vendor / path).read_bytes()).hexdigest(), expected)
+        for path, expected in provenance['flatbuffers_include_sha256'].items():
+            with self.subTest(flatbuffers_include=path):
+                self.assertEqual(hashlib.sha256((vendor / path).read_bytes()).hexdigest(), expected)
 
     def test_controller_validation_population_and_type_rules_retained(self):
         for value in [True, 'x', math.nan, math.inf]:

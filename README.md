@@ -1,11 +1,11 @@
 # Humanoid SDK
 
 SDK **0.2.1** is in preparation; packaging and release are pending. This source
-targets the reviewed Schema73 direct-runtime contract. The manifest identifies
-the dedicated `g993f2f9de12b` messages wheel observed in CI; its source tree
-matches the reviewed schema head. Vendored S91220 native headers are historical
-inputs, not a matching dependency set. Matching headers and the official
-dependency release remain pending; do not install or release this intermediate tree.
+targets the reviewed Schema73 direct-runtime contract. Its dedicated
+`gc783514130bb` messages wheel and native Body headers come from the same
+generation. Their raw files are accepted as source-integration inputs; SDK
+source review, complete validation and the official dependency release remain
+pending. Do not install or release this intermediate tree.
 
 The nonzero startup `runtime_id` is carried directly, and RobotInfo has no
 descriptor-confirmation field. The connection first discovers its runtime via
@@ -24,9 +24,8 @@ aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 The Aorta SDK and messages target `2026.10.20` (ABI 13) and FlatBuffers targets
 `25.12.19`. The `vbot-humanoid-msgs` entry in
 [compatibility.json](compatibility.json) and `pyproject.toml` names the actual
-dedicated CI wheel and its SHA-256, retaining its `g993f2f9de12b` version.
-It is not an official release asset, and the matching native headers have not
-yet been integrated. Do not substitute a product wheel for this distribution.
+dedicated `gc783514130bb` wheel and its SHA-256. It is not yet an official
+release asset. Do not substitute a product wheel for this distribution.
 `dependency_release_tag` is null, so the existing release downloader refuses
 before downloading anything. No replacement release, URL or fallback is chosen.
 

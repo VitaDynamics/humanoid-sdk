@@ -86,11 +86,11 @@ the GIL. Native BodyState DTO and NumPy decoding also retain the GIL. The pinned
 header counter/node policy, schema and QoS; sending uses `publish_bytes`.
 There is no automatic Python-encoding fallback.
 
-`cpp/body_cmd_vendor/provenance.json` records the exact generated BODY2 header
-and FlatBuffers 25.12.19 header closure/license. `tests/test_native_body_cmd.py`
+`cpp/body_cmd_vendor/provenance.json` records the same-generation BodyCmd3 and
+BodyState3 headers, their generated include closure and FlatBuffers 25.12.19
+header closure/license. `tests/test_native_body_cmd.py`
 compares complete buffers with the generated Python builder, including default
 elision, explicit action, integer boundaries and fixed31 population semantics.
-Public 0.1.5 retains the same BodyCmd/BodyState BFBS as 0.1.4.
 Installed-wheel validation must run that suite with the native codec present;
 a source-only skip is not native acceptance.
 
