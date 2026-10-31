@@ -1041,8 +1041,14 @@ class ExternalControllerTest(unittest.TestCase):
         self.addCleanup(harness.controller.close)
         for timeout in (0, -1, True, None, math.nan, math.inf):
             with self.subTest(timeout=timeout):
-                with self.assertRaises(ValueError):
-                    harness.controller.enter_external(timeout=timeout)
+                with mock.patch.object(controller_module.time, 'monotonic',
+                                       side_effect=AssertionError('invalid timeout read a clock')):
+                    with self.assertRaises(ValueError):
+                        harness.controller.enter_external(timeout=timeout)
+                    with self.assertRaises(ValueError):
+                        harness.controller.wait_body_state(timeout)
+                    with self.assertRaises(ValueError):
+                        harness.controller.get_robot_info(timeout)
                 self.assertEqual(harness.transport.published, [])
 
     def test_enter_accepts_running_status_after_server_sequence_reset(self) -> None:

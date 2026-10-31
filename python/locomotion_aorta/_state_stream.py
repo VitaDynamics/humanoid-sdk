@@ -1,10 +1,10 @@
 """Aorta state-only adapter; deliberately does not construct control transport."""
 import importlib
-import math
 import threading
 
 from .transport import AortaBindingsUnavailableError, BODY_STATE_TOPIC, _call_get_robot_info
 from ._group import require_node_group
+from .types import _positive_timeout, _ceil_ms
 
 
 class _StateStream:
@@ -32,12 +32,11 @@ class _StateStream:
             raise
 
     def get_robot_info(self, timeout):
-        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
-            raise ValueError('timeout must be finite and positive')
+        _positive_timeout(timeout, 'timeout must be finite and positive')
         with self._info_lock:
             if self._closed:
                 raise RuntimeError('body state source is closed')
-            timeout_ms = math.ceil(timeout * 1000)
+            timeout_ms = _ceil_ms(timeout)
             request = importlib.import_module('aorta.services.humanoid_locomotion.GetRobotInfoRequest')
             response = importlib.import_module('aorta.services.humanoid_locomotion.GetRobotInfoResponse')
             meta = importlib.import_module('get_robot_info_schema_meta')

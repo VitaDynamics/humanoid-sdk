@@ -182,17 +182,19 @@ class EndEffectorCodecTest(unittest.TestCase):
                                   wire.TsClientSendUs()), (0, 0, 0))
                 self.assertFalse(hasattr(wire, 'SdkTimeValidMask'))
 
-    def test_new_command_rejects_missing_axes_and_invalid_numeric_control(self):
+    def test_command_decoder_rejects_missing_axes_wrong_version_and_zero_control(self):
         bindings = codec.load_bindings()
         info = decode('info', info_object())
-        command = EndEffectorSubmission(info.runtime_id, 7, 1, 13,
-            CommandKey(42, 1), codec.prepare_target(info, target()))
-        for changed in ({'control_id': 0}, {'control_id': True},
-                        {'protocol_version': 1},
-                        {'target': dataclasses.replace(command.target, mode=())}):
+        for changed in ({'controlId': 0}, {'protocolVersion': 1}, {'axes': []}):
+            values = dict(protocolVersion=2, runtimeId=info.runtime_id,
+                layoutId=7, side=1, controlId=13,
+                key=module('CommandKey').CommandKeyT(42, 1),
+                axes=[module('AxisCommand').AxisCommandT(
+                    commandFields=Field.POS, mode=ControlMode.POSITION, pos=.03125)])
+            values.update(changed)
+            obj = module('EndEffectorCmd').EndEffectorCmdT(**values)
             with self.subTest(changed=changed), self.assertRaises(ValueError):
-                codec.fill_command(bindings, dataclasses.replace(command, **changed),
-                                   flatbuffers.Builder(1), 0)
+                codec.decode_cmd(bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(pack(obj)))
 
     def test_all_axis_vector_lengths_and_capability_sets_are_checked(self):
         info = decode('info', info_object())
@@ -335,14 +337,9 @@ class EndEffectorCodecTest(unittest.TestCase):
                     RuntimeError, 'new generated EE'):
                 codec.load_bindings()
 
-    def test_fabricated_sdk_time_is_not_encoded(self):
+    def test_decoder_preserves_nonzero_producer_times(self):
         bindings = codec.load_bindings()
         info = decode('info', info_object())
-        result = EndEffectorSubmission(info.runtime_id, 7, 1, 13,
-                                      CommandKey(42, 1), codec.prepare_target(info, target()))
-        for changed in ({'ts_client_created_us': 1}, {'ts_client_send_us': 1}):
-            with self.subTest(changed=changed), self.assertRaises(ValueError):
-                codec.fill_command(bindings, dataclasses.replace(result, **changed), flatbuffers.Builder(1), 0)
         # The independent decoder may observe nonzero timestamps from a wire
         # producer even though this SDK is not allowed to fabricate them.
         obj = module('EndEffectorCmd').EndEffectorCmdT(
@@ -353,8 +350,6 @@ class EndEffectorCodecTest(unittest.TestCase):
             tsClientCreatedUs=1, tsClientSendUs=2)
         decoded = codec.decode_cmd(bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(pack(obj)))
         self.assertEqual((decoded.ts_client_created_us, decoded.ts_client_send_us), (1, 2))
-        with self.assertRaises(ValueError):
-            codec.fill_command(bindings, decoded, flatbuffers.Builder(1), 0)
 
     def test_nonempty_observations_use_real_struct_vector_and_roundtrip(self):
         bindings = codec.load_bindings()

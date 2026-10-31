@@ -24,6 +24,7 @@ from .types import (
     ControlStatus,
     ExternalPhase,
     PROTOCOL_VERSION,
+    _positive_timeout,
 )
 
 from .body_types import (
@@ -388,10 +389,6 @@ class ExternalController:
         current = self._control_context()
         with self._condition:
             self._ensure_open()
-            status = self._require_owned_status()
-            if not _matches_control_context(current, self._request_id, self.client_id,
-                                            self._control_id, status.generation):
-                raise NotRunningError('Body control context changed before reservation')
             body_info = self._body_info
             runtime_id = self._runtime_binding.runtime_id
             _validate_body_targets(command, body_info, target_names, required_fields)
@@ -419,19 +416,14 @@ class ExternalController:
         try:
             def guard(submit):
                 # PullController pumps its status ring here, outside _condition.
-                current = self._control_context()
+                self._poll_status_if_open()
                 with self._condition:
-                    self._ensure_open()
-                    status = self._require_owned_status()
+                    current = self._owned_control_context_locked()
                     if (self._runtime_binding.runtime_id != context.runtime_id
                             or self._body_info is not body_info
-                            or self._request_id != context.request_id
                             or not _matches_control_context(current, context.request_id,
                                 context.client_id, context.control_id, context.session_id)
-                            or self.client_id != context.client_id
-                            or self._control_id != context.control_id
                             or self._external_session_id != context.session_id
-                            or status.generation != context.session_id
                             or (command_runtime_id is not None and
                                 command_runtime_id != context.runtime_id)
                             or self._request_action != 'EXTERNAL'):
@@ -516,6 +508,14 @@ class ExternalController:
             )
         return status
 
+    def _poll_status_if_open(self) -> None:
+        """Callback transport has no status ring; Pull overrides this outside locks."""
+
+    def _owned_control_context_locked(self) -> _ControlContext:
+        status = self._require_owned_status()
+        return _ControlContext(self.client_id, self._control_id,
+                               status.generation, self._request_id)
+
     def _control_context(self) -> _ControlContext:
         """No command allocation, generation learning, publish or heartbeat refresh.
 
@@ -523,9 +523,7 @@ class ExternalController:
         shared lock. RPC callers must recheck after blocking and in typed fill.
         """
         with self._condition:
-            status = self._require_owned_status()
-            return _ControlContext(self.client_id, self._control_id,
-                                   status.generation, self._request_id)
+            return self._owned_control_context_locked()
 
     @staticmethod
     def _end_effector_runtime_changed() -> ValueError:
@@ -549,8 +547,6 @@ class ExternalController:
         """Attach one EE client to this connection's existing lifecycle."""
         with self._condition:
             self._ensure_open()
-            if self._runtime_binding.poisoned:
-                raise self._end_effector_runtime_changed()
             self._end_effector_clients.add(client)
 
     def _close_end_effector_client(self, client: Any) -> list[Any]:
@@ -566,8 +562,6 @@ class ExternalController:
         client._ensure_open()
         if client not in self._end_effector_clients:
             raise ControllerClosedError("end-effector client is detached")
-        if self._runtime_binding.poisoned:
-            raise self._end_effector_runtime_changed()
         if self._runtime_binding.runtime_id != robot_runtime_id:
             raise self._end_effector_runtime_changed()
 
@@ -610,11 +604,7 @@ class ExternalController:
         with self._condition:
             with client._condition:
                 self._require_end_effector_runtime_locked(client, robot_runtime_id)
-                status = self._require_owned_status()
-                context = _ControlContext(
-                    self.client_id, self._control_id, status.generation, self._request_id
-                )
-                return operation(context)
+                return operation(self._owned_control_context_locked())
 
     def exit_external(self, timeout: float) -> ControlStatus:
         """Release the current connection; retained for existing callers."""
@@ -880,7 +870,7 @@ class ExternalController:
 
 
 def _uint64_nonzero(value: int, name: str) -> int:
-    if type(value) is not int or not 0 < value <= _MAX_UINT64:
+    if not _valid_uint64(value) or value == 0:
         raise ValueError(f'{name} must be a nonzero uint64')
     return value
 
@@ -896,10 +886,7 @@ def _nonempty_text(value: str, name: str) -> str:
 
 
 def _deadline(timeout: float) -> float:
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-        raise ValueError("timeout must be a finite positive number")
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError("timeout must be a finite positive number")
+    _positive_timeout(timeout)
     return time.monotonic() + timeout
 
 

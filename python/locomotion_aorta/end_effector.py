@@ -3,7 +3,6 @@
 Observation sources are fixed at startup; callers supply the actual sample refs
 used by each invocation. No independent controller or sample synchronizer.
 """
-import math
 import struct
 import threading
 import time
@@ -13,6 +12,7 @@ from . import _end_effector_codec as codec
 from .controller import (ControllerClosedError, ExternalController, InvalidCommandError,
                          NotRunningError, _close_handles, _deadline, _matches_control_context)
 from .pull import PullStateSource
+from .types import _positive_timeout, _ceil_ms
 from .end_effector_types import (
     CommandKey, EndEffectorSide, EndEffectorSubmission,
     SampleRef, SampleStream, Field, SampleStatus,
@@ -456,11 +456,10 @@ class EndEffectorClient:
         """
         if type(enable) is not bool:
             raise ValueError('enable must be boolean')
-        _deadline(timeout)
+        _positive_timeout(timeout)
         if timeout * 1000 >= 1 << 64:
             raise ValueError('timeout_ms must fit uint64')
-        timeout_ms = math.ceil(timeout * 1000)
-        codec._uint(timeout_ms, 64, 'timeout_ms')
+        timeout_ms = _ceil_ms(timeout)
         with self._condition:
             self._ensure_open()
             if self._read_only:
@@ -483,14 +482,14 @@ class EndEffectorClient:
             options=self._bindings.aorta.ClientOptions(timeout_ms=timeout_ms, allow_retry=False))
         registered = False
         try:
-            with self._condition:
-                self._ensure_open()
+            def register():
+                nonlocal registered
                 self._service_clients.add(rpc)
                 registered = True
-            self._check_touch_context(info, context)
+            self._check_touch_context(info, context, register)
             matched = rpc.raw().wait_for_matching(timeout_ms)
-            self._check_touch_context(info, context)
             if not matched:
+                self._check_touch_context(info, context)
                 raise TimeoutError('EE set_touch service provider not found')
             request = EndEffectorSetTouchRequest(
                 info.runtime_id, info.layout_id, info.side,

@@ -7,6 +7,8 @@ import dataclasses
 import importlib.util
 from pathlib import Path
 import threading
+from functools import partial
+from _thread_helpers import running_call
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -298,6 +300,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual((second.ts_client_created_us, second.ts_client_send_us), (0, 0))
         for (topic, wire), expected in zip(node.commands, (second, third)):
             self.assertTrue(topic.endswith('/cmd'))
+            self.assertEqual((wire.TsClientCreatedUs(), wire.TsClientSendUs()), (0, 0))
             self.assertEqual((wire.Key().SessionId(), wire.Key().Sequence()),
                              (expected.key.session_id, expected.key.sequence))
             self.assertEqual(wire.ControlId(), harness.control_id)
@@ -361,14 +364,23 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(client.info.runtime_id, 100)
 
     def test_invalid_target_empty_info_read_only_closed_and_unconfigured_k_never_reserve(self):
-        for reason in ('target', 'no-info', 'read-only', 'closed', 'observations'):
+        invalid_targets = {
+            'target': dataclasses.replace(target(), pos=(1.,)),
+            'empty-axes': dataclasses.replace(target(), mode=()),
+            'empty-fields': dataclasses.replace(target(), command_fields=()),
+            'bad-mode': dataclasses.replace(target(), mode=(65536,)),
+            'bad-mask': dataclasses.replace(target(), command_fields=(1 << 31,)),
+            'nan': dataclasses.replace(target(), pos=(float('nan'),)),
+            'float32-overflow': dataclasses.replace(target(), pos=(1e40,)),
+        }
+        for reason in (*invalid_targets, 'no-info', 'read-only', 'closed', 'observations'):
             with self.subTest(reason=reason):
                 harness, node = self.harness()
                 client = self.client(harness, node, feedback=reason != 'no-info',
                                      read_only=reason == 'read-only')
                 if reason == 'closed':
                     client.close()
-                command = dataclasses.replace(target(), pos=(1.,)) if reason == 'target' else target()
+                command = invalid_targets.get(reason, target())
                 kwargs = {'input_observations': (SampleRef(100, 2, 1, 1),)} if reason == 'observations' else {}
                 with self.assertRaises((InvalidCommandError, ControllerClosedError)):
                     client.publish(command, **kwargs)
@@ -486,29 +498,17 @@ class EndEffectorClientTest(unittest.TestCase):
                 sent = len(node.commands)
                 before = harness.controller._next_external_sequence
                 entered, release = threading.Event(), threading.Event()
-                errors = []
                 original = getattr(harness.controller, method_name)
 
                 def block(*args, **kwargs):
                     _reach_barrier(entered, release, 'runtime poison barrier was not released')
                     return original(*args, **kwargs)
 
-                def publish():
-                    try:
-                        right.publish(target())
-                    except BaseException as error:
-                        errors.append(error)
 
                 with patch.object(harness.controller, method_name, side_effect=block):
-                    thread = threading.Thread(target=publish)
-                    thread.start()
-                    try:
+                    with running_call(lambda: right.publish(target()), release=release, join_timeout=2) as errors:
                         self.assertTrue(entered.wait(1))
                         self.confirm_restart(harness)
-                    finally:
-                        release.set()
-                        thread.join(2)
-                self.assertFalse(thread.is_alive())
                 self.assertEqual(len(errors), 1)
                 self.assertIsInstance(errors[0], ValueError)
                 self.assertEqual(len(node.commands), sent)
@@ -530,30 +530,18 @@ class EndEffectorClientTest(unittest.TestCase):
         right.publish(target())
         publisher = right._publisher
         entered, release = threading.Event(), threading.Event()
-        errors = []
 
         def block():
             _reach_barrier(entered, release, 'RPC retirement barrier was not released')
 
-        def call():
-            try:
-                right.set_touch(True, .1)
-            except BaseException as error:
-                errors.append(error)
 
         node.match_hook = block
-        thread = threading.Thread(target=call)
-        thread.start()
-        try:
+        with running_call(lambda: right.set_touch(True, 0.1), release=release, join_timeout=2) as errors:
             self.assertTrue(entered.wait(1))
             rpc = next(handle for handle in reversed(node.handles)
                        if isinstance(handle, TouchRPC))
             self.confirm_restart(harness)
             self.assertEqual((publisher.close_count, rpc.close_count), (1, 1))
-        finally:
-            release.set()
-            thread.join(2)
-        self.assertFalse(thread.is_alive())
         self.assertEqual(len(errors), 1)
         self.assertIsInstance(errors[0], ValueError)
         self.assertEqual(node.touch_requests, [])
@@ -573,18 +561,10 @@ class EndEffectorClientTest(unittest.TestCase):
             return original_decode(view)
 
         with patch.object(codec, 'decode_info', side_effect=decode):
-            thread = threading.Thread(
-                target=node.emit,
-                args=('left', 'info', info_object(runtime=101)),
-            )
-            thread.start()
-            try:
+            with running_call(partial(node.emit, 'left', 'info', info_object(runtime=101)), release=release, join_timeout=2) as errors:
                 self.assertTrue(entered.wait(1))
                 left.close()
-            finally:
-                release.set()
-                thread.join(2)
-        self.assertFalse(thread.is_alive())
+            self.assertEqual(errors, [])
         self.assertTrue(all(handle.close_count == 1 for handle in left_handles))
         self.assertEqual(harness.controller._runtime_binding.runtime_id, 100)
         self.assertFalse(harness.controller._runtime_binding.poisoned)
@@ -991,26 +971,28 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(node.rpc_options, [])
 
     def test_set_touch_rechecks_owner_lease_generation_and_cancel_after_matching(self):
-        for change in ('owner', 'lease', 'generation', 'cancel', 'closed'):
-            with self.subTest(change=change):
-                harness, node = self.harness()
-                client = self.client(harness, node, touch=True)
-                owned = harness.controller.status
-                def change_owner():
-                    if change == 'cancel':
-                        harness.controller._best_effort_cancel()
-                    elif change == 'closed':
-                        harness.controller.close()
-                    else:
-                        changes = {'owner': {'client_id': 17}, 'lease': {'control_id': 19},
-                                   'generation': {'generation': 84}}[change]
-                        harness.transport.emit(CONTROL_STATUS_TOPIC, dataclasses.replace(owned, status_seq=2, **changes))
-                node.match_hook = change_owner
-                with self.assertRaises((NotRunningError, ControllerClosedError)):
-                    client.set_touch(True, timeout=.1)
-                self.assertEqual(node.touch_requests, [])
-                self.assertEqual(harness.controller._next_external_sequence, 1)
-                self.assertEqual(node.handles[-1].close_count, 1)
+        for matching in (False, True):
+            for change in ('owner', 'lease', 'generation', 'cancel', 'closed'):
+                with self.subTest(change=change, matching=matching):
+                    harness, node = self.harness()
+                    node.matching = matching
+                    client = self.client(harness, node, touch=True)
+                    owned = harness.controller.status
+                    def change_owner():
+                        if change == 'cancel':
+                            harness.controller._best_effort_cancel()
+                        elif change == 'closed':
+                            harness.controller.close()
+                        else:
+                            changes = {'owner': {'client_id': 17}, 'lease': {'control_id': 19},
+                                       'generation': {'generation': 84}}[change]
+                            harness.transport.emit(CONTROL_STATUS_TOPIC, dataclasses.replace(owned, status_seq=2, **changes))
+                    node.match_hook = change_owner
+                    with self.assertRaises((NotRunningError, ControllerClosedError)):
+                        client.set_touch(True, timeout=.1)
+                    self.assertEqual(node.touch_requests, [])
+                    self.assertEqual(harness.controller._next_external_sequence, 1)
+                    self.assertEqual(node.handles[-1].close_count, 1)
 
     def test_set_touch_fill_rechecks_permissions_and_descriptor_before_serializing_request(self):
         for change in ('owner', 'descriptor'):
@@ -1120,7 +1102,6 @@ class EndEffectorClientTest(unittest.TestCase):
                 harness, node = self.harness()
                 client = self.client(harness, node, touch=True)
                 entered, release = threading.Event(), threading.Event()
-                errors = []
                 original_publish = harness.transport.on_publish
                 def accept_leave(topic, request):
                     if topic == CONTROL_REQUEST_TOPIC and request.operation == ControlOperation.CANCEL:
@@ -1133,11 +1114,7 @@ class EndEffectorClientTest(unittest.TestCase):
                     _reach_barrier(entered, release, 'test did not release RPC')
                 if stage == 'matching': node.match_hook = block
                 else: node.rpc_hook = block
-                def worker():
-                    try: client.set_touch(True, timeout=.1)
-                    except BaseException as error: errors.append(error)
-                thread = threading.Thread(target=worker); thread.start()
-                try:
+                with running_call(lambda: client.set_touch(True, timeout=0.1), release=release, join_timeout=2) as errors:
                     self.assertTrue(entered.wait(1))
                     self.assertTrue(harness.controller._condition.acquire(timeout=1))
                     harness.controller._condition.release()
@@ -1146,9 +1123,6 @@ class EndEffectorClientTest(unittest.TestCase):
                     client.close()
                     self.assertEqual(harness.transport.published, requests_after_explicit_cancel)
                     self.assertEqual(harness.transport.close_count, 0)
-                finally:
-                    release.set(); thread.join(2)
-                self.assertFalse(thread.is_alive())
                 self.assertEqual(len(errors), 1)
                 self.assertIsInstance(errors[0], (NotRunningError, ControllerClosedError))
                 self.assertEqual(len(node.touch_requests), 0 if stage == 'matching' else 1)
@@ -1304,27 +1278,15 @@ class EndEffectorClientTest(unittest.TestCase):
                 client = self.client(harness, node)
                 original = harness.controller._end_effector_control_context
                 entered, release = threading.Event(), threading.Event()
-                errors = []
                 def blocked(*args, **kwargs):
                     _reach_barrier(entered, release, 'test gate not released', TimeoutError)
                     return original(*args, **kwargs)
-                def send():
-                    try:
-                        client.publish(target())
-                    except Exception as error:
-                        errors.append(error)
                 with patch.object(harness.controller, '_end_effector_control_context', side_effect=blocked):
-                    thread = threading.Thread(target=send)
-                    thread.start()
-                    try:
+                    with running_call(lambda: client.publish(target()), release=release, join_timeout=2) as errors:
                         self.assertTrue(entered.wait(2))
                         owned = harness.controller.status
                         harness.transport.emit(CONTROL_STATUS_TOPIC, dataclasses.replace(
                             owned, status_seq=owned.status_seq + 1, **change))
-                    finally:
-                        release.set()
-                        thread.join(2)
-                self.assertFalse(thread.is_alive())
                 self.assertEqual(len(errors), 1)
                 self.assertIsInstance(errors[0], NotRunningError)
                 self.assertEqual(node.commands, [])
@@ -1335,14 +1297,10 @@ class EndEffectorClientTest(unittest.TestCase):
         for change in (None, {'runtime_id': 101},
                        {'client_id': 17}, {'control_id': 19}, {'generation': 84}):
             with self.subTest(change=change):
-                t = PullTest().transport()
-                t._candidate_gate = None
                 node = Node()
-                t.node, t.subscriptions = node, []
-                t.get_robot_info = lambda timeout: dataclasses.replace(
-                    robot_info_reply(), runtime_id=100)
-                t._prepare_body_output = lambda: None
-                t.close = lambda: setattr(t, '_closed', True)
+                t = PullTest().transport(
+                    node=node, get_robot_info=lambda timeout: dataclasses.replace(
+                        robot_info_reply(), runtime_id=100))
                 c = PullController(client_id=7, _transport=t)
                 self.addCleanup(c.close)
                 c.get_robot_info(.1)
@@ -1361,19 +1319,11 @@ class EndEffectorClientTest(unittest.TestCase):
                 confirm_info(client, node, info_object())
                 original = c._end_effector_control_context
                 entered, release = threading.Event(), threading.Event()
-                errors = []
                 def blocked(*args, **kwargs):
                     _reach_barrier(entered, release, 'test gate not released', TimeoutError)
                     return original(*args, **kwargs)
-                def send():
-                    try:
-                        client.publish(target())
-                    except Exception as error:
-                        errors.append(error)
                 with patch.object(c, '_end_effector_control_context', side_effect=blocked):
-                    thread = threading.Thread(target=send)
-                    thread.start()
-                    try:
+                    with running_call(lambda: client.publish(target()), release=release, join_timeout=2) as errors:
                         self.assertTrue(entered.wait(2))
                         status = ControlStatus(status_seq=2, current_action='EXTERNAL',
                             phase=ExternalPhase.RUNNING, client_id=9, control_id=13,
@@ -1381,10 +1331,6 @@ class EndEffectorClientTest(unittest.TestCase):
                         if change is not None:
                             t._pulls[CONTROL_STATUS_TOPIC].samples.append(SimpleNamespace(
                                 payload=dataclasses.replace(status, **change)))
-                    finally:
-                        release.set()
-                        thread.join(2)
-                self.assertFalse(thread.is_alive())
                 allowed = change is None or 'runtime_id' in change
                 self.assertEqual(len(errors), 0 if allowed else 1)
                 if not allowed:

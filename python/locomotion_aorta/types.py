@@ -1,5 +1,17 @@
+import math as _math
 from dataclasses import dataclass
 from enum import Enum
+
+
+def _positive_timeout(value, message="timeout must be a finite positive number"):
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not _math.isfinite(value) or value <= 0):
+        raise ValueError(message)
+    return value
+
+
+def _ceil_ms(value):
+    return _math.ceil(value * 1000)
 
 
 PROTOCOL_VERSION = 4

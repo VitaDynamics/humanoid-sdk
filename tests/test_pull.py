@@ -1,5 +1,6 @@
 """Opt-in pull state/snapshot/session lifecycle; no network or motor IO."""
 import threading
+from _thread_helpers import running_call
 import unittest
 import time
 from collections import deque
@@ -21,6 +22,34 @@ class Ring:
     def close(self):self.closed=True
 
 class PullTest(unittest.TestCase):
+    def test_running_call_releases_and_reaps_after_failed_scenario_assertion(self):
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        workers = []
+
+        def call():
+            workers.append(threading.current_thread())
+            entered.set()
+            try:
+                if not release.wait(2):
+                    raise TimeoutError('test gate not released')
+            finally:
+                finished.set()
+
+        try:
+            with self.assertRaisesRegex(AssertionError, 'scenario failed'):
+                with running_call(call, release=release, join_timeout=2) as errors:
+                    self.assertTrue(entered.wait(1))
+                    self.fail('scenario failed')
+            self.assertTrue(release.is_set())
+            self.assertTrue(finished.is_set())
+            self.assertEqual(errors, [])
+        finally:
+            # This test must also clean up if the fixture itself regresses.
+            release.set()
+            for worker in workers:
+                worker.join(2)
+                self.assertFalse(worker.is_alive())
+
     def test_real_status_ring_rechecks_after_body_reservation_before_submit(self):
         from body_fixtures import robot_info_reply
         cases = {
@@ -34,17 +63,13 @@ class PullTest(unittest.TestCase):
         }
         for name, (change, allowed) in cases.items():
             with self.subTest(name=name):
-                t = self.transport()
-                t._candidate_gate = None
-                t.node = S(create_subscriber_typed=lambda *a, **kw: S(close=lambda: None))
-                t.subscriptions = []
+                t = self.transport(
+                    node=S(create_subscriber_typed=lambda *a, **kw: S(close=lambda: None)),
+                    get_robot_info=lambda timeout: robot_info_reply())
                 t._publish_trace = threading.local()
                 t._capture_publish_timing = False
-                t._prepare_body_output = lambda: None
-                t.get_robot_info = lambda timeout: robot_info_reply()
-                t.close = lambda: setattr(t, '_closed', True)
                 entered, release = threading.Event(), threading.Event()
-                sent, errors = [], []
+                sent = []
                 class Publisher:
                     def publish(self, command, trace, guard):
                         entered.set()
@@ -66,24 +91,13 @@ class PullTest(unittest.TestCase):
                             client_id=9, control_id=13, generation=42, runtime_id=11)))
                 t._publish_control = control
                 c.enter_external(.2)
-                def publish():
-                    try:
-                        c.publish(BodyCmd(tuple(BodyJointCmd() for _ in range(31))), target_names=_BODY_TEST_TARGETS, required_fields=0x19)
-                    except Exception as error:
-                        errors.append(error)
-                worker = threading.Thread(target=publish)
-                worker.start()
-                try:
+                with running_call(lambda: c.publish(BodyCmd(tuple((BodyJointCmd() for _ in range(31)))), target_names=_BODY_TEST_TARGETS, required_fields=25), release=release, join_timeout=2) as errors:
                     self.assertTrue(entered.wait(2))
                     if change is not None:
                         status = ControlStatus(status_seq=2, current_action='EXTERNAL',
                             phase=ExternalPhase.RUNNING, client_id=9, control_id=13,
                             generation=42, runtime_id=11)
                         t._pulls[CONTROL_STATUS_TOPIC].samples.append(S(payload=replace(status, **change)))
-                finally:
-                    release.set()
-                    worker.join(2)
-                self.assertFalse(worker.is_alive())
                 self.assertEqual(len(sent), int(allowed))
                 self.assertEqual(len(errors), int(not allowed))
                 if not allowed:
@@ -166,13 +180,21 @@ class PullTest(unittest.TestCase):
             poll.assert_not_called()
         self.assertEqual(t.published,sent_at_close)
 
-    def transport(self):
+    def transport(self, *, node=None, get_robot_info=None):
         t=PullTransport.__new__(PullTransport);t._closed=False;t._state_lock=threading.Lock();t._status_lock=threading.RLock();t._status=None;t._latest_state=None;t._latest_sample=None;t._latest_body_state=None
         t._pulls={BODY_STATE_TOPIC:Ring(),CONTROL_STATUS_TOPIC:Ring()};t._callbacks={BODY_STATE_TOPIC:[],CONTROL_STATUS_TOPIC:[]}
         t._bindings=S(control_status_decoder=lambda v:v);t._subscriber_spec=lambda topic:(None,lambda v:v,None)
         # These original transport-only tests exercise receive mechanics; the
         # connection-bound tests below install the real identity gate instead.
         t._candidate_gate=lambda candidate, commit:(commit() or True)
+        if node is not None:
+            # Actual connection tests let the production constructor install
+            # its runtime gate; they do not use the transport-only shortcut.
+            t._candidate_gate = None
+            t.node, t.subscriptions = node, []
+            t.get_robot_info = get_robot_info
+            t._prepare_body_output = lambda: None
+            t.close = lambda: setattr(t, '_closed', True)
         return t
 
     def test_constructor_no_publishers_two_native_depth1_rings(self):
@@ -440,11 +462,19 @@ class PullTest(unittest.TestCase):
 
         receiver=threading.Thread(target=drain,daemon=True)
         sender=threading.Thread(target=publish,daemon=True)
-        receiver.start()
-        entered=callback_entered.wait(1.0)
-        sender.start()
-        receiver.join(3.0)
-        sender.join(3.0)
+        try:
+            receiver.start()
+            entered=callback_entered.wait(1.0)
+            sender.start()
+            receiver.join(3.0)
+            sender.join(3.0)
+        finally:
+            # Do not manufacture the normal rendezvous before both workers
+            # had their original opportunity to complete it.
+            publish_polling.set()
+            for worker in (receiver, sender):
+                if worker.ident is not None and worker.is_alive():
+                    worker.join(3.0)
         self.assertTrue(entered)
         self.assertFalse(receiver.is_alive() or sender.is_alive())
         self.assertEqual(errors,[])
@@ -481,11 +511,17 @@ class PullTest(unittest.TestCase):
 
         sender=threading.Thread(target=publish,daemon=True)
         closer=threading.Thread(target=close,daemon=True)
-        sender.start()
-        entered=callback_entered.wait(1.0)
-        closer.start()
-        sender.join(3.0)
-        closer.join(3.0)
+        try:
+            sender.start()
+            entered=callback_entered.wait(1.0)
+            closer.start()
+            sender.join(3.0)
+            closer.join(3.0)
+        finally:
+            closed.set()
+            for worker in (sender, closer):
+                if worker.ident is not None and worker.is_alive():
+                    worker.join(3.0)
         self.assertTrue(entered)
         self.assertFalse(sender.is_alive() or closer.is_alive())
         self.assertEqual(len(errors),1)
@@ -524,7 +560,7 @@ class RuntimeIdentityPullR3Test(unittest.TestCase):
         transport = FakeTransport()
         source = PullStateSource(_transport=transport)
         self.addCleanup(source.close)
-        entered, release, errors = threading.Event(), threading.Event(), []
+        entered, release = threading.Event(), threading.Event()
         caller = threading.get_ident()
         def reply(_timeout):
             if threading.get_ident() != caller:
@@ -534,18 +570,9 @@ class RuntimeIdentityPullR3Test(unittest.TestCase):
                 return replace(robot_info_reply(), runtime_id=12)
             return robot_info_reply()
         transport.get_robot_info = reply
-        def discover():
-            try: source.get_robot_info(.1)
-            except Exception as error: errors.append(error)
-        worker = threading.Thread(target=discover)
-        worker.start()
-        try:
+        with running_call(lambda: source.get_robot_info(0.1), release=release, join_timeout=2) as errors:
             self.assertTrue(entered.wait(1))
             self.assertEqual(source.get_robot_info(.1).runtime_id, 11)
-        finally:
-            release.set()
-            worker.join(2)
-        self.assertFalse(worker.is_alive())
         self.assertEqual(len(errors), 1)
         self.assertIsInstance(errors[0], ValueError)
         self.assertIn('discovery context changed', str(errors[0]))

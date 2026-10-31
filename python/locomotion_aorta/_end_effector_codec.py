@@ -419,27 +419,11 @@ def decode_cmd(view):
 
 
 def fill_command(bindings, command, builder, header):
-    _validate_command_envelope(command)
-    if command.ts_client_created_us or command.ts_client_send_us:
-        raise ValueError('SDK time remains invalid/zero until a verified Vita mapping exists')
+    # Private writer: publish validated the caller payload before reserving,
+    # then constructed identity/key/time from the existing owned context.
     module = bindings.EndEffectorCmd
     target = command.target
-    if not isinstance(target, EndEffectorTarget) or not isinstance(target.mode, tuple) or not target.mode:
-        raise ValueError('command requires fixed axes')
     n = len(target.mode)
-    _tuple(target.command_fields, n, 'command_fields')
-    for mode, mask in zip(target.mode, target.command_fields):
-        _uint(mode, 16, 'mode'); _uint(mask, 32, 'command_fields')
-        if mask & ~_COMMAND_FIELDS:
-            raise ValueError('unsupported command field')
-    for name, bit in _COMMAND_COLUMNS:
-        values = getattr(target, name)
-        if values is not None and (not isinstance(values, tuple) or len(values) not in (0, n)):
-            raise ValueError('command column has an incompatible fixed length: ' + name)
-        if not values and any(mask & bit for mask in target.command_fields):
-            raise ValueError('selected column is missing: ' + name)
-        for value in values or ():
-            _finite(value, name)
     module.EndEffectorCmdStartInputObservationsVector(builder, len(command.input_observations))
     for sample in reversed(command.input_observations):
         bindings.SampleRef.CreateSampleRef(builder, sample.stream, sample.side,

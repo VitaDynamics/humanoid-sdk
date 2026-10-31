@@ -15,6 +15,7 @@ from .types import (
     ControlRequest,
     ControlStatus,
     ExternalPhase,
+    _ceil_ms,
 )
 
 
@@ -196,7 +197,7 @@ class _AortaTransport:
             raise RuntimeError("Aorta transport is closed")
         if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
-        timeout_ms = math.ceil(timeout * 1000)
+        timeout_ms = _ceil_ms(timeout)
         return _call_get_robot_info(
             self.node, self._bindings.aorta, self._info_clients, timeout_ms,
             self._bindings.get_robot_info_request, self._bindings.get_robot_info_response,
