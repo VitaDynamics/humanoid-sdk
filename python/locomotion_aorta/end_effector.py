@@ -384,7 +384,10 @@ class EndEffectorClient:
                 self._ensure_open()
                 if self._read_only:
                     raise InvalidCommandError('read-only EndEffectorClient cannot publish')
-                info = self._get('info')
+                try:
+                    info = self._get('info')
+                except ValueError as error:
+                    raise InvalidCommandError(str(error)) from error
                 if info is None:
                     raise InvalidCommandError('validated EE Info is required before publish')
                 try:

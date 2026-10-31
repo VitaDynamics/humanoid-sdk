@@ -408,7 +408,7 @@ class EndEffectorExampleTest(unittest.TestCase):
                     self.run_case(c, clients, pattern='sine', period=1., duration=.12,
                         sine_min=.01, sine_max=.08, touch='on' if during == 'touch' else 'keep')
                 for e in clients:
-                    self.assertEqual(e.commands[0].target.pos, (.07,))
+                    self.assertEqual(e.commands[0].target.pos, (demo._float32(.07),))
                     self.assertNotEqual(e.commands[0].target.pos, saved[e.side])
                     self.assertEqual(e.commands[-1].target.pos, saved[e.side])
                     for a, b, t0, t1 in zip(e.commands, e.commands[1:], e.times, e.times[1:]):
@@ -431,7 +431,8 @@ class EndEffectorExampleTest(unittest.TestCase):
         c = self.controller(); e = Endpoint(c)
         saved = e._state.pos
         self.run_case(c, [e], duration=1., rates={'right': 1.}, native_hz={'right': 2}, return_to_start=True)
-        returning = [i for i, command in enumerate(e.commands) if command.target.pos == saved]
+        returning = [i for i, command in enumerate(e.commands)
+                     if i and command.target.pos == saved and e.commands[i-1].target.pos != saved]
         self.assertTrue(returning)
         self.assertGreater(returning[0], 0)
         self.assertTrue(all(b-a >= 1.-1e-9 for a, b in zip(e.times, e.times[1:])))
@@ -769,13 +770,18 @@ class EndEffectorExampleTest(unittest.TestCase):
             result.publish_typed=publish
             return result
         node.create_publisher_typed=publisher
+        def sleep_with_ee_feedback(seconds):
+            self.clock.sleep(seconds)
+            for side, wire_side in (('left', 1), ('right', 2)):
+                samples[side] += 1
+                node.emit(side, 'state', state_object(side=wire_side, sample=samples[side]))
         enter,exit_=controller.enter_external,controller.exit_external
         with patch.object(controller,'wait_state',recorded.wait_state,create=True), \
              patch.object(controller,'enter_external',wraps=enter) as entered, \
              patch.object(controller,'exit_external',wraps=exit_) as cancelled:
             demo.run(controller,clients,{c.side:demo.position_target(c.info,(.03125,),unit='m') for c in clients},
                 demo._MotionOptions(duration=.08,timeout=.3,native_hz={'left':250,'right':250},
-                                    native_config='synthetic-test-effective-config'),sleep=self.clock.sleep,
+                                    native_config='synthetic-test-effective-config'),sleep=sleep_with_ee_feedback,
                 monotonic=self.clock.monotonic,emit=self.events.append)
         entered.assert_called_once(); cancelled.assert_called_once()
         keys=[(value.session_id,value.sequence) for topic,value in recorded.transport.published if topic==BODY_CMD_TOPIC]
@@ -868,7 +874,8 @@ class EndEffectorExampleTest(unittest.TestCase):
                     return original_run(*args, **kwargs, sleep=sleep,
                                         monotonic=clock.monotonic, emit=self.events.append)
                 argv = ['--confirm-motion', '--side', 'right', '--right-pos', '.0625',
-                        '--right-unit', 'm', '--touch', 'on', '--timeout', '.3']
+                        '--right-unit', 'm', '--touch', 'on', '--timeout', '.3',
+                        '--right-native-hz', '250', '--native-config', 'synthetic-test-effective-config']
                 with patch.object(demo, 'ThreadPoolExecutor', return_value=pool), \
                      patch.object(demo, 'run', side_effect=run_with_clock), patch('builtins.print'):
                     if fault == 'signal':

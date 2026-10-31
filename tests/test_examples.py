@@ -798,6 +798,7 @@ class ExamplesSmokeTest(unittest.TestCase):
                     )
 
                 sleep_with_feedback(0)
+                harness.get_robot_info(.1)
                 state = external_control._wait_for_stationary_body_state(
                     harness, body_info=example_robot_info_reply().info.body, timeout=5.0, sleep=sleep_with_feedback,
                     monotonic=clock.monotonic,
@@ -825,7 +826,7 @@ class ExamplesSmokeTest(unittest.TestCase):
         for invalid_setup, error in (
             (lambda h: setattr(h, "measured_dq", [0.051] * 31), "timed out"),
             (lambda h: setattr(h, "attitude_valid", False), "attitude"),
-            (lambda h: setattr(h, "measured_q", [0.0] * 30), "31 required"),
+            (lambda h: setattr(h, "measured_q", [0.0] * 30), "requires 31"),
             (lambda h: setattr(h, "measured_q", [float("nan")] * 31), "finite"),
             (lambda h: setattr(h, "measured_dq", [float("nan")] * 31), "finite"),
         ):
@@ -834,6 +835,12 @@ class ExamplesSmokeTest(unittest.TestCase):
                 harness = RecordingController(clock)
                 self.addCleanup(harness.close)
                 invalid_setup(harness)
+                if len(harness.measured_q) != 31:
+                    # Exercise the preflight's own malformed-array defense;
+                    # the actual controller correctly drops bad wire shapes.
+                    harness.wait_state = mock.Mock(return_value=SimpleNamespace(
+                        attitude_valid=True, q=tuple(harness.measured_q),
+                        dq=tuple(harness.measured_dq), error_code=(0,) * 31))
 
                 with self.assertRaisesRegex(RuntimeError, error):
                     external_control.run(

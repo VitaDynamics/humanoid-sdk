@@ -199,10 +199,10 @@ def _body_target_slots(body_info, *, require_zero=False):
     body_joint_order(body_info, required_names=targets)
     slots = tuple(i for i, name in enumerate(names) if name in targets)
     if require_zero:
-        for i in slots:
-            cap = body_info.joints[i]
-            if not cap.q_min <= 0.0 <= cap.q_max:
-                raise ValueError(f'{names[i]}: zero outside position limit')
+        invalid = [names[i] for i in slots
+                   if not body_info.joints[i].q_min <= 0.0 <= body_info.joints[i].q_max]
+        if invalid:
+            raise ValueError('; '.join(f'{name}: zero outside position limit' for name in invalid))
     return slots
 
 

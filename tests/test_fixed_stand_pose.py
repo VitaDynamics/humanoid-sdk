@@ -130,7 +130,7 @@ class ZeroPoseTest(unittest.TestCase):
             caps = list(info.joints)
             caps[0] = replace(caps[0], valid_limits=0) if missing else replace(caps[0], q_max=.01)
             c, clock = self.controller(info=replace(info, joints=tuple(caps)))
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError if missing else RuntimeError):
                 self.run_zero(c, clock, lambda f: self.fail('must not enter'))
             self.assertNotIn('enter_external', c.calls)
 
