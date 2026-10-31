@@ -13,89 +13,21 @@ static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
               FLATBUFFERS_VERSION_REVISION == 19,
              "Non-compatible flatbuffers version included");
 
-namespace aorta {
-namespace sys {
-
-struct AortaHeader;
-struct AortaHeaderBuilder;
-
-}  // namespace sys
-}  // namespace aorta
+#include "aorta_base_generated.h"
+#include "body_common_generated.h"
+#include "end_effector_common_generated.h"
 
 namespace lowlevel {
+
+struct BodyJointState;
+
+struct BodyImuState;
 
 struct BodyImuSample;
 struct BodyImuSampleBuilder;
 
-struct BodyImuState;
-
-struct BodyJointCmd;
-
-struct BodyJointState;
-
 struct BodyState;
 struct BodyStateBuilder;
-
-struct RootQuatWxyz;
-
-enum BodyCmdAction : uint8_t {
-  BodyCmdAction_HUMANOID_TRACKING = 14,
-  BodyCmdAction_EXTERNAL = 18,
-  BodyCmdAction_UNKNOWN = 255,
-  BodyCmdAction_MIN = BodyCmdAction_HUMANOID_TRACKING,
-  BodyCmdAction_MAX = BodyCmdAction_UNKNOWN
-};
-
-inline const BodyCmdAction (&EnumValuesBodyCmdAction())[3] {
-  static const BodyCmdAction values[] = {
-    BodyCmdAction_HUMANOID_TRACKING,
-    BodyCmdAction_EXTERNAL,
-    BodyCmdAction_UNKNOWN
-  };
-  return values;
-}
-
-inline const char *EnumNameBodyCmdAction(BodyCmdAction e) {
-  switch (e) {
-    case BodyCmdAction_HUMANOID_TRACKING: return "HUMANOID_TRACKING";
-    case BodyCmdAction_EXTERNAL: return "EXTERNAL";
-    case BodyCmdAction_UNKNOWN: return "UNKNOWN";
-    default: return "";
-  }
-}
-
-enum BodyImuLocation : uint8_t {
-  BodyImuLocation_HIP = 0,
-  BodyImuLocation_TRUNK = 1,
-  BodyImuLocation_HEAD = 2,
-  BodyImuLocation_MIN = BodyImuLocation_HIP,
-  BodyImuLocation_MAX = BodyImuLocation_HEAD
-};
-
-inline const BodyImuLocation (&EnumValuesBodyImuLocation())[3] {
-  static const BodyImuLocation values[] = {
-    BodyImuLocation_HIP,
-    BodyImuLocation_TRUNK,
-    BodyImuLocation_HEAD
-  };
-  return values;
-}
-
-inline const char * const *EnumNamesBodyImuLocation() {
-  static const char * const names[4] = {
-    "HIP",
-    "TRUNK",
-    "HEAD",
-    nullptr
-  };
-  return names;
-}
-
-inline const char *EnumNameBodyImuLocation(BodyImuLocation e) {
-  if (::flatbuffers::IsOutRange(e, BodyImuLocation_HIP, BodyImuLocation_HEAD)) return "";
-  const size_t index = static_cast<size_t>(e);
-  return EnumNamesBodyImuLocation()[index];
-}
 
 enum BodySampleStatus : uint8_t {
   BodySampleStatus_UNKNOWN = 0,
@@ -143,6 +75,39 @@ inline const char *EnumNameBodySampleStatus(BodySampleStatus e) {
   if (::flatbuffers::IsOutRange(e, BodySampleStatus_UNKNOWN, BodySampleStatus_UNCONFIGURED)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesBodySampleStatus()[index];
+}
+
+enum BodyImuLocation : uint8_t {
+  BodyImuLocation_HIP = 0,
+  BodyImuLocation_TRUNK = 1,
+  BodyImuLocation_HEAD = 2,
+  BodyImuLocation_MIN = BodyImuLocation_HIP,
+  BodyImuLocation_MAX = BodyImuLocation_HEAD
+};
+
+inline const BodyImuLocation (&EnumValuesBodyImuLocation())[3] {
+  static const BodyImuLocation values[] = {
+    BodyImuLocation_HIP,
+    BodyImuLocation_TRUNK,
+    BodyImuLocation_HEAD
+  };
+  return values;
+}
+
+inline const char * const *EnumNamesBodyImuLocation() {
+  static const char * const names[4] = {
+    "HIP",
+    "TRUNK",
+    "HEAD",
+    nullptr
+  };
+  return names;
+}
+
+inline const char *EnumNameBodyImuLocation(BodyImuLocation e) {
+  if (::flatbuffers::IsOutRange(e, BodyImuLocation_HIP, BodyImuLocation_HEAD)) return "";
+  const size_t index = static_cast<size_t>(e);
+  return EnumNamesBodyImuLocation()[index];
 }
 
 enum JointError : uint32_t {
@@ -222,82 +187,6 @@ inline const char *EnumNameJointError(JointError e) {
   }
 }
 
-FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(4) BodyImuState FLATBUFFERS_FINAL_CLASS {
- private:
-  float quaternion_[4];
-  float gyroscope_[3];
-  float accelerometer_[3];
-  float rpy_[3];
-
- public:
-  BodyImuState()
-      : quaternion_(),
-        gyroscope_(),
-        accelerometer_(),
-        rpy_() {
-  }
-  BodyImuState(::flatbuffers::span<const float, 4> _quaternion, ::flatbuffers::span<const float, 3> _gyroscope, ::flatbuffers::span<const float, 3> _accelerometer, ::flatbuffers::span<const float, 3> _rpy) {
-    ::flatbuffers::CastToArray(quaternion_).CopyFromSpan(_quaternion);
-    ::flatbuffers::CastToArray(gyroscope_).CopyFromSpan(_gyroscope);
-    ::flatbuffers::CastToArray(accelerometer_).CopyFromSpan(_accelerometer);
-    ::flatbuffers::CastToArray(rpy_).CopyFromSpan(_rpy);
-  }
-  const ::flatbuffers::Array<float, 4> *quaternion() const {
-    return &::flatbuffers::CastToArray(quaternion_);
-  }
-  const ::flatbuffers::Array<float, 3> *gyroscope() const {
-    return &::flatbuffers::CastToArray(gyroscope_);
-  }
-  const ::flatbuffers::Array<float, 3> *accelerometer() const {
-    return &::flatbuffers::CastToArray(accelerometer_);
-  }
-  const ::flatbuffers::Array<float, 3> *rpy() const {
-    return &::flatbuffers::CastToArray(rpy_);
-  }
-};
-FLATBUFFERS_STRUCT_END(BodyImuState, 52);
-
-FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(4) BodyJointCmd FLATBUFFERS_FINAL_CLASS {
- private:
-  float q_;
-  float dq_;
-  float tau_;
-  float kp_;
-  float kd_;
-
- public:
-  BodyJointCmd()
-      : q_(0),
-        dq_(0),
-        tau_(0),
-        kp_(0),
-        kd_(0) {
-  }
-  BodyJointCmd(float _q, float _dq, float _tau, float _kp, float _kd)
-      : q_(::flatbuffers::EndianScalar(_q)),
-        dq_(::flatbuffers::EndianScalar(_dq)),
-        tau_(::flatbuffers::EndianScalar(_tau)),
-        kp_(::flatbuffers::EndianScalar(_kp)),
-        kd_(::flatbuffers::EndianScalar(_kd)) {
-  }
-  float q() const {
-    return ::flatbuffers::EndianScalar(q_);
-  }
-  float dq() const {
-    return ::flatbuffers::EndianScalar(dq_);
-  }
-  float tau() const {
-    return ::flatbuffers::EndianScalar(tau_);
-  }
-  float kp() const {
-    return ::flatbuffers::EndianScalar(kp_);
-  }
-  float kd() const {
-    return ::flatbuffers::EndianScalar(kd_);
-  }
-};
-FLATBUFFERS_STRUCT_END(BodyJointCmd, 20);
-
 FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(8) BodyJointState FLATBUFFERS_FINAL_CLASS {
  private:
   uint64_t ts_acquired_hw_us_;
@@ -327,150 +216,76 @@ FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(8) BodyJointState FLATBUFFERS_FINAL_CLASS {
         tau_est_(::flatbuffers::EndianScalar(_tau_est)),
         error_code_(::flatbuffers::EndianScalar(static_cast<uint32_t>(_error_code))) {
   }
+  /// hardware clock, offline only; 0=unmeasured
   uint64_t ts_acquired_hw_us() const {
     return ::flatbuffers::EndianScalar(ts_acquired_hw_us_);
   }
+  /// feedback receipt, robot-host Unix epoch us; 0=unobserved
   uint64_t ts_ingested_us() const {
     return ::flatbuffers::EndianScalar(ts_ingested_us_);
   }
+  /// snapshot assembly, robot-host Unix epoch us; 0=unobserved
   uint64_t ts_assembled_us() const {
     return ::flatbuffers::EndianScalar(ts_assembled_us_);
   }
+  /// rad
   float q() const {
     return ::flatbuffers::EndianScalar(q_);
   }
+  /// rad/s
   float dq() const {
     return ::flatbuffers::EndianScalar(dq_);
   }
+  /// N*m, only when a genuine estimate exists
   float tau_est() const {
     return ::flatbuffers::EndianScalar(tau_est_);
   }
+  /// Full uint32 JointError from the priority rules above; valid zero is NONE, not a loss
+  /// counter.
   lowlevel::JointError error_code() const {
     return static_cast<lowlevel::JointError>(::flatbuffers::EndianScalar(error_code_));
   }
 };
 FLATBUFFERS_STRUCT_END(BodyJointState, 40);
 
-FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(4) RootQuatWxyz FLATBUFFERS_FINAL_CLASS {
+FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(4) BodyImuState FLATBUFFERS_FINAL_CLASS {
  private:
-  float w_;
-  float x_;
-  float y_;
-  float z_;
+  float quaternion_[4];
+  float gyroscope_[3];
+  float accelerometer_[3];
+  float rpy_[3];
 
  public:
-  RootQuatWxyz()
-      : w_(0),
-        x_(0),
-        y_(0),
-        z_(0) {
+  BodyImuState()
+      : quaternion_(),
+        gyroscope_(),
+        accelerometer_(),
+        rpy_() {
   }
-  RootQuatWxyz(float _w, float _x, float _y, float _z)
-      : w_(::flatbuffers::EndianScalar(_w)),
-        x_(::flatbuffers::EndianScalar(_x)),
-        y_(::flatbuffers::EndianScalar(_y)),
-        z_(::flatbuffers::EndianScalar(_z)) {
+  BodyImuState(::flatbuffers::span<const float, 4> _quaternion, ::flatbuffers::span<const float, 3> _gyroscope, ::flatbuffers::span<const float, 3> _accelerometer, ::flatbuffers::span<const float, 3> _rpy) {
+    ::flatbuffers::CastToArray(quaternion_).CopyFromSpan(_quaternion);
+    ::flatbuffers::CastToArray(gyroscope_).CopyFromSpan(_gyroscope);
+    ::flatbuffers::CastToArray(accelerometer_).CopyFromSpan(_accelerometer);
+    ::flatbuffers::CastToArray(rpy_).CopyFromSpan(_rpy);
   }
-  float w() const {
-    return ::flatbuffers::EndianScalar(w_);
+  /// wxyz
+  const ::flatbuffers::Array<float, 4> *quaternion() const {
+    return &::flatbuffers::CastToArray(quaternion_);
   }
-  float x() const {
-    return ::flatbuffers::EndianScalar(x_);
+  /// body-frame rad/s
+  const ::flatbuffers::Array<float, 3> *gyroscope() const {
+    return &::flatbuffers::CastToArray(gyroscope_);
   }
-  float y() const {
-    return ::flatbuffers::EndianScalar(y_);
+  /// m/s^2
+  const ::flatbuffers::Array<float, 3> *accelerometer() const {
+    return &::flatbuffers::CastToArray(accelerometer_);
   }
-  float z() const {
-    return ::flatbuffers::EndianScalar(z_);
-  }
-};
-FLATBUFFERS_STRUCT_END(RootQuatWxyz, 16);
-
-}  // namespace lowlevel
-
-namespace aorta {
-namespace sys {
-
-struct AortaHeader FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef AortaHeaderBuilder Builder;
-  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_PUBLISH_STAMP_NS = 4,
-    VT_PUBLISHER_NODE = 6,
-    VT_SEQUENCE = 8
-  };
-  uint64_t publish_stamp_ns() const {
-    return GetField<uint64_t>(VT_PUBLISH_STAMP_NS, 0);
-  }
-  const ::flatbuffers::String *publisher_node() const {
-    return GetPointer<const ::flatbuffers::String *>(VT_PUBLISHER_NODE);
-  }
-  uint64_t sequence() const {
-    return GetField<uint64_t>(VT_SEQUENCE, 0);
-  }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
-    return VerifyTableStart(verifier) &&
-           VerifyField<uint64_t>(verifier, VT_PUBLISH_STAMP_NS, 8) &&
-           VerifyOffset(verifier, VT_PUBLISHER_NODE) &&
-           verifier.VerifyString(publisher_node()) &&
-           VerifyField<uint64_t>(verifier, VT_SEQUENCE, 8) &&
-           verifier.EndTable();
+  /// deg, follows existing humanoid IMU contract
+  const ::flatbuffers::Array<float, 3> *rpy() const {
+    return &::flatbuffers::CastToArray(rpy_);
   }
 };
-
-struct AortaHeaderBuilder {
-  typedef AortaHeader Table;
-  ::flatbuffers::FlatBufferBuilder &fbb_;
-  ::flatbuffers::uoffset_t start_;
-  void add_publish_stamp_ns(uint64_t publish_stamp_ns) {
-    fbb_.AddElement<uint64_t>(AortaHeader::VT_PUBLISH_STAMP_NS, publish_stamp_ns, 0);
-  }
-  void add_publisher_node(::flatbuffers::Offset<::flatbuffers::String> publisher_node) {
-    fbb_.AddOffset(AortaHeader::VT_PUBLISHER_NODE, publisher_node);
-  }
-  void add_sequence(uint64_t sequence) {
-    fbb_.AddElement<uint64_t>(AortaHeader::VT_SEQUENCE, sequence, 0);
-  }
-  explicit AortaHeaderBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
-        : fbb_(_fbb) {
-    start_ = fbb_.StartTable();
-  }
-  ::flatbuffers::Offset<AortaHeader> Finish() {
-    const auto end = fbb_.EndTable(start_);
-    auto o = ::flatbuffers::Offset<AortaHeader>(end);
-    return o;
-  }
-};
-
-inline ::flatbuffers::Offset<AortaHeader> CreateAortaHeader(
-    ::flatbuffers::FlatBufferBuilder &_fbb,
-    uint64_t publish_stamp_ns = 0,
-    ::flatbuffers::Offset<::flatbuffers::String> publisher_node = 0,
-    uint64_t sequence = 0) {
-  AortaHeaderBuilder builder_(_fbb);
-  builder_.add_sequence(sequence);
-  builder_.add_publish_stamp_ns(publish_stamp_ns);
-  builder_.add_publisher_node(publisher_node);
-  return builder_.Finish();
-}
-
-inline ::flatbuffers::Offset<AortaHeader> CreateAortaHeaderDirect(
-    ::flatbuffers::FlatBufferBuilder &_fbb,
-    uint64_t publish_stamp_ns = 0,
-    const char *publisher_node = nullptr,
-    uint64_t sequence = 0) {
-  auto publisher_node__ = publisher_node ? _fbb.CreateString(publisher_node) : 0;
-  return aorta::sys::CreateAortaHeader(
-      _fbb,
-      publish_stamp_ns,
-      publisher_node__,
-      sequence);
-}
-
-}  // namespace sys
-}  // namespace aorta
-
-namespace lowlevel {
+FLATBUFFERS_STRUCT_END(BodyImuState, 52);
 
 struct BodyImuSample FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef BodyImuSampleBuilder Builder;
@@ -483,24 +298,34 @@ struct BodyImuSample FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_STATE = 14,
     VT_STATUS = 16
   };
+  /// device-clock sample, us
   uint64_t ts_sampled_us() const {
     return GetField<uint64_t>(VT_TS_SAMPLED_US, 0);
   }
+  /// acquisition-controller clock
   uint64_t ts_acquired_hw_us() const {
     return GetField<uint64_t>(VT_TS_ACQUIRED_HW_US, 0);
   }
+  /// feedback receipt, robot-host Unix epoch us; 0=unobserved
   uint64_t ts_ingested_us() const {
     return GetField<uint64_t>(VT_TS_INGESTED_US, 0);
   }
+  /// snapshot assembly, robot-host Unix epoch us; 0=unobserved
   uint64_t ts_assembled_us() const {
     return GetField<uint64_t>(VT_TS_ASSEMBLED_US, 0);
   }
+  /// Configured mounting location HIP/TRUNK/HEAD; array order alone does not identify the
+  /// hip.
   lowlevel::BodyImuLocation location() const {
     return static_cast<lowlevel::BodyImuLocation>(GetField<uint8_t>(VT_LOCATION, 0));
   }
+  /// Fixed quaternion/gyro/acceleration/rpy storage; status, not zero storage, determines
+  /// sample usability.
   const lowlevel::BodyImuState *state() const {
     return GetStruct<const lowlevel::BodyImuState *>(VT_STATE);
   }
+  /// BodySampleStatus quality of this IMU sample; unknown or failed storage is not a valid
+  /// attitude.
   lowlevel::BodySampleStatus status() const {
     return static_cast<lowlevel::BodySampleStatus>(GetField<uint8_t>(VT_STATUS, 0));
   }
@@ -589,46 +414,99 @@ struct BodyState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_JOINTS = 22,
     VT_APPLIED_SESSION_ID = 24,
     VT_APPLIED_SEQUENCE = 26,
-    VT_TS_FIRST_OUTPUT_US = 28
+    VT_TS_FIRST_OUTPUT_US = 28,
+    VT_RUNTIME_ID = 30,
+    VT_TS_CONTROL_US = 32,
+    VT_APPLIED_KEY_VALID = 34,
+    VT_ASSOCIATION_SOURCE_TYPE = 36
   };
+  /// Transport publication metadata; not control authority or physical-send evidence.
   const aorta::sys::AortaHeader *aorta_header() const {
     return GetPointer<const aorta::sys::AortaHeader *>(VT_AORTA_HEADER);
   }
+  /// producer2 legacy association; candidate3 extends association, default0 unknown
   uint32_t protocol_version() const {
     return GetField<uint32_t>(VT_PROTOCOL_VERSION, 0);
   }
+  /// same release roster as BodyInfo
   uint32_t roster_version() const {
     return GetField<uint32_t>(VT_ROSTER_VERSION, 0);
   }
+  /// full 64-bit monotonic sequence; never truncate in public messages
   uint64_t state_id() const {
     return GetField<uint64_t>(VT_STATE_ID, 0);
   }
+  /// real source snapshot time, robot-host Unix epoch us; 0=unobserved
   uint64_t ts_state_real_us() const {
     return GetField<uint64_t>(VT_TS_STATE_REAL_US, 0);
   }
+  /// publisher sample, robot-host Unix epoch us; 0=unobserved
   uint64_t ts_state_pub_us() const {
     return GetField<uint64_t>(VT_TS_STATE_PUB_US, 0);
   }
+  /// actual locomotion consumption, robot-host Unix epoch us; 0=unobserved
   uint64_t ts_consumed_us() const {
     return GetField<uint64_t>(VT_TS_CONSUMED_US, 0);
   }
+  /// Whether the legacy public attitude projection is usable; inspect each IMU status for its
+  /// own validity.
   bool attitude_valid() const {
     return GetField<uint8_t>(VT_ATTITUDE_VALID, 0) != 0;
   }
+  /// fixed configured set/order; every state object always present
   const ::flatbuffers::Vector<::flatbuffers::Offset<lowlevel::BodyImuSample>> *imu_states() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<lowlevel::BodyImuSample>> *>(VT_IMU_STATES);
   }
+  /// exactly BodyInfo.slot_count per run (31 for this roster), including uninstalled14
   const ::flatbuffers::Vector<const lowlevel::BodyJointState *> *joints() const {
     return GetPointer<const ::flatbuffers::Vector<const lowlevel::BodyJointState *> *>(VT_JOINTS);
   }
+  /// Protocol2: last successfully sent EXTERNAL output association, keyed by session/sequence.
+  /// Only EXTERNAL creates a nonzero association; its ingress rejects zero keys.
+  /// All-zero means no EXTERNAL command is affecting the applied output.
+  /// TRACKING output carries a zero association and clears all three only after
+  /// its first successful send/report. Before that, while paused or after a send
+  /// failure, retain the last successful EXTERNAL association. This is not gated
+  /// by the current action name at publication time.
+  /// Source session of the latched applied association; protocol2 EXTERNAL rules above,
+  /// protocol3 uses applied_key_valid/source_type.
   uint64_t applied_session_id() const {
     return GetField<uint64_t>(VT_APPLIED_SESSION_ID, 0);
   }
+  /// Sequence paired with applied_session_id; a real initial zero key is meaningful only
+  /// under protocol3 validity/source rules.
   uint64_t applied_sequence() const {
     return GetField<uint64_t>(VT_APPLIED_SEQUENCE, 0);
   }
+  /// Robot-host Unix epoch us of the control cycle when interpolation alpha>0
+  /// first affects output; latched only after successful send. Not hardware
+  /// send-completion time. 0=unobserved; follows the successful-send latch above.
+  /// Latched first control-cycle effect in Vita epoch us under the successful-send rules
+  /// above; not physical TX completion.
   uint64_t ts_first_output_us() const {
     return GetField<uint64_t>(VT_TS_FIRST_OUTPUT_US, 0);
+  }
+  /// Protocol3 candidate: same-snapshot association across all command sources.
+  /// Retain ids0..12 and all legacy struct layouts/units. Do not infer validity
+  /// from nonzero keys: an initial TRACKING source can have a genuine zero key.
+  /// Same frozen robot startup identity as GetRobotInfo; never replace it with a control ID
+  /// or PID.
+  uint64_t runtime_id() const {
+    return GetField<uint64_t>(VT_RUNTIME_ID, 0);
+  }
+  /// Vita control capture, shared with command echo
+  uint64_t ts_control_us() const {
+    return GetField<uint64_t>(VT_TS_CONTROL_US, 0);
+  }
+  /// Protocol3 applied-key association validity; key numeric zero alone does not mean absent
+  /// or invalid.
+  bool applied_key_valid() const {
+    return GetField<uint8_t>(VT_APPLIED_KEY_VALID, 0) != 0;
+  }
+  /// Protocol3 CommandSourceType for the actual associated output; not the current action
+  /// name at publication.
+  uint8_t association_source_type() const {
+    return GetField<uint8_t>(VT_ASSOCIATION_SOURCE_TYPE, 0);
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -650,6 +528,10 @@ struct BodyState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint64_t>(verifier, VT_APPLIED_SESSION_ID, 8) &&
            VerifyField<uint64_t>(verifier, VT_APPLIED_SEQUENCE, 8) &&
            VerifyField<uint64_t>(verifier, VT_TS_FIRST_OUTPUT_US, 8) &&
+           VerifyField<uint64_t>(verifier, VT_RUNTIME_ID, 8) &&
+           VerifyField<uint64_t>(verifier, VT_TS_CONTROL_US, 8) &&
+           VerifyField<uint8_t>(verifier, VT_APPLIED_KEY_VALID, 1) &&
+           VerifyField<uint8_t>(verifier, VT_ASSOCIATION_SOURCE_TYPE, 1) &&
            verifier.EndTable();
   }
 };
@@ -697,6 +579,18 @@ struct BodyStateBuilder {
   void add_ts_first_output_us(uint64_t ts_first_output_us) {
     fbb_.AddElement<uint64_t>(BodyState::VT_TS_FIRST_OUTPUT_US, ts_first_output_us, 0);
   }
+  void add_runtime_id(uint64_t runtime_id) {
+    fbb_.AddElement<uint64_t>(BodyState::VT_RUNTIME_ID, runtime_id, 0);
+  }
+  void add_ts_control_us(uint64_t ts_control_us) {
+    fbb_.AddElement<uint64_t>(BodyState::VT_TS_CONTROL_US, ts_control_us, 0);
+  }
+  void add_applied_key_valid(bool applied_key_valid) {
+    fbb_.AddElement<uint8_t>(BodyState::VT_APPLIED_KEY_VALID, static_cast<uint8_t>(applied_key_valid), 0);
+  }
+  void add_association_source_type(uint8_t association_source_type) {
+    fbb_.AddElement<uint8_t>(BodyState::VT_ASSOCIATION_SOURCE_TYPE, association_source_type, 0);
+  }
   explicit BodyStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -722,8 +616,14 @@ inline ::flatbuffers::Offset<BodyState> CreateBodyState(
     ::flatbuffers::Offset<::flatbuffers::Vector<const lowlevel::BodyJointState *>> joints = 0,
     uint64_t applied_session_id = 0,
     uint64_t applied_sequence = 0,
-    uint64_t ts_first_output_us = 0) {
+    uint64_t ts_first_output_us = 0,
+    uint64_t runtime_id = 0,
+    uint64_t ts_control_us = 0,
+    bool applied_key_valid = false,
+    uint8_t association_source_type = 0) {
   BodyStateBuilder builder_(_fbb);
+  builder_.add_ts_control_us(ts_control_us);
+  builder_.add_runtime_id(runtime_id);
   builder_.add_ts_first_output_us(ts_first_output_us);
   builder_.add_applied_sequence(applied_sequence);
   builder_.add_applied_session_id(applied_session_id);
@@ -736,6 +636,8 @@ inline ::flatbuffers::Offset<BodyState> CreateBodyState(
   builder_.add_roster_version(roster_version);
   builder_.add_protocol_version(protocol_version);
   builder_.add_aorta_header(aorta_header);
+  builder_.add_association_source_type(association_source_type);
+  builder_.add_applied_key_valid(applied_key_valid);
   builder_.add_attitude_valid(attitude_valid);
   return builder_.Finish();
 }
@@ -754,7 +656,11 @@ inline ::flatbuffers::Offset<BodyState> CreateBodyStateDirect(
     const std::vector<lowlevel::BodyJointState> *joints = nullptr,
     uint64_t applied_session_id = 0,
     uint64_t applied_sequence = 0,
-    uint64_t ts_first_output_us = 0) {
+    uint64_t ts_first_output_us = 0,
+    uint64_t runtime_id = 0,
+    uint64_t ts_control_us = 0,
+    bool applied_key_valid = false,
+    uint8_t association_source_type = 0) {
   auto imu_states__ = imu_states ? _fbb.CreateVector<::flatbuffers::Offset<lowlevel::BodyImuSample>>(*imu_states) : 0;
   auto joints__ = joints ? _fbb.CreateVectorOfStructs<lowlevel::BodyJointState>(*joints) : 0;
   return lowlevel::CreateBodyState(
@@ -771,18 +677,12 @@ inline ::flatbuffers::Offset<BodyState> CreateBodyStateDirect(
       joints__,
       applied_session_id,
       applied_sequence,
-      ts_first_output_us);
+      ts_first_output_us,
+      runtime_id,
+      ts_control_us,
+      applied_key_valid,
+      association_source_type);
 }
-
-}  // namespace lowlevel
-
-namespace aorta {
-namespace sys {
-
-}  // namespace sys
-}  // namespace aorta
-
-namespace lowlevel {
 
 inline const lowlevel::BodyState *GetBodyState(const void *buf) {
   return ::flatbuffers::GetRoot<lowlevel::BodyState>(buf);

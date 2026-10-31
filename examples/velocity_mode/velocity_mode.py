@@ -13,7 +13,7 @@ import time
 import uuid
 
 from locomotion_aorta import (
-    PullController, PullTransport, BodyCmd, BodyJointCmd, JoyReader, ExternalPhase,
+    PullController, PullStateSource, PullTransport, BodyCmd, BodyJointCmd, JoyReader, ExternalPhase,
 )
 import locomotion_aorta
 
@@ -98,12 +98,16 @@ def require_running(controller, expected=None):
             or status.phase != ExternalPhase.RUNNING or getattr(status, 'timeout_hold', False)):
         raise RuntimeError('EXTERNAL is no longer RUNNING')
     if expected is not None and any(getattr(status, key, 0) != getattr(expected, key, 0)
-            for key in ('generation', 'client_id', 'lease_id', 'reject_count', 'ingress_drop_count')):
+            for key in ('generation', 'client_id', 'control_id', 'reject_count', 'ingress_drop_count')):
         raise RuntimeError('EXTERNAL ownership or rejection/drop counters changed')
     return status
 
 
 def run_cycles(policy, frames, directions, log, *, controller, duration, transition, stop=None):
+    target_names = tuple(name for i, name in enumerate(policy.order) if i in policy.driven_slots)
+    if not target_names:
+        raise ValueError('velocity policy has no declared Body targets')
+    required_fields = 0x1b | (0x04 if policy.config.get('ankle_clamp_feedforward', False) else 0)
     initial = frames()
     target, transition_s = transition
     policy.reset()
@@ -183,7 +187,7 @@ def run_cycles(policy, frames, directions, log, *, controller, duration, transit
                     if previous_publish_ns is not None else NOT_MEASURED)
                 previous_publish_ns = publish_mono
                 try:
-                    sent = controller.publish(command)
+                    sent = controller.publish(command, target_names=target_names, required_fields=required_fields)
                     publish_log_fields(record, sent)
                     record["publish_result"] = "returned"
                 except BaseException:
@@ -244,7 +248,7 @@ def main():
                     S1_source="Python pull recv return, before root lookup and decode",
                     S5_source="would-publish boundary" if args.shadow else "ExternalController.publish entry",
                     period_s=PERIOD_S, models=[policy.inventory])
-    log = transport = controller = directions = None
+    log = transport = controller = source = directions = None
     entered = False
     stop = threading.Event()
     handlers = {sig: signal.signal(sig, lambda *_args: stop.set())
@@ -254,17 +258,23 @@ def main():
             node_name=f"velocity-mode-{uuid.uuid4().hex}")
         if not args.shadow:
             controller = PullController(group=args.group, _transport=transport)
-        status = wait_ready(transport, args.timeout)
-        frames = lambda: read_frame(transport, args.timeout)
-        response = controller.get_robot_info(args.timeout) if controller else transport.get_robot_info(args.timeout)
+        else:
+            source = PullStateSource(group=args.group, _transport=transport)
+        reader = controller if controller is not None else source
+        response = reader.get_robot_info(args.timeout)
         if response.info is None or response.info.body is None:
             raise RuntimeError(response.error_message or "RobotInfo has no body roster")
+        status = wait_ready(transport, args.timeout)
+        frames = lambda: read_frame(reader, args.timeout)
         policy.bind_body_info(response.info.body)
+        from locomotion_aorta._policy_state import format_robot_info
+        print(format_robot_info(response))
         log = CycleLog(args.log, metadata)
         log.write(dict(record_type="roster", joint_names=policy.order,
                        roster_version=response.info.body.roster_version,
-                       populated=[j.populated for j in response.info.body.joints],
-                       is_mock=[j.is_mock for j in response.info.body.joints]))
+                       is_mock=[j.is_mock for j in response.info.body.joints],
+                       supported_fields=[j.supported_fields for j in response.info.body.joints],
+                       valid_limits=[j.valid_limits for j in response.info.body.joints]))
         log.write(dict(record_type="preflight", timestamp_ns=realtime_ns(),
                        current_action=status.current_action,
                        phase=status.phase.value,
@@ -296,6 +306,8 @@ def main():
                 try:
                     if controller is not None:
                         controller.close()
+                    elif source is not None:
+                        source.close()
                     elif transport is not None:
                         transport.close()
                 finally:

@@ -20,20 +20,40 @@
     "flatbuffers/vector_downward.h": "7f687fdb661f4c1be09223d6e416e042b139ff1748b5a215cb9864c56f9f3be2",
     "flatbuffers/verifier.h": "d7fbf583019088983af684e7d00cbfda23b759093c6501f850c1c33400559b5a"
   },
-  "generated_source_schema_commit": "22369843d1f712fc35b3a664d681777df6fdd7f1",
-  "generated_source": "official public0.1.4 wheel SHA31fbd1f710a8e92043cc1d0ec80657fc5f76aad4a47e0926d94d70e415185169 actual BFBS->CPP plain generated with actual flatc25.12.19; no object API",
-  "flatc_sha256": "1d89e6ea3d1d28aa03b332f27ca4a89c29db9e1a3b4a58cb6bbb3b1be104c1b4",
-  "flatc_argv": [
-    "flatc",
-    "--cpp",
-    "--gen-all",
-    "-o",
-    "generated",
-    "{body_cmd,body_state}.bfbs"
-  ],
+  "generated_source_schema_commit": "c783514130bb3686af8c14237ed6da0463b9b438",
+  "generated_source": "REQ254 same-generation G-only raw capture accepted for source integration only; C validation, SDK source review and tests pending.",
+  "flatc_argv": null,
   "license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-  "body_cmd_bfbs_sha256": "c98a531aad2b43206048753b82d0bacec1ad65d2429536432766975cd211e71c",
-  "body_cmd_generated_h_sha256": "86d560968788eb19661ca7d3c0f82b4f1cabe5852b3b5f05cfeaa66abb3dec7f",
-  "body_state_bfbs_sha256": "514af044787e6f29789e77359503d9f2d87f29513e4b44bcecdeeabaf1151c2e",
-  "body_state_generated_h_sha256": "92b104d92b1b72914c2c54029ea12b7dcaaaae4999b0aa36084f5491888ab07b"
+  "body_cmd_bfbs_sha256": "4d81942260f97ccfa5a18f5b2a0fb272093ffd337846973e53fb80ac7d62a03f",
+  "body_cmd_generated_h_sha256": "6f62946a5fcdc49cbd7df4c445e8674777dce8d802434d94a2d4ccd0b2d054f7",
+  "body_state_bfbs_sha256": "4954736e458ce093d5b5b8d5d838df29ab67eb98a11982e7365c1e68c6544a1b",
+  "body_state_generated_h_sha256": "93265719052c74021843465623286310064a487d9e104b737403bea45361f5a6",
+  "generated_source_wheel_sha256": "0faf300ee8254695963bfd34fd9cf6fd977264104c46a64253b5608231623df7",
+  "generated_source_wheel_version": "0.0.0+gc783514130bb",
+  "carrier_result_sha256": "c999addde48bee031f8fe005f0878f427742e12a96bcd677eac0718e1e92b07f",
+  "flatc_version_output": null,
+  "generated_source_schema_tree": "31579e37fda605e83229fd814732e77df7e7bc8a",
+  "flatc_rule": {
+    "status": "RULE_SOURCE_ONLY_ACTUAL_ARGV_AND_BINARY_SHA_NOT_CAPTURED",
+    "provider_commit": "309b8691cb7b31949a8977c4ed9db36bddaf6fd6",
+    "rule_path": "message/tools/schema_codegen.bzl",
+    "rule_sha256": "7e903d83f188794fe6dd23ccc7444c64074cd7af024b26f2be43fb1d5700aa0c",
+    "mode": "--cpp",
+    "tool_alias": "@aorta//message/tools:flatc -> @flatbuffers//:flatc",
+    "includes": "dependency-derived -I roots; actual expanded argv not captured",
+    "flatbuffers_archive_sha256": "f81c3162b1046fe8b84b9a0dbdd383e24fdbcf88583b9cb6028f90d04d90696a",
+    "root_override_patch": "patches/flatbuffers_cpp_struct_dependency_order.patch",
+    "root_override_patch_sha256": "fdb43193c2048388cd7de45e9d93acb04aa6e2ca2977f33a3edee9582d8efb58",
+    "generated_header_static_version": "25.12.19"
+  },
+  "generated_include_sha256": {
+    "message/schemas/topic/lowlevel/body_common_generated.h": "f3ff4ea29b30fadd96933e293bd55ef5eb8994fd8527d6863c0f4afc7f1edae5",
+    "message/schemas/topic/lowlevel/end_effector_common_generated.h": "6b53afed9682a6bda797c1ac3f4c1e958b08bd7d9a374ae2430bf4d99ceb07f9",
+    "declared-headers/generated/external/aorta~/message/schemas/system/aorta_base_generated.h": "fde3ee3fad85501632552fe45abdb4793dc0b2995c1ce06db62d7ab2487a3be6"
+  },
+  "source_adoption_sha256": "7a38ae4f8f2b8564ea777784bc4718ec96a84a6d3b8ca349c6f526247c83ed1d",
+  "artifact_manifest_sha256": "633c53ae01e50528133636f010f4009bcc244f605308e6b828ae44fab6ef281b",
+  "raw_inventory_sha256": "4b8e879a9621a873ab44be7a3f0f8cebba595c8442126f1ad2a5f34f5d8d1311",
+  "aorta_provider_commit": "309b8691cb7b31949a8977c4ed9db36bddaf6fd6",
+  "flatbuffers_provider_authority_sha256": "015d1579187b12c0dbc79a57c34ce42df1e8ac6fc25d1051be35d14f42857e8b"
 }

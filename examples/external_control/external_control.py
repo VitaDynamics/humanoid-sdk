@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import math
 import time
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 from locomotion_aorta import (
     PullController,
@@ -35,6 +37,27 @@ DEMO_KP = (100.0, 100.0, 60.0, 150.0, 80.0, 40.0, 100.0, 100.0, 60.0, 150.0, 80.
 FIXED_STAND_KD = (3.0, 3.0, 2.0, 4.0, 2.0, 1.0, 3.0, 3.0, 2.0, 4.0, 2.0, 1.0, 2.0, 2.0, 0.0, 2.0, 1.0, 1.0, 1.0, 3.0, 3.0, 4.0, 2.0, 1.0, 1.0, 1.0, 3.0, 3.0, 4.0, 1.0, 1.0)
 
 
+def _matches_external_identity(status, generation, client_id, control_id):
+    return not (status.generation != generation or status.client_id != client_id
+                or status.control_id != control_id)
+
+
+def _external_status_problem(status, phases, entered):
+    if status is None or status.current_action != 'EXTERNAL' or status.phase not in phases:
+        return 'owner'
+    if not _matches_external_identity(status, entered.generation, entered.client_id, entered.control_id):
+        return 'owner'
+    if status.reject_count != entered.reject_count:
+        return 'reject'
+    return None
+
+
+def _body_sample_progress(state_id, last_id, last_change, now, window):
+    if state_id != last_id:
+        return state_id, now, False
+    return last_id, last_change, now - last_change >= window
+
+
 def run(
     controller: PullController,
     *,
@@ -43,16 +66,19 @@ def run(
     monotonic: Callable[[], float] = time.monotonic,
     emit: Callable[[str], None] = print,
 ) -> None:
-    info = require_body_info(controller, timeout)
+    info = require_body_info(controller, timeout, emit_info=emit)
+    target_slots = _body_target_slots(info, require_zero=True)
+    target_names = tuple(info.joint_names[i] for i in target_slots)
     start_state = _wait_for_stationary_body_state(
         controller,
         body_info=info,
         timeout=timeout,
         sleep=sleep,
         monotonic=monotonic,
+        target_slots=target_slots,
     )
     positions = start_state.q
-    start_q = tuple(float(q) if cap.populated else 0.0 for q, cap in zip(positions,info.joints))
+    start_q = tuple(float(q) if i in target_slots else 0.0 for i, q in enumerate(positions))
     return_q = list(start_q)
     # Offset only the elbows toward zero to avoid the observed hip interference.
     for slot in (18, 25):
@@ -77,10 +103,6 @@ def run(
         entered_status = controller.enter_external(timeout)
         entered = True
 
-        generation = entered_status.generation
-        reject_count = entered_status.reject_count
-        client_id = entered_status.client_id
-        lease_id = entered_status.lease_id
         last_state_id = start_state.state_id
         last_state_change = monotonic()
         next_publish = monotonic()
@@ -91,32 +113,25 @@ def run(
             if delay > 0:
                 sleep(delay)
             status = controller.status
-            if (
-                status is None
-                or status.current_action != "EXTERNAL"
-                or status.phase != ExternalPhase.RUNNING
-                or status.generation != generation
-                or status.client_id != client_id
-                or status.lease_id != lease_id
-            ):
+            problem = _external_status_problem(status, (ExternalPhase.RUNNING,), entered_status)
+            if problem == 'owner':
                 raise RuntimeError(
                     "EXTERNAL ownership is no longer the entered RUNNING session"
                 )
-            if status.reject_count != reject_count:
+            if problem == 'reject':
                 raise RuntimeError(
                     "robot reject_count changed during the trajectory"
                 )
 
             state = controller.wait_state(timeout)
-            _validate_body_state(state, body_info=info, require_stationary=False)
+            _validate_body_state(state, body_info=info, require_stationary=False, target_slots=target_slots)
             now = monotonic()
-            if state.state_id != last_state_id:
-                last_state_id = state.state_id
-                last_state_change = now
-            elif now - last_state_change >= LOWSTATE_WINDOW_S:
+            last_state_id, last_state_change, stale = _body_sample_progress(
+                state.state_id, last_state_id, last_state_change, now, LOWSTATE_WINDOW_S)
+            if stale:
                 raise RuntimeError("body state became stale during the trajectory")
 
-            controller.publish(_position_command(q, state))
+            controller.publish(_position_command(q, state), target_names=target_names, required_fields=0x19)
             next_publish = max(next_publish + PERIOD_S, monotonic() + PERIOD_S)
             return state
 
@@ -130,6 +145,7 @@ def run(
             monotonic=monotonic,
             label="zero",
             position_tolerance_rad=ZERO_ENDPOINT_POSITION_TOLERANCE_RAD,
+            target_slots=target_slots,
         )
         emit("zero endpoint settled")
         _publish_segment(publish_frame, zero_q, return_q, segment_steps)
@@ -140,6 +156,7 @@ def run(
             monotonic=monotonic,
             label="return",
             position_tolerance_rad=RETURN_ENDPOINT_POSITION_TOLERANCE_RAD,
+            target_slots=target_slots,
         )
         emit("return endpoint settled")
     finally:
@@ -153,7 +170,7 @@ def run(
             emit("CANCEL confirmed PASSIVE")
 
 
-def require_body_info(controller: PullController, timeout: float):
+def require_body_info(controller: PullController, timeout: float, *, emit_info=None):
     response = controller.get_robot_info(timeout)
     if response.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS):
         raise RuntimeError(f"get_robot_info failed: status={response.status} {response.error_message}")
@@ -162,7 +179,31 @@ def require_body_info(controller: PullController, timeout: float):
     if (body is None or body.slot_count != COMMAND_SLOTS
             or any(len(v) != COMMAND_SLOTS for v in (body.joint_names, body.joints, body.motor_identities))):
         raise RuntimeError("get_robot_info did not provide the public31 body roster")
+    if emit_info is not None:
+        from locomotion_aorta._policy_state import format_robot_info
+        emit_info(format_robot_info(response))
     return body
+
+
+def _body_target_slots(body_info, *, require_zero=False):
+    """Validate the existing FIXED_STAND 30-joint action profile, not slot presence."""
+    from locomotion_aorta._policy_state import body_joint_order
+
+    path = Path(__file__).resolve().parents[1] / 'fixed_stand_pose/fixed_stand_profile.json'
+    names = tuple(body_info.joint_names)
+    targets = frozenset(json.loads(path.read_text())['joint_gains'])
+    if (body_info.slot_count != COMMAND_SLOTS or len(body_info.joints) != COMMAND_SLOTS
+            or len(targets) != 30 or not targets.issubset(names)
+            or any(cap.body_index != i for i, cap in enumerate(body_info.joints))):
+        raise ValueError('the full 30-joint Body action profile is required')
+    body_joint_order(body_info, required_names=targets)
+    slots = tuple(i for i, name in enumerate(names) if name in targets)
+    if require_zero:
+        invalid = [names[i] for i in slots
+                   if not body_info.joints[i].q_min <= 0.0 <= body_info.joints[i].q_max]
+        if invalid:
+            raise ValueError('; '.join(f'{name}: zero outside position limit' for name in invalid))
+    return slots
 
 
 def _wait_for_stationary_body_state(
@@ -172,7 +213,12 @@ def _wait_for_stationary_body_state(
     timeout: float,
     sleep: Callable[[float], None],
     monotonic: Callable[[], float],
+    target_slots=None,
 ) -> BodyStateArrays:
+    if target_slots is None:
+        target_slots = _body_target_slots(body_info)
+    if not target_slots:
+        raise ValueError('Body action has no target slots')
     deadline = monotonic() + timeout
     stationary_since: float | None = None
     last_new_time = monotonic()
@@ -182,14 +228,14 @@ def _wait_for_stationary_body_state(
     while monotonic() < deadline:
         remaining = deadline - monotonic()
         latest = controller.wait_state(max(remaining, 0.001))
-        _validate_body_state(latest, body_info=body_info, require_stationary=False)
+        _validate_body_state(latest, body_info=body_info, require_stationary=False, target_slots=target_slots)
         now = monotonic()
         if latest.state_id != last_state_id:
             last_state_id = latest.state_id
             last_new_time = now
             if any(
                 abs(dq) > STATIONARY_DQ_RAD_S
-                for dq, cap in zip(latest.dq, body_info.joints) if cap.populated
+                for i, dq in enumerate(latest.dq) if i in target_slots
             ):
                 stationary_since = None
             elif stationary_since is None:
@@ -204,20 +250,26 @@ def _wait_for_stationary_body_state(
 
 
 def _validate_body_state(
-    state: BodyStateArrays, *, body_info, require_stationary: bool
+    state: BodyStateArrays, *, body_info, require_stationary: bool, target_slots=None
 ) -> None:
+    if target_slots is None:
+        target_slots = _body_target_slots(body_info)
+    if not target_slots:
+        raise ValueError('Body action has no target slots')
     if not state.attitude_valid:
         raise RuntimeError("body state attitude is invalid")
     q, dq, errors = state.q, state.dq, state.error_code
-    if len(q) != COMMAND_SLOTS:
-        raise RuntimeError(f"body state has {len(q)} motor slots; {COMMAND_SLOTS} required")
-    for index, (position, velocity, error, cap) in enumerate(zip(q,dq,errors,body_info.joints)):
-        if not cap.populated:
-            continue
+    if any(len(column) != COMMAND_SLOTS for column in (q, dq, errors)):
+        raise RuntimeError(f"body state requires {COMMAND_SLOTS} motor slots")
+    for index in target_slots:
+        position, velocity, error = q[index], dq[index], errors[index]
         if error != JointError.NONE:
             raise RuntimeError(f"body state motor[{index}] error_code={error}")
         if not math.isfinite(position) or not math.isfinite(velocity):
             raise RuntimeError(f"body state motor[{index}] q/dq is not finite")
+        cap = body_info.joints[index]
+        if not cap.q_min <= position <= cap.q_max:
+            raise RuntimeError(f"body state motor[{index}] q is outside BodyInfo limit")
         if require_stationary and abs(velocity) > STATIONARY_DQ_RAD_S:
             raise RuntimeError(f"body state motor[{index}] is moving at {velocity:.3f} rad/s")
 
@@ -268,18 +320,21 @@ def _publish_dwell(
     monotonic: Callable[[], float],
     label: str,
     position_tolerance_rad: float,
+    target_slots=None,
 ) -> None:
+    if target_slots is None:
+        target_slots = _body_target_slots(body_info)
+    if not target_slots:
+        raise ValueError('Body action has no target slots')
     settled_since: float | None = None
     settled = False
     for _ in range(math.ceil(DWELL_S / PERIOD_S)):
         state = publish(target)
         now = monotonic()
         at_endpoint = all(
-            not cap.populated or (abs(q - target_q) <= position_tolerance_rad
-            and abs(dq) <= STATIONARY_DQ_RAD_S)
-            for q, dq, target_q, cap in zip(
-                state.q, state.dq, target, body_info.joints
-            )
+            abs(state.q[i] - target[i]) <= position_tolerance_rad
+            and abs(state.dq[i]) <= STATIONARY_DQ_RAD_S
+            for i in target_slots
         )
         if at_endpoint:
             if settled_since is None:

@@ -7,6 +7,7 @@ import signal
 import threading
 from types import SimpleNamespace as NS
 import unittest
+from unittest.mock import patch
 
 from examples.teleop_policy.teleop_policy import JoyCommand, Policy, bodycmd, live, objects
 
@@ -30,7 +31,8 @@ NAMES = (
 
 def fixture():
     body = NS(slot_count=31,joint_names=NAMES,
-              joints=tuple(NS(populated=n!='waist_roll_joint') for n in NAMES))
+              joints=tuple(NS(body_index=i, is_mock=n=='waist_roll_joint', supported_fields=31,
+                              valid_limits=31, q_min=-3., q_max=3.) for i,n in enumerate(NAMES)))
     motors = tuple(NS(error_code=0,
                       q=float(i),dq=float(100+i)) for i,n in enumerate(NAMES))
     # TRUNK first and deliberately different, preventing accidental imu_states[0].
@@ -52,6 +54,20 @@ class ObservationTests(unittest.TestCase):
     def setUp(self):
         self.policy = Policy(METADATA,CONTRACT)
         self.body,self.state = fixture()
+
+    def test_required_leg_and_upper_mock_are_rejected_before_target_selection(self):
+        self.assertEqual(len(self.policy.names), 30)
+        self.assertTrue(self.body.joints[14].is_mock)
+        self.assertEqual(len(self.policy.roster(self.body)), 31)
+        for name in (self.policy.legs[0], self.policy.upper[-1]):
+            with self.subTest(name=name):
+                joints = list(self.body.joints)
+                i = self.body.joint_names.index(name)
+                joints[i] = NS(body_index=i, is_mock=True, supported_fields=31, valid_limits=31,
+                               q_min=-3., q_max=3.)
+                changed = NS(slot_count=31, joint_names=self.body.joint_names, joints=tuple(joints))
+                with self.assertRaisesRegex(ValueError, 'unavailable'):
+                    self.policy.roster(changed)
 
     def test_named_full_frame_and_initial_backfill(self):
         obs = self.policy.observation(self.state,self.body,(.25,-.5,.125,.75),'HIP')
@@ -141,7 +157,13 @@ class ObservationTests(unittest.TestCase):
 
     def test_no_new_fallback_limit_from_joint_target_metadata(self):
         self.assertIsNone(self.policy.limits)
-        self.assertAlmostEqual(self.policy.targets([100]*12,self.body)[0].q,24.8)
+        with self.assertRaisesRegex(ValueError, 'outside BodyInfo limit'):
+            self.policy.targets([100]*12, self.body)
+        joints = tuple(NS(**(dict(vars(cap), q_min=-100., q_max=100.)
+                              if name in self.policy.legs else vars(cap)))
+                       for name, cap in zip(self.body.joint_names, self.body.joints))
+        wide = NS(slot_count=31, joint_names=self.body.joint_names, joints=joints)
+        self.assertAlmostEqual(self.policy.targets([100]*12, wide)[0].q,24.8)
 
     def test_declared_clipping_and_leg_limits(self):
         md=dict(METADATA,clip_actions='2',joint_pos_limit_lower=','.join(['-.1']*12),joint_pos_limit_upper=','.join(['.1']*12))
@@ -176,13 +198,20 @@ class JoyTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.TestCase):
+    def setUp(self):
+        # These lifecycle cases use symbolic service DTOs; formatting is tested
+        # separately with a real public Info DTO.
+        formatter = patch('locomotion_aorta._policy_state.format_robot_info', return_value='Info')
+        formatter.start()
+        self.addCleanup(formatter.stop)
+
     def run_case(self,mode,reply_status=API.ServiceStatus.PARTIAL_SUCCESS):
         body,state=fixture()
         # Ordinary synthetic stand values; no robot-captured evidence claimed.
         for m in state.joints:m.q=0;m.dq=0
         stop=threading.Event();events=[]
         status=NS(phase='RUNNING',current_action='EXTERNAL',generation=3,
-                  client_id='client',lease_id=4,reject_count=0)
+                  client_id=9,control_id=13,reject_count=0)
         class Controller:
             def get_robot_info(self,timeout):return NS(info=NS(body=body),status=reply_status,error_message='hands unavailable')
             def wait_body_state(self,timeout):
@@ -194,7 +223,7 @@ class LifecycleTests(unittest.TestCase):
                 events.append('enter')
                 if mode=='entry_error':raise TimeoutError('entry interrupted after PREPARE')
                 return status
-            def publish(self,cmd):
+            def publish(self,cmd, *, target_names, required_fields):
                 if mode=='sdk_guard':raise ValueError('existing SDK command/capability guard')
                 events.append('publish');stop.set()
             def exit_external(self,timeout):
@@ -223,7 +252,7 @@ class LifecycleTests(unittest.TestCase):
         stop = threading.Event()
         commands, events = [], []
         status = NS(phase=api.ExternalPhase.RUNNING, current_action='EXTERNAL',
-                    generation=3, client_id='client', lease_id='lease', reject_count=0)
+                    generation=3, client_id=9, control_id=13, reject_count=0)
         targets = tuple(api.BodyJointCmd() for _ in range(31))
 
         class Controller:
@@ -236,7 +265,9 @@ class LifecycleTests(unittest.TestCase):
             def enter_external(self, timeout):
                 events.append('enter')
                 return status
-            def publish(self, command):
+            def publish(self, command, *, target_names, required_fields):
+                if target_names != tuple(n for n in body.joint_names if n != 'waist_roll_joint') or required_fields != 0x19:
+                    raise AssertionError('policy must declare its complete physical target scope and PD fields')
                 # Exercise the real controller guard at startup and both sides
                 # of the uint16 boundary, without transport or a real model.
                 if len(commands) in (0, 65534, 65535, 65536):
@@ -249,6 +280,7 @@ class LifecycleTests(unittest.TestCase):
                 return NS(current_action='PASSIVE')
 
         class PolicyStub:
+            names = tuple(n for n in body.joint_names if n != 'waist_roll_joint')
             contract = CONTRACT
             period = 0
             history = []
@@ -280,7 +312,7 @@ class LifecycleTests(unittest.TestCase):
         clock, stop = FakeClock(), threading.Event()
         published, inferred, reads, events = [], [], [], []
         status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
-                    client_id='client', lease_id=4, reject_count=0)
+                    client_id=9, control_id=13, reject_count=0)
         class Controller:
             def get_robot_info(self, timeout):
                 return NS(info=NS(body=body), status=API.ServiceStatus.SUCCESS, error_message='')
@@ -296,7 +328,7 @@ class LifecycleTests(unittest.TestCase):
             def enter_external(self, timeout):
                 events.append('enter')
                 return status
-            def publish(self, command):
+            def publish(self, command, *, target_names, required_fields):
                 published.append(command)
                 if command.input_state_id == ids[-1] and len(set(ids)) > 2:
                     stop.set()
@@ -333,7 +365,7 @@ class LifecycleTests(unittest.TestCase):
                 clock, stop = FakeClock(), threading.Event()
                 outputs, inferences, events = [], [], []
                 status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
-                            client_id='client', lease_id=4, reject_count=0)
+                            client_id=9, control_id=13, reject_count=0)
                 class Controller:
                     reads = 0
                     def get_robot_info(self, timeout):
@@ -348,7 +380,7 @@ class LifecycleTests(unittest.TestCase):
                     def enter_external(self, timeout):
                         events.append('enter')
                         return status
-                    def publish(self, command):
+                    def publish(self, command, *, target_names, required_fields):
                         outputs.append(command)
                     def exit_external(self, timeout):
                         events.append('cancel')
@@ -429,22 +461,23 @@ class ActualSdkDtoIntegration(unittest.TestCase):
         import flatbuffers
         import lowlevel.BodyCmd as command_module
         body, state = fixture()
-        capability = tuple(api.BodyJointCapability(i,api.BodySlotRole.ACTIVE,False,j.populated,
-                              31 if j.populated else 0,0,0.,0.,0.,0.,0.,0.,0.,0.,0.,0.)
+        capability = tuple(api.BodyJointCapability(i,api.BodySlotRole.ACTIVE,j.is_mock,
+                              j.supported_fields,j.valid_limits,-3.,3.,0.,0.,0.,0.,0.,0.,0.,0.)
                            for i,j in enumerate(body.joints))
         typed_body = api.BodyInfo(0,31,body.joint_names,capability,
-                                 tuple(api.BodyMotorIdentity('synthetic',i+1,j.populated) for i,j in enumerate(capability)))
+                                 tuple(api.BodyMotorIdentity('synthetic',i+1,i != 14) for i in range(31)))
         motors = tuple(api.BodyJointState(q=m.q,dq=m.dq) for m in state.joints)
         imus = tuple(api.BodyImuSample(getattr(api.BodyImuLocation,m.location),
                          api.BodyImuState(m.state.quaternion,m.state.gyroscope,(0.,0.,9.81),(0.,0.,0.)),
                          m.status) for m in state.imu_states)
-        typed_state = api.BodyState(state.state_id,motors,ts_state_real_us=state.ts_state_real_us,
+        typed_state = api.BodyState(state.state_id,motors,runtime_id=11,ts_state_real_us=state.ts_state_real_us,
                                    attitude_valid=True,imu_states=imus)
         policy = Policy(METADATA,CONTRACT)
         observation = policy.observation(typed_state,typed_body,(0.,0.,0.,.85),api.BodyImuLocation.HIP)
         self.assertEqual(len(observation),492)
         targets = policy.targets((0.,)*12,typed_body)
-        command = bodycmd(api,targets,typed_state,)
+        command = dataclasses.replace(bodycmd(api,targets,typed_state),
+                                      runtime_id=11, control_id=13, session_id=3, sequence=1)
         b=flatbuffers.Builder(1);b.Finish(_fill_body_cmd(NS(body_cmd_module=command_module),command,b,0))
         view=command_module.BodyCmd.GetRootAs(b.Output())
         self.assertEqual(view.Action(),api.BodyCmdAction.EXTERNAL)

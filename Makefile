@@ -10,11 +10,14 @@ check: test
 	$(PYTHON) -m unittest tools.production_topic_mock.test_group_contract -v
 	$(PYTHON) -m pip check
 	$(PYTHON) examples/body_state_subscriber/body_state_subscriber.py --help
+	$(PYTHON) examples/end_effector_state_subscriber/end_effector_state_subscriber.py --help
+	$(PYTHON) examples/end_effector/end_effector_external.py --help
+	$(PYTHON) examples/end_effector/brainco_revo2.py --help
+	$(PYTHON) examples/end_effector/agx_gripper.py --help
+	$(PYTHON) examples/end_effector/linker_l6.py --help
 	$(PYTHON) examples/external_control/external_control.py --help
 	$(PYTHON) examples/teleop_policy/teleop_policy.py --help
-	$(PYTHON) examples/brainco_hand/brainco_hand_external.py --help
 	$(PYTHON) examples/brainco_hand/brainco_capture.py --help
-	$(PYTHON) examples/gripper/gripper_external.py --help
 	$(PYTHON) examples/velocity_mode/velocity_mode.py --help
 	$(PYTHON) examples/wbc_tracking_mode/wbc_tracking_mode.py --help
 	test -L CLAUDE.md

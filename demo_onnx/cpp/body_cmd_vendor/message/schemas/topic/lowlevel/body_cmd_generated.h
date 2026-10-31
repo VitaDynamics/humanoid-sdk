@@ -13,211 +13,14 @@ static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
               FLATBUFFERS_VERSION_REVISION == 19,
              "Non-compatible flatbuffers version included");
 
-namespace aorta {
-namespace sys {
-
-struct AortaHeader;
-struct AortaHeaderBuilder;
-
-}  // namespace sys
-}  // namespace aorta
+#include "aorta_base_generated.h"
+#include "body_common_generated.h"
+#include "end_effector_common_generated.h"
 
 namespace lowlevel {
 
 struct BodyCmd;
 struct BodyCmdBuilder;
-
-struct BodyJointCmd;
-
-struct RootQuatWxyz;
-
-enum BodyCmdAction : uint8_t {
-  BodyCmdAction_HUMANOID_TRACKING = 14,
-  BodyCmdAction_EXTERNAL = 18,
-  BodyCmdAction_UNKNOWN = 255,
-  BodyCmdAction_MIN = BodyCmdAction_HUMANOID_TRACKING,
-  BodyCmdAction_MAX = BodyCmdAction_UNKNOWN
-};
-
-inline const BodyCmdAction (&EnumValuesBodyCmdAction())[3] {
-  static const BodyCmdAction values[] = {
-    BodyCmdAction_HUMANOID_TRACKING,
-    BodyCmdAction_EXTERNAL,
-    BodyCmdAction_UNKNOWN
-  };
-  return values;
-}
-
-inline const char *EnumNameBodyCmdAction(BodyCmdAction e) {
-  switch (e) {
-    case BodyCmdAction_HUMANOID_TRACKING: return "HUMANOID_TRACKING";
-    case BodyCmdAction_EXTERNAL: return "EXTERNAL";
-    case BodyCmdAction_UNKNOWN: return "UNKNOWN";
-    default: return "";
-  }
-}
-
-FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(4) BodyJointCmd FLATBUFFERS_FINAL_CLASS {
- private:
-  float q_;
-  float dq_;
-  float tau_;
-  float kp_;
-  float kd_;
-
- public:
-  BodyJointCmd()
-      : q_(0),
-        dq_(0),
-        tau_(0),
-        kp_(0),
-        kd_(0) {
-  }
-  BodyJointCmd(float _q, float _dq, float _tau, float _kp, float _kd)
-      : q_(::flatbuffers::EndianScalar(_q)),
-        dq_(::flatbuffers::EndianScalar(_dq)),
-        tau_(::flatbuffers::EndianScalar(_tau)),
-        kp_(::flatbuffers::EndianScalar(_kp)),
-        kd_(::flatbuffers::EndianScalar(_kd)) {
-  }
-  float q() const {
-    return ::flatbuffers::EndianScalar(q_);
-  }
-  float dq() const {
-    return ::flatbuffers::EndianScalar(dq_);
-  }
-  float tau() const {
-    return ::flatbuffers::EndianScalar(tau_);
-  }
-  float kp() const {
-    return ::flatbuffers::EndianScalar(kp_);
-  }
-  float kd() const {
-    return ::flatbuffers::EndianScalar(kd_);
-  }
-};
-FLATBUFFERS_STRUCT_END(BodyJointCmd, 20);
-
-FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(4) RootQuatWxyz FLATBUFFERS_FINAL_CLASS {
- private:
-  float w_;
-  float x_;
-  float y_;
-  float z_;
-
- public:
-  RootQuatWxyz()
-      : w_(0),
-        x_(0),
-        y_(0),
-        z_(0) {
-  }
-  RootQuatWxyz(float _w, float _x, float _y, float _z)
-      : w_(::flatbuffers::EndianScalar(_w)),
-        x_(::flatbuffers::EndianScalar(_x)),
-        y_(::flatbuffers::EndianScalar(_y)),
-        z_(::flatbuffers::EndianScalar(_z)) {
-  }
-  float w() const {
-    return ::flatbuffers::EndianScalar(w_);
-  }
-  float x() const {
-    return ::flatbuffers::EndianScalar(x_);
-  }
-  float y() const {
-    return ::flatbuffers::EndianScalar(y_);
-  }
-  float z() const {
-    return ::flatbuffers::EndianScalar(z_);
-  }
-};
-FLATBUFFERS_STRUCT_END(RootQuatWxyz, 16);
-
-}  // namespace lowlevel
-
-namespace aorta {
-namespace sys {
-
-struct AortaHeader FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef AortaHeaderBuilder Builder;
-  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_PUBLISH_STAMP_NS = 4,
-    VT_PUBLISHER_NODE = 6,
-    VT_SEQUENCE = 8
-  };
-  uint64_t publish_stamp_ns() const {
-    return GetField<uint64_t>(VT_PUBLISH_STAMP_NS, 0);
-  }
-  const ::flatbuffers::String *publisher_node() const {
-    return GetPointer<const ::flatbuffers::String *>(VT_PUBLISHER_NODE);
-  }
-  uint64_t sequence() const {
-    return GetField<uint64_t>(VT_SEQUENCE, 0);
-  }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
-    return VerifyTableStart(verifier) &&
-           VerifyField<uint64_t>(verifier, VT_PUBLISH_STAMP_NS, 8) &&
-           VerifyOffset(verifier, VT_PUBLISHER_NODE) &&
-           verifier.VerifyString(publisher_node()) &&
-           VerifyField<uint64_t>(verifier, VT_SEQUENCE, 8) &&
-           verifier.EndTable();
-  }
-};
-
-struct AortaHeaderBuilder {
-  typedef AortaHeader Table;
-  ::flatbuffers::FlatBufferBuilder &fbb_;
-  ::flatbuffers::uoffset_t start_;
-  void add_publish_stamp_ns(uint64_t publish_stamp_ns) {
-    fbb_.AddElement<uint64_t>(AortaHeader::VT_PUBLISH_STAMP_NS, publish_stamp_ns, 0);
-  }
-  void add_publisher_node(::flatbuffers::Offset<::flatbuffers::String> publisher_node) {
-    fbb_.AddOffset(AortaHeader::VT_PUBLISHER_NODE, publisher_node);
-  }
-  void add_sequence(uint64_t sequence) {
-    fbb_.AddElement<uint64_t>(AortaHeader::VT_SEQUENCE, sequence, 0);
-  }
-  explicit AortaHeaderBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
-        : fbb_(_fbb) {
-    start_ = fbb_.StartTable();
-  }
-  ::flatbuffers::Offset<AortaHeader> Finish() {
-    const auto end = fbb_.EndTable(start_);
-    auto o = ::flatbuffers::Offset<AortaHeader>(end);
-    return o;
-  }
-};
-
-inline ::flatbuffers::Offset<AortaHeader> CreateAortaHeader(
-    ::flatbuffers::FlatBufferBuilder &_fbb,
-    uint64_t publish_stamp_ns = 0,
-    ::flatbuffers::Offset<::flatbuffers::String> publisher_node = 0,
-    uint64_t sequence = 0) {
-  AortaHeaderBuilder builder_(_fbb);
-  builder_.add_sequence(sequence);
-  builder_.add_publish_stamp_ns(publish_stamp_ns);
-  builder_.add_publisher_node(publisher_node);
-  return builder_.Finish();
-}
-
-inline ::flatbuffers::Offset<AortaHeader> CreateAortaHeaderDirect(
-    ::flatbuffers::FlatBufferBuilder &_fbb,
-    uint64_t publish_stamp_ns = 0,
-    const char *publisher_node = nullptr,
-    uint64_t sequence = 0) {
-  auto publisher_node__ = publisher_node ? _fbb.CreateString(publisher_node) : 0;
-  return aorta::sys::CreateAortaHeader(
-      _fbb,
-      publish_stamp_ns,
-      publisher_node__,
-      sequence);
-}
-
-}  // namespace sys
-}  // namespace aorta
-
-namespace lowlevel {
 
 struct BodyCmd FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef BodyCmdBuilder Builder;
@@ -232,40 +35,71 @@ struct BodyCmd FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_TS_CLIENT_SEND_US = 18,
     VT_JOINTS = 20,
     VT_ACTION = 22,
-    VT_ROOT_QUAT = 24
+    VT_ROOT_QUAT = 24,
+    VT_RUNTIME_ID = 26,
+    VT_CONTROL_ID = 28
   };
+  /// Transport publication metadata; not control authority or physical-send evidence.
   const aorta::sys::AortaHeader *aorta_header() const {
     return GetPointer<const aorta::sys::AortaHeader *>(VT_AORTA_HEADER);
   }
+  /// new BodyCmd wire revision: producer3 binds startup/control; producer2 is legacy, not new
+  /// control authority
   uint32_t protocol_version() const {
     return GetField<uint32_t>(VT_PROTOCOL_VERSION, 0);
   }
+  /// EXTERNAL requires a nonzero value; 0 is rejected at its ingress.
+  /// TRACKING uses its source session, renewed on bridge restart/source switch.
+  /// EXTERNAL uses the activation generation reported by ControlStatus.generation,
+  /// not control_id or a requested lease duration.
   uint64_t session_id() const {
     return GetField<uint64_t>(VT_SESSION_ID, 0);
   }
+  /// EXTERNAL requires a nonzero value; 0 is rejected at its ingress.
+  /// TRACKING=+1 per source frame; EXTERNAL=strictly increasing, gaps allowed
   uint64_t sequence() const {
     return GetField<uint64_t>(VT_SEQUENCE, 0);
   }
+  /// full 64-bit BodyState.state_id used to generate this command; no truncation; not a hand
+  /// state ID
   uint64_t input_state_id() const {
     return GetField<uint64_t>(VT_INPUT_STATE_ID, 0);
   }
+  /// copy that body's ts_state_real_us in robot-host Unix epoch us; unknown input: both
+  /// input_state_* = 0
   uint64_t input_state_ts_real_us() const {
     return GetField<uint64_t>(VT_INPUT_STATE_TS_REAL_US, 0);
   }
+  /// client-clock us at command construction; 0=not recorded; diagnostic only
   uint64_t ts_client_created_us() const {
     return GetField<uint64_t>(VT_TS_CLIENT_CREATED_US, 0);
   }
+  /// same client clock, us immediately before publish handoff; not actual wire departure;
+  /// 0=not recorded
   uint64_t ts_client_send_us() const {
     return GetField<uint64_t>(VT_TS_CLIENT_SEND_US, 0);
   }
+  /// exactly BodyInfo.slot_count per run (31 for this roster); both actions use this payload
   const ::flatbuffers::Vector<const lowlevel::BodyJointCmd *> *joints() const {
     return GetPointer<const ::flatbuffers::Vector<const lowlevel::BodyJointCmd *> *>(VT_JOINTS);
   }
+  /// omitted action means EXTERNAL (18); does not activate or grant control
   lowlevel::BodyCmdAction action() const {
     return static_cast<lowlevel::BodyCmdAction>(GetField<uint8_t>(VT_ACTION, 18));
   }
+  /// producer3 always stores wxyz; EXTERNAL ignores, TRACKING consumes
   const lowlevel::RootQuatWxyz *root_quat() const {
     return GetStruct<const lowlevel::RootQuatWxyz *>(VT_ROOT_QUAT);
+  }
+  /// Same frozen robot startup identity as GetRobotInfo; never replace it with a control ID
+  /// or PID.
+  uint64_t runtime_id() const {
+    return GetField<uint64_t>(VT_RUNTIME_ID, 0);
+  }
+  /// EXTERNAL confirmed control authority; separate from action source session_id/sequence
+  /// and not used to invent TRACKING ownership.
+  uint64_t control_id() const {
+    return GetField<uint64_t>(VT_CONTROL_ID, 0);
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -283,6 +117,8 @@ struct BodyCmd FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVector(joints()) &&
            VerifyField<uint8_t>(verifier, VT_ACTION, 1) &&
            VerifyField<lowlevel::RootQuatWxyz>(verifier, VT_ROOT_QUAT, 4) &&
+           VerifyField<uint64_t>(verifier, VT_RUNTIME_ID, 8) &&
+           VerifyField<uint64_t>(verifier, VT_CONTROL_ID, 8) &&
            verifier.EndTable();
   }
 };
@@ -324,6 +160,12 @@ struct BodyCmdBuilder {
   void add_root_quat(const lowlevel::RootQuatWxyz *root_quat) {
     fbb_.AddStruct(BodyCmd::VT_ROOT_QUAT, root_quat);
   }
+  void add_runtime_id(uint64_t runtime_id) {
+    fbb_.AddElement<uint64_t>(BodyCmd::VT_RUNTIME_ID, runtime_id, 0);
+  }
+  void add_control_id(uint64_t control_id) {
+    fbb_.AddElement<uint64_t>(BodyCmd::VT_CONTROL_ID, control_id, 0);
+  }
   explicit BodyCmdBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -347,8 +189,12 @@ inline ::flatbuffers::Offset<BodyCmd> CreateBodyCmd(
     uint64_t ts_client_send_us = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<const lowlevel::BodyJointCmd *>> joints = 0,
     lowlevel::BodyCmdAction action = lowlevel::BodyCmdAction_EXTERNAL,
-    const lowlevel::RootQuatWxyz *root_quat = nullptr) {
+    const lowlevel::RootQuatWxyz *root_quat = nullptr,
+    uint64_t runtime_id = 0,
+    uint64_t control_id = 0) {
   BodyCmdBuilder builder_(_fbb);
+  builder_.add_control_id(control_id);
+  builder_.add_runtime_id(runtime_id);
   builder_.add_ts_client_send_us(ts_client_send_us);
   builder_.add_ts_client_created_us(ts_client_created_us);
   builder_.add_input_state_ts_real_us(input_state_ts_real_us);
@@ -375,7 +221,9 @@ inline ::flatbuffers::Offset<BodyCmd> CreateBodyCmdDirect(
     uint64_t ts_client_send_us = 0,
     const std::vector<lowlevel::BodyJointCmd> *joints = nullptr,
     lowlevel::BodyCmdAction action = lowlevel::BodyCmdAction_EXTERNAL,
-    const lowlevel::RootQuatWxyz *root_quat = nullptr) {
+    const lowlevel::RootQuatWxyz *root_quat = nullptr,
+    uint64_t runtime_id = 0,
+    uint64_t control_id = 0) {
   auto joints__ = joints ? _fbb.CreateVectorOfStructs<lowlevel::BodyJointCmd>(*joints) : 0;
   return lowlevel::CreateBodyCmd(
       _fbb,
@@ -389,18 +237,10 @@ inline ::flatbuffers::Offset<BodyCmd> CreateBodyCmdDirect(
       ts_client_send_us,
       joints__,
       action,
-      root_quat);
+      root_quat,
+      runtime_id,
+      control_id);
 }
-
-}  // namespace lowlevel
-
-namespace aorta {
-namespace sys {
-
-}  // namespace sys
-}  // namespace aorta
-
-namespace lowlevel {
 
 inline const lowlevel::BodyCmd *GetBodyCmd(const void *buf) {
   return ::flatbuffers::GetRoot<lowlevel::BodyCmd>(buf);

@@ -94,17 +94,27 @@ class PullReviewTest(unittest.TestCase):
                 pull_tests.PullTest().test_constructor_no_publishers_two_native_depth1_rings()
                 self.assertEqual(dict(os.environ), env)
 
-    def test_native_abi_failure_happens_during_construction_and_closes_node(self):
+    def test_native_abi_failure_before_prepare_closes_only_new_publisher(self):
         from locomotion_aorta.transport import _AortaTransport
-        node = S(group=lambda:'fake', create_publisher_typed=Mock(return_value=object()), close=Mock())
+        control, body = Mock(), Mock()
+        node = S(group=lambda:'fake', create_publisher_typed=Mock(side_effect=[control, body]), close=Mock())
         bindings = S(aorta=S(Node=Mock(return_value=node),
                             QoS=S(realtime_control=lambda: None)),
                      control_request_schema_meta=object(), body_cmd_schema_meta=object())
         with patch('locomotion_aorta.transport._load_aorta_bindings', return_value=bindings), \
              patch('locomotion_aorta._native_body_codec.NativeBodyPublisher',
                    side_effect=RuntimeError('unsupported Aorta publisher header ABI')):
-            with self.assertRaisesRegex(RuntimeError, 'header ABI'):
-                _AortaTransport(node_name='fake', group='fake')
+            transport = _AortaTransport(node_name='fake', group='fake')
+            try:
+                self.assertIsNone(transport._body_publisher)
+                with self.assertRaisesRegex(RuntimeError, 'header ABI'):
+                    transport._prepare_body_output()
+                body.close.assert_called_once_with()
+                control.close.assert_not_called()
+                node.close.assert_not_called()
+                self.assertIsNone(transport._body_publisher)
+            finally:
+                transport.close()
         node.close.assert_called_once_with()
 
 
@@ -184,41 +194,49 @@ class FeedbackAgeTest(unittest.TestCase):
 class EEConcurrencyTest(unittest.TestCase):
     def test_cached_info_publish_does_not_wait_for_other_threads_state_recv(self):
         fixture = ee_tests.EEPullTest()
-        client, node = fixture.hand()
-        try:
-            client.wait_info(.1)
-            entered, release, published = (threading.Event() for _ in range(3))
-            ring = node.rings[client.topic+'/state']
-            def recv(timeout):
-                entered.set()
-                release.wait(1)
-                return None
-            ring.recv = recv
-            waiter = threading.Thread(target=lambda: client._pulls.poll('state', .5))
-            failures = []
-            def publish():
-                try:
-                    client.publish([.01]*6)
-                except BaseException as error:
-                    failures.append(error)
-                finally:
-                    published.set()
-            sender = threading.Thread(target=publish)
-            waiter.start()
+        client, node, _ = fixture.client()
+        entered, release, published = (threading.Event() for _ in range(3))
+        failures = []
+        original_wait = client._condition.wait
+        def wait(timeout):
+            entered.set()
+            return original_wait(timeout)
+        def receive():
             try:
+                client.wait_state(2)
+            except ControllerClosedError:
+                if not release.is_set():
+                    failures.append(AssertionError('closed before cleanup'))
+            except BaseException as error:
+                failures.append(error)
+        def publish():
+            try:
+                client.publish(ee_tests.target())
+            except BaseException as error:
+                failures.append(error)
+            finally:
+                published.set()
+        waiter = threading.Thread(target=receive)
+        sender = threading.Thread(target=publish)
+        try:
+            with patch.object(client._condition, 'wait', side_effect=wait):
+                waiter.start()
                 self.assertTrue(entered.wait(1))
                 sender.start()
                 self.assertTrue(published.wait(.5), 'publish waited for blocked state recv')
                 self.assertFalse(release.is_set())
                 self.assertEqual(failures, [])
                 self.assertEqual(len(node.commands), 1)
-            finally:
-                release.set()
-                waiter.join(1)
-                if sender.ident is not None:
-                    sender.join(1)
         finally:
+            release.set()
+            client.close()
+            waiter.join(2)
+            if sender.ident is not None:
+                sender.join(2)
             fixture.doCleanups()
+        self.assertFalse(waiter.is_alive())
+        self.assertFalse(sender.is_alive())
+        self.assertEqual(failures, [])
 
 
 @unittest.skipIf(any(importlib.util.find_spec(name) is None for name in ('numpy', 'yaml')),
@@ -246,7 +264,10 @@ class VelocityReviewTest(unittest.TestCase):
                 controller.status = replace(status, timeout_hold=True)
             return np.zeros(2, np.float32)
         policy.infer = infer
-        def publish(command):
+        def publish(command, *, target_names, required_fields):
+            self.assertEqual(target_names, tuple(name for i, name in enumerate(policy.order)
+                                                if i in policy.driven_slots))
+            self.assertEqual(required_fields, 0x1b | (0x04 if policy.config.get('ankle_clamp_feedforward', False) else 0))
             self.published.append(clock.now)
             return replace(command, session_id=1, sequence=len(self.published))
         controller.publish = publish
@@ -300,7 +321,8 @@ class VelocityReviewTest(unittest.TestCase):
         transport.observed_status = S(current_action='PASSIVE',
             phase=S(value='IDLE'), generation=0)
         transport.publishers = {}
-        controller.get_robot_info.return_value = S(info=S(body=S(roster_version=1, joints=[])))
+        from test_examples import example_robot_info_reply
+        controller.get_robot_info.return_value = example_robot_info_reply()
         controller.exit_external.return_value = S(current_action='PASSIVE', phase=S(value='IDLE'))
         directions.read.return_value = __import__("test_velocity_mode").joy_sample()
         before = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
@@ -336,7 +358,7 @@ class TeleopReviewTest(unittest.TestCase):
         for joint in state.joints:
             joint.q = joint.dq = 0.
         status = S(phase='RUNNING', current_action='EXTERNAL', generation=1,
-                   client_id='test', lease_id='lease', reject_count=0, timeout_hold=False)
+                   client_id=9, control_id=13, reject_count=0, timeout_hold=False)
         self.published, self.events = [], []
         controller = S(status=status)
         reads = 0
@@ -348,7 +370,12 @@ class TeleopReviewTest(unittest.TestCase):
                 clock.now += .07
                 controller.status = S(**dict(vars(status), timeout_hold=True))
             return state
-        def publish(command):
+        def publish(command, *, target_names, required_fields):
+            declared = tuple((fixtures.METADATA['joint_names'] + ',' +
+                              fixtures.METADATA['upper_joint_names']).split(','))
+            self.assertEqual(target_names, declared)
+            self.assertEqual(set(target_names), set(body.joint_names) - {'waist_roll_joint'})
+            self.assertEqual(required_fields, 0x19)
             self.published.append(clock.now)
             if len(self.published) == 3:
                 stop.set()
@@ -362,9 +389,10 @@ class TeleopReviewTest(unittest.TestCase):
         controller.enter_external = lambda timeout: status
         controller.publish = publish
         controller.exit_external = lambda timeout: self.events.append('cancel') or S(current_action='PASSIVE')
-        live(controller, fixtures.API, fixtures.Policy(fixtures.METADATA, fixtures.CONTRACT),
-             S(infer=infer), lambda: (), stop, 1., monotonic=lambda: clock.now,
-             sleep=lambda dt: setattr(clock, 'now', clock.now+dt))
+        with patch('locomotion_aorta._policy_state.format_robot_info', return_value='synthetic Info'):
+            live(controller, fixtures.API, fixtures.Policy(fixtures.METADATA, fixtures.CONTRACT),
+                 S(infer=infer), lambda: (), stop, 1., monotonic=lambda: clock.now,
+                 sleep=lambda dt: setattr(clock, 'now', clock.now+dt))
 
     def test_overrun_waits_full_period_instead_of_bursting(self):
         self.run_loop()

@@ -26,6 +26,17 @@ class ReleaseTest(unittest.TestCase):
         })
         self.assertEqual(manifest["python_requires"], "==3.10.*")
         self.assertEqual(manifest["platforms"], ["manylinux_2_35_x86_64", "manylinux_2_35_aarch64"])
+        self.assertEqual(manifest["body_protocol_version"], 3)
+        self.assertEqual(manifest["control_request_version"], 4)
+        self.assertEqual(set(manifest["schema_sha256"]), {
+            "body_cmd", "body_state", "control_ack", "control_request", "control_status",
+            "end_effector_cmd", "end_effector_info", "end_effector_set_touch",
+            "end_effector_state", "end_effector_touch", "get_robot_info",
+            "humanoid_low_state", "joy", "low_cmd", "robot_info",
+        })
+        version = manifest["humanoid_msgs_version"]
+        self.assertIn(f'"vbot-humanoid-msgs=={version}"', (ROOT / "pyproject.toml").read_text())
+        self.assertIn(f"vbot_humanoid_msgs-{version}-py3-none-any.whl", manifest["wheel_sha256"])
         self.assertEqual(sorted(n.split("-")[0] for n in manifest["wheel_sha256"]),
                          ["aorta_msgs", "aorta_sdk", "aorta_sdk", "flatbuffers", "vbot_humanoid_msgs"])
 
@@ -60,14 +71,17 @@ class ReleaseTest(unittest.TestCase):
                 'body_state_subscriber/body_state_subscriber.py',
                 'brainco_hand/README.md',
                 'brainco_hand/brainco_capture.py',
-                'brainco_hand/brainco_hand_external.py',
+                'end_effector/README.md',
+                'end_effector/end_effector_external.py',
+                'end_effector/brainco_revo2.py',
+                'end_effector/agx_gripper.py',
+                'end_effector/linker_l6.py',
+                'end_effector_state_subscriber/end_effector_state_subscriber.py',
                 'external_control/README.md',
                 'external_control/external_control.py',
                 'fixed_stand_pose/README.md',
                 'fixed_stand_pose/fixed_stand_pose.py',
                 'fixed_stand_pose/fixed_stand_profile.json',
-                'gripper/README.md',
-                'gripper/gripper_external.py',
                 'teleop_policy/README.md',
                 'teleop_policy/action17_contract.json',
                 'teleop_policy/teleop_policy.py',
@@ -111,7 +125,8 @@ class ReleaseTest(unittest.TestCase):
                 self.assertEqual((output / relative).read_bytes(), (ROOT / relative).read_bytes())
                 self.assertEqual(manifest["files"][relative],
                                  hashlib.sha256((ROOT / relative).read_bytes()).hexdigest())
-            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py"):
+            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py",
+                            "brainco_hand/brainco_hand_external.py", "gripper/gripper_external.py"):
                 self.assertFalse((output / "examples" / retired).exists())
                 self.assertNotIn("examples/" + retired, manifest["files"])
             self.assertEqual(sorted(p.name for p in (output / "wheelhouse").glob("locomotion_aorta-*.whl")),

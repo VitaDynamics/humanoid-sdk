@@ -191,7 +191,7 @@ class FakeController:
     def __init__(self, p, clock):
         self.clock, self.state = clock, example.synthetic_state(p)
         self.status = ControlStatus(1, 'EXTERNAL', ExternalPhase.RUNNING,
-                                    'tracking-test', 'lease', generation=9)
+                                    9, 13, generation=9)
         self.commands, self.exits, self.enters = [], 0, 0
         self.advance = True
 
@@ -207,7 +207,9 @@ class FakeController:
         self.enters += 1
         return self.status
 
-    def publish(self, command):
+    def publish(self, command, *, target_names, required_fields):
+        self.target_names = target_names
+        self.required_fields = required_fields
         command = replace(command, session_id=2**63+9, sequence=2**63+1001+len(self.commands))
         self.commands.append(command)
         return command
@@ -232,6 +234,9 @@ class TrackingLoopTest(unittest.TestCase):
     def test_bounded_50hz_loop_uses_new_state_and_exits(self):
         result = self.run_live()
         self.assertEqual((result['steps'], self.model.calls), (3, 4))
+        self.assertEqual(self.controller.target_names,
+                         tuple(self.p.contract.names) + tuple(self.p.profile['fixed_joints']))
+        self.assertEqual(self.controller.required_fields, 0x1f)
         self.assertEqual((self.controller.enters, self.controller.exits), (1, 1))
         commands = self.controller.commands
         rows = [r for r in self.rec.rows if r['kind'] == 'step' and r['published']]
@@ -259,9 +264,9 @@ class TrackingLoopTest(unittest.TestCase):
                            received_monotonic_ns=round(self.clock.now*1e9))
         self.controller.wait_state=latest
         original_publish=self.controller.publish
-        def publish(command):
+        def publish(command, *, target_names, required_fields):
             times.append(self.clock.now)
-            return original_publish(command)
+            return original_publish(command, target_names=target_names, required_fields=required_fields)
         self.controller.publish=publish
         result=self.run_live()
         self.assertEqual(result['steps'],10)
@@ -284,7 +289,7 @@ class TrackingLoopTest(unittest.TestCase):
             self.assertEqual(row['publish_timing']['encode_native_ns'],123)
 
     def test_publish_failure_survives_a_diagnostic_write_failure(self):
-        self.controller.publish = lambda _: (_ for _ in ()).throw(RuntimeError('send failed'))
+        self.controller.publish = lambda _, **kwargs: (_ for _ in ()).throw(RuntimeError('send failed'))
         original = self.rec.write
         def write(row):
             if row.get('published') is False:raise OSError('log full')

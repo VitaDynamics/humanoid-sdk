@@ -1,4 +1,5 @@
 from body_fixtures import body_array_frame, sample_motor, robot_info_reply
+from dataclasses import replace
 import math
 import unittest
 from types import SimpleNamespace
@@ -20,6 +21,87 @@ from locomotion_aorta import (
     BodyState,
 )
 from fake_transport import FakeTransport
+from locomotion_aorta._policy_state import ASAMPLE_BODY_JOINT_NAMES, body_joint_order
+
+
+def example_robot_info_reply():
+    reply = robot_info_reply()
+    body = replace(reply.info.body, joint_names=ASAMPLE_BODY_JOINT_NAMES)
+    return replace(reply, info=replace(reply.info, body=body))
+
+
+class InfoDisplayTest(unittest.TestCase):
+    def test_endpoint_axis_table_uses_same_runtime_and_valid_zero(self):
+        from locomotion_aorta import EndEffectorCapability, EndEffectorInfo
+        from locomotion_aorta.end_effector_types import Field, PositionDomain, TorqueDomain
+        from locomotion_aorta._policy_state import format_robot_info
+        reply = example_robot_info_reply()
+        info = EndEffectorInfo(runtime_id=reply.runtime_id, layout_id=7, side=1,
+            axis_names=('finger',), position_domain=(PositionDomain.TOTAL_OPENING,),
+            torque_domain=(TorqueDomain.VENDOR_UNCONFIRMED,), supported_modes=(2,),
+            supported_command_fields=(Field.POS | Field.VEL,), supported_state_fields=(Field.POS,),
+            valid_limits=(Field.POS,), pos_min=(0.,), pos_max=(0.,),
+            vel_min=(0.,), vel_max=(0.,), is_mock=(False,))
+        left = EndEffectorCapability(1, False, info, True, 0, '')
+        reply = replace(reply, info=replace(reply.info, end_effectors=(left, reply.info.end_effectors[1])))
+        text = format_robot_info(reply)
+        self.assertIn('LEFT 0 finger is_mock=False pos=[0.0, 0.0] m vel=unknown', text)
+        self.assertIn('tau=unsupported', text)
+        with self.assertRaisesRegex(ValueError, 'runtime_id/side'):
+            format_robot_info(replace(reply, runtime_id=reply.runtime_id + 1))
+        with self.assertRaisesRegex(ValueError, 'runtime_id must be nonzero'):
+            format_robot_info(replace(reply, info=replace(reply.info, end_effectors=(
+                replace(left, info=replace(info, runtime_id=0)), reply.info.end_effectors[1]))))
+
+    def test_selected_observation_keeps_its_own_runtime_and_identity(self):
+        from locomotion_aorta._end_effector_codec import validate_observations
+        from locomotion_aorta.end_effector_types import SampleRef, SampleStream
+        selected = SampleRef(100, SampleStream.EE_STATE, 1, 100, 20, 3)
+        validate_observations(100, (selected,), sources=((SampleStream.EE_STATE, 1),))
+        self.assertEqual((selected.runtime_id, selected.sample_id, selected.source_time_us), (100, 100, 20))
+        for sample in (replace(selected, runtime_id=101), replace(selected, runtime_id=0)):
+            with self.assertRaises(ValueError):
+                validate_observations(100, (sample,), sources=((SampleStream.EE_STATE, 1),))
+
+    def test_mock_endpoint_axis_cannot_be_a_motion_target(self):
+        from locomotion_aorta import EndEffectorInfo, EndEffectorTarget
+        from locomotion_aorta._end_effector_codec import prepare_target
+        from locomotion_aorta.end_effector_types import Field, PositionDomain, TorqueDomain, ControlMode
+        info = EndEffectorInfo(runtime_id=100, layout_id=7, side=1, axis_names=('finger',),
+            position_domain=(PositionDomain.TOTAL_OPENING,), torque_domain=(TorqueDomain.MOTOR_SHAFT,),
+            supported_modes=(2,), supported_command_fields=(Field.POS,), supported_state_fields=(Field.POS,),
+            valid_limits=(Field.POS,), pos_min=(0.,), pos_max=(1.,), is_mock=(True,))
+        target = EndEffectorTarget(mode=(ControlMode.POSITION,), command_fields=(Field.POS,), pos=(0.,))
+        with self.assertRaisesRegex(ValueError, 'no physical device'):
+            prepare_target(info, target)
+
+    def test_real_info_reports_valid_zero_unknown_and_failure_separately(self):
+        from locomotion_aorta._policy_state import format_robot_info
+        reply = example_robot_info_reply()
+        joints = list(reply.info.body.joints)
+        joints[0] = replace(joints[0], q_min=0.0, q_max=0.0)
+        joints[1] = replace(joints[1], valid_limits=joints[1].valid_limits & ~1)
+        body = replace(reply.info.body, joints=tuple(joints))
+        endpoints = list(reply.info.end_effectors)
+        endpoints[0] = replace(endpoints[0], is_mock=False, reason='initialization failed')
+        text = format_robot_info(replace(reply, info=replace(reply.info, body=body,
+                                      end_effectors=tuple(endpoints))))
+        self.assertIn('0 left_hip_pitch_joint is_mock=False q=[0.0, 0.0] rad', text)
+        self.assertIn('1 left_hip_roll_joint is_mock=False q=unknown', text)
+        self.assertIn('LEFT: is_mock=False ready=False', text)
+        self.assertIn('initialization failed', text)
+        self.assertIn('RIGHT: is_mock=True ready=False', text)
+
+    def test_invalid_roster_is_rejected_before_any_table_is_emitted(self):
+        reply = example_robot_info_reply()
+        bad = replace(reply.info.body, joints=reply.info.body.joints[:-1])
+        controller = mock.Mock()
+        controller.get_robot_info.return_value = replace(reply, info=replace(reply.info, body=bad))
+        emit = mock.Mock()
+        with self.assertRaises(RuntimeError):
+            external_control.require_body_info(controller, 1.0, emit_info=emit)
+        emit.assert_not_called()
+        controller.get_robot_info.assert_called_once_with(1.0)
 
 
 class RecordingController:
@@ -46,8 +128,10 @@ class RecordingController:
         self.drift_position_rad = drift_position_rad
         self.follow_commands = follow_commands
         self.transport = FakeTransport()
+        self.transport.get_robot_info = lambda timeout: replace(
+            example_robot_info_reply(), runtime_id=100)
         self.controller = ExternalController(
-            client_id="example-client", _transport=self.transport
+            client_id=7, _transport=self.transport
         )
         self.calls: list[str] = []
         self.status_sequence = 0
@@ -64,6 +148,11 @@ class RecordingController:
     def status(self):
         return self.controller.status
 
+    def emit_status_change(self, **changes):
+        status = self.status
+        self.transport.emit(CONTROL_STATUS_TOPIC, replace(
+            status, status_seq=status.status_seq + 1, **changes))
+
     def wait_body_state(self, timeout: float):
         self.calls.append("wait_body_state")
         self._emit_body_state()
@@ -78,9 +167,10 @@ class RecordingController:
         self.calls.append("enter_external")
         return self.controller.enter_external(timeout)
 
-    def publish(self, command):
+    def publish(self, command, *, target_names=None, required_fields=None):
         self.calls.append("publish")
-        published = self.controller.publish(command)
+        published = self.controller.publish(command, target_names=target_names,
+                                            required_fields=required_fields)
         if self.follow_commands:
             self.measured_q = [motor.q for motor in command.joints]
         return published
@@ -110,9 +200,10 @@ class RecordingController:
             BODY_STATE_TOPIC,
             BodyState(
                 state_id=self.state_id,
+                runtime_id=100,
                 ts_state_real_us=int(self.clock.monotonic() * 1_000_000),
                 joints=tuple(
-                    sample_motor(q=q, dq=dq, body_index=i, populated=i != 14)
+                    sample_motor(q=q, dq=dq, body_index=i)
                     for i, (q, dq) in enumerate(zip(emitted_q, self.measured_dq))
                 ),
                 attitude_valid=self.attitude_valid,
@@ -143,9 +234,9 @@ class RecordingController:
                         status_seq=self.status_sequence,
                         current_action="EXTERNAL",
                         phase=phase,
-                        client_id="example-client",
-                        lease_id="lease-example",
-                        lease_deadline_monotonic_ns=0,
+                        client_id=9,
+                        control_id=13,
+                        runtime_id=100,
                         generation=17,
                         reject_count=reject_count,
                         stamp_monotonic_ns=(
@@ -163,7 +254,9 @@ class RecordingController:
                     request_id=message.request_id,
                     operation=message.operation,
                     accepted=True,
-                    lease_id="lease-example",
+                    client_id=9,
+                    control_id=13,
+                    runtime_id=100,
                 ),
             )
         elif message.operation == ControlOperation.COMMIT:
@@ -173,7 +266,9 @@ class RecordingController:
                     request_id=message.request_id,
                     operation=message.operation,
                     accepted=True,
-                    lease_id="lease-example",
+                    client_id=9,
+                    control_id=13,
+                    runtime_id=100,
                 ),
             )
             self.status_sequence += 1
@@ -183,9 +278,9 @@ class RecordingController:
                     status_seq=self.status_sequence,
                     current_action="EXTERNAL",
                     phase=ExternalPhase.RUNNING,
-                    client_id="example-client",
-                    lease_id="lease-example",
-                    lease_deadline_monotonic_ns=0,
+                    client_id=9,
+                    control_id=13,
+                    runtime_id=100,
                     generation=17,
                     stamp_monotonic_ns=1_000_000_000,
                 ),
@@ -197,7 +292,9 @@ class RecordingController:
                     request_id=message.request_id,
                     operation=message.operation,
                     accepted=True,
-                    lease_id="lease-example",
+                    client_id=9,
+                    control_id=13,
+                    runtime_id=100,
                 ),
             )
             self.status_sequence += 1
@@ -207,6 +304,9 @@ class RecordingController:
                     status_seq=self.status_sequence,
                     current_action=self.cancel_action,
                     phase=ExternalPhase.IDLE,
+                    client_id=9,
+                    control_id=13,
+                    runtime_id=100,
                     stamp_monotonic_ns=2_000_000_000,
                 ),
             )
@@ -226,8 +326,8 @@ class FakeClock:
 class ExamplesSmokeTest(unittest.TestCase):
     def test_body_state_example_prints_snapshot_without_entering_external(self):
         state = BodyState(state_id=8, ts_state_real_us=0, attitude_valid=True,
-                          joints=tuple(sample_motor(q=0.1, dq=0.0, body_index=i,
-                                                    populated=i != 14) for i in range(31)))
+                          joints=tuple(sample_motor(q=0.1, dq=0.0, body_index=i)
+                                       for i in range(31)))
         source = SimpleNamespace(wait_state=mock.Mock(return_value=body_array_frame(state)))
         output: list[str] = []
         body_state_subscriber.run_once(source, timeout=0.1, emit=output.append)
@@ -241,18 +341,79 @@ class ExamplesSmokeTest(unittest.TestCase):
             ],
         )
 
+    def test_subscriber_uses_fixed_position_domain_units(self):
+        from examples.end_effector_state_subscriber import end_effector_state_subscriber as subscriber
+        from locomotion_aorta.end_effector_types import Field, PositionDomain, _POSITION_DOMAIN_UNITS
+
+        state = SimpleNamespace(runtime_id=100, layout_id=7, side=1, state_id=4,
+                                sample_status=0, pos=(.25, .5, .75),
+                                valid_fields=(Field.POS,) * 3, error_code=(0,) * 3)
+        info = SimpleNamespace(runtime_id=100, layout_id=7, side=1,
+                               axis_names=('angle', 'opening', 'unknown'),
+                               position_domain=(PositionDomain.JOINT_ANGLE,
+                                                PositionDomain.TOTAL_OPENING, 255),
+                               is_mock=(False,) * 3)
+        client = SimpleNamespace(side='left', wait_info=mock.Mock(return_value=info),
+                                 wait_state=mock.Mock(return_value=state))
+        with mock.patch('locomotion_aorta.end_effector_types._POSITION_DOMAIN_UNITS',
+                        wraps=_POSITION_DOMAIN_UNITS) as units:
+            lines = []
+            subscriber.run_once(client, timeout=.1, emit=lines.append)
+        self.assertEqual(units.get.call_args_list,
+                         [mock.call(domain, 'unknown') for domain in info.position_domain])
+        self.assertIn('pos=0.250000 rad', lines[-3])
+        self.assertIn('pos=0.500000 m', lines[-2])
+        self.assertIn('pos=0.750000 unknown', lines[-1])
+
     def test_body_info_masks_absent_slots_and_installed_errors_are_rejected(self):
         from dataclasses import replace
         motors = [sample_motor() for _ in range(31)]
         motors[14] = sample_motor(q=math.nan, dq=math.inf)
         state = BodyState(1, tuple(motors), attitude_valid=True)
-        info = robot_info_reply().info.body
+        info = example_robot_info_reply().info.body
         external_control._validate_body_state(body_array_frame(state), body_info=info, require_stationary=True)
         for error in (3, 20, 255):
             motors[0] = replace(motors[0], error_code=error)
             with self.subTest(error=error), self.assertRaisesRegex(RuntimeError, f'error_code={error}'):
                 external_control._validate_body_state(body_array_frame(replace(state, joints=tuple(motors))),
                                                       body_info=info, require_stationary=False)
+
+    def test_profile_rejects_mock_target_and_keeps_non_target_readonly(self):
+        info = example_robot_info_reply().info.body
+        slots = external_control._body_target_slots(info)
+        self.assertEqual(len(slots), 30)
+        self.assertNotIn(14, slots)
+        self.assertTrue(info.joints[14].is_mock)
+        joints = list(info.joints)
+        joints[0] = replace(joints[0], is_mock=True)
+        self.assertNotEqual(joints[0].supported_fields, 0)
+        with self.assertRaisesRegex(ValueError, 'policy joints are unavailable'):
+            external_control._body_target_slots(replace(info, joints=tuple(joints)))
+        with mock.patch('locomotion_aorta._policy_state.body_joint_order',
+                        wraps=body_joint_order) as shared_order:
+            self.assertEqual(slots, external_control._body_target_slots(info))
+        self.assertEqual(1, shared_order.call_count)
+        required = shared_order.call_args.kwargs['required_names']
+        self.assertEqual(30, len(required))
+        self.assertEqual({info.joint_names[i] for i in slots}, set(required))
+        missing = replace(info, joint_names=tuple('missing_joint' if i == 0 else name
+                                                 for i, name in enumerate(info.joint_names)))
+        with self.assertRaisesRegex(ValueError, 'full 30-joint'):
+            external_control._body_target_slots(missing)
+        unavailable = list(info.joints)
+        unavailable[0] = replace(unavailable[0], supported_fields=0)
+        with self.assertRaisesRegex(ValueError, 'position capability or limit unavailable'):
+            external_control._body_target_slots(replace(info, joints=tuple(unavailable)))
+        bad_zero = list(info.joints)
+        bad_zero[0] = replace(bad_zero[0], q_min=1.0, q_max=2.0)
+        with self.assertRaisesRegex(ValueError, 'zero outside position limit'):
+            external_control._body_target_slots(replace(info, joints=tuple(bad_zero)), require_zero=True)
+        self.assertEqual(slots, external_control._body_target_slots(
+            replace(info, joints=tuple(bad_zero))))
+        state = BodyState(1, tuple(sample_motor() for _ in range(31)), attitude_valid=True)
+        with self.assertRaisesRegex(ValueError, 'no target slots'):
+            external_control._validate_body_state(body_array_frame(state), body_info=info,
+                                                  require_stationary=True, target_slots=())
 
     def test_external_example_runs_full_body_round_trip_and_enters_passive(self):
         clock = FakeClock()
@@ -267,6 +428,7 @@ class ExamplesSmokeTest(unittest.TestCase):
             monotonic=clock.monotonic,
             emit=output.append,
         )
+        self.assertEqual(sum(text.startswith('Body Info:') for text in output), 1)
 
         self.assertEqual(harness.calls[0], "wait_body_state")
         self.assertIn("enter_external", harness.calls)
@@ -445,7 +607,7 @@ class ExamplesSmokeTest(unittest.TestCase):
             message for topic, message in harness.transport.published
             if topic == CONTROL_REQUEST_TOPIC
         ]
-        self.assertEqual(requests[0].requested_lease_ms, 0)
+        self.assertFalse(hasattr(requests[0], "requested_lease_ms"))
         commands = [
             message for topic, message in harness.transport.published
             if topic == BODY_CMD_TOPIC
@@ -486,7 +648,7 @@ class ExamplesSmokeTest(unittest.TestCase):
             [request.operation for request in requests],
             [ControlOperation.PREPARE, ControlOperation.COMMIT, ControlOperation.CANCEL],
         )
-        self.assertTrue(all(request.requested_lease_ms == 0 for request in requests))
+        self.assertTrue(all(not hasattr(request, "requested_lease_ms") for request in requests))
         self.assertEqual(harness.status.current_action, "PASSIVE")
 
     def test_external_example_rejects_stale_preflight_lowstate(self):
@@ -534,6 +696,24 @@ class ExamplesSmokeTest(unittest.TestCase):
             )
 
         self.assertEqual(harness.calls[-1], "exit_external")
+
+    def test_external_example_cancels_on_owner_identity_change(self):
+        for field, value in (('generation', 84), ('client_id', 17), ('control_id', 19)):
+            with self.subTest(field=field):
+                clock = FakeClock()
+                harness = RecordingController(clock)
+                self.addCleanup(harness.close)
+                original = harness.transport.on_publish
+                def publish(topic, message):
+                    original(topic, message)
+                    if topic == BODY_CMD_TOPIC and harness.command_count == 1:
+                        harness.emit_status_change(**{field: value})
+                harness.transport.on_publish = publish
+                with self.assertRaisesRegex(RuntimeError, 'ownership is no longer'):
+                    external_control.run(harness, timeout=1.0, sleep=clock.sleep,
+                                         monotonic=clock.monotonic, emit=lambda _: None)
+                self.assertEqual(harness.command_count, 1)
+                self.assertEqual(harness.calls.count('exit_external'), 1)
 
     def test_external_example_cancels_when_reject_count_increases(self):
         clock = FakeClock()
@@ -618,8 +798,9 @@ class ExamplesSmokeTest(unittest.TestCase):
                     )
 
                 sleep_with_feedback(0)
+                harness.get_robot_info(.1)
                 state = external_control._wait_for_stationary_body_state(
-                    harness, body_info=robot_info_reply().info.body, timeout=5.0, sleep=sleep_with_feedback,
+                    harness, body_info=example_robot_info_reply().info.body, timeout=5.0, sleep=sleep_with_feedback,
                     monotonic=clock.monotonic,
                 )
                 self.assertEqual(state.joints[26].dq, 0.0)
@@ -645,7 +826,7 @@ class ExamplesSmokeTest(unittest.TestCase):
         for invalid_setup, error in (
             (lambda h: setattr(h, "measured_dq", [0.051] * 31), "timed out"),
             (lambda h: setattr(h, "attitude_valid", False), "attitude"),
-            (lambda h: setattr(h, "measured_q", [0.0] * 30), "31 required"),
+            (lambda h: setattr(h, "measured_q", [0.0] * 30), "requires 31"),
             (lambda h: setattr(h, "measured_q", [float("nan")] * 31), "finite"),
             (lambda h: setattr(h, "measured_dq", [float("nan")] * 31), "finite"),
         ):
@@ -654,6 +835,12 @@ class ExamplesSmokeTest(unittest.TestCase):
                 harness = RecordingController(clock)
                 self.addCleanup(harness.close)
                 invalid_setup(harness)
+                if len(harness.measured_q) != 31:
+                    # Exercise the preflight's own malformed-array defense;
+                    # the actual controller correctly drops bad wire shapes.
+                    harness.wait_state = mock.Mock(return_value=SimpleNamespace(
+                        attitude_valid=True, q=tuple(harness.measured_q),
+                        dq=tuple(harness.measured_dq), error_code=(0,) * 31))
 
                 with self.assertRaisesRegex(RuntimeError, error):
                     external_control.run(

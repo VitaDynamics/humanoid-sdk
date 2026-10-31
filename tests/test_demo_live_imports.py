@@ -18,7 +18,7 @@ sys.path.insert(0, str(source))
 import aorta
 aorta.Node = Mock(side_effect=AssertionError('real Node forbidden'))
 import locomotion_aorta as api
-script = {'brainco_hand':'brainco_hand_external','gripper':'gripper_external'}.get(mode,mode)
+script = {'end_effector':'end_effector_external'}.get(mode,mode)
 path = root/'examples'/mode/(script+'.py')
 # run_path has no script-dir or repository sys.path: the isolated bundle case.
 namespace = runpy.run_path(str(path))
@@ -72,11 +72,11 @@ elif mode == 'wbc_tracking_mode':
          patch.object(sys,'argv',argv):
         try: main()
         except Reached: pass
-elif mode in ('external_control','brainco_hand','gripper'):
+elif mode in ('external_control','end_effector'):
     g['PullController'] = reached
     argv = [str(path),'--confirm-motion']
-    if mode == 'gripper':
-        argv += ['--side','left','--target-m','.03']
+    if mode == 'end_effector':
+        argv += ['--side','left','--left-pos','.03','--left-unit','m']
     with patch.object(api,'ExternalController',reached), \
          patch.object(api,'PullController',reached,create=True), \
          patch.object(sys,'argv',argv):
@@ -105,7 +105,7 @@ class DemoLiveImportTest(unittest.TestCase):
             else:
                 source = ROOT/'python'
             for mode in ('teleop_policy','velocity_mode','wbc_tracking_mode',
-                         'external_control','brainco_hand','gripper'):
+                         'external_control','end_effector'):
                 with self.subTest(bundle=bundle,mode=mode):
                     result = subprocess.run([sys.executable,'-I','-B','-c',CHECK,
                         str(root),str(source),mode],cwd=root,

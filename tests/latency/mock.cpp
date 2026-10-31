@@ -5,17 +5,21 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <mutex>
+#include <memory>
 #include <stdexcept>
 #include <thread>
 #include <vector>
 
 #include "aorta_abi.h"
 #include "body_cmd_generated.h"
+#include "protocol.h"
 
-std::vector<uint8_t> MakeState(uint64_t sequence);
+std::vector<uint8_t> MakeState(uint64_t sequence, uint64_t runtime);
 aorta_service_t StartInfoService(aorta_node_t node, const std::string &endpoint,
-                                const std::string &bfbs, const std::string &hash);
+                                const std::string &bfbs, const std::string &hash,
+                                uint64_t *runtime);
 uint64_t InfoRequests();
 uint64_t InfoErrors();
 using Clock = std::chrono::steady_clock;
@@ -34,16 +38,46 @@ void Check(int rc) {
   if (rc != 0) throw std::runtime_error("Aorta result=" + std::to_string(rc));
 }
 struct Reply {
-  uint64_t session, sequence, callback_ns, copied_ns;
+  uint64_t session, sequence, input_state_id, callback_ns, copied_ns;
   uint64_t callback_realtime_ns, copied_realtime_ns;
   bool valid;
 };
 struct Capture {
   std::mutex mutex;
   std::vector<Reply> replies;
-  uint64_t session;
+  uint64_t session = 0, runtime = 0;
+  std::unique_ptr<production_mock::Protocol> protocol;
+  aorta_pub_t ack = 0;
+  uint64_t ack_sequence = 0;
   size_t errors = 0;
 };
+
+void ReceiveControl(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
+                    const aorta_msg_context_t *, void *opaque) noexcept {
+  auto &capture = *static_cast<Capture *>(opaque);
+  try {
+    if (!view || view->total_len > 65536) throw std::runtime_error("invalid control payload");
+    std::vector<uint8_t> bytes;
+    for (size_t i = 0; i < view->slice_count; ++i) {
+      const auto &slice = view->slices[i];
+      if (slice.len > view->total_len - bytes.size() || (slice.len && !slice.data))
+        throw std::runtime_error("invalid control slice");
+      if (slice.len) bytes.insert(bytes.end(), slice.data, slice.data + slice.len);
+    }
+    if (bytes.size() != view->total_len) throw std::runtime_error("invalid control length");
+    const auto request = production_mock::DecodeRequest(bytes);
+    std::lock_guard<std::mutex> lock(capture.mutex);
+    auto proposed = *capture.protocol;
+    const auto reply = proposed.RequestControl(request, Now());
+    const auto payload = production_mock::EncodeAck(reply, RealtimeNow(), ++capture.ack_sequence);
+    if (aorta_publisher_publish(capture.ack, payload.data(), payload.size()) != 0)
+      throw std::runtime_error("control acknowledgement publish failed");
+    *capture.protocol = std::move(proposed);
+  } catch (...) {
+    std::lock_guard<std::mutex> lock(capture.mutex);
+    ++capture.errors;
+  }
+}
 void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
              const aorta_msg_context_t *, void *opaque) noexcept {
   auto &capture = *static_cast<Capture *>(opaque);
@@ -72,26 +106,40 @@ void Receive(const aorta_bytes_view_t *view, const aorta_schema_hash_view_t *,
     for (size_t j = 0; j < copied.size(); ++j) copied[j] = *motors->Get(j);
     Reply row{cmd->session_id(),
               cmd->sequence(),
+              cmd->input_state_id(),
               entered,
               Now(),
               entered_realtime,
               RealtimeNow(),
               true};
-    row.valid = row.session == capture.session && row.sequence > 0 &&
+    row.valid = row.session > 0 && row.sequence > 0 &&
                 row.sequence <= 65000 &&
-                cmd->protocol_version() == 2 && cmd->input_state_id() == row.sequence &&
+                cmd->protocol_version() == 3 &&
+                cmd->runtime_id() == capture.runtime &&
+                cmd->input_state_id() > 0 && cmd->input_state_id() <= 65000 &&
                 cmd->input_state_ts_real_us() > 0 &&
                 cmd->action() == lowlevel::BodyCmdAction_EXTERNAL;
     for (size_t j = 0; j < copied.size(); ++j) {
       if (j == 14) continue;  // declared uninstalled: no physical validation
       const float q =
-          static_cast<float>(row.sequence % 1024) * .0001f + j * .01f;
+          static_cast<float>(row.input_state_id % 1024) * .0001f + j * .01f;
       const auto &m = copied[j];
       row.valid = row.valid && std::isfinite(m.q()) &&
                   std::abs(m.q() - q) < 1e-6f && m.dq() == .1f &&
                   m.tau() == .2f && m.kp() == 1.f && m.kd() == .5f;
     }
     std::lock_guard<std::mutex> lock(capture.mutex);
+    production_mock::Command command;
+    command.runtime = cmd->runtime_id();
+    command.control_id = cmd->control_id();
+    command.session = row.session; command.sequence = row.sequence;
+    command.input_state_id = row.input_state_id;
+    command.input_state_real_us = cmd->input_state_ts_real_us();
+    for (size_t j = 0; j < copied.size(); ++j) {
+      command.q[j] = copied[j].q(); command.dq[j] = copied[j].dq();
+      command.tau[j] = copied[j].tau(); command.kp[j] = copied[j].kp(); command.kd[j] = copied[j].kd();
+    }
+    row.valid = row.valid && capture.protocol->Accept(command, Now());
     if (capture.replies.size() >= 65000)
       ++capture.errors;
     else
@@ -121,8 +169,32 @@ int main(int argc, char **argv) {
     const std::string prefix =
         "/bench/sdk_latency/" + std::to_string(capture.session);
     capture.replies.reserve(65000);
+    capture.protocol = std::make_unique<production_mock::Protocol>(capture.session, 1000000000ULL, 10000000000ULL);
+    capture.runtime = capture.protocol->runtime_id();
     Check(aorta_node_new("sdk_ci_mock", "default", &node));
-    info_service = StartInfoService(node, prefix + "/get_robot_info", argv[6], argv[7]);
+    info_service = StartInfoService(node, prefix + "/get_robot_info", argv[6], argv[7], &capture.runtime);
+    const auto schema_dir = std::filesystem::path(argv[5]).parent_path();
+    const auto control_publisher = [&](const char *key, const char *root,
+                                       const std::string &topic, aorta_qos_preset_t preset) {
+      std::ifstream file(schema_dir / (std::string(key) + ".bfbs"), std::ios::binary);
+      std::vector<uint8_t> schema((std::istreambuf_iterator<char>(file)), {});
+      if (schema.empty()) throw std::runtime_error("missing control schema BFBS");
+      aorta_pub_options_t options{};
+      options.schema_root_type = root;
+      options.schema_bfbs = schema.data(); options.schema_bfbs_len = schema.size();
+      const auto qos = aorta_qos_preset(preset);
+      aorta_pub_t publisher = 0;
+      Check(aorta_publisher_new(node, topic.c_str(), &qos, &options, &publisher));
+      return publisher;
+    };
+    capture.ack = control_publisher("control_ack", "locomotion_sdk.ControlAck",
+                                   prefix + "/control/ack", AORTA_QOS_PRESET_REALTIME_CONTROL);
+    const auto status_pub = control_publisher("control_status", "locomotion_sdk.ControlStatus",
+                                               prefix + "/control/status", AORTA_QOS_PRESET_STATE_UPDATE);
+    const auto request_qos = aorta_qos_preset(AORTA_QOS_PRESET_REALTIME_CONTROL);
+    aorta_sub_t request_subscriber = 0;
+    Check(aorta_subscriber_new(node, (prefix + "/control/request").c_str(), &request_qos,
+                               nullptr, ReceiveControl, &capture, &request_subscriber));
     auto command_qos = aorta_qos_preset(AORTA_QOS_PRESET_REALTIME_CONTROL);
     aorta_sub_t subscriber = 0;
     Check(aorta_subscriber_new(node, (prefix + "/command").c_str(),
@@ -143,10 +215,23 @@ int main(int argc, char **argv) {
     uint8_t matched = 0;
     Check(aorta_publisher_wait_for_matching(publisher, 15000, &matched));
     if (!matched) throw std::runtime_error("state subscriber did not match");
+    uint64_t status_sequence = 0;
+    const auto publish_status = [&] {
+      production_mock::Status status;
+      const auto now = Now();
+      {
+        std::lock_guard<std::mutex> lock(capture.mutex);
+        capture.protocol->Watchdog(now);
+        status = capture.protocol->status();
+      }
+      const auto bytes = production_mock::EncodeStatus(status, now, RealtimeNow(), ++status_sequence);
+      Check(aorta_publisher_publish(status_pub, bytes.data(), bytes.size()));
+    };
     const auto ready_deadline = Clock::now() + std::chrono::seconds(15);
     while (!std::filesystem::exists(directory / "client.ready")) {
       if (Clock::now() > ready_deadline)
         throw std::runtime_error("client not ready");
+      publish_status();
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -157,9 +242,14 @@ int main(int argc, char **argv) {
     std::vector<Sent> sent;
     sent.reserve(65000);
     auto next = Clock::now();
+    auto next_status = next;
     for (uint64_t seq = 1; seq <= 65000; ++seq) {
       std::this_thread::sleep_until(next);
-      auto bytes = MakeState(seq);
+      if (Clock::now() >= next_status) {
+        publish_status();
+        next_status = Clock::now() + std::chrono::milliseconds(20);
+      }
+      auto bytes = MakeState(seq, capture.runtime);
       const auto begin = Now();
       const auto begin_realtime = RealtimeNow();
       Check(aorta_publisher_publish(publisher, bytes.data(), bytes.size()));
@@ -173,6 +263,15 @@ int main(int argc, char **argv) {
     }
     std::this_thread::sleep_for(
         std::chrono::seconds(3));  // bounded reply drain
+    // Keep the original control provider alive until the client has sent
+    // CANCEL, observed IDLE and closed. Reuse the existing stop/client files.
+    { std::ofstream stop(directory / "stop"); if (!stop) throw std::runtime_error("cannot signal stop"); }
+    const auto close_deadline = Clock::now() + std::chrono::seconds(15);
+    while (!std::filesystem::exists(directory / "client.json")) {
+      if (Clock::now() > close_deadline) throw std::runtime_error("client did not close");
+      publish_status();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     Check(aorta_service_free(info_service));
     info_service = 0;
     Check(aorta_node_free(node));
@@ -185,9 +284,9 @@ int main(int argc, char **argv) {
                 << ',' << r.size << ',' << r.publish_realtime_ns << ','
                 << r.return_realtime_ns << '\n';
     std::lock_guard<std::mutex> lock(capture.mutex);
-    received << "session,sequence,callback_ns,copied_ns,valid,callback_realtime_ns,copied_realtime_ns\n";
+    received << "session,sequence,input_state_id,callback_ns,copied_ns,valid,callback_realtime_ns,copied_realtime_ns\n";
     for (const auto &r : capture.replies)
-      received << r.session << ',' << r.sequence << ','
+      received << r.session << ',' << r.sequence << ',' << r.input_state_id << ','
                << r.callback_ns << ',' << r.copied_ns << ',' << r.valid << ','
                << r.callback_realtime_ns << ',' << r.copied_realtime_ns << '\n';
     sent_file.close();

@@ -70,7 +70,8 @@ def build(directory):
     generated = directory / "generated"
     generated.mkdir(exist_ok=True)
     schemas = {}
-    for name in ("body_state", "body_cmd", "get_robot_info"):
+    for name in ("body_state", "body_cmd", "get_robot_info",
+                 "control_request", "control_ack", "control_status"):
         meta = importlib.import_module(name + "_schema_meta")
         bfbs = generated / (name + ".bfbs")
         bfbs.write_bytes(meta.SCHEMA_BFBS)
@@ -85,12 +86,25 @@ def build(directory):
     core_link = directory / f"libaorta_core.so.{manifest['aorta_abi_version']}"
     core_link.unlink(missing_ok=True)
     core_link.symlink_to(core)
-    run("g++", "-std=c++17", "-O2", "-pthread", "-Wall", "-Wextra", "-Werror",
-        "-DAORTA_EXPECTED_ABI=" + str(manifest["aorta_abi_version"]),
-        "-I" + str(source / "include"), "-I" + str(generated),
-        ROOT / "tests/latency/mock.cpp", ROOT / "tests/latency/state.cpp",
-        ROOT / "tests/latency/robot_info.cpp", core,
-        "-Wl,-rpath," + str(directory), "-o", directory / "mock")
+    flags = ["g++", "-std=c++17", "-O2", "-pthread", "-Wall", "-Wextra", "-Werror",
+             "-DAORTA_EXPECTED_ABI=" + str(manifest["aorta_abi_version"]),
+             "-I" + str(source / "include"), "-I" + str(generated),
+             "-I" + str(ROOT / "tests/latency"),
+             "-I" + str(ROOT / "tools/production_topic_mock")]
+    protocol = ROOT / "tools/production_topic_mock/protocol.cpp"
+    units = [("mock", ROOT / "tests/latency/mock.cpp", None),
+             ("state", ROOT / "tests/latency/state.cpp", None),
+             ("robot_info", ROOT / "tests/latency/robot_info.cpp", None),
+             ("protocol", protocol, None)]
+    units += [(kind, protocol, "PRODUCTION_MOCK_" + kind.upper() + "_CODEC")
+              for kind in ("request", "ack", "status")]
+    objects = []
+    for name, path, macro in units:
+        obj = directory / (name + ".o")
+        run(*flags, *(["-D" + macro] if macro else []), "-c", path, "-o", obj)
+        objects.append(obj)
+    run("g++", "-pthread", *objects, core, "-Wl,-rpath," + str(directory),
+        "-o", directory / "mock")
     result = {"versions": versions,
               "aorta_abi_version": manifest["aorta_abi_version"],
               "core_sha256": digest(core), "flatbuffers_source_sha256": FB_SHA,

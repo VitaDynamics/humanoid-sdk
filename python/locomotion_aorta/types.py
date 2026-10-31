@@ -1,9 +1,21 @@
+import math as _math
 from dataclasses import dataclass
 from enum import Enum
 
 
-PROTOCOL_VERSION = 1
-CONTROL_REQUEST_VERSION = 2
+def _positive_timeout(value, message="timeout must be a finite positive number"):
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not _math.isfinite(value) or value <= 0):
+        raise ValueError(message)
+    return value
+
+
+def _ceil_ms(value):
+    return _math.ceil(value * 1000)
+
+
+PROTOCOL_VERSION = 4
+CONTROL_REQUEST_VERSION = 4
 
 
 class ControlOperation(str, Enum):
@@ -61,15 +73,15 @@ class HumanoidLowState:
 
 @dataclass(frozen=True, slots=True)
 class ControlRequest:
-    """Wire request; lease_id names control ownership, not a timer."""
+    """Numeric control ownership and expected robot process identity."""
 
     request_id: str
-    client_id: str
+    client_id: int
     operation: ControlOperation
     action_name: str = "EXTERNAL"
-    lease_id: str = ""
-    requested_lease_ms: int = 0  # Legacy wire field; the controller always sends 0.
+    control_id: int = 0
     protocol_version: int = CONTROL_REQUEST_VERSION
+    runtime_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,9 +91,10 @@ class ControlAck:
     accepted: bool
     error_code: int = 0
     reason: str = ""
-    lease_id: str = ""
-    lease_deadline_monotonic_ns: int = 0  # Legacy wire field; 0 means no expiry.
+    control_id: int = 0
     protocol_version: int = PROTOCOL_VERSION
+    runtime_id: int = 0
+    client_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,9 +102,8 @@ class ControlStatus:
     status_seq: int
     current_action: str
     phase: ExternalPhase
-    client_id: str = ""
-    lease_id: str = ""
-    lease_deadline_monotonic_ns: int = 0  # Legacy wire field; 0 means no expiry.
+    client_id: int = 0
+    control_id: int = 0
     generation: int = 0
     last_accepted_cmd_id: int = 0
     last_valid_age_ms: int = 0
@@ -102,3 +114,4 @@ class ControlStatus:
     ingress_drop_count: int = 0
     stamp_monotonic_ns: int = 0
     protocol_version: int = PROTOCOL_VERSION
+    runtime_id: int = 0

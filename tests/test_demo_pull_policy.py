@@ -2,14 +2,13 @@
 import threading
 import unittest
 from types import SimpleNamespace as NS
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from examples.brainco_hand import brainco_hand_external
+from examples.end_effector import end_effector_external
 from examples.external_control import external_control
-from examples.gripper import gripper_external
 from examples.teleop_policy import teleop_policy
 from locomotion_aorta import BODY_CMD_TOPIC
-from test_brainco_hand_external import FakeHand
+from test_end_effector_external import Endpoint
 from test_examples import FakeClock, RecordingController
 from test_teleop_policy import API, CONTRACT, METADATA, fixture
 
@@ -21,10 +20,17 @@ class Latest400HzController(RecordingController):
 
 
 class TimedDemoTests(unittest.TestCase):
+    def setUp(self):
+        formatter = patch('locomotion_aorta._policy_state.format_robot_info', return_value='synthetic Info')
+        formatter.start()
+        self.addCleanup(formatter.stop)
+
     def test_teleop_publish_failure_is_preserved_when_diagnostics_also_fail(self):
         body, state = fixture()
+        for joint in state.joints:
+            joint.q = joint.dq = 0.
         status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
-                    client_id='client', lease_id=4, reject_count=0)
+                    client_id=9, control_id=13, reject_count=0)
         def latest(timeout):
             state.state_id += 1
             return state
@@ -67,22 +73,20 @@ class TimedDemoTests(unittest.TestCase):
         def loop(frame):
             for _ in range(10):
                 frame()
-        self.assert_body_timer(lambda c, clock: gripper_external.run_external(
-            c, loop, body=external_control, timeout=1, sleep=clock.sleep,
-            monotonic=clock.monotonic, emit=lambda _: None))
-
-    def test_hand_body_hold_keeps_timer_with_400hz_state(self):
-        self.assert_body_timer(lambda c, clock: brainco_hand_external.run(
-            c, [FakeHand()], timeout=1, sleep=clock.sleep,
+        self.assert_body_timer(lambda c, clock: end_effector_external.run_external(
+            c, loop, end_effector_external._MotionOptions(timeout=1),
+            body=external_control, sleep=clock.sleep,
             monotonic=clock.monotonic, emit=lambda _: None))
 
     def test_teleop_50hz_logs_actual_keys_and_keeps_timer_with_400hz_state(self):
         body, state = fixture()
+        for joint in state.joints:
+            joint.q = joint.dq = 0.
         clock, stop = FakeClock(), threading.Event()
         policy = teleop_policy.Policy(METADATA, CONTRACT)
         times, commands, rows, events = [], [], [], []
         status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
-                    client_id='client', lease_id=4, reject_count=0)
+                    client_id=9, control_id=13, reject_count=0)
 
         class Controller:
             def get_robot_info(self, timeout):
@@ -102,7 +106,7 @@ class TimedDemoTests(unittest.TestCase):
                 events.append('enter')
                 return status
 
-            def publish(self, command):
+            def publish(self, command, *, target_names=None, required_fields=None):
                 commands.append(command)
                 times.append(clock.monotonic())
                 return NS(session_id=37, sequence=len(commands))

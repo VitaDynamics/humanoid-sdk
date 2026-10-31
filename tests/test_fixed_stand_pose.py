@@ -2,15 +2,16 @@
 from dataclasses import replace
 import signal
 import unittest
+from unittest import mock
 
 from body_fixtures import robot_info_reply
 from examples.external_control import external_control as body
 from examples.fixed_stand_pose.fixed_stand_pose import FixedStandPose
-from examples.gripper.gripper_external import run_external
-from examples.gripper import gripper_external as gripper_demo
+from examples.end_effector.end_effector_external import run_external
+from examples.end_effector import end_effector_external as gripper_demo
 from locomotion_aorta import BODY_CMD_TOPIC
 from test_examples import FakeClock, RecordingController
-from test_gripper_external import FakeGripper
+from test_end_effector_external import Endpoint
 from test_teleop_policy import NAMES
 
 
@@ -20,7 +21,9 @@ def body_info():
     for i in (4, 5, 10, 11):
         caps[i] = replace(caps[i], valid_limits=1,
                           q_min=-.751 if i in (4, 10) else -.43625,
-                          q_max=.414 if i in (4, 10) else .43625)
+                          q_max=.414 if i in (4, 10) else .43625,
+                          dq_min=0., dq_max=0., tau_min=0., tau_max=0.,
+                          kp_min=0., kp_max=0., kd_min=0., kd_max=0.)
     return replace(info, joints=tuple(caps))
 
 
@@ -30,11 +33,13 @@ class ZeroPoseTest(unittest.TestCase):
         c = RecordingController(clock, **options)
         self.addCleanup(c.close)
         reply = robot_info_reply()
-        c.get_robot_info = lambda timeout: replace(reply, info=replace(reply.info, body=info or body_info()))
+        selected = info or body_info()
+        c.transport.get_robot_info = lambda timeout: replace(
+            reply, runtime_id=100, info=replace(reply.info, body=selected))
         return c, clock
 
     def run_zero(self, c, clock, loop, events=None):
-        return run_external(c, loop, body=body, body_pose='zero', timeout=1,
+        return run_external(c, loop, gripper_demo._MotionOptions(body_pose='zero', timeout=1), body=body,
                             sleep=clock.sleep, monotonic=clock.monotonic,
                             emit=(events if events is not None else []).append)
 
@@ -42,13 +47,55 @@ class ZeroPoseTest(unittest.TestCase):
         return [value for topic, value in c.transport.published if topic == BODY_CMD_TOPIC]
 
     def test_frozen_gain_mapping_and_adapter_q_only_limits(self):
-        plan = FixedStandPose(body_info())
+        info = body_info()
+        self.assertEqual((info.joints[4].supported_fields, info.joints[4].valid_limits,
+                          info.joints[4].kp_min, info.joints[4].kp_max), (31, 1, 0., 0.))
+        plan = FixedStandPose(info)
         self.assertEqual(plan.profile['robot_source_head'], 'fda136e91b47e6771026043ae69a8b48b756122e')
         gains = plan.profile['joint_gains']
         self.assertEqual(gains['left_shoulder_pitch_joint']['kp'], 60)
         self.assertEqual(gains['left_elbow_joint']['kp'], 40)
         self.assertEqual(gains['right_wrist_pitch_joint']['kd'], 4)
         self.assertEqual(gains['neck_pitch_joint']['kp'], 20)
+
+    def test_target_mock_is_rejected_but_non_target_slot_is_retained(self):
+        info = body_info()
+        plan = FixedStandPose(info)
+        self.assertEqual(len(plan.targets), 30)
+        self.assertTrue(info.joints[14].is_mock)
+        self.assertNotIn(info.joint_names[14], plan.targets)
+        caps = list(info.joints)
+        caps[0] = replace(caps[0], is_mock=True)
+        self.assertNotEqual(caps[0].supported_fields, 0)
+        with self.assertRaisesRegex(ValueError, 'targets unavailable'):
+            FixedStandPose(replace(info, joints=tuple(caps)))
+
+    def test_zero_dwell_cannot_succeed_without_a_sample(self):
+        events = []
+        with mock.patch.object(body, 'DWELL_S', 0), self.assertRaisesRegex(ValueError, 'at least one'):
+            gripper_demo._observe_zero_dwell(lambda _: self.fail('must not request feedback'),
+                (0.,) * 31, body=body, body_info=body_info(), monotonic=lambda: 0., emit=events.append)
+        self.assertEqual(events, [])
+
+    def test_measured_hold_accepts_positive_range_but_zero_mode_rejects(self):
+        info = body_info()
+        caps = list(info.joints)
+        caps[0] = replace(caps[0], q_min=.2, q_max=1.2)
+        info = replace(info, joints=tuple(caps))
+        c, clock = self.controller(info=info)
+        c.measured_q[0] = .7
+        run_external(c, lambda frame: frame(), gripper_demo._MotionOptions(body_pose='measured', timeout=1),
+                     body=body, sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
+        self.assertTrue(self.commands(c))
+        self.assertEqual(c.calls.count('exit_external'), 1)
+        c2, clock2 = self.controller(info=info)
+        c2.measured_q[0] = .7
+        with self.assertRaisesRegex(ValueError, 'zero outside'):
+            run_external(c2, lambda frame: self.fail('zero mode must not enter'),
+                         gripper_demo._MotionOptions(body_pose='zero', timeout=1), body=body, sleep=clock2.sleep,
+                         monotonic=clock2.monotonic, emit=lambda _: None)
+        self.assertNotIn('enter_external', c2.calls)
+        self.assertFalse(self.commands(c2))
 
     def test_native_transition_duration_and_actual_time_curve(self):
         plan = FixedStandPose(body_info())
@@ -83,7 +130,7 @@ class ZeroPoseTest(unittest.TestCase):
             caps = list(info.joints)
             caps[0] = replace(caps[0], valid_limits=0) if missing else replace(caps[0], q_max=.01)
             c, clock = self.controller(info=replace(info, joints=tuple(caps)))
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError if missing else RuntimeError):
                 self.run_zero(c, clock, lambda f: self.fail('must not enter'))
             self.assertNotIn('enter_external', c.calls)
 
@@ -118,16 +165,19 @@ class ZeroPoseTest(unittest.TestCase):
                         {'drift_command_range': (8, 60), 'drift_position_rad': .2}):
             with self.subTest(options=options):
                 c, clock = self.controller(**options)
-                gripper = FakeGripper()
+                gripper = Endpoint(c)
                 events = []
-                publish = gripper.publish_target
+                publish = gripper.publish
                 def gripper_publish(*args, **kwargs):
                     self.assertNotIn('exit_external', c.calls)
                     self.assertTrue(any('ZERO_DWELL complete observation_only=true' in e for e in events))
                     return publish(*args, **kwargs)
-                gripper.publish_target = gripper_publish
-                gripper_demo.run(c, gripper, q=.075, duration=.08, body_pose='zero',
-                                 timeout=1, sleep=clock.sleep, monotonic=clock.monotonic, emit=events.append)
+                gripper.publish = gripper_publish
+                target = gripper_demo.position_target(gripper.info, (.075,), unit='m')
+                gripper_demo.run(c, [gripper], {gripper.side: target},
+                                 gripper_demo._MotionOptions(duration=.08, body_pose='zero', timeout=1,
+                                     native_hz={gripper.side: 250}, native_config='synthetic-test-effective-config'),
+                                 sleep=clock.sleep, monotonic=clock.monotonic, emit=events.append)
                 self.assertTrue(gripper.commands)
                 complete = [e for e in events if 'ZERO_DWELL complete observation_only=true' in e]
                 self.assertEqual(len(complete), 1)
@@ -164,16 +214,30 @@ class ZeroPoseTest(unittest.TestCase):
 
     def test_zero_pose_round_trip_keeps_one_external_session(self):
         c, clock = self.controller()
-        g = FakeGripper()
-        initial = g.state.sample.q
-        publish = g.publish_target
+        g = Endpoint(c)
+        initial = g.state.pos[0]
+        publish = g.publish
         def checked_publish(*args, **kwargs):
             self.assertTrue(all(j.q == 0 for j in self.commands(c)[-1].joints))
             return publish(*args, **kwargs)
-        g.publish_target = checked_publish
-        gripper_demo.run(c, g, q=.075, duration=.08, body_pose='zero', return_to_start=True,
-                         timeout=1, sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
-        self.assertEqual(list(dict.fromkeys(cmd.q for cmd in g.commands)), [.075, initial])
+        g.publish = checked_publish
+        target = gripper_demo.position_target(g.info, (.075,), unit='m')
+        gripper_demo.run(c, [g], {g.side: target},
+                         gripper_demo._MotionOptions(duration=.08, body_pose='zero', return_to_start=True, timeout=1,
+                             native_hz={g.side: 250}, native_config='synthetic-test-effective-config'),
+                         sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
+        positions = [cmd.target.pos[0] for cmd in g.commands]
+        target_indices = [i for i, value in enumerate(positions) if abs(value - .075) < 1e-7]
+        self.assertTrue(target_indices)
+        target_index = target_indices[0]
+        self.assertGreater(target_index, 0)
+        self.assertLess(target_index, len(positions) - 1)
+        self.assertAlmostEqual(positions[target_index], .075, places=7)
+        self.assertAlmostEqual(positions[-1], initial, places=7)
+        self.assertTrue(all(a <= b + 1e-7 for a, b in zip(positions[:target_index], positions[1:target_index+1])))
+        self.assertTrue(all(a >= b - 1e-7 for a, b in zip(positions[target_index:], positions[target_index+1:])))
+        for first, second, start, end in zip(g.commands, g.commands[1:], g.times, g.times[1:]):
+            self.assertLessEqual(abs(second.target.pos[0] - first.target.pos[0]), min(end - start, 1/250) + 1e-8)
         self.assertEqual(c.calls.count('enter_external'), 1)
         self.assertEqual(c.calls.count('exit_external'), 1)
 

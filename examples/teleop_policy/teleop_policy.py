@@ -100,12 +100,19 @@ class Policy:
             raise ValueError('get_robot_info must provide 31 unique public joint names')
         if set(names) != set(self.names) | {'waist_roll_joint'}:
             raise ValueError('get_robot_info roster differs from model plus unpopulated roll')
-        if len(body.joints) != 31:
+        if (len(body.joints) != 31 or
+                any(cap.body_index != i for i, cap in enumerate(body.joints))):
             raise ValueError('get_robot_info capability count differs from roster')
         indices = {name: i for i, name in enumerate(names)}
+        unavailable = [name for name in self.names if body.joints[indices[name]].is_mock]
+        if unavailable:
+            raise ValueError('policy joints are unavailable: ' + ', '.join(unavailable))
         for name in self.names:
-            if not body.joints[indices[name]].populated:
-                raise ValueError(f'policy joint is unpopulated: {name}')
+            cap = body.joints[indices[name]]
+            if (cap.supported_fields & 0x19 != 0x19 or not cap.valid_limits & 1
+                    or not math.isfinite(cap.q_min) or not math.isfinite(cap.q_max)
+                    or cap.q_min > cap.q_max):
+                raise ValueError(f'policy joint position capability or limit unavailable: {name}')
         return indices
 
     def observation(self, state: Any, body: Any, command: Sequence[float], hip: Any) -> tuple[float, ...]:
@@ -173,9 +180,11 @@ class Policy:
                 q = clamp(q, *self.contract['joint_limits'][name])
             kp = self.contract['joint_kp'].get(name, self.kp[p])
             kd = self.contract['joint_kd'].get(name, self.kd[p])
+            cap = body.joints[indices[name]]
+            if not cap.q_min <= q <= cap.q_max:
+                raise ValueError(f'policy target outside BodyInfo limit: {name}')
             targets[indices[name]] = MotorTarget(q=q, kp=kp, kd=kd)
-        # Unpopulated roll stays placeholder; D2 codec/server populated mask skips dispatch.
-        # Do not add a physical range/zero/finite gate for that slot.
+        # The profile does not target waist roll; its fixed wire slot is a command placeholder.
         return tuple(targets)
 
 
@@ -263,6 +272,8 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
         raise RuntimeError('get_robot_info did not return real body capabilities')
     body = reply.info.body
     policy.roster(body)
+    from locomotion_aorta._policy_state import format_robot_info
+    print(format_robot_info(reply))
     initial = controller.wait_state(timeout=timeout)
     command = JoyCommand(policy.contract)
     # Validate the real observation before requesting ownership; don't consume history yet.
@@ -282,7 +293,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
         while not stop.is_set() and (duration == 0 or monotonic()-started < duration):
             status = controller.status
             if status is None or any(getattr(status,key) != getattr(entered,key)
-                                     for key in ('phase','generation','client_id','lease_id','current_action','reject_count')) or getattr(status, 'timeout_hold', False):
+                                     for key in ('phase','generation','client_id','control_id','current_action','reject_count')) or getattr(status, 'timeout_hold', False):
                 raise RuntimeError('EXTERNAL ownership/status changed')
             # wait_state may return its cache. Reuse --timeout to wait for
             # a strictly newer input; never infer/publish again from that cache.
@@ -327,7 +338,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
                 # A wait/inference may have crossed into TIMEOUT_HOLD.
                 status = controller.status
                 if status is None or any(getattr(status, key) != getattr(entered, key)
-                        for key in ('phase','generation','client_id','lease_id','current_action','reject_count')) or getattr(status, 'timeout_hold', False):
+                        for key in ('phase','generation','client_id','control_id','current_action','reject_count')) or getattr(status, 'timeout_hold', False):
                     raise RuntimeError('EXTERNAL state changed during state wait/inference')
                 msg = bodycmd(api,targets,state)
                 row['S5'] = time.time_ns()
@@ -336,7 +347,7 @@ def live(controller: Any, api: Any, policy: Policy, model: Any,
                     if previous_publish_ns is not None else NOT_MEASURED)
                 previous_publish_ns = publish_mono
                 try:
-                    sent = controller.publish(msg)
+                    sent = controller.publish(msg, target_names=tuple(policy.names), required_fields=0x19)
                     row['publish_result'] = 'returned'
                     publish_log_fields(row,sent)
                 except BaseException:

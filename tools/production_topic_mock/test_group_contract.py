@@ -14,13 +14,17 @@ class GroupContractTest(unittest.TestCase):
         self.assertEqual(MAX_GROUP_LEN, 32)
         self.assertEqual(validate_group(group), group)
 
-    def test_33_bytes_are_rejected_with_actual_and_maximum(self):
-        with self.assertRaisesRegex(ValueError, r"max length 32 .*got 33"):
-            validate_group(GROUP_PREFIX + "a" * (33 - len(GROUP_PREFIX)))
-
-    def test_old_default_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, r"max length 32 .*got 45"):
-            validate_group(GROUP_PREFIX + "a" * 32)
+    def test_oversized_groups_report_actual_and_maximum(self):
+        cases = (
+            ('33-byte-boundary', GROUP_PREFIX + "a" * (33 - len(GROUP_PREFIX)),
+             r"max length 32 .*got 33"),
+            ('old-45-byte-default', GROUP_PREFIX + "a" * 32,
+             r"max length 32 .*got 45"),
+        )
+        for name, group, error in cases:
+            with self.subTest(case=name):
+                with self.assertRaisesRegex(ValueError, error):
+                    validate_group(group)
 
     def test_default_groups_fit_and_keep_random_identity(self):
         groups = {new_group() for _ in range(1000)}

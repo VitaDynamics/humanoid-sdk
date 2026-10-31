@@ -23,7 +23,7 @@ except ImportError:
 
 
 def state_buffer(seed, *, count=31, missing_joints=False, missing_imus=False,
-                 missing_sample=False, protocol=2):
+                 missing_sample=False, protocol=3):
     rng = random.Random(seed)
     builder = flatbuffers.Builder(1)
     imu_module = module('BodyImuSample')
@@ -54,8 +54,11 @@ def state_buffer(seed, *, count=31, missing_joints=False, missing_imus=False,
     m.BodyStateAddProtocolVersion(builder, protocol)
     m.BodyStateAddRosterVersion(builder, rng.randrange(2**32))
     for name in ('StateId', 'TsStateRealUs', 'TsStatePubUs', 'TsConsumedUs',
-                 'AppliedSessionId', 'AppliedSequence', 'TsFirstOutputUs'):
+                 'AppliedSessionId', 'AppliedSequence', 'TsFirstOutputUs', 'TsControlUs'):
         getattr(m, 'BodyStateAdd' + name)(builder, rng.randrange(2**64))
+    m.BodyStateAddRuntimeId(builder, 2**64-1)
+    m.BodyStateAddAppliedKeyValid(builder, bool(seed % 2))
+    m.BodyStateAddAssociationSourceType(builder, seed % 256)
     m.BodyStateAddAttitudeValid(builder, bool(seed % 2))
     if not missing_joints: m.BodyStateAddJoints(builder, joints)
     if not missing_imus: m.BodyStateAddImuStates(builder, imu_vector)
@@ -94,21 +97,52 @@ class NativeBodyStateTest(unittest.TestCase):
             with self.subTest(seed=seed): self.compare(state_buffer(seed))
 
     def test_absent_joints_imus_and_optional_sample_keep_defaults(self):
-        for kwargs in ({'missing_joints':True}, {'missing_imus':True}, {'missing_sample':True}):
+        for kwargs in ({'missing_imus':True}, {'missing_sample':True}):
             with self.subTest(**kwargs): self.compare(state_buffer(3, **kwargs))
+        missing = state_buffer(3, missing_joints=True)
+        with self.assertRaisesRegex(ValueError, '31 joint slots'):
+            _decode_body_state_python(module('BodyState').BodyState.GetRootAs(missing))
+        with self.assertRaisesRegex(ValueError, '31 joint slots'):
+            decode_body_state_native(missing)
         b = flatbuffers.Builder(1);m = module('BodyState')
-        m.BodyStateStart(b);m.BodyStateAddProtocolVersion(b, 2);b.Finish(m.BodyStateEnd(b))
-        state = self.compare(bytes(b.Output()))
-        self.assertEqual((state.joints, state.imu_states), ((), ()))
-        self.assertEqual((state.state_id, state.applied_session_id, state.applied_sequence), (0, 0, 0))
+        m.BodyStateStart(b);m.BodyStateAddProtocolVersion(b, 3);m.BodyStateAddRuntimeId(b, 11);b.Finish(m.BodyStateEnd(b))
+        with self.assertRaisesRegex(ValueError, '31 joint slots'):
+            self.compare(bytes(b.Output()))
 
     def test_wrong_protocol_and_present_wrong_joint_lengths_reject(self):
-        for kwargs in ({'protocol':0}, {'protocol':1}, {'protocol':3},
+        for kwargs in ({'protocol':0}, {'protocol':1}, {'protocol':2}, {'protocol':4}, {'protocol':0xffffffff},
                        {'count':0}, {'count':30}, {'count':32}, {'count':42}):
             view = module('BodyState').BodyState.GetRootAs(state_buffer(1, **kwargs))
             with self.subTest(**kwargs):
                 with self.assertRaises(ValueError): _decode_body_state_python(view)
                 with self.assertRaises(ValueError): decode_body_state(view)
+
+    def test_valid_zero_key_all_source_association_reaches_native_dto(self):
+        m = module('BodyState')
+        for source in (0, 1, 2, 3, 4, 5, 6, 255):
+            with self.subTest(source=source):
+                obj = m.BodyStateT.InitFromObj(make_state()[1])
+                obj.runtimeId = 2**64-1
+                obj.tsControlUs, obj.appliedKeyValid, obj.associationSourceType = 2**64-2, True, source
+                b = flatbuffers.Builder(1); b.Finish(obj.Pack(b))
+                state = self.compare(bytes(b.Output()))
+                self.assertEqual((state.applied_session_id, state.applied_sequence, state.ts_first_output_us), (0, 0, 0))
+                self.assertTrue(state.applied_key_valid)
+                self.assertEqual(state.association_source_type, source)
+                self.assertEqual(state.runtime_id, 2**64-1)
+                self.assertEqual(state.ts_control_us, 2**64-2)
+
+    def test_present_zero_runtime_is_rejected_by_python_and_native(self):
+        m = module('BodyState')
+        obj = m.BodyStateT.InitFromObj(make_state()[1])
+        obj.runtimeId = 0
+        builder = flatbuffers.Builder(1)
+        builder.Finish(obj.Pack(builder))
+        payload = bytes(builder.Output())
+        with self.assertRaisesRegex(ValueError, 'nonzero runtime_id'):
+            _decode_body_state_python(m.BodyState.GetRootAs(payload))
+        with self.assertRaisesRegex(ValueError, 'nonzero runtime_id'):
+            native.decode_state(payload, 0)
 
     def test_truncated_corrupt_and_invalid_table_offsets_reject(self):
         data = state_buffer(3);pos = struct.unpack_from('<I', data)[0]
@@ -127,6 +161,13 @@ class NativeBodyStateTest(unittest.TestCase):
         self.same(expected, self.compare(bytes(8)+data, offset=8))
         source = bytearray(data);result = decode_body_state(module('BodyState').BodyState.GetRootAs(source))
         source[:] = bytes(len(source));self.same(expected, result)
+        source = bytearray(data)
+        borrowed = memoryview(source)
+        result = decode_body_state(module('BodyState').BodyState.GetRootAs(borrowed))
+        source[:] = bytes(len(source))
+        borrowed.release()
+        del source, borrowed
+        self.same(expected, result)
 
     def test_parallel_decodes_have_owned_independent_state_with_gil_held(self):
         payloads = [state_buffer(i) for i in range(32)]
@@ -138,11 +179,13 @@ class NativeBodyStateTest(unittest.TestCase):
         from test_pull import PullTest, S
         from locomotion_aorta import PullController
         from locomotion_aorta.transport import BODY_STATE_TOPIC
-        t = PullTest().transport()
-        controller = PullController.__new__(PullController)
-        controller.transport = t
-        controller._condition = __import__("threading").Condition()
-        controller._closed = False
+        from body_fixtures import robot_info_reply
+        t = PullTest().transport(
+            node=S(create_subscriber_typed=lambda *a, **kw: S(close=lambda: None)),
+            get_robot_info=lambda _: dataclasses.replace(robot_info_reply(), runtime_id=2**64-1))
+        controller = PullController(client_id=7, _transport=t)
+        self.addCleanup(controller.close)
+        controller.get_robot_info(.1)
         _state_decoder.cache_clear()
         self.addCleanup(_state_decoder.cache_clear)
         with mock.patch.object(native, 'decode_state', wraps=native.decode_state) as decode:
@@ -160,7 +203,7 @@ class NativeBodyStateTest(unittest.TestCase):
                 decode.assert_called_with(data, 0)
         _state_decoder.cache_clear()
         with mock.patch('body_state_schema_meta.SCHEMA_HASH_HEX', 'wrong'):
-            with self.assertRaisesRegex(RuntimeError, 'pinned BODY2'):
+            with self.assertRaisesRegex(RuntimeError, 'pinned BodyState3'):
                 decode_body_state_native(data)
         _state_decoder.cache_clear()
 
@@ -177,11 +220,13 @@ class NativeBodyStateTest(unittest.TestCase):
                 put(state_buffer(3))
                 first = read(0)
                 receipt = t._latest_sample
-                put(b'bad')
-                with self.assertRaises(ValueError):
-                    read(0)
-                self.assertIs(t._latest_sample, receipt)
-                self.assertIs(read(0), first)
+                for bad in (b'bad', state_buffer(3, missing_joints=True),
+                            state_buffer(3, count=30)):
+                    put(bad)
+                    with self.assertRaises(ValueError):
+                        read(0)
+                    self.assertIs(t._latest_sample, receipt)
+                    self.assertIs(read(0), first)
                 put(state_buffer(4))
                 self.assertNotEqual(read(0).state_id, first.state_id)
                 empty = PullTest().transport()
@@ -190,6 +235,14 @@ class NativeBodyStateTest(unittest.TestCase):
                 empty_read = empty.wait_state if arrays else empty._wait_body_state
                 with self.assertRaises(ValueError): empty_read(0)
                 with self.assertRaises(TimeoutError): empty_read(0)
+
+    def test_stale_native_protocol_cannot_pass_even_with_matching_old_metadata(self):
+        _state_decoder.cache_clear()
+        self.addCleanup(_state_decoder.cache_clear)
+        with mock.patch.object(native, 'BODY_STATE_PROTOCOL_VERSION', 2):
+            with self.assertRaisesRegex(RuntimeError, 'pinned BodyState3'):
+                decode_body_state_native(state_buffer(3))
+        _state_decoder.cache_clear()
 
     def test_native_entry_returns_only_the_state_dto(self):
         data = state_buffer(3);view = module('BodyState').BodyState.GetRootAs(data)

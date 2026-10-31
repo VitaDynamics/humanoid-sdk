@@ -26,7 +26,9 @@ class PublicPolicyStateTest(unittest.TestCase):
         old = dict(zip(p.order, before.joints))
         names = tuple(reversed(p.order))
         p.bind_body_info(SimpleNamespace(joint_names=names,
-                                        joints=[SimpleNamespace(populated=True)]*31))
+            joints=[SimpleNamespace(body_index=i, is_mock=name == 'waist_roll_joint',
+                                    supported_fields=31, valid_limits=1, q_min=-3., q_max=3.)
+                    for i, name in enumerate(names)]))
         after, _ = p.decode(np.linspace(-1,1,28))
         self.assertEqual(dict(zip(names, after.joints)), old)
         self.assertEqual(after.joints[names.index('waist_roll_joint')].kp, 0.)
@@ -93,8 +95,11 @@ class PublicPolicyStateTest(unittest.TestCase):
             with patch.dict(sys.modules, {'locomotion_aorta._onnx': SimpleNamespace(Session=Session)}):
                 p = VelocityModePolicy(root)
             before = dict(zip(p.order,p.decode(np.zeros(28,np.float32))))
-            p.bind_body_info(SimpleNamespace(joint_names=tuple(reversed(ASAMPLE_BODY_JOINT_NAMES)),
-                                            joints=[SimpleNamespace(populated=True)]*31))
+            names = tuple(reversed(ASAMPLE_BODY_JOINT_NAMES))
+            p.bind_body_info(SimpleNamespace(joint_names=names,
+                joints=[SimpleNamespace(body_index=i, is_mock=name == 'waist_roll_joint',
+                                        supported_fields=31, valid_limits=1, q_min=-3., q_max=3.)
+                        for i, name in enumerate(names)]))
             self.assertEqual(dict(zip(p.order,p.decode(np.zeros(28,np.float32)))), before)
             self.assertEqual(p.inventory['body_joint_names'], p.order)
             self.assertEqual(p.inventory['policy_to_body_slot'], p.policy_to_body)
@@ -119,7 +124,7 @@ class PublicPolicyStateTest(unittest.TestCase):
                 schema = writer.register_schema('lowlevel.BodyState','flatbuffer',body_state_schema_meta.SCHEMA_BFBS)
                 channel = writer.register_channel(BODY_STATE_TOPIC,'flatbuffer',schema)
                 for i in range(3):
-                    raw = BodyStateT(protocolVersion=2,stateId=2**63+i,tsStateRealUs=1_000_000+20_000*i,
+                    raw = BodyStateT(protocolVersion=3,runtimeId=11,stateId=2**63+i,tsStateRealUs=1_000_000+20_000*i,
                                     joints=[BodyJointStateT(q=j/4) for j in range(31)])
                     builder = flatbuffers.Builder(2048);builder.Finish(raw.Pack(builder))
                     writer.add_message(channel,100+i,bytes(builder.Output()),100+i)

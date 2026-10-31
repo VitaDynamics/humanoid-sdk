@@ -1,31 +1,39 @@
 """Real public wheel checks; generated messages only, no robot connection."""
 import hashlib
 import importlib
+import importlib.util
 import importlib.metadata
 import json
 from pathlib import Path
 import unittest
 
-from locomotion_aorta._hand_codec import load_bindings
+from locomotion_aorta._end_effector_codec import load_bindings, load_touch_bindings
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class PublicEeBindingTest(unittest.TestCase):
     def test_t021_struct_layouts_and_message_level_clocks(self):
-        from lowlevel.HandJointCmd import HandJointCmd
-        from lowlevel.HandJointState import HandJointState
-        from lowlevel.FingerTouchMeta import FingerTouchMeta
-        from lowlevel.HandState import HandState
-        from lowlevel.HandInfo import HandInfo
-        self.assertEqual((HandJointCmd.SizeOf(), HandJointState.SizeOf(), FingerTouchMeta.SizeOf()),
-                         (8, 28, 32))
+        from lowlevel.ee.AxisCommand import AxisCommand
+        from lowlevel.ee.AxisState import AxisState
+        from lowlevel.ee.SampleRef import SampleRef
+        from lowlevel.ee.EndEffectorState import EndEffectorState
+        self.assertEqual((AxisCommand.SizeOf(), AxisState.SizeOf(), SampleRef.SizeOf()),
+                         (28, 28, 32))
+        for name in ('CommandFields', 'Mode', 'Pos', 'Vel', 'VelLimit', 'Tau', 'Current'):
+            self.assertTrue(hasattr(AxisCommand, name))
+        for name in ('ValidFields', 'Pos', 'Vel', 'Tau', 'Current', 'TemperatureC', 'ErrorCode'):
+            self.assertTrue(hasattr(AxisState, name))
         for name in ('TsAcquiredHwUs', 'TsIngestedUs', 'TsAssembledUs'):
-            self.assertTrue(hasattr(HandState, name))
-            self.assertFalse(hasattr(HandJointState, name))
+            self.assertTrue(hasattr(EndEffectorState, name))
+            self.assertFalse(hasattr(AxisState, name))
         for name in ('Dof', 'TsPollRequestUs', 'TsPollResponseUs', 'CmdDequeuedUs'):
-            self.assertFalse(hasattr(HandState, name))
-        self.assertFalse(hasattr(HandInfo, 'Model'))
+            self.assertFalse(hasattr(EndEffectorState, name))
+        for name in ('HandJointCmd', 'HandJointState', 'FingerTouchMeta', 'HandCmd',
+                     'HandState', 'HandTouch', 'HandInfo', 'GripperCmd',
+                     'GripperState', 'GripperInfo'):
+            with self.subTest(retired=name):
+                self.assertIsNone(importlib.util.find_spec('lowlevel.' + name))
 
     def test_distribution_and_all_pinned_bfbs_match(self):
         manifest = json.loads((ROOT / 'compatibility.json').read_text())
@@ -38,12 +46,15 @@ class PublicEeBindingTest(unittest.TestCase):
                 meta = importlib.import_module(stem + '_schema_meta')
                 self.assertEqual(hashlib.sha256(meta.SCHEMA_BFBS).hexdigest(), expected)
 
-    def test_hand_topics_and_touch_control_are_generated(self):
+    def test_generic_topics_and_touch_control_are_generated(self):
         bindings = load_bindings()
-        for name in ('HandCmd', 'HandState', 'HandTouch', 'HandInfo',
-                     'HandSetTouchRequest', 'HandSetTouchResponse'):
+        for name in ('EndEffectorCmd', 'EndEffectorState', 'EndEffectorTouch', 'EndEffectorInfo'):
             with self.subTest(name=name):
                 self.assertTrue(callable(getattr(getattr(bindings, name), name).GetRootAs))
+        service = load_touch_bindings()
+        for module, name in ((service.request, 'EndEffectorSetTouchRequest'),
+                             (service.response, 'EndEffectorSetTouchResponse')):
+            self.assertTrue(callable(getattr(module, name).GetRootAs))
         for name in ('hand_cmd_trace',):
             with self.subTest(removed_root=name), self.assertRaises(ImportError):
                 importlib.import_module(name + '_schema_meta')

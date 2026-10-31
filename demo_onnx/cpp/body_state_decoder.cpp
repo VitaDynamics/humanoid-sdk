@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "body_cmd_vendor/body_state_generated.h"
+#include "body_cmd_vendor/message/schemas/topic/lowlevel/body_state_generated.h"
 
 namespace py = pybind11;
 namespace {
@@ -22,7 +22,10 @@ struct Imu {
 struct State {
   uint32_t protocol, roster;
   uint64_t id, real, pub, consumed, session, sequence, output;
-  bool attitude;
+  bool attitude, key_valid;
+  uint64_t control;
+  uint8_t source_type;
+  uint64_t runtime_id;
   std::vector<lowlevel::BodyJointState> joints;
   std::vector<Imu> imus;
 };
@@ -54,9 +57,9 @@ State ReadState(const uint8_t *data, size_t size, size_t offset) {
       reinterpret_cast<const lowlevel::BodyState *>(data + offset);
   if (!verifier.VerifyTable(view))
     throw std::invalid_argument("invalid BodyState FlatBuffer");
-  if (view->protocol_version() != 2)
+  if (view->protocol_version() != 3)
     throw std::invalid_argument(
-        "incompatible BodyState protocol_version; expected BODY 2");
+        "incompatible BodyState protocol_version; expected BodyState 3");
   result.protocol = view->protocol_version();
   result.roster = view->roster_version();
   result.id = view->state_id();
@@ -67,13 +70,15 @@ State ReadState(const uint8_t *data, size_t size, size_t offset) {
   result.session = view->applied_session_id();
   result.sequence = view->applied_sequence();
   result.output = view->ts_first_output_us();
-  if (const auto *joints = view->joints()) {
-    if (joints->size() != 31)
-      throw std::invalid_argument(
-          "body vector requires exactly 31 joint slots");
-    result.joints.reserve(31);
-    for (const auto *joint : *joints) result.joints.push_back(*joint);
-  }
+  result.control = view->ts_control_us();
+  result.key_valid = view->applied_key_valid();
+  result.source_type = view->association_source_type();
+  result.runtime_id = view->runtime_id();
+  const auto *joints = view->joints();
+  if (!joints || joints->size() != 31)
+    throw std::invalid_argument("body vector requires exactly 31 joint slots");
+  result.joints.reserve(31);
+  for (const auto *joint : *joints) result.joints.push_back(*joint);
   if (const auto *imus = view->imu_states()) {
     result.imus.reserve(imus->size());
     for (const auto *sample : *imus) {
@@ -91,18 +96,29 @@ State ReadState(const uint8_t *data, size_t size, size_t offset) {
   return result;
 }
 
-py::object Decode(py::buffer input, size_t offset, const py::object &state_type,
-                  const py::object &joint_type, const py::object &imu_type,
-                  const py::object &sample_type) {
+State ReadOwnedState(const py::buffer &input, size_t offset) {
   // bytes is retained without copying. Mutable/borrowed buffers are copied
-  // before decoding, so results never borrow mutable caller storage.
+  // and stay alive until ReadState has copied every joint and IMU value.
   py::bytes owned =
       py::reinterpret_steal<py::bytes>(PyObject_Bytes(input.ptr()));
   if (!owned) throw py::error_already_set();
-  auto *data =
+  const auto *data =
       reinterpret_cast<const uint8_t *>(PyBytes_AS_STRING(owned.ptr()));
   const auto size = static_cast<size_t>(PyBytes_GET_SIZE(owned.ptr()));
-  State result = ReadState(data, size, offset);
+  return ReadState(data, size, offset);
+}
+
+py::object RuntimeId(const State &state) {
+  if (!state.runtime_id)
+    throw std::invalid_argument(
+        "BodyState requires nonzero runtime_id");
+  return py::int_(state.runtime_id);
+}
+
+py::object Decode(py::buffer input, size_t offset, const py::object &state_type,
+                  const py::object &joint_type, const py::object &imu_type,
+                  const py::object &sample_type) {
+  State result = ReadOwnedState(input, offset);
   py::tuple joints(result.joints.size());
   for (size_t i = 0; i < result.joints.size(); ++i) {
     const auto &j = result.joints[i];
@@ -125,7 +141,9 @@ py::object Decode(py::buffer input, size_t offset, const py::object &state_type,
   py::object dto =
       state_type(result.id, joints, result.protocol, result.roster, result.real,
                  result.pub, result.consumed, result.attitude, imus,
-                 result.session, result.sequence, result.output);
+                 result.session, result.sequence, result.output,
+                 RuntimeId(result), result.control,
+                 result.key_valid, result.source_type);
   return dto;
 }
 
@@ -156,14 +174,8 @@ py::array View(std::vector<T> &data, py::ssize_t columns,
 }
 
 py::dict DecodeArrays(py::buffer input, size_t offset) {
-  py::bytes owned =
-      py::reinterpret_steal<py::bytes>(PyObject_Bytes(input.ptr()));
-  if (!owned) throw py::error_already_set();
-  auto *data =
-      reinterpret_cast<const uint8_t *>(PyBytes_AS_STRING(owned.ptr()));
-  const auto size = static_cast<size_t>(PyBytes_GET_SIZE(owned.ptr()));
   auto arrays = std::make_unique<Arrays>();
-  arrays->state = ReadState(data, size, offset);
+  arrays->state = ReadOwnedState(input, offset);
   const auto joint_count = arrays->state.joints.size();
   arrays->q.reserve(joint_count);
   arrays->dq.reserve(joint_count);
@@ -228,15 +240,24 @@ py::dict DecodeArrays(py::buffer input, size_t offset) {
   out["applied_session_id"] = v.session;
   out["applied_sequence"] = v.sequence;
   out["ts_first_output_us"] = v.output;
+  out["runtime_id"] = RuntimeId(v);
+  out["ts_control_us"] = v.control;
+  out["applied_key_valid"] = v.key_valid;
+  out["association_source_type"] = v.source_type;
   return out;
 }
 }  // namespace
 
 void BindBodyState(py::module_ &module) {
-  module.def("decode_state_arrays", &DecodeArrays, py::arg("payload"),
-             py::arg("table_offset") = 0);
   auto types = py::module_::import("locomotion_aorta.body_types");
+  module.def(
+      "decode_state_arrays",
+      [](py::buffer input, size_t offset) {
+        return DecodeArrays(input, offset);
+      },
+      py::arg("payload"), py::arg("table_offset") = 0);
   module.attr("BODY_STATE_SCHEMA_SHA256") = BODY_STATE_SCHEMA_SHA256;
+  module.attr("BODY_STATE_PROTOCOL_VERSION") = 3;
   module.def(
       "decode_state",
       [state = types.attr("BodyState"), joint = types.attr("BodyJointState"),

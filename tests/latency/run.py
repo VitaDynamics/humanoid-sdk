@@ -1,4 +1,4 @@
-"""Bounded real IPC sweep. No profiling, models, robot topic, or control session."""
+"""Bounded real IPC sweep with an isolated synthetic control session."""
 import argparse
 import hashlib
 import json

@@ -30,10 +30,10 @@ def read_rows(path):
         return [{k: int(v) for k, v in row.items()} for row in csv.DictReader(stream)]
 
 
-def indexed(rows):
+def indexed(rows, key="sequence"):
     result = {}
     for row in rows:
-        seq = row["sequence"]
+        seq = row[key]
         if not 0 < seq <= 65000 or seq in result:
             raise ValueError(f"invalid/duplicate sequence {seq}")
         result[seq] = row
@@ -65,15 +65,30 @@ def frequency(rows, stamp):
 
 def analyze(directory, session, seconds, rate):
     sent = indexed(read_rows(directory / "sent.csv"))
-    client = indexed(read_rows(directory / "client.csv"))
-    received = indexed(read_rows(directory / "received.csv"))
+    client_rows = read_rows(directory / "client.csv")
+    received_rows = read_rows(directory / "received.csv")
+    actual_keys = bool(client_rows and received_rows and
+                       "input_state_id" in client_rows[0] and "input_state_id" in received_rows[0])
+    if any(("input_state_id" in row) != actual_keys for row in client_rows + received_rows):
+        raise ValueError("inconsistent input state identity columns")
+    client = indexed(client_rows, "input_state_id" if actual_keys else "sequence")
+    received = indexed(received_rows, "input_state_id" if actual_keys else "sequence")
     if set(sent) != set(range(1, len(sent) + 1)):
         raise ValueError("sender sequence is not contiguous")
     if not client.keys() <= sent.keys() or not received.keys() <= client.keys():
         raise ValueError("orphan response or client sample")
-    for row in (*client.values(), *received.values()):
-        if row["session"] != session:
-            raise ValueError("wrong session")
+    if actual_keys:
+        keys = [(row['session'], row['sequence']) for row in client.values()]
+        if (any(not s or not 0 < seq <= 65000 for s, seq in keys) or
+                len(keys) != len(set(keys)) or len({s for s, _ in keys}) != 1):
+            raise ValueError('invalid actual command keys')
+        for sample_id, row in received.items():
+            if (row['session'], row['sequence']) != (client[sample_id]['session'], client[sample_id]['sequence']):
+                raise ValueError('command key mismatch')
+    else:
+        for row in (*client.values(), *received.values()):
+            if row["session"] != session:
+                raise ValueError("wrong session")
     for row in received.values():
         if row["valid"] != 1:
             raise ValueError("invalid command content/ID")

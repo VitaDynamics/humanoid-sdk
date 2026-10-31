@@ -14,9 +14,11 @@ import time
 try:
     from . import validate_auxiliary, run_auxiliary
     from .group_contract import new_group, validate_group
+    from .ee_fixture import prepare_ee_fixture
 except ImportError:
     from __init__ import validate_auxiliary, run_auxiliary
     from group_contract import new_group, validate_group
+    from ee_fixture import prepare_ee_fixture
 
 
 def session_config(port, connect_port=None):
@@ -104,6 +106,8 @@ def run(args):
     server_port = port()
     profiles = {"mock": output / "mock-session.json", "client": output / "client-session.json"}
     auxiliary = validate_auxiliary(json.loads(args.auxiliary_fixture.read_text())) if args.auxiliary_fixture else None
+    if args.ee_fixture:
+        prepare_ee_fixture(args.ee_fixture, output)
     aux_port = None
     if auxiliary:
         aux_port = port()
@@ -123,9 +127,6 @@ def run(args):
     (output / "initial-imu.txt").write_text(" ".join(str(v) for q in imu for v in q) + "\n")
     envs = {role: child_environment(os.environ, group, uri) for role, uri in profiles.items()}
     envs["mock"]["LD_LIBRARY_PATH"] = str(build) + os.pathsep + str(Path(manifest["core_path"]).parent) + os.pathsep + envs["mock"].get("LD_LIBRARY_PATH", "")
-    for side in ("left", "right"):
-        cfg = auxiliary.get(side) if auxiliary else None
-        envs["mock"]["PRODUCTION_MOCK_EE_" + side.upper() + "_KIND"] = str({"brainco": 1, "gripper": 2}[cfg["kind"]] if cfg else 0)
     exported = {"SDK_GROUP": group, "AORTA_GROUP": group, "AORTA_LOG_TOPIC_ENABLED": "false",
                 "ZENOH_SESSION_CONFIG_URI": str(profiles["client"])}
     (output / "client-environment.json").write_text(json.dumps(exported, indent=2) + "\n")
@@ -158,7 +159,7 @@ def run(args):
         client_stop_sent = False
         while processes["mock"].poll() is None:
             if "auxiliary" in processes and processes["auxiliary"].poll() not in (None, 0):
-                raise RuntimeError("optional EE/Joy process failed; see auxiliary.log")
+                raise RuntimeError("optional Joy process failed; see auxiliary.log")
             if "client" in processes and processes["client"].poll() is not None:
                 result["client_rc"] = processes["client"].returncode
                 terminate(processes["mock"])
@@ -204,7 +205,8 @@ def parser():
     p.add_argument("--initial-imu", type=Path, help="Two normalized WXYZ JSON quaternions matching the client's approved alignment")
     p.add_argument("--allow-client", action="store_true")
     p.add_argument("--client-command", nargs=argparse.REMAINDER)
-    p.add_argument("--auxiliary-fixture", type=Path, help="Explicit EE Info/rates and/or scripted Joy; no hardware defaults")
+    p.add_argument("--ee-fixture", type=Path, help="Main-owned EE: actual Info/Touch binary fixtures, initial positions, explicit rates and fixed observation sources")
+    p.add_argument("--auxiliary-fixture", type=Path, help="Scripted Joy only; EE belongs to the main Mock")
     p.add_argument("--auxiliary-worker", action="store_true", help=argparse.SUPPRESS)
     return p
 
