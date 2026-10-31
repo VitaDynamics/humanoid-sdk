@@ -2,7 +2,7 @@
 import threading
 import unittest
 from types import SimpleNamespace as NS
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from examples.end_effector import end_effector_external
 from examples.external_control import external_control
@@ -20,8 +20,15 @@ class Latest400HzController(RecordingController):
 
 
 class TimedDemoTests(unittest.TestCase):
+    def setUp(self):
+        formatter = patch('locomotion_aorta._policy_state.format_robot_info', return_value='synthetic Info')
+        formatter.start()
+        self.addCleanup(formatter.stop)
+
     def test_teleop_publish_failure_is_preserved_when_diagnostics_also_fail(self):
         body, state = fixture()
+        for joint in state.joints:
+            joint.q = joint.dq = 0.
         status = NS(phase='RUNNING', current_action='EXTERNAL', generation=3,
                     client_id=9, control_id=13, reject_count=0)
         def latest(timeout):
@@ -73,6 +80,8 @@ class TimedDemoTests(unittest.TestCase):
 
     def test_teleop_50hz_logs_actual_keys_and_keeps_timer_with_400hz_state(self):
         body, state = fixture()
+        for joint in state.joints:
+            joint.q = joint.dq = 0.
         clock, stop = FakeClock(), threading.Event()
         policy = teleop_policy.Policy(METADATA, CONTRACT)
         times, commands, rows, events = [], [], [], []

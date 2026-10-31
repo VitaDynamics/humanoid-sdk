@@ -517,7 +517,8 @@ class DurationTest(unittest.TestCase):
         transport.observed_status = SimpleNamespace(current_action="PASSIVE",
             phase=SimpleNamespace(value="IDLE"), generation=0)
         transport.publishers = {}
-        transport.get_robot_info.return_value = SimpleNamespace(info=SimpleNamespace(body=SimpleNamespace(roster_version=1, joints=[])))
+        from test_examples import example_robot_info_reply
+        transport.get_robot_info.return_value = example_robot_info_reply()
         controller.get_robot_info.return_value = transport.get_robot_info.return_value
         directions.node.publishers = []
         directions.read.return_value = __import__("test_velocity_mode").joy_sample()

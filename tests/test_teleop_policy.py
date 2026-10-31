@@ -278,6 +278,7 @@ class LifecycleTests(unittest.TestCase):
                 return NS(current_action='PASSIVE')
 
         class PolicyStub:
+            names = tuple(n for n in body.joint_names if n != 'waist_roll_joint')
             contract = CONTRACT
             period = 0
             history = []
