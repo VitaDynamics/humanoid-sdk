@@ -718,6 +718,7 @@ class BodyCodecTest(unittest.TestCase):
         class Client:
             matches = []
             def raw(self): return self
+            def close(self): pass
             def wait_for_matching(self, timeout): self.matches.append(timeout); return True
             def call(self, fill):
                 b = flatbuffers.Builder(1); b.Finish(fill(b,0))
@@ -734,10 +735,13 @@ class BodyCodecTest(unittest.TestCase):
             def __init__(self, *a): pass
             def group(self): return 'default'
             def create_publisher_typed(self, *a, **kw): return object()
-            def create_client_typed(self, *a, **kw): self.calls.append((a,kw)); return client
+            def create_owned(self, *a, **kw): self.calls.append((a,kw)); return client
+            def create_client_typed(self, *a, **kw): raise AssertionError('node-retained info clients are not allowed')
             def close(self): pass
         qos = SimpleNamespace(realtime_control=lambda: None)
-        fake_aorta = SimpleNamespace(Node=Node, QoS=qos, ClientOptions=lambda **kw: kw)
+        fake_aorta = SimpleNamespace(Node=Node, QoS=qos, ClientOptions=lambda **kw: SimpleNamespace(**kw),
+            Client=lambda node, *a, **kw: node.create_owned(*a, **kw),
+            TypedClient=lambda node, raw, decoder: raw)
         bindings = SimpleNamespace(aorta=fake_aorta, control_request_schema_meta=object(), body_cmd_schema_meta=object(),
                                    get_robot_info_request=request_module, get_robot_info_response=reply_module,
                                    get_robot_info_schema_meta=importlib.import_module('get_robot_info_schema_meta'))
@@ -752,6 +756,9 @@ class BodyCodecTest(unittest.TestCase):
                 self.assertEqual((reply.runtime_id, reply.error_message), (0, 'startup unavailable'))
             self.assertEqual(len(t.node.calls),1)
             self.assertEqual(t.node.calls[0][0][0],transport.GET_ROBOT_INFO_SERVICE)
+            self.assertEqual(t.node.calls[0][1]['options'].timeout_ms,500)
+            self.assertEqual(t.node.calls[0][1]['options'].service_schema_hash_hex,
+                             bindings.get_robot_info_schema_meta.SCHEMA_HASH_HEX)
             self.assertEqual(client.matches,[500,500])
             self.assertEqual(set(t.publishers),{transport.BODY_CMD_TOPIC, transport.CONTROL_REQUEST_TOPIC})
             from fake_transport import FakeTransport
