@@ -12,11 +12,14 @@ from pathlib import Path
 import time
 
 from locomotion_aorta import PullController, PullStateSource, ServiceStatus
+from locomotion_aorta.body_types import _BODY_FIELD_KD, _BODY_FIELD_KP, _BODY_FIELD_Q
 from locomotion_aorta.end_effector import EndEffectorClient
 from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector_types import (
     ControlMode, DeviceModel, EndEffectorSide, EndEffectorTarget, Field, InhibitReason,
     PositionDomain, SampleStatus, SampleStream,
+    _STATE_INHIBIT_REASON_VALID, _STATE_OUTPUT_ALLOWED_VALID, _STATE_READY_VALID,
+    _STATE_TOUCH_ENABLED_VALID, _TOUCH_REGION_PAYLOAD_VALID, _TOUCH_REGION_STALE,
 )
 
 def _load_sibling_module(name, relative_path):
@@ -196,7 +199,8 @@ def run_external(controller, command_loop, options, *, body, strict_hold=False,
                 plan.measured(state)
                 q = pose if target is None else target(now) if callable(target) else target
                 command = plan.command(q, state)
-            published = controller.publish(command, target_names=hold_names, required_fields=0x19)
+            published = controller.publish(command, target_names=hold_names,
+                required_fields=_BODY_FIELD_Q | _BODY_FIELD_KP | _BODY_FIELD_KD)
             if plan is not None:
                 emit(f'BODY stage={stage} session_id={published.session_id} sequence={published.sequence} input_state={state.state_id} '
                      f'q_cmd={tuple(j.q for j in command.joints)!r} '
@@ -271,7 +275,7 @@ def validate_status(info, state, *, require_output=False):
     if state is None:
         raise ValueError('end-effector feedback is absent')
     codec.validate_state(info, state)
-    if state.status_valid_mask & 4 and state.inhibit_reason in (
+    if state.status_valid_mask & _STATE_INHIBIT_REASON_VALID and state.inhibit_reason in (
             InhibitReason.EMERGENCY, InhibitReason.DOMAIN_FAULT, InhibitReason.NOT_READY):
         raise RuntimeError(f'end-effector inhibited: {state.inhibit_reason}')
     if any(mask & Field.ERROR_CODE and code for mask, code in zip(state.valid_fields, state.error_code)):
@@ -317,7 +321,8 @@ def _current_info(client, timeout):
 
 
 def output_ready(state):
-    return (state.status_valid_mask & 7 == 7 and state.ready and
+    required = _STATE_READY_VALID | _STATE_OUTPUT_ALLOWED_VALID | _STATE_INHIBIT_REASON_VALID
+    return (state.status_valid_mask & required == required and state.ready and
             state.output_allowed and state.inhibit_reason == InhibitReason.NONE)
 
 
@@ -390,7 +395,7 @@ def set_touch_and_observe(client, enabled, timeout, *, monotonic=time.monotonic,
         if state.runtime_id != before_state.runtime_id:
             raise ValueError('descriptor changed while confirming touch switch')
         if (state.ts_state_pub_us > before_state.ts_state_pub_us
-                and state.status_valid_mask & 8 and state.touch_enabled == enabled):
+                and state.status_valid_mask & _STATE_TOUCH_ENABLED_VALID and state.touch_enabled == enabled):
             break
         sleep(min(.01, remaining))
     if not enabled:
@@ -405,7 +410,8 @@ def set_touch_and_observe(client, enabled, timeout, *, monotonic=time.monotonic,
             raise ValueError('Touch belongs to another descriptor')
         previous = touch.sample_ref
         if touch.touch_state_id and touch.region_stamps and all(
-                region.validity & 1 and not region.validity & 64 for region in touch.region_stamps):
+                region.validity & _TOUCH_REGION_PAYLOAD_VALID and not region.validity & _TOUCH_REGION_STALE
+                for region in touch.region_stamps):
             return state, touch
 
 

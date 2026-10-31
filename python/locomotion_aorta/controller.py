@@ -30,6 +30,7 @@ from .types import (
 from .body_types import (
     BODY_SLOTS, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION, BodyState, BodyCmd, BodyJointCmd, BodyCmdAction,
     BodyInfo, GetRobotInfoResponse, ServiceStatus,
+    _BODY_FIELD_ALL, _BODY_FIELD_KP, _BODY_FIELD_Q,
 )
 
 
@@ -919,9 +920,9 @@ def _validate_body_targets(command: BodyCmd, body_info: BodyInfo | None,
             or any(not isinstance(name, str) or not name for name in target_names)
             or len(set(target_names)) != len(target_names)):
         raise InvalidCommandError('BodyCmd target scope must be explicitly declared')
-    if type(required_fields) is not int or not 0 < required_fields <= 0x1f:
+    if type(required_fields) is not int or not 0 < required_fields <= _BODY_FIELD_ALL:
         raise InvalidCommandError('BodyCmd required fields must be explicitly declared')
-    if required_fields & 0x08 and not required_fields & 0x01:
+    if required_fields & _BODY_FIELD_KP and not required_fields & _BODY_FIELD_Q:
         raise InvalidCommandError('position gain requires the declared position field')
     roster = {name: i for i, name in enumerate(body_info.joint_names)}
     if any(name not in roster for name in target_names):
@@ -939,7 +940,7 @@ def _validate_body_targets(command: BodyCmd, body_info: BodyInfo | None,
         cap = body_info.joints[i]
         if cap.supported_fields & required_fields != required_fields:
             raise InvalidCommandError(f'BodyCmd target capability unavailable: {i}')
-        if required_fields & 0x01 and not cap.valid_limits & 0x01:
+        if required_fields & _BODY_FIELD_Q and not cap.valid_limits & _BODY_FIELD_Q:
             raise InvalidCommandError(f'BodyCmd target q limit unavailable: {i}')
         # A missing non-Q range is unknown; native admission remains authoritative.
         for bit, name in enumerate(fields):

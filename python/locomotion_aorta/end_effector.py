@@ -17,6 +17,7 @@ from .end_effector_types import (
     CommandKey, EndEffectorSide, EndEffectorSubmission,
     SampleRef, SampleStream, Field, SampleStatus,
     EndEffectorSetTouchRequest, ServiceStatus, TouchSetReason,
+    _INFO_TIME_PUBLISHED_VALID, _TOUCH_REGION_PAYLOAD_VALID, _TOUCH_REGION_STALE,
 )
 
 
@@ -32,7 +33,8 @@ def _token(value):
 
 
 def _description(info):
-    return _token(replace(info, ts_state_pub_us=0, time_valid_mask=info.time_valid_mask & ~2))
+    return _token(replace(info, ts_state_pub_us=0,
+                          time_valid_mask=info.time_valid_mask & ~_INFO_TIME_PUBLISHED_VALID))
 
 
 def _publication_time(kind, value):
@@ -45,10 +47,11 @@ def _same_sample(kind, old, new):
     if kind == 'touch':
         if old.payload != new.payload:
             raise ValueError('same Touch sample changed payload')
+        dynamic_bits = _TOUCH_REGION_PAYLOAD_VALID | _TOUCH_REGION_STALE
         for a, b in zip(old.region_stamps, new.region_stamps):
             # Payload availability/staleness vary; native region identity does not.
-            if (replace(a, validity=a.validity & ~65) != replace(b, validity=b.validity & ~65)
-                    or b.validity & 1 and not a.validity & 1):
+            if (replace(a, validity=a.validity & ~dynamic_bits) != replace(b, validity=b.validity & ~dynamic_bits)
+                    or b.validity & _TOUCH_REGION_PAYLOAD_VALID and not a.validity & _TOUCH_REGION_PAYLOAD_VALID):
                 raise ValueError('same Touch sample changed source or restored validity')
         return
     source = ('ts_state_real_us', 'ts_acquired_hw_us', 'ts_ingested_us')

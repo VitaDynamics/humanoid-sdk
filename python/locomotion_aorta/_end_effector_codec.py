@@ -16,6 +16,7 @@ from .end_effector_types import (
     Field, InhibitReason, PositionDomain, RegionStamp,
     TorqueDomain, TouchPayloadType, TouchRegionInfo, EndEffectorSetTouchResponse,
     EndEffectorSubmission, SampleRef, SampleStream,
+    _SAMPLE_REF_VALID_MASK, _STATE_INHIBIT_REASON_VALID, _STATE_OUTPUT_ALLOWED_VALID,
 )
 
 _COMMAND_FIELDS = Field.POS | Field.VEL | Field.VEL_LIMIT | Field.TAU | Field.CURRENT | Field.MODE
@@ -279,7 +280,9 @@ def validate_state(info, state):
     for name in ('ready', 'output_allowed', 'touch_enabled'):
         if type(getattr(state, name)) is not bool:
             raise ValueError('invalid boolean: ' + name)
-    if state.status_valid_mask & 6 == 6 and state.output_allowed != (state.inhibit_reason == InhibitReason.NONE):
+    permission_fields = _STATE_OUTPUT_ALLOWED_VALID | _STATE_INHIBIT_REASON_VALID
+    if (state.status_valid_mask & permission_fields == permission_fields
+            and state.output_allowed != (state.inhibit_reason == InhibitReason.NONE)):
         raise ValueError('inconsistent output permission snapshot')
 
 
@@ -373,7 +376,7 @@ def validate_observations(runtime_id, observations, *, sources=None):
         for name in ('sample_id', 'source_time_us'):
             _uint(getattr(sample, name), 64, name)
         _uint(sample.validity, 8, 'sample validity')
-        if sample.validity & ~15:
+        if sample.validity & ~_SAMPLE_REF_VALID_MASK:
             raise ValueError('unknown SampleRef validity bits')
         if sample.runtime_id != runtime_id:
             raise ValueError('observation runtime_id differs from command runtime_id')
