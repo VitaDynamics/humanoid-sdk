@@ -43,10 +43,10 @@ def touch_wait_client(mode, output):
             return [dict(row) for row in trace if row['event'] == event]
     def module(name):
         return importlib.import_module('lowlevel.ee.'+name)
-    def pack(obj, sequence):
+    def pack(obj, sequence, *, publish_ns=None):
         obj.aortaHeader = AortaHeaderT()
         obj.aortaHeader.sequence = sequence
-        obj.aortaHeader.publishStampNs = time.time_ns()
+        obj.aortaHeader.publishStampNs = time.time_ns() if publish_ns is None else publish_ns
         obj.aortaHeader.publisherNode = 'synthetic_touch_wait_fixture'
         builder = flatbuffers.Builder(1024); builder.Finish(obj.Pack(builder))
         return bytes(builder.Output())
@@ -83,11 +83,13 @@ def touch_wait_client(mode, output):
         ref = actual_body.runtime_id
         assert actual_body.protocol_version == 3
         bindings, rpc_bindings = codec.load_bindings(), codec.load_touch_bindings()
+        # SYNTHETIC loopback peer emulates a controllable axis; it is not a device.
         info = module('EndEffectorInfo').EndEffectorInfoT(protocolVersion=1, runtimeId=ref,
             layoutId=7, side=1, deviceModel=DeviceModel.AGX, firmware='synthetic', serial='synthetic',
             axisNames=['synthetic'], positionDomain=[PositionDomain.TOTAL_OPENING], torqueDomain=[0], supportedModes=[1 << ControlMode.POSITION],
-            supportedCommandFields=[Field.POS | Field.MODE], supportedStateFields=[Field.POS], validLimits=[Field.POS],
-            posMin=[0.], posMax=[.0625], isMock=[True], touchAvailable=True,
+            supportedCommandFields=[Field.POS | Field.MODE | Field.VEL_LIMIT], supportedStateFields=[Field.POS],
+            validLimits=[Field.POS | Field.VEL_LIMIT], posMin=[0.], posMax=[.0625], velLimitMax=[1.],
+            isMock=[False], touchAvailable=True,
             touchRegions=[module('TouchRegionInfo').TouchRegionInfoT(regionId=1, name='synthetic',
                 frame='synthetic', sensorType=1, shape=[1], components=['raw'], dtype=TouchPayloadType.UINT16_LE,
                 unit='1', payloadOffset=0, payloadBytes=2, encodingVersion=1)])
@@ -105,14 +107,21 @@ def touch_wait_client(mode, output):
         def publish_state():
             nonlocal sample_id
             sample_id += 1
+            publish_ns = time.time_ns()
             state = module('EndEffectorState').EndEffectorStateT(protocolVersion=2,
-                runtimeId=ref, layoutId=7, side=1, stateId=sample_id, sampleStatus=SampleStatus.OK,
+                runtimeId=ref, layoutId=7, side=1, stateId=sample_id, tsStatePubUs=publish_ns // 1000,
+                sampleStatus=SampleStatus.OK,
                 axes=[module('AxisState').AxisStateT(validFields=Field.POS, pos=.03125)],
                 ready=True, outputAllowed=True,
                 inhibitReason=0, touchEnabled=False, statusValidMask=15)
-            # Fixture sample identity only; no invented robot acquisition time.
-            state_pub.publish_bytes(pack(state, sample_id))
+            # Local sender's realtime publication stamp, not a robot acquisition time.
+            state_pub.publish_bytes(pack(state, sample_id, publish_ns=publish_ns))
         publish_state(); endpoint.wait_state(3)
+
+        def publish_fresh_state(timeout):
+            previous = endpoint.state.sample_ref
+            publish_state()
+            endpoint.wait_state(timeout, after_sample=previous)
 
         def retain(request, responder):
             with lock:
@@ -151,7 +160,7 @@ def touch_wait_client(mode, output):
                 finally: mark('rpc_free_end')
             raw.wait_for_matching, rpc.call, rpc.close = wait_matching, invoke, close_rpc
             return rpc
-        body_publish, cancel = controller.publish, controller.exit_external
+        body_publish, cancel, enter = controller.publish, controller.exit_external, controller.enter_external
         ee_publish = endpoint.publish
         def body_send(command):
             sent = body_publish(command)
@@ -160,6 +169,10 @@ def touch_wait_client(mode, output):
         def ee_send(*args, **kwargs):
             mark('ee_send')
             return ee_publish(*args, **kwargs)
+        def enter_then_refresh(timeout):
+            status = enter(timeout)
+            publish_fresh_state(timeout)
+            return status
         def cancel_then_reply(timeout):
             mark('cancel_begin')
             result = cancel(timeout)
@@ -189,12 +202,15 @@ def touch_wait_client(mode, output):
                     raise KeyboardInterrupt('IPC cancellation while actual native wait is pending')
         with patch.object(node, 'create_client_typed', side_effect=observed_rpc), \
              patch.object(controller, 'publish', side_effect=body_send), \
+             patch.object(controller, 'enter_external', side_effect=enter_then_refresh), \
              patch.object(controller, 'exit_external', side_effect=cancel_then_reply), \
              patch.object(endpoint, 'publish', side_effect=ee_send), \
              patch.object(demo, 'ThreadPoolExecutor', ObservedPool):
             try:
+                publish_fresh_state(3)
                 demo.run(controller, [endpoint], {'left':demo.position_target(endpoint.info, (.03125,), unit='m')},
-                         timeout=1., duration=.1, touch='on', sleep=paced_sleep)
+                         demo._MotionOptions(timeout=1., duration=.1, touch='on',
+                             native_hz={'left':250}, native_config='synthetic-loopback-config'), sleep=paced_sleep)
             except KeyboardInterrupt:
                 assert interrupted
             else:
