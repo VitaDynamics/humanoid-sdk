@@ -19,12 +19,16 @@ from locomotion_aorta.end_effector_types import (
     PositionDomain, SampleStatus, SampleStream,
 )
 
+def _load_sibling_module(name, relative_path):
+    spec = importlib.util.spec_from_file_location(
+        name, Path(__file__).resolve().parents[1] / relative_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 # The existing SDK body example remains the authority for its unchanged guards.
-_body_spec = importlib.util.spec_from_file_location(
-    'ee_body_hold_baseline',
-    Path(__file__).resolve().parents[1] / 'external_control/external_control.py')
-body = importlib.util.module_from_spec(_body_spec)
-_body_spec.loader.exec_module(body)
+body = _load_sibling_module('ee_body_hold_baseline', 'external_control/external_control.py')
 _external_status_problem = body._external_status_problem
 _body_sample_progress = body._body_sample_progress
 
@@ -106,10 +110,7 @@ def run_external(controller, command_loop, options, *, body, strict_hold=False,
         hold_names = tuple(info.joint_names[i] for i in hold_slots)
         plan = None
         if body_pose == 'zero':
-            spec = importlib.util.spec_from_file_location(
-                'ee_fixed_stand_pose', Path(__file__).resolve().parents[1] / 'fixed_stand_pose/fixed_stand_pose.py')
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+            module = _load_sibling_module('ee_fixed_stand_pose', 'fixed_stand_pose/fixed_stand_pose.py')
             plan = module.FixedStandPose(info)  # Reject all bad/missing zero limits before PREPARE.
         initial = body._wait_for_stationary_body_state(
             controller, body_info=info, timeout=timeout, sleep=sleep, monotonic=monotonic,
@@ -323,8 +324,7 @@ def position_target(info, positions, *, unit, vel_limit=None, torque=None):
     n = len(info.axis_names)
     if vel_limit is None and any(mask & Field.VEL_LIMIT for mask in info.supported_command_fields):
         # Keep the old angular demo's documented20deg/s default as float32.
-        import struct
-        speed = 0.0 if unit == 'm' else struct.unpack('<f', struct.pack('<f', math.radians(20.0)))[0]
+        speed = 0.0 if unit == 'm' else _float32(math.radians(20.0))
         vel_limit = (speed,) * n
     modes = tuple(ControlMode.POSITION_TORQUE if torque is not None or
                   not support & (1 << ControlMode.POSITION) else ControlMode.POSITION

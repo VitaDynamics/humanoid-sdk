@@ -34,7 +34,9 @@ class ExternalLifecycleTest(unittest.TestCase):
                     callbacks.append(frame)
                     for _ in range(4):
                         frame()
-                self.run_loop(c, loop, body_gains=gains)
+                with patch('examples.end_effector.end_effector_external._load_sibling_module') as load:
+                    self.run_loop(c, loop, body_gains=gains)
+                load.assert_not_called()  # Measured hold never needs the zero-pose module.
                 commands = [value for topic, value in c.transport.published if topic == BODY_CMD_TOPIC]
                 self.assertEqual(len(commands), 4)
                 self.assertEqual({topic for topic, _ in c.transport.published},
