@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from examples.end_effector import end_effector_external as demo
-from locomotion_aorta import BODY_CMD_TOPIC
+from locomotion_aorta import BODY_CMD_TOPIC, CONTROL_STATUS_TOPIC, ExternalPhase
 from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector_types import (
     CommandKey, ControlMode, DeviceModel, EndEffectorSubmission,
@@ -160,6 +160,44 @@ class EndEffectorExampleTest(unittest.TestCase):
         self.assertEqual(c.command_count,0)
         c.wait_state.assert_not_called(); c.get_robot_info.assert_called_once()
         self.assertEqual(c.calls.count('exit_external'),1)
+
+    def test_timeout_hold_remains_allowed_only_without_body_output(self):
+        for body_enabled in (False, True):
+            with self.subTest(body_enabled=body_enabled):
+                c = self.controller()
+                endpoint = Endpoint(c)
+                def enter_hold(_submission):
+                    status = c.status
+                    c.transport.emit(CONTROL_STATUS_TOPIC, replace(
+                        status, status_seq=status.status_seq + 1,
+                        phase=ExternalPhase.TIMEOUT_HOLD, timeout_hold=True))
+                    endpoint.after_publish = None
+                endpoint.after_publish = enter_hold
+                if body_enabled:
+                    with self.assertRaisesRegex(RuntimeError, 'ownership/phase/reject_count'):
+                        self.run_case(c, [endpoint], body_enabled=True)
+                    self.assertTrue(endpoint.commands)
+                else:
+                    self.run_case(c, [endpoint], body_enabled=False)
+                    self.assertTrue(endpoint.commands)
+                    self.assertEqual(c.command_count, 0)
+                self.assertEqual(c.calls.count('exit_external'), 1)
+
+    def test_transition_helpers_keep_rates_and_selected_axis(self):
+        start = {'left': (0.0, .25), 'right': (.5,)}
+        end = {'left': (1.0, 0.0), 'right': (0.0,)}
+        limits = {'left': ((), (), (.5, .5)), 'right': ((), (), (.25,))}
+        self.assertEqual(demo._transition_seconds(start, end, limits), 2.0)
+        self.assertEqual(demo._transition_seconds(start, end, limits, minimum=3.0), 3.0)
+        with self.assertRaisesRegex(ValueError, 'positive speed'):
+            demo._transition_seconds({'left': (0.0,)}, {'left': (1.0,)},
+                                     {'left': ((), (), (0.0,))})
+        low = {'left': (.1, .2), 'right': (.3, .4)}
+        high = {'left': (.5, .6), 'right': (.7, .8)}
+        selected = demo._single_axis_high(low, high, 'left', 1)
+        self.assertEqual(selected, {'left': (.1, .6), 'right': (.3, .4)})
+        self.assertEqual(low, {'left': (.1, .2), 'right': (.3, .4)})
+        self.assertEqual(high, {'left': (.5, .6), 'right': (.7, .8)})
 
     def test_mixed_rates_do_not_couple_endpoints_or_speed_up_body(self):
         c = self.controller()

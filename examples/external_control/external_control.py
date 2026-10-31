@@ -37,6 +37,11 @@ DEMO_KP = (100.0, 100.0, 60.0, 150.0, 80.0, 40.0, 100.0, 100.0, 60.0, 150.0, 80.
 FIXED_STAND_KD = (3.0, 3.0, 2.0, 4.0, 2.0, 1.0, 3.0, 3.0, 2.0, 4.0, 2.0, 1.0, 2.0, 2.0, 0.0, 2.0, 1.0, 1.0, 1.0, 3.0, 3.0, 4.0, 2.0, 1.0, 1.0, 1.0, 3.0, 3.0, 4.0, 1.0, 1.0)
 
 
+def _matches_external_identity(status, generation, client_id, control_id):
+    return not (status.generation != generation or status.client_id != client_id
+                or status.control_id != control_id)
+
+
 def run(
     controller: PullController,
     *,
@@ -96,14 +101,9 @@ def run(
             if delay > 0:
                 sleep(delay)
             status = controller.status
-            if (
-                status is None
-                or status.current_action != "EXTERNAL"
-                or status.phase != ExternalPhase.RUNNING
-                or status.generation != generation
-                or status.client_id != client_id
-                or status.control_id != control_id
-            ):
+            if (status is None or status.current_action != "EXTERNAL"
+                    or status.phase != ExternalPhase.RUNNING
+                    or not _matches_external_identity(status, generation, client_id, control_id)):
                 raise RuntimeError(
                     "EXTERNAL ownership is no longer the entered RUNNING session"
                 )

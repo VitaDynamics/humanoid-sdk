@@ -25,6 +25,7 @@ _body_spec = importlib.util.spec_from_file_location(
     Path(__file__).resolve().parents[1] / 'external_control/external_control.py')
 body = importlib.util.module_from_spec(_body_spec)
 _body_spec.loader.exec_module(body)
+_matches_external_identity = body._matches_external_identity
 
 
 def _bind_runtime(connection, timeout):
@@ -159,8 +160,8 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             if (status is None or status.current_action != 'EXTERNAL'
                     or status.phase not in ((body.ExternalPhase.RUNNING,) if body_enabled else
                                            (body.ExternalPhase.RUNNING, body.ExternalPhase.TIMEOUT_HOLD))
-                    or (status.generation, status.client_id, status.control_id) !=
-                       (entered.generation, entered.client_id, entered.control_id)
+                    or not _matches_external_identity(status, entered.generation,
+                                                      entered.client_id, entered.control_id)
                     or status.reject_count != entered.reject_count):
                 raise RuntimeError(f'body EXTERNAL ownership/phase/reject_count changed: {status!r}')
             if not body_enabled:
@@ -427,6 +428,19 @@ def _transition_duration(start, target, rate, minimum=0.0):
     return max(minimum, delta/rate)
 
 
+def _transition_seconds(start, end, limits, minimum=0.0):
+    return max([minimum, *(_transition_duration(a, b, rate)
+        for side in end for a, b, rate in zip(start[side], end[side], limits[side][2]))])
+
+
+def _single_axis_high(low, high, side, index):
+    end = dict(low)
+    values = list(end[side])
+    values[index] = high[side][index]
+    end[side] = tuple(values)
+    return end
+
+
 def _float32(value):
     return struct.unpack('<f', struct.pack('<f', value))[0]
 
@@ -601,8 +615,7 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
 
         def transition(end, minimum=0.0):
             start = dict(positions)
-            seconds = max([minimum, *(_transition_duration(a, b, rate)
-                for side in end for a, b, rate in zip(start[side], end[side], limits[side][2]))])
+            seconds = _transition_seconds(start, end, limits, minimum)
             def targets_at(elapsed):
                 alpha = 1.0 if seconds == 0 else min(1.0, elapsed/seconds)
                 return {side: codec.prepare_target(infos[side], replace(prepared[side],
@@ -642,7 +655,7 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
                 else:
                     for side in guards:
                         for index in range(len(infos[side].axis_names)):
-                            end = dict(low); values=list(end[side]); values[index]=high[side][index]; end[side]=tuple(values)
+                            end = _single_axis_high(low, high, side, index)
                             target_at, seconds = transition(end)
                             yield side+'/'+infos[side].axis_names[index], target_at, seconds+body.DWELL_S
                             target_at, seconds = transition(low)
