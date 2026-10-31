@@ -467,13 +467,14 @@ class ActualSdkDtoIntegration(unittest.TestCase):
         imus = tuple(api.BodyImuSample(getattr(api.BodyImuLocation,m.location),
                          api.BodyImuState(m.state.quaternion,m.state.gyroscope,(0.,0.,9.81),(0.,0.,0.)),
                          m.status) for m in state.imu_states)
-        typed_state = api.BodyState(state.state_id,motors,ts_state_real_us=state.ts_state_real_us,
+        typed_state = api.BodyState(state.state_id,motors,runtime_id=11,ts_state_real_us=state.ts_state_real_us,
                                    attitude_valid=True,imu_states=imus)
         policy = Policy(METADATA,CONTRACT)
         observation = policy.observation(typed_state,typed_body,(0.,0.,0.,.85),api.BodyImuLocation.HIP)
         self.assertEqual(len(observation),492)
         targets = policy.targets((0.,)*12,typed_body)
-        command = bodycmd(api,targets,typed_state,)
+        command = dataclasses.replace(bodycmd(api,targets,typed_state),
+                                      runtime_id=11, control_id=13, session_id=3, sequence=1)
         b=flatbuffers.Builder(1);b.Finish(_fill_body_cmd(NS(body_cmd_module=command_module),command,b,0))
         view=command_module.BodyCmd.GetRootAs(b.Output())
         self.assertEqual(view.Action(),api.BodyCmdAction.EXTERNAL)

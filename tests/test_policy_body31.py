@@ -124,7 +124,7 @@ class PublicPolicyStateTest(unittest.TestCase):
                 schema = writer.register_schema('lowlevel.BodyState','flatbuffer',body_state_schema_meta.SCHEMA_BFBS)
                 channel = writer.register_channel(BODY_STATE_TOPIC,'flatbuffer',schema)
                 for i in range(3):
-                    raw = BodyStateT(protocolVersion=3,stateId=2**63+i,tsStateRealUs=1_000_000+20_000*i,
+                    raw = BodyStateT(protocolVersion=3,runtimeId=11,stateId=2**63+i,tsStateRealUs=1_000_000+20_000*i,
                                     joints=[BodyJointStateT(q=j/4) for j in range(31)])
                     builder = flatbuffers.Builder(2048);builder.Finish(raw.Pack(builder))
                     writer.add_message(channel,100+i,bytes(builder.Output()),100+i)

@@ -105,7 +105,7 @@ class NativeBodyStateTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '31 joint slots'):
             decode_body_state_native(missing)
         b = flatbuffers.Builder(1);m = module('BodyState')
-        m.BodyStateStart(b);m.BodyStateAddProtocolVersion(b, 3);b.Finish(m.BodyStateEnd(b))
+        m.BodyStateStart(b);m.BodyStateAddProtocolVersion(b, 3);m.BodyStateAddRuntimeId(b, 11);b.Finish(m.BodyStateEnd(b))
         with self.assertRaisesRegex(ValueError, '31 joint slots'):
             self.compare(bytes(b.Output()))
 
@@ -179,11 +179,13 @@ class NativeBodyStateTest(unittest.TestCase):
         from test_pull import PullTest, S
         from locomotion_aorta import PullController
         from locomotion_aorta.transport import BODY_STATE_TOPIC
-        t = PullTest().transport()
-        controller = PullController.__new__(PullController)
-        controller.transport = t
-        controller._condition = __import__("threading").Condition()
-        controller._closed = False
+        from body_fixtures import robot_info_reply
+        t = PullTest().transport(
+            node=S(create_subscriber_typed=lambda *a, **kw: S(close=lambda: None)),
+            get_robot_info=lambda _: dataclasses.replace(robot_info_reply(), runtime_id=2**64-1))
+        controller = PullController(client_id=7, _transport=t)
+        self.addCleanup(controller.close)
+        controller.get_robot_info(.1)
         _state_decoder.cache_clear()
         self.addCleanup(_state_decoder.cache_clear)
         with mock.patch.object(native, 'decode_state', wraps=native.decode_state) as decode:
