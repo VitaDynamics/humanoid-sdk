@@ -17,7 +17,7 @@ import flatbuffers
 
 from fake_transport import FakeTransport
 from body_fixtures import robot_info_reply
-from test_controller import ControllerHarness, make_command
+from test_controller import ControllerHarness, make_command, _BODY_TEST_TARGETS
 from test_end_effector_codec import info_object, state_object, touch_object, pack, target
 from locomotion_aorta import (
     AortaBindingsUnavailableError, CONTROL_REQUEST_TOPIC, CONTROL_STATUS_TOPIC, ControllerClosedError,
@@ -189,7 +189,7 @@ class EndEffectorClientTest(unittest.TestCase):
         first = left.publish(target())
         before = list(harness.transport.published)
         with self.assertRaises(NotRunningError):
-            harness.controller.publish(make_command(0))
+            harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual(harness.transport.published, before)
         self.assertEqual(harness.controller._next_external_sequence, 2)
         self.assertEqual(left.set_touch(True, .1).status, ServiceStatus.SUCCESS)
@@ -289,10 +289,10 @@ class EndEffectorClientTest(unittest.TestCase):
         left = self.client(harness, node)
         right = self.client(harness, node, 'right')
         harness.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=2**64-1)
-        first = harness.controller.publish(make_command(0))
+        first = harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         second = left.publish(target(torque=0.))
         third = right.publish(target(torque=-.25))
-        fourth = harness.controller.publish(make_command(0))
+        fourth = harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual((first.sequence, second.key.sequence, third.key.sequence, fourth.sequence), (1, 2, 3, 4))
         self.assertEqual((first.session_id, second.key.session_id, third.key.session_id), (2**64-1,)*3)
         self.assertEqual(second.control_id, harness.control_id)
@@ -320,7 +320,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(node.commands[0][1].Key().Sequence(), 1)
         self.assertEqual(harness.transport.published, requests)
         node.publish_error = None
-        self.assertEqual(harness.controller.publish(make_command(0)).sequence, 2)
+        self.assertEqual(harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).sequence, 2)
         client.close()
         self.assertEqual(len(node.commands), 1)
         self.assertEqual(harness.transport.close_count, 0)
@@ -338,7 +338,7 @@ class EndEffectorClientTest(unittest.TestCase):
             except BaseException as error:
                 errors.append(error)
         threads = [threading.Thread(target=publish, args=(call,)) for call in (
-            lambda: harness.controller.publish(make_command(0)),
+            lambda: harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f),
             lambda: left.publish(target()), lambda: right.publish(target()))]
         for thread in threads:
             thread.start()
@@ -385,7 +385,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 with self.assertRaises((InvalidCommandError, ControllerClosedError)):
                     client.publish(command, **kwargs)
                 self.assertEqual(node.commands, [])
-                self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+                self.assertEqual(harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).sequence, 1)
 
     def test_foreign_owner_lease_invalid_generation_and_unentered_connection_cannot_send(self):
         for replacement in ({'client_id': 17}, {'control_id': 19}, {'generation': 0}):
@@ -519,7 +519,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 self.assertEqual(harness.controller._next_external_sequence, after_poison)
 
                 with self.assertRaises(ValueError):
-                    harness.controller.publish(make_command(0))
+                    harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
                 self.assertIsNotNone(left._fatal)
                 self.assertIsNotNone(right._fatal)
 
@@ -732,7 +732,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertIs(client._latest['state'], last)
         with self.assertRaises(ControllerClosedError):
             client.wait_state(0.01)
-        self.assertEqual(harness.controller.publish(make_command(0)).sequence, 2)
+        self.assertEqual(harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).sequence, 2)
 
     def test_close_wakes_waiters_without_waiting_for_transport_or_fabricating_feedback(self):
         harness, node = self.harness(running=False)
@@ -886,7 +886,7 @@ class EndEffectorClientTest(unittest.TestCase):
     def test_set_touch_real_typed_calls_keep_motion_keys_heartbeat_and_feedback_unchanged(self):
         harness, node = self.harness()
         client = self.client(harness, node, touch=True)
-        first = harness.controller.publish(make_command(0))
+        first = harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         state, touch = client.state, client.touch
         traffic = list(harness.transport.published)
         sequence = harness.controller._next_external_sequence
@@ -909,7 +909,7 @@ class EndEffectorClientTest(unittest.TestCase):
             self.assertFalse(hasattr(wire, 'Key'))
         self.assertEqual(node.commands, [])
         self.assertEqual((first.sequence, client.publish(target()).key.sequence,
-                          harness.controller.publish(make_command(0)).sequence), (1, 2, 3))
+                          harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).sequence), (1, 2, 3))
         self.assertTrue(all(h.close_count == 1 for h in node.handles if isinstance(h, TouchRPC)))
 
     def test_set_touch_lazily_caches_only_validated_bindings_not_rpc_clients(self):
@@ -960,9 +960,9 @@ class EndEffectorClientTest(unittest.TestCase):
                 self.assertEqual(node.touch_requests, [])
                 if reason == 'bad-ref':
                     with self.assertRaises(ValueError):
-                        harness.controller.publish(make_command(0))
+                        harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
                 else:
-                    self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+                    self.assertEqual(harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).sequence, 1)
         harness, node = self.harness()
         client = self.client(harness, node, touch=True)
         for timeout in (True, -1, float('nan'), float('inf'), '1', 1e300):
@@ -1049,7 +1049,7 @@ class EndEffectorClientTest(unittest.TestCase):
                     client.set_touch(True, timeout=.1)
                 self.assertIs(client.state, state); self.assertIs(client.touch, touch)
                 self.assertEqual(len(node.touch_requests), 1)
-                self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+                self.assertEqual(harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).sequence, 1)
 
     def test_set_touch_service_failures_and_partial_status_preserve_raw_reply(self):
         # Synthetic returned statuses test preservation, not claims about backend pairings.
@@ -1073,7 +1073,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 self.assertEqual((actual.status, actual.reason), (status, reason))
                 self.assertIs(client.state, state)
                 self.assertEqual(len(node.touch_requests), 1)
-                self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+                self.assertEqual(harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).sequence, 1)
 
     def test_set_touch_matching_core_timeout_cancel_and_transport_errors_are_not_service_replies(self):
         from aorta.errors import TimeoutError as AortaTimeoutError, CancelledError
@@ -1094,7 +1094,7 @@ class EndEffectorClientTest(unittest.TestCase):
             self.assertEqual(len(node.touch_requests), before+1)
             self.assertFalse(hasattr(caught.exception, 'response'))
         self.assertTrue(all(o.allow_retry is False for o in node.rpc_options))
-        self.assertEqual(harness.controller.publish(make_command(0)).sequence, 1)
+        self.assertEqual(harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).sequence, 1)
 
     def test_set_touch_blocking_matching_or_rpc_releases_shared_locks_and_close_has_no_commands(self):
         for stage in ('matching', 'rpc'):
@@ -1133,14 +1133,14 @@ class EndEffectorClientTest(unittest.TestCase):
     def test_set_touch_does_not_learn_generation_or_reset_the_motion_stream(self):
         harness, node = self.harness()
         client = self.client(harness, node, touch=True)
-        harness.controller.publish(make_command(0))
+        harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         harness.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
         client.set_touch(True, timeout=.1)
         self.assertEqual((harness.controller._external_session_id, harness.controller._next_external_sequence), (42, 2))
         harness.status(action='EXTERNAL', phase=ExternalPhase.TIMEOUT_HOLD, generation=84)
         with self.assertRaises(NotRunningError): client.set_touch(True, timeout=.1)
         harness.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
-        self.assertEqual(harness.controller.publish(make_command(0)).session_id, 84)
+        self.assertEqual(harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).session_id, 84)
         harness.status(action='EXTERNAL', phase=ExternalPhase.TIMEOUT_HOLD, generation=84)
         client.set_touch(False, timeout=.1)
         self.assertEqual(client.publish(target()).key, CommandKey(84, 2))
@@ -1273,7 +1273,7 @@ class EndEffectorClientTest(unittest.TestCase):
             self.assertEqual(wire.InputObservations(0).SampleId(), 2**64-1)
             self.assertEqual((wire.TsClientCreatedUs(), wire.TsClientSendUs()), (0, 0))
         self.assertEqual(harness.transport.published, before)
-        self.assertEqual(harness.controller.publish(make_command(0)).sequence, 3)
+        self.assertEqual(harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).sequence, 3)
 
     def test_body_and_selected_ee_sample_keep_order_after_latest_changes(self):
         from test_body_codec import make_state
@@ -1431,7 +1431,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(len(node.commands), 1)
         self.assertEqual(codec.decode_cmd(node.commands[0][1]).input_observations, used)
         node.publish_error = None
-        self.assertEqual(harness.controller.publish(make_command(0)).sequence, 2)
+        self.assertEqual(harness.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f).sequence, 2)
         self.assertEqual(client.publish(target(), input_observations=used).key, CommandKey(42, 3))
 
     def test_late_info_and_missing_bindings_never_open_an_independent_node(self):
@@ -1541,7 +1541,10 @@ class EndEffectorClientTest(unittest.TestCase):
                 previous = client.state
                 obj = state_object()
                 for name, value in change.items():
-                    setattr(obj, name, value)
+                    if name == 'pos':
+                        obj.axes[0].pos = value[0]
+                    else:
+                        setattr(obj, name, value)
                 node.emit('left', 'state', obj)
                 with self.assertRaisesRegex(ValueError, 'invalid EE state'):
                     client.state

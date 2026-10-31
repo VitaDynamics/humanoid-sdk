@@ -1317,7 +1317,7 @@ class ExternalControllerTest(unittest.TestCase):
         ]
         self.assertEqual([message.sequence for message in published_commands], [1, 2])
         self.assertEqual(
-            [message.protocol_version for message in published_commands], [2, 2]
+            [message.protocol_version for message in published_commands], [3, 3]
         )
         self.assertEqual(
             [message.session_id for message in published_commands],

@@ -1079,7 +1079,7 @@ class PartialFeedbackGuardTest(unittest.TestCase):
         self.emit(1,Field.POS,tsStatePubUs=120,outputAllowed=False,inhibitReason=InhibitReason.DOMAIN_FAULT)
         with self.assertRaisesRegex(RuntimeError,'inhibited'):
             guard.feedback(True)
-        self.emit(2,Field.POS,sampleStatus=SampleStatus.STALE)
+        self.emit(2,Field.POS,tsStatePubUs=130,sampleStatus=SampleStatus.STALE)
         with self.assertRaisesRegex(ValueError,'measured position'):
             guard.feedback(True)
 
