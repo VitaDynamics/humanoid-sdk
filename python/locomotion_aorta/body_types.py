@@ -18,6 +18,13 @@ BODY_SLOTS = 31
 BODY_CMD_PROTOCOL_VERSION = 3
 BODY_STATE_PROTOCOL_VERSION = 3
 
+_BODY_FIELD_Q = 1 << 0
+_BODY_FIELD_DQ = 1 << 1
+_BODY_FIELD_TAU = 1 << 2
+_BODY_FIELD_KP = 1 << 3
+_BODY_FIELD_KD = 1 << 4
+_BODY_FIELD_ALL = 0x1f
+
 
 @dataclass(frozen=True, slots=True)
 class BodyJointCmd:
