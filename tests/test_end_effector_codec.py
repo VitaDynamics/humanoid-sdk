@@ -288,6 +288,25 @@ class EndEffectorCodecTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             codec.prepare_target(info, dataclasses.replace(prepared, current=(125.,)))
 
+    def test_each_command_field_keeps_its_own_limit_and_validity(self):
+        info = decode('info', info_object())
+        cases = (('pos', Field.POS, .0625, .125),
+                 ('vel', Field.VEL, -.125, -.126),
+                 ('vel_limit', Field.VEL_LIMIT, .125, -.001),
+                 ('tau', Field.TAU, -.5, -.501),
+                 ('current', Field.CURRENT, .25, .251))
+        for name, bit, valid, outside in cases:
+            with self.subTest(field=name):
+                target_value = EndEffectorTarget((ControlMode.POSITION_TORQUE,),
+                    (bit,), **{name: (valid,)})
+                prepared = codec.prepare_target(info, target_value)
+                self.assertEqual(getattr(prepared, name), (valid,))
+                with self.assertRaisesRegex(ValueError, 'outside declared SI limits'):
+                    codec.prepare_target(info, dataclasses.replace(target_value, **{name: (outside,)}))
+                missing = dataclasses.replace(info, valid_limits=(info.valid_limits[0] & ~bit,))
+                with self.assertRaisesRegex(ValueError, 'no proven limit'):
+                    codec.prepare_target(missing, target_value)
+
     def test_unsupported_columns_stay_empty_and_unknown_read_enums_stay_unknown(self):
         obj = info_object()
         obj.supportedCommandFields = [Field.POS | Field.VEL_LIMIT | Field.MODE]

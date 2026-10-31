@@ -321,6 +321,7 @@ def prepare_target(info, target):
                 raise ValueError('selected column is missing: ' + name)
             values = (0.0,) * n if supported else ()
         _tuple(values, n if supported else 0, name)
+        _, lower, upper = next(row for row in _LIMITS if row[0] == bit)
         for i, value in enumerate(values):
             _finite(value, name)
             if not target.command_fields[i] & bit:
@@ -333,7 +334,6 @@ def prepare_target(info, target):
             if bit == Field.TAU and info.torque_domain[i] not in (
                     TorqueDomain.JOINT_AXIS, TorqueDomain.MOTOR_SHAFT, TorqueDomain.VENDOR_UNCONFIRMED):
                 raise ValueError('torque quantity has no declared domain')
-            _, lower, upper = next(row for row in _LIMITS if row[0] == bit)
             minimum = 0.0 if lower is None else getattr(info, lower)[i]
             if not minimum <= value <= getattr(info, upper)[i]:
                 raise ValueError(name + ' is outside declared SI limits')
