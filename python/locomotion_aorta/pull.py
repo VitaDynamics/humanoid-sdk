@@ -6,13 +6,19 @@ import uuid
 from dataclasses import replace
 
 from .controller import (ExternalController, ExternalControlTimeoutError,
-                         ControllerClosedError, _deadline, _nonempty_text,
+                         ControllerClosedError, _deadline, _discovered_runtime, _nonempty_text,
                          _uint64_nonzero, _valid_generation)
-from .body_types import BODY_STATE_PROTOCOL_VERSION, ServiceStatus
+from .body_types import BODY_STATE_PROTOCOL_VERSION
 from .types import ControlStatus, PROTOCOL_VERSION
 from .transport import _AortaTransport, BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC
 from .state_arrays import decode_body_state_arrays
 from ._native_body_codec import decode_body_state_native
+
+
+def _matches_pull_candidate(candidate, runtime_id):
+    version = PROTOCOL_VERSION if isinstance(candidate, ControlStatus) else BODY_STATE_PROTOCOL_VERSION
+    return (candidate.protocol_version == version and _valid_generation(candidate.runtime_id)
+            and candidate.runtime_id == runtime_id)
 
 
 class PullTransport(_AortaTransport):
@@ -199,15 +205,7 @@ class PullStateSource:
     def _commit_pull_candidate(self, candidate, commit):
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
-            if isinstance(candidate, ControlStatus):
-                valid = (candidate.protocol_version == PROTOCOL_VERSION
-                         and _valid_generation(candidate.runtime_id)
-                         and candidate.runtime_id == self._end_effector_runtime_id)
-            else:
-                valid = (candidate.protocol_version == BODY_STATE_PROTOCOL_VERSION
-                         and _valid_generation(candidate.runtime_id)
-                         and candidate.runtime_id == self._end_effector_runtime_id)
-            if not valid:
+            if not _matches_pull_candidate(candidate, self._end_effector_runtime_id):
                 return False
             commit()
             return True
@@ -232,13 +230,8 @@ class PullStateSource:
         handles = []
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
-            if (reply.status in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
-                    and reply.info is not None and reply.info.body is not None
-                    and _valid_generation(reply.runtime_id)):
-                runtime = reply.runtime_id
-                if (self._end_effector_runtime_id != observed_runtime
-                        and self._end_effector_runtime_id != runtime):
-                    raise ValueError('discovery context changed while request was in flight')
+            runtime = _discovered_runtime(reply, observed_runtime, self._end_effector_runtime_id)
+            if runtime is not None:
                 if self._end_effector_runtime_id is None:
                     self._end_effector_runtime_id = runtime
                 elif self._end_effector_runtime_id != runtime:
@@ -333,15 +326,7 @@ class PullController(ExternalController):
         with self._condition:
             self._ensure_open()
             self.transport._ensure_open()
-            if isinstance(candidate, ControlStatus):
-                valid = (candidate.protocol_version == PROTOCOL_VERSION
-                         and _valid_generation(candidate.runtime_id)
-                         and candidate.runtime_id == self._end_effector_runtime_id)
-            else:
-                valid = (candidate.protocol_version == BODY_STATE_PROTOCOL_VERSION
-                         and _valid_generation(candidate.runtime_id)
-                         and candidate.runtime_id == self._end_effector_runtime_id)
-            if not valid:
+            if not _matches_pull_candidate(candidate, self._end_effector_runtime_id):
                 return False
             commit()
             return True
@@ -349,7 +334,10 @@ class PullController(ExternalController):
     def wait_state(self, timeout=5.0):
         with self._condition:
             self._ensure_open()
-        state = self.transport.wait_state(timeout)
+        return self._read_pull_state('wait_state', timeout)
+
+    def _read_pull_state(self, reader, timeout):
+        state = getattr(self.transport, reader)(timeout)
         with self._condition:
             self._ensure_open()
             self.transport._ensure_open()
@@ -361,13 +349,7 @@ class PullController(ExternalController):
         with self._condition:
             self._ensure_open()
         try:
-            state = self.transport._wait_body_state(timeout)
-            with self._condition:
-                self._ensure_open()
-                self.transport._ensure_open()
-                if not _valid_generation(state.runtime_id) or state.runtime_id != self._end_effector_runtime_id:
-                    raise ValueError('BodyState does not belong to the discovered runtime')
-                return state
+            return self._read_pull_state('_wait_body_state', timeout)
         except TimeoutError as error:
             raise ExternalControlTimeoutError(str(error)) from error
 
@@ -378,30 +360,27 @@ class PullController(ExternalController):
             self.transport.poll_control_status()
         return super().status
 
-    def _reserve_command(self, *, for_body=False, expected_runtime_id=None):
+    def _poll_status_if_open(self):
         with self._condition:
             self._ensure_open()
         self.transport.poll_control_status()
+
+    def _reserve_command(self, *, for_body=False, expected_runtime_id=None):
+        self._poll_status_if_open()
         return super()._reserve_command(for_body=for_body, expected_runtime_id=expected_runtime_id)
 
     def _reserve_end_effector_command(self, client, robot_runtime_id, prepare):
-        with self._condition:
-            self._ensure_open()
-        self.transport.poll_control_status()
+        self._poll_status_if_open()
         return super()._reserve_end_effector_command(
             client, robot_runtime_id, prepare
         )
 
     def _control_context(self):
-        with self._condition:
-            self._ensure_open()
-        self.transport.poll_control_status()
+        self._poll_status_if_open()
         return super()._control_context()
 
     def _end_effector_control_context(self, client, robot_runtime_id, operation):
-        with self._condition:
-            self._ensure_open()
-        self.transport.poll_control_status()
+        self._poll_status_if_open()
         return super()._end_effector_control_context(
             client, robot_runtime_id, operation
         )

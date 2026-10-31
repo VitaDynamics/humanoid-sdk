@@ -519,6 +519,38 @@ class PullTest(unittest.TestCase):
         self.assertIs(source.control_status,status);source.close();self.assertEqual(calls,[.1,'close'])
 
 class RuntimeIdentityPullR3Test(unittest.TestCase):
+    def test_late_discovery_does_not_retire_new_pull_binding(self):
+        from body_fixtures import robot_info_reply
+        transport = FakeTransport()
+        source = PullStateSource(_transport=transport)
+        self.addCleanup(source.close)
+        entered, release, errors = threading.Event(), threading.Event(), []
+        caller = threading.get_ident()
+        def reply(_timeout):
+            if threading.get_ident() != caller:
+                entered.set()
+                if not release.wait(2):
+                    raise AssertionError('late-discovery barrier not released')
+                return replace(robot_info_reply(), runtime_id=12)
+            return robot_info_reply()
+        transport.get_robot_info = reply
+        def discover():
+            try: source.get_robot_info(.1)
+            except Exception as error: errors.append(error)
+        worker = threading.Thread(target=discover)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            self.assertEqual(source.get_robot_info(.1).runtime_id, 11)
+        finally:
+            release.set()
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], ValueError)
+        self.assertIn('discovery context changed', str(errors[0]))
+        self.assertEqual(source.get_robot_info(.1).runtime_id, 11)
+
     def test_readonly_discovery_binds_before_accepting_body_without_control(self):
         from body_fixtures import robot_info_reply
 

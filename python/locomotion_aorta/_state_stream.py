@@ -3,9 +3,7 @@ import importlib
 import math
 import threading
 
-from .transport import (AortaBindingsUnavailableError, BODY_STATE_TOPIC,
-                        GET_ROBOT_INFO_SERVICE, _fill_robot_info_request)
-from ._body_codec import decode_robot_info_response
+from .transport import AortaBindingsUnavailableError, BODY_STATE_TOPIC, _call_get_robot_info
 from ._group import require_node_group
 
 
@@ -43,15 +41,8 @@ class _StateStream:
             request = importlib.import_module('aorta.services.humanoid_locomotion.GetRobotInfoRequest')
             response = importlib.import_module('aorta.services.humanoid_locomotion.GetRobotInfoResponse')
             meta = importlib.import_module('get_robot_info_schema_meta')
-            if timeout_ms not in self._info_clients:
-                self._info_clients[timeout_ms] = self.node.create_client_typed(
-                    GET_ROBOT_INFO_SERVICE, response.GetRobotInfoResponse.GetRootAs,
-                    request_schema_meta=meta, options=self._aorta.ClientOptions(timeout_ms=timeout_ms))
-            client = self._info_clients[timeout_ms]
-            if not client.raw().wait_for_matching(timeout_ms):
-                raise TimeoutError('get_robot_info service provider not found')
-            return decode_robot_info_response(client.call(
-                lambda builder, header: _fill_robot_info_request(request, builder, header)).decode())
+            return _call_get_robot_info(self.node, self._aorta, self._info_clients,
+                                        timeout_ms, request, response, meta)
 
     def close(self):
         with self._info_lock:

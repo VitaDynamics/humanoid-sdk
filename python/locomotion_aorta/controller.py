@@ -82,6 +82,17 @@ class _ControlContext:
     request_id: str
 
 
+def _discovered_runtime(reply, observed_runtime, current_runtime):
+    if (reply.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
+            or reply.info is None or reply.info.body is None
+            or not _valid_generation(reply.runtime_id)):
+        return None
+    runtime = reply.runtime_id
+    if current_runtime != observed_runtime and current_runtime != runtime:
+        raise ValueError('discovery context changed while request was in flight')
+    return runtime
+
+
 class ExternalController:
     def __init__(
         self,
@@ -172,13 +183,8 @@ class ExternalController:
         handles = []
         with self._condition:
             self._ensure_open()
-            if (reply.status in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
-                    and reply.info is not None and reply.info.body is not None
-                    and _valid_generation(reply.runtime_id)):
-                runtime = reply.runtime_id
-                if (self._end_effector_runtime_id != observed_runtime
-                        and self._end_effector_runtime_id != runtime):
-                    raise ValueError('discovery context changed while request was in flight')
+            runtime = _discovered_runtime(reply, observed_runtime, self._end_effector_runtime_id)
+            if runtime is not None:
                 if self._end_effector_runtime_id is None:
                     self._end_effector_runtime_id = runtime
                 elif self._end_effector_runtime_id != runtime:

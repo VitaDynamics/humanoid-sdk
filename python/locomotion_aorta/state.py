@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from functools import cached_property
 
 from ._body_codec import decode_body_state, _require_body_joints
-from .body_types import BODY_STATE_PROTOCOL_VERSION, BodyState, ServiceStatus
-from .controller import _deadline, _nonempty_text, _valid_generation
+from .body_types import BODY_STATE_PROTOCOL_VERSION, BodyState
+from .controller import _deadline, _discovered_runtime, _nonempty_text
 from ._state_stream import create_state_stream
 
 
@@ -84,12 +84,8 @@ class BodyStateSource:
         reply = self._stream.get_robot_info(timeout)
         with self._condition:
             self._ensure_open()
-            if (reply.status in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
-                    and reply.info is not None and reply.info.body is not None
-                    and _valid_generation(reply.runtime_id)):
-                runtime = reply.runtime_id
-                if self._runtime_id != observed_runtime and self._runtime_id != runtime:
-                    raise ValueError('discovery context changed while request was in flight')
+            runtime = _discovered_runtime(reply, observed_runtime, self._runtime_id)
+            if runtime is not None:
                 if self._runtime_id is None:
                     self._runtime_id = runtime
                 elif self._runtime_id != runtime:

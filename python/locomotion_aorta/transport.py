@@ -26,6 +26,19 @@ CONTROL_ACK_TOPIC = "/sdk/foot_humanoid/control/ack"
 CONTROL_STATUS_TOPIC = "/sdk/foot_humanoid/control/status"
 
 
+def _call_get_robot_info(node, aorta, clients, timeout_ms, request, response, schema_meta):
+    if timeout_ms not in clients:
+        clients[timeout_ms] = node.create_client_typed(
+            GET_ROBOT_INFO_SERVICE, response.GetRobotInfoResponse.GetRootAs,
+            request_schema_meta=schema_meta, options=aorta.ClientOptions(timeout_ms=timeout_ms))
+    client = clients[timeout_ms]
+    if not client.raw().wait_for_matching(timeout_ms):
+        raise TimeoutError("get_robot_info service provider not found")
+    reply = client.call(lambda builder, header: _fill_robot_info_request(
+        request, builder, header)).decode()
+    return decode_robot_info_response(reply)
+
+
 class AortaBindingsUnavailableError(RuntimeError):
     """Raised when the compatible Aorta Python bindings are unavailable."""
 
@@ -184,18 +197,10 @@ class _AortaTransport:
         if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
         timeout_ms = math.ceil(timeout * 1000)
-        if timeout_ms not in self._info_clients:
-            self._info_clients[timeout_ms] = self.node.create_client_typed(
-                GET_ROBOT_INFO_SERVICE,
-                self._bindings.get_robot_info_response.GetRobotInfoResponse.GetRootAs,
-                request_schema_meta=self._bindings.get_robot_info_schema_meta,
-                options=self._bindings.aorta.ClientOptions(timeout_ms=timeout_ms))
-        client = self._info_clients[timeout_ms]
-        if not client.raw().wait_for_matching(timeout_ms):
-            raise TimeoutError("get_robot_info service provider not found")
-        reply = client.call(lambda builder, header: _fill_robot_info_request(
-            self._bindings.get_robot_info_request, builder, header)).decode()
-        return decode_robot_info_response(reply)
+        return _call_get_robot_info(
+            self.node, self._bindings.aorta, self._info_clients, timeout_ms,
+            self._bindings.get_robot_info_request, self._bindings.get_robot_info_response,
+            self._bindings.get_robot_info_schema_meta)
 
     def close(self) -> None:
         with self._info_lock:

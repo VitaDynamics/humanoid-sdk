@@ -265,6 +265,101 @@ class StateSourceTest(unittest.TestCase):
             stream.close()
             node.close.assert_called_once_with()
 
+    def test_info_rpc_cache_and_timeout_order_remain_per_source(self):
+        from locomotion_aorta import transport as transport_module
+        from locomotion_aorta import _state_stream as stream_module
+
+        class Client:
+            def __init__(self):
+                self.matching = True
+                self.waits = []
+                self.headers = []
+            def raw(self): return self
+            def wait_for_matching(self, timeout_ms):
+                self.waits.append(timeout_ms)
+                return self.matching
+            def call(self, fill):
+                self.headers.append(fill('builder', 17))
+                return SimpleNamespace(decode=lambda: 'actual-reply-view')
+
+        def make_node():
+            node = SimpleNamespace()
+            node.create_client_typed = mock.Mock(side_effect=lambda *args, **kwargs: Client())
+            return node
+
+        aorta = SimpleNamespace(ClientOptions=lambda **kw: SimpleNamespace(**kw))
+        request = SimpleNamespace(GetRobotInfoRequestStart=mock.Mock(),
+                                  GetRobotInfoRequestAddAortaHeader=mock.Mock(),
+                                  GetRobotInfoRequestEnd=mock.Mock(return_value=23))
+        response = SimpleNamespace(GetRobotInfoResponse=SimpleNamespace(GetRootAs=object()))
+        meta = object()
+        names = {'aorta.services.humanoid_locomotion.GetRobotInfoRequest': request,
+                 'aorta.services.humanoid_locomotion.GetRobotInfoResponse': response,
+                 'get_robot_info_schema_meta': meta}
+        stream = _StateStream.__new__(_StateStream)
+        stream.node, stream._aorta, stream._info_lock = make_node(), aorta, threading.Lock()
+        stream._info_clients, stream._closed = {}, False
+        transport = transport_module._AortaTransport.__new__(transport_module._AortaTransport)
+        transport.node, transport._info_lock = make_node(), threading.Lock()
+        transport._info_clients, transport._closed = {}, False
+        transport._bindings = SimpleNamespace(aorta=aorta, get_robot_info_request=request,
+            get_robot_info_response=response, get_robot_info_schema_meta=meta)
+        reply = robot_info_reply()
+        with mock.patch.object(stream_module.importlib, 'import_module', side_effect=names.__getitem__), \
+             mock.patch.object(transport_module, 'decode_robot_info_response', return_value=reply) as decode:
+            for source in (stream, transport):
+                self.assertIs(source.get_robot_info(.1001), reply)
+                self.assertIs(source.get_robot_info(.1001), reply)
+                self.assertIs(source.get_robot_info(.2), reply)
+                self.assertEqual(source.node.create_client_typed.call_count, 2)
+                calls = source.node.create_client_typed.call_args_list
+                self.assertEqual([call.kwargs['options'].timeout_ms for call in calls], [101, 200])
+                self.assertTrue(all(call.args[0] == transport_module.GET_ROBOT_INFO_SERVICE and
+                                    call.args[1] is response.GetRobotInfoResponse.GetRootAs and
+                                    call.kwargs['request_schema_meta'] is meta for call in calls))
+                self.assertEqual(source._info_clients[101].waits, [101, 101])
+                self.assertEqual(source._info_clients[101].headers, [23, 23])
+                source._info_clients[101].matching = False
+                with self.assertRaisesRegex(TimeoutError, 'provider not found'):
+                    source.get_robot_info(.1001)
+            self.assertEqual(decode.call_count, 6)
+            self.assertIsNot(stream._info_clients[101], transport._info_clients[101])
+            stream._closed = transport._closed = True
+            with self.assertRaises(ValueError): stream.get_robot_info('bad')
+            with self.assertRaisesRegex(RuntimeError, 'closed'): transport.get_robot_info('bad')
+
+    def test_late_discovery_does_not_retire_new_readonly_binding(self):
+        from dataclasses import replace
+        source = BodyStateSource()
+        self.addCleanup(source.close)
+        entered, release, errors = threading.Event(), threading.Event(), []
+        caller = threading.get_ident()
+        def reply(_timeout):
+            if threading.get_ident() != caller:
+                entered.set()
+                if not release.wait(2):
+                    raise AssertionError('late-discovery barrier not released')
+                return replace(robot_info_reply(), runtime_id=12)
+            return robot_info_reply()
+        source._stream.get_robot_info = reply
+        def discover():
+            try: source.get_robot_info(.1)
+            except Exception as error: errors.append(error)
+        worker = threading.Thread(target=discover)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            self.assertEqual(source.get_robot_info(.1).runtime_id, 11)
+        finally:
+            release.set()
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], ValueError)
+        self.assertIn('discovery context changed', str(errors[0]))
+        source._stream.emit()
+        self.assertEqual(source.snapshot(.1).body_state().runtime_id, 11)
+
 
 if __name__ == '__main__':
     unittest.main()
