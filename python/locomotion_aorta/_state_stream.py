@@ -2,7 +2,7 @@
 import importlib
 import threading
 
-from .transport import AortaBindingsUnavailableError, BODY_STATE_TOPIC, _call_get_robot_info
+from .transport import AortaBindingsUnavailableError, BODY_STATE_TOPIC, _call_get_robot_info, _close_info_client
 from ._group import require_node_group
 from .types import _positive_timeout, _ceil_ms
 
@@ -45,8 +45,14 @@ class _StateStream:
 
     def close(self):
         with self._info_lock:
-            if not self._closed:
-                self._closed = True
+            if self._closed:
+                if None in self._info_clients:
+                    _close_info_client(self._info_clients)
+                return
+            self._closed = True
+            try:
+                _close_info_client(self._info_clients)
+            finally:
                 self.node.close()
 
 

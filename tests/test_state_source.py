@@ -277,9 +277,11 @@ class StateSourceTest(unittest.TestCase):
                 self.closed = False
                 self.close_error = None
             def close(self):
+                if self.closed:
+                    return
+                self.closed = True
                 if self.close_error is not None:
                     raise self.close_error
-                self.closed = True
             def raw(self): return self
             def wait_for_matching(self, timeout_ms):
                 self.waits.append(timeout_ms)
@@ -291,20 +293,32 @@ class StateSourceTest(unittest.TestCase):
         def make_node():
             node = SimpleNamespace()
             node.clients = []
+            node.children = []
+            node.close = mock.Mock()
             def create(*args, **kwargs):
                 self.assertFalse(any(not c.closed for c in node.clients))
                 client = Client()
                 node.clients.append(client)
                 return client
-            node.create_client_typed = mock.Mock(side_effect=create)
+            node.create_owned = mock.Mock(side_effect=create)
+            def retaining_factory(*args, **kwargs):
+                client = create(*args, **kwargs)
+                node.children.append(client)
+                return client
+            node.create_client_typed = mock.Mock(side_effect=retaining_factory)
             return node
 
-        aorta = SimpleNamespace(ClientOptions=lambda **kw: SimpleNamespace(**kw))
+        typed_calls = []
+        def typed(node, raw, decoder):
+            typed_calls.append((node, raw, decoder))
+            return raw
+        aorta = SimpleNamespace(ClientOptions=lambda **kw: SimpleNamespace(**kw),
+            Client=lambda node, *args, **kw: node.create_owned(*args, **kw), TypedClient=typed)
         request = SimpleNamespace(GetRobotInfoRequestStart=mock.Mock(),
                                   GetRobotInfoRequestAddAortaHeader=mock.Mock(),
                                   GetRobotInfoRequestEnd=mock.Mock(return_value=23))
         response = SimpleNamespace(GetRobotInfoResponse=SimpleNamespace(GetRootAs=object()))
-        meta = object()
+        meta = SimpleNamespace(SCHEMA_HASH_HEX="fixed-request-schema")
         names = {'aorta.services.humanoid_locomotion.GetRobotInfoRequest': request,
                  'aorta.services.humanoid_locomotion.GetRobotInfoResponse': response,
                  'get_robot_info_schema_meta': meta}
@@ -314,6 +328,7 @@ class StateSourceTest(unittest.TestCase):
         transport = transport_module._AortaTransport.__new__(transport_module._AortaTransport)
         transport.node, transport._info_lock = make_node(), threading.Lock()
         transport._info_clients, transport._closed = {}, False
+        transport._body_lock = threading.Lock()
         transport._bindings = SimpleNamespace(aorta=aorta, get_robot_info_request=request,
             get_robot_info_response=response, get_robot_info_schema_meta=meta)
         reply = robot_info_reply()
@@ -324,12 +339,13 @@ class StateSourceTest(unittest.TestCase):
                 self.assertIs(source.get_robot_info(.1001), reply)
                 first = source._info_clients[101]
                 self.assertIs(source.get_robot_info(.2), reply)
-                self.assertEqual(source.node.create_client_typed.call_count, 2)
-                calls = source.node.create_client_typed.call_args_list
+                self.assertEqual(source.node.create_owned.call_count, 2)
+                source.node.create_client_typed.assert_not_called()
+                self.assertEqual(source.node.children, [])
+                calls = source.node.create_owned.call_args_list
                 self.assertEqual([call.kwargs['options'].timeout_ms for call in calls], [101, 200])
                 self.assertTrue(all(call.args[0] == transport_module.GET_ROBOT_INFO_SERVICE and
-                                    call.args[1] is response.GetRobotInfoResponse.GetRootAs and
-                                    call.kwargs['request_schema_meta'] is meta for call in calls))
+                                    call.kwargs['options'].service_schema_hash_hex == meta.SCHEMA_HASH_HEX for call in calls))
                 self.assertEqual(first.waits, [101, 101])
                 self.assertEqual(first.headers, [23, 23])
                 self.assertTrue(first.closed)
@@ -346,18 +362,58 @@ class StateSourceTest(unittest.TestCase):
                     self.assertEqual(sum(not c.closed for c in source.node.clients), 1)
                 current = source._info_clients[20000]
                 current.close_error = OSError('close failed')
-                before = source.node.create_client_typed.call_count
+                before = source.node.create_owned.call_count
                 with self.assertRaisesRegex(OSError, 'close failed'):
                     source.get_robot_info(21.)
-                self.assertEqual(source.node.create_client_typed.call_count, before)
+                self.assertEqual(source.node.create_owned.call_count, before)
                 self.assertEqual(list(source._info_clients), [None])
-                current.close_error = None
-                self.assertIs(source.get_robot_info(21.), reply)
-                self.assertTrue(current.closed)
-                self.assertEqual(list(source._info_clients), [21000])
+                self.assertTrue(current.closed)  # Actual Client closes logically before free.
+                current.close_error = None  # A second close would now be a misleading no-op.
+                with self.assertRaisesRegex(RuntimeError, 'cleanup is unconfirmed'):
+                    source.get_robot_info(21.)
+                self.assertEqual(source.node.create_owned.call_count, before)
+                self.assertIs(source._info_clients[None], current)
+                for _ in range(2):
+                    with self.assertRaisesRegex(RuntimeError, 'cleanup is unconfirmed'):
+                        source.close()
+                source.node.close.assert_called_once()
+                self.assertIs(source._info_clients[None], current)
+            self.assertTrue(all(c[2] is response.GetRobotInfoResponse.GetRootAs for c in typed_calls))
             stream._closed = transport._closed = True
             with self.assertRaises(ValueError): stream.get_robot_info('bad')
             with self.assertRaisesRegex(RuntimeError, 'closed'): transport.get_robot_info('bad')
+
+    def test_info_uses_public_caller_owned_clients_without_node_retention(self):
+        import gc
+        import weakref
+        import aorta
+        from locomotion_aorta import transport as module
+        lib = mock.Mock()
+        lib.aorta_client_new_with_options.return_value = 0
+        node = SimpleNamespace(_handle=object(), _name='owned-info-test',
+                               create_client_typed=mock.Mock(), children=[])
+        meta = SimpleNamespace(SCHEMA_HASH_HEX='fixed-request-schema')
+        response = SimpleNamespace(GetRobotInfoResponse=SimpleNamespace(GetRootAs=object()))
+        reply = robot_info_reply()
+        clients = {}
+        with mock.patch('aorta.client.loader.library', return_value=lib), \
+             mock.patch('aorta.client.bindings.configure', return_value=lib), \
+             mock.patch('aorta.client.build_client_options', return_value=(None, None)), \
+             mock.patch('aorta.client.make_header_stamper', return_value=object()), \
+             mock.patch.object(aorta.Client, 'wait_for_matching', return_value=True), \
+             mock.patch.object(aorta.TypedClient, 'call', return_value=SimpleNamespace(decode=lambda: object())), \
+             mock.patch.object(module, 'decode_robot_info_response', return_value=reply):
+            self.assertIs(module._call_get_robot_info(node, aorta, clients, 100, object(), response, meta), reply)
+            original = weakref.ref(clients[100].raw())
+            self.assertIs(module._call_get_robot_info(node, aorta, clients, 200, object(), response, meta), reply)
+            gc.collect()
+            self.assertIsNone(original())
+            node.create_client_typed.assert_not_called()
+            self.assertEqual(node.children, [])
+            self.assertEqual(lib.aorta_client_free.call_count, 1)
+            module._close_info_client(clients)
+            self.assertEqual(lib.aorta_client_free.call_count, 2)
+            self.assertEqual(clients, {})
 
     def test_late_discovery_does_not_retire_new_readonly_binding(self):
         from dataclasses import replace

@@ -27,17 +27,31 @@ CONTROL_ACK_TOPIC = "/sdk/foot_humanoid/control/ack"
 CONTROL_STATUS_TOPIC = "/sdk/foot_humanoid/control/status"
 
 
+def _close_info_client(clients):
+    if None in clients:
+        raise RuntimeError('get_robot_info client cleanup is unconfirmed; close and rebuild the connection')
+    if clients:
+        _, client = clients.popitem()
+        clients[None] = client  # Retain ownership if close raises after setting closed.
+        client.close()
+        clients.clear()
+
+
 def _call_get_robot_info(node, aorta, clients, timeout_ms, request, response, schema_meta):
-    if timeout_ms not in clients:
-        while clients:
-            _, previous = clients.popitem()
-            # A failed close remains owned but cannot be reused for an RPC.
-            clients[None] = previous
-            previous.close()
+    if None in clients or timeout_ms not in clients:
+        _close_info_client(clients)
+        raw = aorta.Client(node, GET_ROBOT_INFO_SERVICE,
+            options=aorta.ClientOptions(timeout_ms=timeout_ms,
+                                       service_schema_hash_hex=schema_meta.SCHEMA_HASH_HEX))
+        clients[None] = raw
+        try:
+            client = aorta.TypedClient(node, raw, response.GetRobotInfoResponse.GetRootAs)
+        except BaseException:
+            raw.close()
             clients.clear()
-        clients[timeout_ms] = node.create_client_typed(
-            GET_ROBOT_INFO_SERVICE, response.GetRobotInfoResponse.GetRootAs,
-            request_schema_meta=schema_meta, options=aorta.ClientOptions(timeout_ms=timeout_ms))
+            raise
+        clients.clear()
+        clients[timeout_ms] = client
     client = clients[timeout_ms]
     if not client.raw().wait_for_matching(timeout_ms):
         raise TimeoutError("get_robot_info service provider not found")
@@ -213,9 +227,14 @@ class _AortaTransport:
         with self._info_lock:
             with self._body_lock:
                 if self._closed:
+                    if None in self._info_clients:
+                        _close_info_client(self._info_clients)
                     return
                 self._closed = True
-                self.node.close()
+                try:
+                    _close_info_client(self._info_clients)
+                finally:
+                    self.node.close()
 
     def _subscriber_spec(
         self, topic: str

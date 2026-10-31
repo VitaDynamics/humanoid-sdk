@@ -231,10 +231,7 @@ class ExternalControllerTest(unittest.TestCase):
                         else:
                             reply = replace(reply, info=replace(reply.info, body=replace(reply.info.body, roster_version=reply.info.body.roster_version + 1)))
                         h.transport.get_robot_info = lambda _: reply
-                        if transition == 'runtime':
-                            with self.assertRaisesRegex(ValueError, 'new connection'):
-                                h.controller.get_robot_info(.1)
-                        else:
+                        with self.assertRaisesRegex(ValueError, 'new connection'):
                             h.controller.get_robot_info(.1)
                 finally:
                     release.set()
@@ -1487,7 +1484,7 @@ class ExternalControllerTest(unittest.TestCase):
                         h.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
                     elif change == 'body_info':
                         h.transport.get_robot_info = lambda _: replace(
-                            reply, info=replace(reply.info, body=replace(reply.info.body)))
+                            reply, info=replace(reply.info, body=replace(reply.info.body, roster_version=reply.info.body.roster_version + 1)))
                         h.controller.get_robot_info(.1)
                     elif change == 'owner':
                         status = h.controller.status
