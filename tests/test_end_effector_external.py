@@ -651,7 +651,9 @@ class EndEffectorExampleTest(unittest.TestCase):
                ['--confirm-motion','--side','right'],['--confirm-motion','--dry-run'],
                ['--right-vel-limit','-1'],['--duration','nan'],['--loop'],
                ['--side','left','--pattern','sine'],['--acceleration-limit-m-s2','1'],
-               ['--period-s','0'],['--low-frac','.8','--high-frac','.2'],['--touch','invalid'])
+               ['--period-s','0'],['--low-frac','.8','--high-frac','.2'],['--touch','invalid'],
+               ['--side','left','--right-hz','0'], ['--side','right','--left-hz','nan'],
+               ['--side','none','--right-hz','inf'])
         for flags in cases:
             with self.subTest(flags=flags),patch('sys.stderr',new_callable=io.StringIO):
                 source,client,controller=Mock(),Mock(),Mock()
@@ -661,16 +663,22 @@ class EndEffectorExampleTest(unittest.TestCase):
                 source.assert_not_called(); client.assert_not_called(); controller.assert_not_called()
 
     def test_main_and_run_share_finite_motion_parameter_validation(self):
-        source,connection,client=Mock(),Mock(),Mock()
+        source,client=Mock(),Mock()
+        connection = self.controller()
+        readonly_endpoint = Endpoint(connection)
         source.return_value.__enter__=Mock(return_value=connection)
         source.return_value.__exit__=Mock(return_value=False)
-        connection.get_robot_info.return_value=robot_info_reply()
-        client.return_value.__enter__=Mock(return_value=Mock(side='right'))
+        client.return_value.__enter__=Mock(return_value=readonly_endpoint)
         client.return_value.__exit__=Mock(return_value=False)
-        with patch.object(demo,'_validate_motion_parameters',wraps=demo._validate_motion_parameters) as validate:
+        with patch.object(demo,'_validate_motion_parameters',wraps=demo._validate_motion_parameters) as validate, \
+             patch('sys.stdout', new_callable=io.StringIO) as output:
             demo.main(['--side','right'],_state_source_factory=source,
                       _client_factory=client,_controller_factory=Mock())
         self.assertEqual(1,validate.call_count)
+        self.assertEqual(readonly_endpoint.info.runtime_id, readonly_endpoint.state.runtime_id)
+        self.assertIn('Info=', output.getvalue())
+        self.assertEqual([], readonly_endpoint.commands)
+        self.assertNotIn('enter_external', connection.calls)
         controller=self.controller(); endpoint=Endpoint(controller)
         target=demo.position_target(endpoint.info,(.0625,),unit='m')
         with patch.object(demo,'_validate_motion_parameters',side_effect=ValueError('shared validation')) as validate:

@@ -813,15 +813,12 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         parser.error('--body-pose zero requires --body-gains hold')
     if args.touch != 'keep' and (readonly or not sides):
         parser.error('--touch on/off requires a selected endpoint and --confirm-motion')
-    for name in ('timeout', 'duration', 'feedback_interval', 'left_hz', 'right_hz'):
-        if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
-            parser.error(name+' must be finite and positive')
     try:
         _validate_motion_parameters(pattern=args.pattern, loop=args.loop, period=args.period_s,
             sine_min=args.sine_min_m, sine_max=args.sine_max_m,
             low_frac=args.low_frac, high_frac=args.high_frac, touch=args.touch,
             timeout=args.timeout, duration=args.duration, feedback_interval=args.feedback_interval,
-            rates=(getattr(args, side+'_hz') for side in sides))
+            rates=(args.left_hz, args.right_hz))
     except ValueError as exc:
         parser.error(str(exc))
     for side in ('left', 'right'):

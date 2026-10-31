@@ -338,20 +338,27 @@ class ExamplesSmokeTest(unittest.TestCase):
 
     def test_subscriber_uses_fixed_position_domain_units(self):
         from examples.end_effector_state_subscriber import end_effector_state_subscriber as subscriber
-        from locomotion_aorta.end_effector_types import _POSITION_DOMAIN_UNITS
+        from locomotion_aorta.end_effector_types import Field, PositionDomain, _POSITION_DOMAIN_UNITS
 
         state = SimpleNamespace(runtime_id=100, layout_id=7, side=1, state_id=4,
-                                sample_status=0, pos=(.25,), valid_fields=(1,), error_code=(0,))
-        info = SimpleNamespace(runtime_id=100, layout_id=7, side=1, axis_names=('finger',),
-                               position_domain=(next(iter(_POSITION_DOMAIN_UNITS)),), is_mock=(False,))
+                                sample_status=0, pos=(.25, .5, .75),
+                                valid_fields=(Field.POS,) * 3, error_code=(0,) * 3)
+        info = SimpleNamespace(runtime_id=100, layout_id=7, side=1,
+                               axis_names=('angle', 'opening', 'unknown'),
+                               position_domain=(PositionDomain.JOINT_ANGLE,
+                                                PositionDomain.TOTAL_OPENING, 255),
+                               is_mock=(False,) * 3)
         client = SimpleNamespace(side='left', wait_info=mock.Mock(return_value=info),
                                  wait_state=mock.Mock(return_value=state))
         with mock.patch('locomotion_aorta.end_effector_types._POSITION_DOMAIN_UNITS',
                         wraps=_POSITION_DOMAIN_UNITS) as units:
             lines = []
             subscriber.run_once(client, timeout=.1, emit=lines.append)
-        self.assertIs(_POSITION_DOMAIN_UNITS, units)
-        self.assertIn('pos=0.250000 rad', lines[-1])
+        self.assertEqual(units.get.call_args_list,
+                         [mock.call(domain, 'unknown') for domain in info.position_domain])
+        self.assertIn('pos=0.250000 rad', lines[-3])
+        self.assertIn('pos=0.500000 m', lines[-2])
+        self.assertIn('pos=0.750000 unknown', lines[-1])
 
     def test_body_info_masks_absent_slots_and_installed_errors_are_rejected(self):
         from dataclasses import replace

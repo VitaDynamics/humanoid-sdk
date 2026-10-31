@@ -188,14 +188,11 @@ def _body_target_slots(body_info, *, require_zero=False):
         raise ValueError('the full 30-joint Body action profile is required')
     body_joint_order(body_info, required_names=targets)
     slots = tuple(i for i, name in enumerate(names) if name in targets)
-    for i in slots:
-        cap = body_info.joints[i]
-        if (cap.supported_fields & 0x19 != 0x19 or not cap.valid_limits & 1
-                or not math.isfinite(cap.q_min) or not math.isfinite(cap.q_max)
-                or cap.q_min > cap.q_max):
-            raise ValueError(f'{names[i]}: position capability or limit unavailable')
-        if require_zero and not cap.q_min <= 0.0 <= cap.q_max:
-            raise ValueError(f'{names[i]}: zero outside position limit')
+    if require_zero:
+        for i in slots:
+            cap = body_info.joints[i]
+            if not cap.q_min <= 0.0 <= cap.q_max:
+                raise ValueError(f'{names[i]}: zero outside position limit')
     return slots
 
 
