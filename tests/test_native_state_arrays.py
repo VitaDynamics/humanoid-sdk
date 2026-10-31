@@ -49,9 +49,17 @@ class NativeStateArraysTest(unittest.TestCase):
     def test_owned_readonly_contiguous_arrays_survive_input_and_result_deletion(self):
         import numpy as np
         data=bytearray(state_buffer(3));v=self.compare(data);saved=v.q.copy();q=v.q
+        imu, stamps = v.imu_values, v.joint_stamps_us
+        saved_imu, saved_stamps = imu.copy(), stamps.copy()
         data[:]=bytes(len(data));del v;gc.collect()
+        del data
+        gc.collect()
         np.testing.assert_array_equal(q,saved)
+        np.testing.assert_array_equal(imu, saved_imu)
+        np.testing.assert_array_equal(stamps, saved_stamps)
         self.assertTrue(q.flags.c_contiguous);self.assertFalse(q.flags.writeable)
+        self.assertFalse(imu.flags.writeable)
+        self.assertFalse(stamps.flags.writeable)
         with self.assertRaises(ValueError):q[0]=1
 
     def test_parallel_results_do_not_share_mutable_cache_storage(self):

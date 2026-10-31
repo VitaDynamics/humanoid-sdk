@@ -74,6 +74,34 @@ std::vector<uint8_t> Copy(const aorta_bytes_view_t *view) {
     throw std::runtime_error("payload length mismatch");
   return bytes;
 }
+
+aorta_service_options_t ServiceOptions(const std::vector<uint8_t>& bfbs,
+                                      const std::vector<uint8_t>& hash,
+                                      const std::string& request_root,
+                                      const std::string& response_root) {
+  // The options borrow the buffers and roots kept in each caller's scope.
+  aorta_service_options_t options{};
+  options.service_schema_hash_hex = hash.data();
+  options.service_schema_hash_len = hash.size();
+  options.service_schema_bfbs = bfbs.data();
+  options.service_schema_bfbs_len = bfbs.size();
+  options.request_root_type = request_root.c_str();
+  options.request_root_type_len = request_root.size();
+  options.response_root_type = response_root.c_str();
+  options.response_root_type_len = response_root.size();
+  return options;
+}
+
+bool ReplyBytes(aorta_service_request_t request,
+                const std::vector<uint8_t>& bytes, bool& consumed,
+                const char* call) {
+  aorta_owned_bytes_slice_t slice{bytes.data(), bytes.size(), nullptr, nullptr};
+  aorta_owned_bytes_view_t owned{&slice, 1, bytes.size()};
+  // This FFI call consumes the request on both success and failure.
+  consumed = true;
+  return Checked(aorta_service_request_reply(request, &owned), call);
+}
+
 struct Context {
   std::mutex mutex;
   pm::Protocol protocol;
@@ -185,13 +213,9 @@ void ReplyInfo(const aorta_bytes_view_t *view, aorta_service_request_t request,
     const auto& left = ctx.ee_info[0] ? *ctx.ee_info[0] : absent;
     const auto& right = ctx.ee_info[1] ? *ctx.ee_info[1] : absent;
     const auto bytes = pm::EncodeInfo(runtime, left, right);
-    aorta_owned_bytes_slice_t slice{bytes.data(), bytes.size(), nullptr,
-                                    nullptr};
-    aorta_owned_bytes_view_t owned{&slice, 1, bytes.size()};
-    // This FFI call consumes the request on both success and failure.
-    reply_consumed = true;
-    const bool replied = Checked(aorta_service_request_reply(request, &owned),
-                                 "aorta_service_request_reply(get_robot_info)");
+    const bool replied = ReplyBytes(
+        request, bytes, reply_consumed,
+        "aorta_service_request_reply(get_robot_info)");
     std::lock_guard<std::mutex> lock(ctx.mutex);
     if (replied)
       ++ctx.info_requests;
@@ -249,10 +273,7 @@ void ReplyTouch(const aorta_bytes_view_t* view, aorta_service_request_t request,
     // The same Protocol snapshot is updated before responding. A transport
     // failure does not pretend the already-confirmed synthetic switch undid.
     const auto bytes = pm::EncodeTouchReply(reply);
-    aorta_owned_bytes_slice_t slice{bytes.data(),bytes.size(),nullptr,nullptr};
-    aorta_owned_bytes_view_t owned{&slice,1,bytes.size()};
-    consumed = true;
-    if (!Checked(aorta_service_request_reply(request,&owned), "set_touch reply")) ctx.endpoint_failed=true;
+    if (!ReplyBytes(request, bytes, consumed, "set_touch reply")) ctx.endpoint_failed=true;
   } catch (const std::exception& error) {
     if (!consumed && !Checked(aorta_service_request_reply_error(request,error.what()),"set_touch error")) ctx.endpoint_failed=true;
     std::lock_guard<std::mutex> lock(ctx.mutex);
@@ -367,13 +388,9 @@ void OpenEE(Resources& resources,const std::filesystem::path& schemas,
   resources.subscribers.push_back(sub);
   const auto bfbs=Read(schemas/"end_effector_set_touch.bfbs");
   const auto hash=Read(schemas/"end_effector_set_touch.sha256");
-  aorta_service_options_t options{};
-  options.service_schema_hash_hex=hash.data();options.service_schema_hash_len=hash.size();
-  options.service_schema_bfbs=bfbs.data();options.service_schema_bfbs_len=bfbs.size();
   const std::string request="aorta.services.humanoid_locomotion.EndEffectorSetTouchRequest";
   const std::string response="aorta.services.humanoid_locomotion.EndEffectorSetTouchResponse";
-  options.request_root_type=request.c_str();options.request_root_type_len=request.size();
-  options.response_root_type=response.c_str();options.response_root_type_len=response.size();
+  auto options = ServiceOptions(bfbs, hash, request, response);
   aorta_service_t service=0;
   Check(aorta_service_new_with_options(resources.node,(prefix+"/set_touch").c_str(),&options,ReplyTouch,&context,&service),"typed set_touch service");
   resources.ee_services.push_back(service);
@@ -481,19 +498,12 @@ int main(int argc, char **argv) {
       resources.subscribers.push_back(requests);
       const auto info_bfbs = Read(schemas / "get_robot_info.bfbs");
       const auto hash_bytes = Read(schemas / "get_robot_info.sha256");
-      aorta_service_options_t options{};
-      options.service_schema_hash_hex = hash_bytes.data();
-      options.service_schema_hash_len = hash_bytes.size();
-      options.service_schema_bfbs = info_bfbs.data();
-      options.service_schema_bfbs_len = info_bfbs.size();
       static const std::string request_root =
           "aorta.services.humanoid_locomotion.GetRobotInfoRequest";
       static const std::string response_root =
           "aorta.services.humanoid_locomotion.GetRobotInfoResponse";
-      options.request_root_type = request_root.c_str();
-      options.request_root_type_len = request_root.size();
-      options.response_root_type = response_root.c_str();
-      options.response_root_type_len = response_root.size();
+      auto options = ServiceOptions(info_bfbs, hash_bytes, request_root,
+                                     response_root);
       Check(
           aorta_service_new_with_options(
               resources.node, "/sdk/foot_humanoid/get_robot_info", &options,

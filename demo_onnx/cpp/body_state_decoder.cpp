@@ -96,6 +96,18 @@ State ReadState(const uint8_t *data, size_t size, size_t offset) {
   return result;
 }
 
+State ReadOwnedState(const py::buffer &input, size_t offset) {
+  // bytes is retained without copying. Mutable/borrowed buffers are copied
+  // and stay alive until ReadState has copied every joint and IMU value.
+  py::bytes owned =
+      py::reinterpret_steal<py::bytes>(PyObject_Bytes(input.ptr()));
+  if (!owned) throw py::error_already_set();
+  const auto *data =
+      reinterpret_cast<const uint8_t *>(PyBytes_AS_STRING(owned.ptr()));
+  const auto size = static_cast<size_t>(PyBytes_GET_SIZE(owned.ptr()));
+  return ReadState(data, size, offset);
+}
+
 py::object RuntimeId(const State &state) {
   if (!state.runtime_id)
     throw std::invalid_argument(
@@ -106,15 +118,7 @@ py::object RuntimeId(const State &state) {
 py::object Decode(py::buffer input, size_t offset, const py::object &state_type,
                   const py::object &joint_type, const py::object &imu_type,
                   const py::object &sample_type) {
-  // bytes is retained without copying. Mutable/borrowed buffers are copied
-  // before decoding, so results never borrow mutable caller storage.
-  py::bytes owned =
-      py::reinterpret_steal<py::bytes>(PyObject_Bytes(input.ptr()));
-  if (!owned) throw py::error_already_set();
-  auto *data =
-      reinterpret_cast<const uint8_t *>(PyBytes_AS_STRING(owned.ptr()));
-  const auto size = static_cast<size_t>(PyBytes_GET_SIZE(owned.ptr()));
-  State result = ReadState(data, size, offset);
+  State result = ReadOwnedState(input, offset);
   py::tuple joints(result.joints.size());
   for (size_t i = 0; i < result.joints.size(); ++i) {
     const auto &j = result.joints[i];
@@ -170,14 +174,8 @@ py::array View(std::vector<T> &data, py::ssize_t columns,
 }
 
 py::dict DecodeArrays(py::buffer input, size_t offset) {
-  py::bytes owned =
-      py::reinterpret_steal<py::bytes>(PyObject_Bytes(input.ptr()));
-  if (!owned) throw py::error_already_set();
-  auto *data =
-      reinterpret_cast<const uint8_t *>(PyBytes_AS_STRING(owned.ptr()));
-  const auto size = static_cast<size_t>(PyBytes_GET_SIZE(owned.ptr()));
   auto arrays = std::make_unique<Arrays>();
-  arrays->state = ReadState(data, size, offset);
+  arrays->state = ReadOwnedState(input, offset);
   const auto joint_count = arrays->state.joints.size();
   arrays->q.reserve(joint_count);
   arrays->dq.reserve(joint_count);

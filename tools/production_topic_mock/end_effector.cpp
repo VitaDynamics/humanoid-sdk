@@ -7,34 +7,21 @@
 
 #if defined(PRODUCTION_MOCK_EE_INFO_CODEC)
 #include "end_effector_info_generated.h"
+#include "wire_helpers.h"
 #elif defined(PRODUCTION_MOCK_EE_CMD_CODEC)
 #include "end_effector_cmd_generated.h"
 #elif defined(PRODUCTION_MOCK_EE_STATE_CODEC)
 #include "end_effector_state_generated.h"
+#include "wire_helpers.h"
 #elif defined(PRODUCTION_MOCK_EE_TOUCH_CODEC)
 #include "end_effector_touch_generated.h"
+#include "wire_helpers.h"
 #elif defined(PRODUCTION_MOCK_EE_SERVICE_CODEC)
 #include "end_effector_set_touch_generated.h"
+#include "wire_helpers.h"
 #endif
 
 namespace production_mock {
-namespace {
-template<class Table, class T> std::vector<uint8_t> Pack(const T& obj) {
-  flatbuffers::FlatBufferBuilder builder;
-  builder.Finish(Table::Pack(builder, &obj));
-  return {builder.GetBufferPointer(), builder.GetBufferPointer()+builder.GetSize()};
-}
-#if defined(PRODUCTION_MOCK_EE_INFO_CODEC) || defined(PRODUCTION_MOCK_EE_STATE_CODEC) || defined(PRODUCTION_MOCK_EE_TOUCH_CODEC)
-std::unique_ptr<aorta::sys::AortaHeaderT> Header(uint64_t id, uint64_t us) {
-  auto header=std::make_unique<aorta::sys::AortaHeaderT>();
-  header->sequence=id;
-  header->publish_stamp_ns=us*1000;
-  header->publisher_node="production_topic_mock_SYNTHETIC";
-  return header;
-}
-#endif
-}  // namespace
-
 #if defined(PRODUCTION_MOCK_EE_INFO_CODEC)
 EEInfo DecodeEEInfo(const std::vector<uint8_t>& bytes) {
   flatbuffers::Verifier verify(bytes.data(),bytes.size());
@@ -80,8 +67,9 @@ std::vector<uint8_t> EncodeEEInfo(const std::vector<uint8_t>& fixture,
   std::unique_ptr<lowlevel::ee::EndEffectorInfoT> info(lowlevel::ee::GetEndEffectorInfo(fixture.data())->UnPack());
   info->runtime_id=runtime;
   info->ts_descriptor_acquired_us=startup_us; info->ts_state_pub_us=wall_us; info->time_valid_mask=3;
-  info->aorta_header=Header(0,wall_us);
-  return Pack<lowlevel::ee::EndEffectorInfo>(*info);
+  info->aorta_header=detail::MakeHeader<aorta::sys::AortaHeaderT>(
+      0, wall_us*1000, "production_topic_mock_SYNTHETIC");
+  return detail::Pack<lowlevel::ee::EndEffectorInfo>(*info);
 }
 #elif defined(PRODUCTION_MOCK_EE_CMD_CODEC)
 EECommand DecodeEECommand(const std::vector<uint8_t>& bytes) {
@@ -124,8 +112,9 @@ std::vector<uint8_t> EncodeEEState(const EESnapshot& s,uint64_t id,uint64_t us) 
                           unknown, unknown, unknown, unknown, 0);
   out.ready=true;out.output_allowed=s.output_allowed;out.inhibit_reason=s.inhibit_reason;
   out.touch_enabled=s.touch_enabled;out.status_valid_mask=15;
-  out.aorta_header=Header(id,us);
-  return Pack<lowlevel::ee::EndEffectorState>(out);
+  out.aorta_header=detail::MakeHeader<aorta::sys::AortaHeaderT>(
+      id, us*1000, "production_topic_mock_SYNTHETIC");
+  return detail::Pack<lowlevel::ee::EndEffectorState>(out);
 }
 #elif defined(PRODUCTION_MOCK_EE_TOUCH_CODEC)
 std::vector<uint8_t> EncodeEETouch(const std::vector<uint8_t>& bytes,
@@ -142,8 +131,9 @@ std::vector<uint8_t> EncodeEETouch(const std::vector<uint8_t>& bytes,
     // hardware times, a device sample sequence, or physical contact evidence.
     stamp=lowlevel::ee::RegionStamp(0,0,0,0,0,0,0,stamp.validity()&1);
   }
-  out->aorta_header=Header(id,us);
-  return Pack<lowlevel::ee::EndEffectorTouch>(*out);
+  out->aorta_header=detail::MakeHeader<aorta::sys::AortaHeaderT>(
+      id, us*1000, "production_topic_mock_SYNTHETIC");
+  return detail::Pack<lowlevel::ee::EndEffectorTouch>(*out);
 }
 #elif defined(PRODUCTION_MOCK_EE_SERVICE_CODEC)
 TouchRequest DecodeTouchRequest(const std::vector<uint8_t>& bytes) {
@@ -162,7 +152,7 @@ std::vector<uint8_t> EncodeTouchReply(const TouchReply& value) {
   out.runtime_id=value.runtime;
   out.side=value.side;out.reason=value.reason;
   out.status=value.success ? aorta::services::common::ServiceStatus_SUCCESS : aorta::services::common::ServiceStatus_INTERNAL_ERROR;
-  return Pack<aorta::services::humanoid_locomotion::EndEffectorSetTouchResponse>(out);
+  return detail::Pack<aorta::services::humanoid_locomotion::EndEffectorSetTouchResponse>(out);
 }
 #endif
 }  // namespace production_mock

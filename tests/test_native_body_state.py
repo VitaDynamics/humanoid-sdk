@@ -161,6 +161,13 @@ class NativeBodyStateTest(unittest.TestCase):
         self.same(expected, self.compare(bytes(8)+data, offset=8))
         source = bytearray(data);result = decode_body_state(module('BodyState').BodyState.GetRootAs(source))
         source[:] = bytes(len(source));self.same(expected, result)
+        source = bytearray(data)
+        borrowed = memoryview(source)
+        result = decode_body_state(module('BodyState').BodyState.GetRootAs(borrowed))
+        source[:] = bytes(len(source))
+        borrowed.release()
+        del source, borrowed
+        self.same(expected, result)
 
     def test_parallel_decodes_have_owned_independent_state_with_gil_held(self):
         payloads = [state_buffer(i) for i in range(32)]

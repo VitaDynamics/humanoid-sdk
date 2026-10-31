@@ -32,6 +32,7 @@ Request DecodeRequest(const std::vector<uint8_t>& bytes) {
 }  // namespace production_mock
 #elif defined(PRODUCTION_MOCK_ACK_CODEC)
 #include "control_ack_generated.h"
+#include "wire_helpers.h"
 namespace production_mock {
 std::vector<uint8_t> EncodeAck(const Ack& r, uint64_t wall_ns,
                                uint64_t publication_id) {
@@ -45,17 +46,14 @@ std::vector<uint8_t> EncodeAck(const Ack& r, uint64_t wall_ns,
   ack.accepted = r.accepted;
   ack.error_code = static_cast<decltype(ack.error_code)>(r.error);
   ack.reason = r.reason;
-  ack.aorta_header = std::make_unique<aorta::sys::AortaHeaderT>();
-  ack.aorta_header->sequence = publication_id;
-  ack.aorta_header->publish_stamp_ns = wall_ns;
-  ack.aorta_header->publisher_node = "production_topic_mock";
-  flatbuffers::FlatBufferBuilder b;
-  b.Finish(locomotion_sdk::ControlAck::Pack(b, &ack));
-  return {b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()};
+  ack.aorta_header = detail::MakeHeader<aorta::sys::AortaHeaderT>(
+      publication_id, wall_ns, "production_topic_mock");
+  return detail::Pack<locomotion_sdk::ControlAck>(ack);
 }
 }  // namespace production_mock
 #elif defined(PRODUCTION_MOCK_STATUS_CODEC)
 #include "control_status_generated.h"
+#include "wire_helpers.h"
 namespace production_mock {
 std::vector<uint8_t> EncodeStatus(const Status& s, uint64_t now_ns,
                                   uint64_t wall_ns, uint64_t publication_id) {
@@ -79,17 +77,14 @@ std::vector<uint8_t> EncodeStatus(const Status& s, uint64_t now_ns,
                                  : 0;
   status.timeout_hold = s.phase == 5;
   status.stamp_monotonic_ns = now_ns;
-  status.aorta_header = std::make_unique<aorta::sys::AortaHeaderT>();
-  status.aorta_header->sequence = publication_id;
-  status.aorta_header->publish_stamp_ns = wall_ns;
-  status.aorta_header->publisher_node = "production_topic_mock";
-  flatbuffers::FlatBufferBuilder b;
-  b.Finish(locomotion_sdk::ControlStatus::Pack(b, &status));
-  return {b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()};
+  status.aorta_header = detail::MakeHeader<aorta::sys::AortaHeaderT>(
+      publication_id, wall_ns, "production_topic_mock");
+  return detail::Pack<locomotion_sdk::ControlStatus>(status);
 }
 }  // namespace production_mock
 #elif defined(PRODUCTION_MOCK_INFO_CODEC)
 #include "get_robot_info_generated.h"
+#include "wire_helpers.h"
 namespace production_mock {
 bool ValidInfoRequest(const std::vector<uint8_t>& bytes) {
   flatbuffers::Verifier verifier(bytes.data(), bytes.size());
@@ -193,10 +188,7 @@ std::vector<uint8_t> EncodeInfo(uint64_t runtime,
   reply.runtime_id = runtime;  // same startup R; RobotInfo2 below
   info.protocol_version = 2;
   reply.info = std::make_unique<lowlevel::RobotInfoT>(std::move(info));
-  flatbuffers::FlatBufferBuilder b;
-  b.Finish(aorta::services::humanoid_locomotion::GetRobotInfoResponse::Pack(
-      b, &reply));
-  return {b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()};
+  return detail::Pack<aorta::services::humanoid_locomotion::GetRobotInfoResponse>(reply);
 }
 }  // namespace production_mock
 #else
