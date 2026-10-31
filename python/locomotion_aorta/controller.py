@@ -82,15 +82,30 @@ class _ControlContext:
     request_id: str
 
 
-def _discovered_runtime(reply, observed_runtime, current_runtime):
-    if (reply.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
-            or reply.info is None or reply.info.body is None
-            or not _valid_generation(reply.runtime_id)):
-        return None
-    runtime = reply.runtime_id
-    if current_runtime != observed_runtime and current_runtime != runtime:
-        raise ValueError('discovery context changed while request was in flight')
-    return runtime
+@dataclass(slots=True)
+class _RuntimeBinding:
+    """One connection's startup binding; caller owns its existing lock and I/O."""
+
+    runtime_id: int | None = None
+    poisoned: bool = False
+
+    def accept_discovery(self, reply, observed_runtime) -> bool:
+        if (reply.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS)
+                or reply.info is None or reply.info.body is None
+                or not _valid_generation(reply.runtime_id)):
+            return False
+        runtime = reply.runtime_id
+        if self.runtime_id != observed_runtime and self.runtime_id != runtime:
+            raise ValueError('discovery context changed while request was in flight')
+        if self.runtime_id is None:
+            self.runtime_id = runtime
+        elif self.runtime_id != runtime:
+            self.retire()
+        return not self.poisoned
+
+    def retire(self) -> None:
+        # Keep the creating R: retirement never rebinds existing objects.
+        self.poisoned = True
 
 
 def _matches_control_context(current, request_id, client_id, control_id, generation):
@@ -104,6 +119,31 @@ def _close_handles(handles):
             handle.close()
         except Exception:
             pass
+
+
+def _retire_ee_handles(clients, failure):
+    """Collect under the caller's connection lock; never close I/O here."""
+    handles = []
+    for client in tuple(clients):
+        with client._condition:
+            if not client._closed and client._fatal is None:
+                handles.extend(client._retire_descriptor_locked(failure))
+    return handles
+
+
+def _close_ee_handles(clients):
+    handles = []
+    for client in tuple(clients):
+        with client._condition:
+            handles.extend(client._close_locked())
+    clients.clear()
+    return handles
+
+
+def _detach_ee_handles(clients, client):
+    clients.discard(client)
+    with client._condition:
+        return client._close_locked()
 
 
 class ExternalController:
@@ -144,8 +184,7 @@ class ExternalController:
         self._external_session_id = 0
         self._next_external_sequence = 1
         # The discovery response binds the connection, not an EE topic.
-        self._end_effector_runtime_id: int | None = None
-        self._end_effector_runtime_error: str | None = None
+        self._runtime_binding = _RuntimeBinding()
         self._end_effector_clients: set[Any] = set()
         self._cancel_sent = False
         self._closed = False
@@ -191,21 +230,17 @@ class ExternalController:
         _deadline(timeout)
         with self._condition:
             self._ensure_open()
-            observed_runtime = self._end_effector_runtime_id
+            observed_runtime = self._runtime_binding.runtime_id
         reply = self.transport.get_robot_info(timeout)
         handles = []
         with self._condition:
             self._ensure_open()
-            runtime = _discovered_runtime(reply, observed_runtime, self._end_effector_runtime_id)
-            if runtime is not None:
-                if self._end_effector_runtime_id is None:
-                    self._end_effector_runtime_id = runtime
-                elif self._end_effector_runtime_id != runtime:
-                    handles = self._retire_runtime_locked()
-                if not handles and self._end_effector_runtime_error is None:
-                    self._body_info = reply.info.body
+            if self._runtime_binding.accept_discovery(reply, observed_runtime):
+                self._body_info = reply.info.body
+            elif self._runtime_binding.poisoned:
+                handles = self._retire_runtime_locked()
         _close_handles(handles)
-        if self._end_effector_runtime_error is not None:
+        if self._runtime_binding.poisoned:
             raise self._end_effector_runtime_changed()
         # Preserve partial or failed discovery and each end-effector status for the caller.
         return reply
@@ -233,16 +268,16 @@ class ExternalController:
             self._ensure_open()
             if self._request_id is not None:
                 raise ExternalControlError("a control request is already active")
-            if self._end_effector_runtime_id is None:
+            if self._runtime_binding.runtime_id is None:
                 raise NotRunningError('get_robot_info must establish a valid runtime first')
-            runtime_id = self._end_effector_runtime_id
+            runtime_id = self._runtime_binding.runtime_id
         if action_name == 'EXTERNAL':
             self.transport._prepare_body_output()
         with self._condition:
             self._ensure_open()
             if self._request_id is not None:
                 raise ExternalControlError('a control request is already active')
-            if self._end_effector_runtime_id != runtime_id:
+            if self._runtime_binding.runtime_id != runtime_id:
                 raise self._end_effector_runtime_changed()
             if time.monotonic() >= deadline:
                 raise ExternalControlTimeoutError('timed out preparing control output')
@@ -343,7 +378,7 @@ class ExternalController:
                 command_runtime_id = command.runtime_id
                 if (command_runtime_id is not None and
                         (not _valid_generation(command_runtime_id) or
-                         command_runtime_id != self._end_effector_runtime_id)):
+                         command_runtime_id != self._runtime_binding.runtime_id)):
                     raise InvalidCommandError('BodyCmd belongs to a different robot runtime')
             finally:
                 if trace is not None:
@@ -358,7 +393,7 @@ class ExternalController:
                                             self._control_id, status.generation):
                 raise NotRunningError('Body control context changed before reservation')
             body_info = self._body_info
-            runtime_id = self._end_effector_runtime_id
+            runtime_id = self._runtime_binding.runtime_id
             _validate_body_targets(command, body_info, target_names, required_fields)
             context = self._reserve_command_locked(
                 for_body=True, expected_runtime_id=command_runtime_id,
@@ -388,7 +423,7 @@ class ExternalController:
                 with self._condition:
                     self._ensure_open()
                     status = self._require_owned_status()
-                    if (self._end_effector_runtime_id != context.runtime_id
+                    if (self._runtime_binding.runtime_id != context.runtime_id
                             or self._body_info is not body_info
                             or self._request_id != context.request_id
                             or not _matches_control_context(current, context.request_id,
@@ -435,7 +470,7 @@ class ExternalController:
         status = self._require_owned_status()
         if (expected_control is not None and
                 (self._body_info is not expected_body_info or
-                 self._end_effector_runtime_id != expected_discovery_runtime or
+                 self._runtime_binding.runtime_id != expected_discovery_runtime or
                  not _matches_control_context(expected_control, self._request_id,
                      self.client_id, self._control_id, status.generation))):
             raise NotRunningError('Body context changed during target validation')
@@ -443,7 +478,7 @@ class ExternalController:
             raise NotRunningError("BodyCmd requires an owned EXTERNAL session")
         if expected_runtime_id is not None and (
                 not _valid_generation(expected_runtime_id) or
-                expected_runtime_id != self._end_effector_runtime_id):
+                expected_runtime_id != self._runtime_binding.runtime_id):
             raise InvalidCommandError('BodyCmd belongs to a different robot runtime')
         if status.phase == ExternalPhase.RUNNING:
             if status.generation != self._external_session_id:
@@ -455,7 +490,7 @@ class ExternalController:
             client_id=self.client_id, control_id=self._control_id,
             session_id=self._external_session_id,
             sequence=self._next_external_sequence,
-            runtime_id=self._end_effector_runtime_id,
+            runtime_id=self._runtime_binding.runtime_id,
             request_id=self._request_id,
         )
         self._next_external_sequence += 1
@@ -502,15 +537,11 @@ class ExternalController:
     def _retire_runtime_locked(self) -> list[Any]:
         """Retire the existing connection after an authoritative runtime change."""
         failure = self._end_effector_runtime_changed()
-        self._end_effector_runtime_error = str(failure)
+        self._runtime_binding.retire()
         self._latest_body_state = None
         self._latest_status = None
         self._cancel_sent = True
-        handles = []
-        for client in tuple(self._end_effector_clients):
-            with client._condition:
-                if not client._closed and client._fatal is None:
-                    handles.extend(client._retire_descriptor_locked(failure))
+        handles = _retire_ee_handles(self._end_effector_clients, failure)
         self._condition.notify_all()
         return handles
 
@@ -518,16 +549,14 @@ class ExternalController:
         """Attach one EE client to this connection's existing lifecycle."""
         with self._condition:
             self._ensure_open()
-            if self._end_effector_runtime_error is not None:
-                raise ValueError(self._end_effector_runtime_error)
+            if self._runtime_binding.poisoned:
+                raise self._end_effector_runtime_changed()
             self._end_effector_clients.add(client)
 
     def _close_end_effector_client(self, client: Any) -> list[Any]:
         """Detach and retire one client; returned handles close without locks."""
         with self._condition:
-            self._end_effector_clients.discard(client)
-            with client._condition:
-                return client._close_locked()
+            return _detach_ee_handles(self._end_effector_clients, client)
 
     def _require_end_effector_runtime_locked(
         self, client: Any, robot_runtime_id: int
@@ -537,9 +566,9 @@ class ExternalController:
         client._ensure_open()
         if client not in self._end_effector_clients:
             raise ControllerClosedError("end-effector client is detached")
-        if self._end_effector_runtime_error is not None:
-            raise ValueError(self._end_effector_runtime_error)
-        if self._end_effector_runtime_id != robot_runtime_id:
+        if self._runtime_binding.poisoned:
+            raise self._end_effector_runtime_changed()
+        if self._runtime_binding.runtime_id != robot_runtime_id:
             raise self._end_effector_runtime_changed()
 
     def _bind_end_effector_runtime(self, client: Any, robot_runtime_id: int) -> bool:
@@ -553,7 +582,7 @@ class ExternalController:
                 client._ensure_open()
                 if client not in self._end_effector_clients:
                     raise ControllerClosedError("end-effector client is detached")
-            return self._end_effector_runtime_id == robot_runtime_id
+            return self._runtime_binding.runtime_id == robot_runtime_id
 
     def _run_end_effector_gate(
         self, client: Any, robot_runtime_id: int, operation: Callable[[], _T]
@@ -629,18 +658,14 @@ class ExternalController:
                 return
             self._closed = True
             should_cancel = (self._request_id is not None and not self._cancel_sent
-                             and self._end_effector_runtime_error is None)
+                             and not self._runtime_binding.poisoned)
             if should_cancel:
                 self._cancel_sent = True
                 cancel = self._request(ControlOperation.CANCEL)
                 self._expected_ack = ControlOperation.CANCEL
             else:
                 cancel = None
-            handles = []
-            for client in tuple(self._end_effector_clients):
-                with client._condition:
-                    handles.extend(client._close_locked())
-            self._end_effector_clients.clear()
+            handles = _close_ee_handles(self._end_effector_clients)
             self._condition.notify_all()
 
         if cancel is not None:
@@ -674,9 +699,9 @@ class ExternalController:
                 not isinstance(lowstate.joints, tuple) or len(lowstate.joints) != BODY_SLOTS):
             return
         with self._condition:
-            if (not self._closed and self._end_effector_runtime_error is None
+            if (not self._closed and not self._runtime_binding.poisoned
                     and _valid_generation(lowstate.runtime_id)
-                    and lowstate.runtime_id == self._end_effector_runtime_id):
+                    and lowstate.runtime_id == self._runtime_binding.runtime_id):
                 self._latest_body_state = lowstate
                 self._condition.notify_all()
 
@@ -702,7 +727,7 @@ class ExternalController:
                     return
                 if not _valid_generation(ack.runtime_id):
                     return
-                if ack.runtime_id != self._end_effector_runtime_id:
+                if ack.runtime_id != self._runtime_binding.runtime_id:
                     handles = self._retire_runtime_locked()
                 else:
                     key = (ack.request_id, ack.operation)
@@ -720,9 +745,9 @@ class ExternalController:
         ):
             return
         with self._condition:
-            if (not self._closed and self._end_effector_runtime_error is None
+            if (not self._closed and not self._runtime_binding.poisoned
                     and _valid_generation(status.runtime_id)
-                    and status.runtime_id == self._end_effector_runtime_id):
+                    and status.runtime_id == self._runtime_binding.runtime_id):
                 if _status_is_newer(status, self._latest_status):
                     self._latest_status = status
                     self._condition.notify_all()
@@ -765,7 +790,7 @@ class ExternalController:
             operation=operation,
             action_name=self._request_action,
             control_id=self._control_id,
-            runtime_id=self._end_effector_runtime_id,
+            runtime_id=self._runtime_binding.runtime_id,
         )
 
     def _best_effort_cancel(self, *, request_id: str | None = None) -> None:
@@ -785,9 +810,9 @@ class ExternalController:
     def _publish_control(self, request: ControlRequest) -> None:
         def guard(fill):
             with self._condition:
-                if self._end_effector_runtime_error is not None:
+                if self._runtime_binding.poisoned:
                     raise self._end_effector_runtime_changed()
-                if request.request_id != self._request_id or request.runtime_id != self._end_effector_runtime_id:
+                if request.request_id != self._request_id or request.runtime_id != self._runtime_binding.runtime_id:
                     raise NotRunningError('control request context changed before encoding')
                 if request.operation != self._expected_ack:
                     raise NotRunningError('control request phase changed before encoding')
@@ -826,7 +851,7 @@ class ExternalController:
             and status.phase in (ExternalPhase.RUNNING, ExternalPhase.TIMEOUT_HOLD)
             and status.client_id == self.client_id
             and status.control_id == self._control_id
-            and status.runtime_id == self._end_effector_runtime_id
+            and status.runtime_id == self._runtime_binding.runtime_id
         )
 
     def _require_accepted(self, ack: ControlAck) -> None:
@@ -850,7 +875,7 @@ class ExternalController:
     def _ensure_open(self) -> None:
         if self._closed:
             raise ControllerClosedError("controller is closed")
-        if self._end_effector_runtime_error is not None:
+        if self._runtime_binding.poisoned:
             raise self._end_effector_runtime_changed()
 
 

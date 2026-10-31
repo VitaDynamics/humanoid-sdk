@@ -11,7 +11,7 @@ from functools import cached_property
 
 from ._body_codec import decode_body_state, _require_body_joints
 from .body_types import BODY_STATE_PROTOCOL_VERSION, BodyState
-from .controller import _deadline, _discovered_runtime, _nonempty_text
+from .controller import _deadline, _RuntimeBinding, _nonempty_text
 from ._state_stream import create_state_stream
 
 
@@ -51,8 +51,7 @@ class BodyStateSource:
         self._condition = threading.Condition()
         self._latest: BodyStateSnapshot | None = None
         self._closed = False
-        self._runtime_id = None
-        self._runtime_changed = False
+        self._runtime_binding = _RuntimeBinding()
         self._stream = create_state_stream(
             node_name=node_name or "body-state-" + uuid.uuid4().hex,
             group=group, callback=self._receive)
@@ -68,7 +67,7 @@ class BodyStateSource:
         with self._condition:
             while True:
                 self._ensure_open()
-                if self._runtime_id is None:
+                if self._runtime_binding.runtime_id is None:
                     raise ValueError('get_robot_info must establish a valid runtime first')
                 if self._latest is not None and self._latest is not after:
                     return self._latest
@@ -80,19 +79,15 @@ class BodyStateSource:
     def get_robot_info(self, timeout: float = 5.0):
         with self._condition:
             self._ensure_open()
-            observed_runtime = self._runtime_id
+            observed_runtime = self._runtime_binding.runtime_id
         reply = self._stream.get_robot_info(timeout)
         with self._condition:
             self._ensure_open()
-            runtime = _discovered_runtime(reply, observed_runtime, self._runtime_id)
-            if runtime is not None:
-                if self._runtime_id is None:
-                    self._runtime_id = runtime
-                elif self._runtime_id != runtime:
-                    self._runtime_changed = True
-                    self._latest = None
-                    self._condition.notify_all()
-                    raise ValueError('robot runtime changed; create a new source')
+            if (not self._runtime_binding.accept_discovery(reply, observed_runtime)
+                    and self._runtime_binding.poisoned):
+                self._latest = None
+                self._condition.notify_all()
+                raise ValueError('robot runtime changed; create a new source')
         return reply
 
     def close(self) -> None:
@@ -106,7 +101,7 @@ class BodyStateSource:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("body state source is closed")
-        if self._runtime_changed:
+        if self._runtime_binding.poisoned:
             raise ValueError('robot runtime changed; create a new source')
 
     def _receive(self, payload, decoder) -> None:
@@ -123,7 +118,7 @@ class BodyStateSource:
         except (ValueError, TypeError, AttributeError, IndexError, OverflowError, struct.error):
             return
         with self._condition:
-            if (not self._closed and not self._runtime_changed and self._runtime_id is not None
-                    and runtime == self._runtime_id):
+            if (not self._closed and not self._runtime_binding.poisoned and self._runtime_binding.runtime_id is not None
+                    and runtime == self._runtime_binding.runtime_id):
                 self._latest = BodyStateSnapshot(payload, decoder, monotonic_ns, realtime_ns)
                 self._condition.notify_all()

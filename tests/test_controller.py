@@ -1765,6 +1765,7 @@ class RuntimeIdentityR3Test(unittest.TestCase):
     def test_unrelated_status_does_not_change_runtime_and_service_restart_retires(self):
 
         controller, transport = self.make_controller()
+        creating_runtime = controller._runtime_binding.runtime_id
         transport.emit(CONTROL_STATUS_TOPIC, ControlStatus(
             1, 'EXTERNAL', ExternalPhase.RUNNING, client_id=2,
             control_id=3, generation=1, runtime_id=99))
@@ -1773,6 +1774,8 @@ class RuntimeIdentityR3Test(unittest.TestCase):
             robot_info_reply(), runtime_id=12)
         with self.assertRaisesRegex(ValueError, 'robot runtime changed'):
             controller.get_robot_info(.1)
+        self.assertEqual(controller._runtime_binding.runtime_id, creating_runtime)
+        self.assertTrue(controller._runtime_binding.poisoned)
         with self.assertRaisesRegex(ValueError, 'robot runtime changed'):
             controller.enter_external(.1)
 
@@ -1878,7 +1881,7 @@ class RuntimeIdentityR3Test(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(len(failures), 1)
         self.assertIsInstance(failures[0], ControllerClosedError)
-        self.assertIsNone(controller._end_effector_runtime_id)
+        self.assertIsNone(controller._runtime_binding.runtime_id)
 
     def test_body_prepare_failure_precedes_prepare_and_key_allocation(self):
         controller, transport = self.make_controller()

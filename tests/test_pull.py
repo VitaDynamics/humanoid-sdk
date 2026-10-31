@@ -578,6 +578,8 @@ class RuntimeIdentityPullR3Test(unittest.TestCase):
         transport.reply = replace(transport.reply, runtime_id=12)
         with self.assertRaisesRegex(ValueError, 'runtime changed'):
             source.get_robot_info(.1)
+        self.assertEqual(source._runtime_binding.runtime_id, 11)
+        self.assertTrue(source._runtime_binding.poisoned)
         transport.state = S(runtime_id=11)
         with self.assertRaisesRegex(ValueError, 'runtime changed'):
             source.wait_state(.1)

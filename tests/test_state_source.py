@@ -380,3 +380,12 @@ class RuntimeIdentityStateSourceR3Test(unittest.TestCase):
                 source.snapshot(.001, after=original)
             source._stream.emit()
             self.assertIsNot(source.snapshot(.1, after=original), original)
+            from dataclasses import replace
+            source._stream.get_robot_info = lambda timeout: replace(
+                robot_info_reply(), runtime_id=12)
+            with self.assertRaisesRegex(ValueError, 'new source'):
+                source.get_robot_info(.1)
+            self.assertEqual(source._runtime_binding.runtime_id, 11)
+            self.assertTrue(source._runtime_binding.poisoned)
+            with self.assertRaisesRegex(ValueError, 'new source'):
+                source.snapshot(.01)

@@ -586,13 +586,13 @@ class EndEffectorClientTest(unittest.TestCase):
                 thread.join(2)
         self.assertFalse(thread.is_alive())
         self.assertTrue(all(handle.close_count == 1 for handle in left_handles))
-        self.assertEqual(harness.controller._end_effector_runtime_id, 100)
-        self.assertIsNone(harness.controller._end_effector_runtime_error)
+        self.assertEqual(harness.controller._runtime_binding.runtime_id, 100)
+        self.assertFalse(harness.controller._runtime_binding.poisoned)
         self.assertEqual(
             confirm_info(right, node, info_object(side=2)).runtime_id,
             100,
         )
-        self.assertIsNone(harness.controller._end_effector_runtime_error)
+        self.assertFalse(harness.controller._runtime_binding.poisoned)
 
     def test_read_only_clients_on_one_source_share_one_runtime_binding(self):
         harness, node = self.harness(running=False)

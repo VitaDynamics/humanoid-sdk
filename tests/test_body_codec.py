@@ -761,7 +761,7 @@ class BodyCodecTest(unittest.TestCase):
             controller = ExternalController(client_id=7, _transport=fake)
             try:
                 self.assertEqual(controller.get_robot_info(.1), reply)
-                self.assertIsNone(controller._end_effector_runtime_id)
+                self.assertIsNone(controller._runtime_binding.runtime_id)
                 self.assertFalse(any(topic == transport.CONTROL_REQUEST_TOPIC for topic, _ in fake.published))
             finally:
                 controller.close()

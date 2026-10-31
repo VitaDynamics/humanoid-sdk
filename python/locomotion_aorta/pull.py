@@ -6,8 +6,9 @@ import uuid
 from dataclasses import replace
 
 from .controller import (ExternalController, ExternalControlTimeoutError,
-                         ControllerClosedError, _close_handles, _deadline, _discovered_runtime, _nonempty_text,
+                         ControllerClosedError, _close_handles, _deadline, _RuntimeBinding, _nonempty_text,
                          _uint64_nonzero, _valid_generation)
+from .controller import _retire_ee_handles, _close_ee_handles, _detach_ee_handles
 from .body_types import BODY_STATE_PROTOCOL_VERSION
 from .types import ControlStatus, PROTOCOL_VERSION
 from .transport import _AortaTransport, BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC
@@ -192,9 +193,8 @@ class PullStateSource:
         self.transport = _transport if _transport is not None else PullTransport(
             node_name=node_name or 'body-pull-'+uuid.uuid4().hex,
             group=group, publishers=False)
-        self._end_effector_runtime_id = None
+        self._runtime_binding = _RuntimeBinding()
         self._end_effector_runtime_lock = threading.Lock()
-        self._runtime_changed = False
         self._closed = False
         self._end_effector_clients = set()
         if isinstance(self.transport, PullTransport):
@@ -205,7 +205,7 @@ class PullStateSource:
     def _commit_pull_candidate(self, candidate, commit):
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
-            if not _matches_pull_candidate(candidate, self._end_effector_runtime_id):
+            if not _matches_pull_candidate(candidate, self._runtime_binding.runtime_id):
                 return False
             commit()
             return True
@@ -218,31 +218,25 @@ class PullStateSource:
         state = self.transport.wait_state(timeout)
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
-            if not _valid_generation(state.runtime_id) or state.runtime_id != self._end_effector_runtime_id:
+            if not _valid_generation(state.runtime_id) or state.runtime_id != self._runtime_binding.runtime_id:
                 raise ValueError('BodyState does not belong to the discovered runtime')
             return state
 
     def get_robot_info(self, timeout=5.0):
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
-            observed_runtime = self._end_effector_runtime_id
+            observed_runtime = self._runtime_binding.runtime_id
         reply = self.transport.get_robot_info(timeout)
         handles = []
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
-            runtime = _discovered_runtime(reply, observed_runtime, self._end_effector_runtime_id)
-            if runtime is not None:
-                if self._end_effector_runtime_id is None:
-                    self._end_effector_runtime_id = runtime
-                elif self._end_effector_runtime_id != runtime:
-                    self._runtime_changed = True
-                    for client in tuple(self._end_effector_clients):
-                        with client._condition:
-                            if not client._closed and client._fatal is None:
-                                handles.extend(client._retire_descriptor_locked(
-                                    ValueError('robot runtime changed; create a new connection')))
+            if (not self._runtime_binding.accept_discovery(reply, observed_runtime)
+                    and self._runtime_binding.poisoned):
+                handles = _retire_ee_handles(
+                    self._end_effector_clients,
+                    ValueError('robot runtime changed; create a new connection'))
         _close_handles(handles)
-        if self._runtime_changed:
+        if self._runtime_binding.poisoned:
             raise ValueError('robot runtime changed; create a new connection')
         return reply
 
@@ -250,7 +244,7 @@ class PullStateSource:
         if self._closed:
             raise ControllerClosedError('body state source is closed')
         self.transport._ensure_open()
-        if self._runtime_changed:
+        if self._runtime_binding.poisoned:
             raise ValueError('robot runtime changed; create a new connection')
 
     @property
@@ -260,7 +254,7 @@ class PullStateSource:
             self._ensure_runtime_locked()
             if status is None or not _valid_generation(status.runtime_id):
                 return None
-            return status if status.runtime_id == self._end_effector_runtime_id else None
+            return status if status.runtime_id == self._runtime_binding.runtime_id else None
 
     def _register_end_effector_client(self, client) -> None:
         with self._end_effector_runtime_lock:
@@ -269,9 +263,7 @@ class PullStateSource:
 
     def _close_end_effector_client(self, client):
         with self._end_effector_runtime_lock:
-            self._end_effector_clients.discard(client)
-            with client._condition:
-                return client._close_locked()
+            return _detach_ee_handles(self._end_effector_clients, client)
 
     def _bind_end_effector_runtime(self, client, robot_runtime_id: int) -> bool:
         if type(robot_runtime_id) is not int or not 0 < robot_runtime_id < 2**64:
@@ -280,18 +272,14 @@ class PullStateSource:
             self._ensure_runtime_locked()
             with client._condition:
                 client._ensure_open()
-                return self._end_effector_runtime_id == robot_runtime_id
+                return self._runtime_binding.runtime_id == robot_runtime_id
 
     def close(self):
         with self._end_effector_runtime_lock:
             if self._closed:
                 return
             self._closed = True
-            handles = []
-            for client in tuple(self._end_effector_clients):
-                with client._condition:
-                    handles.extend(client._close_locked())
-            self._end_effector_clients.clear()
+            handles = _close_ee_handles(self._end_effector_clients)
         _close_handles(handles)
         self.transport.close()
 
@@ -318,7 +306,7 @@ class PullController(ExternalController):
         with self._condition:
             self._ensure_open()
             self.transport._ensure_open()
-            if not _matches_pull_candidate(candidate, self._end_effector_runtime_id):
+            if not _matches_pull_candidate(candidate, self._runtime_binding.runtime_id):
                 return False
             commit()
             return True
@@ -333,7 +321,7 @@ class PullController(ExternalController):
         with self._condition:
             self._ensure_open()
             self.transport._ensure_open()
-            if not _valid_generation(state.runtime_id) or state.runtime_id != self._end_effector_runtime_id:
+            if not _valid_generation(state.runtime_id) or state.runtime_id != self._runtime_binding.runtime_id:
                 raise ValueError('BodyState does not belong to the discovered runtime')
             return state
 
