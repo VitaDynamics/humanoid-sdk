@@ -1,5 +1,6 @@
 """Actual new generated roots; synthetic capabilities are not device evidence."""
 import dataclasses
+from enum import IntEnum
 import hashlib
 import math
 import struct
@@ -96,6 +97,27 @@ def target(n=1, *, torque=None):
 
 
 class EndEffectorCodecTest(unittest.TestCase):
+    def test_runtime_identity_keeps_exact_integer_and_nonzero_errors(self):
+        class IntegerSubclass(int):
+            pass
+
+        class NumericEnum(IntEnum):
+            VALUE = 1
+
+        class IndexOnly:
+            def __index__(self):
+                return 1
+
+        for invalid in (False, True, IntegerSubclass(1), NumericEnum.VALUE,
+                        IndexOnly(), -1, 2**64, 1.0):
+            with self.subTest(value=invalid):
+                with self.assertRaisesRegex(ValueError, '^runtime_id must be uint64$'):
+                    codec.validate_observations(invalid, ())
+        with self.assertRaisesRegex(ValueError, '^runtime_id must be nonzero$'):
+            codec.validate_observations(0, ())
+        for valid in (1, 2**64 - 1):
+            codec.validate_observations(valid, ())
+
     def test_real_set_touch_request_uses_full_binding_control_ref_and_no_motion_key(self):
         bindings, service = codec.load_bindings(), codec.load_touch_bindings()
         for side in (1, 2):

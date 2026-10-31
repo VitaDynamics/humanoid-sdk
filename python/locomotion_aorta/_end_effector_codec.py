@@ -138,6 +138,12 @@ def _uint(value, bits, name):
         raise ValueError(name + ' must be uint' + str(bits))
 
 
+def _uint_nonzero(value, bits, name):
+    _uint(value, bits, name)
+    if not value:
+        raise ValueError(name + ' must be nonzero')
+
+
 def _uint_fields(value, fields):
     for name, bits in fields:
         _uint(getattr(value, name), bits, name)
@@ -162,9 +168,7 @@ def _identity(value, version):
     _uint(value.protocol_version, 32, 'protocol_version')
     if value.protocol_version != version:
         raise ValueError('incompatible new EE protocol_version')
-    _uint(value.runtime_id, 64, 'runtime_id')
-    if not value.runtime_id:
-        raise ValueError('runtime_id must be nonzero')
+    _uint_nonzero(value.runtime_id, 64, 'runtime_id')
     _uint(value.layout_id, 32, 'layout_id')
     if value.side not in (1, 2) or type(value.side) is not int:
         raise ValueError('invalid EE side')
@@ -359,17 +363,13 @@ def validate_observation_sources(sources):
 
 
 def validate_observations(runtime_id, observations, *, sources=None):
-    _uint(runtime_id, 64, 'runtime_id')
-    if not runtime_id:
-        raise ValueError('runtime_id must be nonzero')
+    _uint_nonzero(runtime_id, 64, 'runtime_id')
     if not isinstance(observations, tuple):
         raise ValueError('input_observations must be a tuple')
     for sample in observations:
         if not isinstance(sample, SampleRef):
             raise ValueError('input_observations must contain actual SampleRef values')
-        _uint(sample.runtime_id, 64, 'runtime_id')
-        if not sample.runtime_id:
-            raise ValueError('runtime_id must be nonzero')
+        _uint_nonzero(sample.runtime_id, 64, 'runtime_id')
         for name in ('sample_id', 'source_time_us'):
             _uint(getattr(sample, name), 64, name)
         _uint(sample.validity, 8, 'sample validity')
@@ -387,9 +387,7 @@ def validate_observations(runtime_id, observations, *, sources=None):
 
 def _validate_command_envelope(command):
     _identity(command, EE_CMD_PROTOCOL_VERSION)
-    _uint(command.control_id, 64, 'control_id')
-    if not command.control_id:
-        raise ValueError('control_id must be nonzero')
+    _uint_nonzero(command.control_id, 64, 'control_id')
     _validate_key(command.key, True)
     validate_observations(command.runtime_id, command.input_observations)
     _uint(command.ts_client_created_us, 64, 'ts_client_created_us')
@@ -458,9 +456,7 @@ def fill_command(bindings, command, builder, header):
 
 def fill_set_touch(bindings, service, request, builder, header):
     _identity(request, EE_SET_TOUCH_REQUEST_VERSION)
-    _uint(request.control_id, 64, 'control_id')
-    if not request.control_id:
-        raise ValueError('control_id must be nonzero')
+    _uint_nonzero(request.control_id, 64, 'control_id')
     if type(request.enable) is not bool:
         raise ValueError('enable must be boolean')
     module = service.request
@@ -483,9 +479,7 @@ def validate_set_touch_response(request, response):
     _uint(response.protocol_version, 32, 'protocol_version')
     if response.protocol_version != EE_SET_TOUCH_RESPONSE_VERSION:
         raise ValueError('incompatible set_touch response protocol_version')
-    _uint(response.runtime_id, 64, 'runtime_id')
-    if not response.runtime_id:
-        raise ValueError('runtime_id must be nonzero')
+    _uint_nonzero(response.runtime_id, 64, 'runtime_id')
     if (response.runtime_id, response.side) != (request.runtime_id, request.side):
         raise ValueError('set_touch response runtime_id/side differs from request')
     _uint(response.side, 8, 'side')

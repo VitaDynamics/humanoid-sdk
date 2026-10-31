@@ -1,5 +1,6 @@
 from body_fixtures import sample_motor, robot_info_reply
 import math
+from enum import IntEnum
 import threading
 import unittest
 import uuid
@@ -123,6 +124,21 @@ def make_command(sequence_hint: int, *, q: float = 0.0) -> BodyCmd:
 
 
 class ExternalControllerTest(unittest.TestCase):
+    def test_generation_accepts_integer_subclasses_but_wire_identity_is_exact_int(self):
+        class IntegerSubclass(int):
+            pass
+
+        class NumericEnum(IntEnum):
+            VALUE = 1
+
+        for value in (IntegerSubclass(1), NumericEnum.VALUE):
+            with self.subTest(value=value):
+                self.assertTrue(controller_module._valid_generation(value))
+                with self.assertRaisesRegex(ValueError, 'robot_runtime_id must be a nonzero uint64'):
+                    controller_module._uint64_nonzero(value, 'robot_runtime_id')
+        for value in (False, True, 0, -1, 2**64):
+            self.assertFalse(controller_module._valid_generation(value))
+
     def test_body3_preserves_selected_callback_state_after_newer_sample(self):
         import flatbuffers
         from test_body_codec import module, make_state, encode

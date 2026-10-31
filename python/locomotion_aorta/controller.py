@@ -567,9 +567,7 @@ class ExternalController:
 
     def _bind_end_effector_runtime(self, client: Any, robot_runtime_id: int) -> bool:
         """Accept a topic only when it matches the discovered process."""
-        if (type(robot_runtime_id) is not int or
-                not 0 < robot_runtime_id <= _MAX_UINT64):
-            raise ValueError("robot_runtime_id must be a nonzero uint64")
+        _uint64_nonzero(robot_runtime_id, 'robot_runtime_id')
         with self._condition:
             self._ensure_open()
             with client._condition:

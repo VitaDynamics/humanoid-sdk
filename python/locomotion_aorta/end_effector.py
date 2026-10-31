@@ -353,9 +353,7 @@ class EndEffectorClient:
     def wait_info(self, timeout=5.0, *, after_runtime_id=None):
         """Wait for the first immutable Info publication for this robot process."""
         if after_runtime_id is not None:
-            codec._uint(after_runtime_id, 64, 'runtime_id')
-            if not after_runtime_id:
-                raise ValueError('runtime_id must be nonzero')
+            codec._uint_nonzero(after_runtime_id, 64, 'runtime_id')
         return self._wait('info', timeout, after_runtime_id)
 
     def _after_sample(self, sample, stream):

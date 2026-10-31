@@ -1208,6 +1208,34 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(node.commands, [])
         self.assertEqual(harness.transport.published, [])
 
+    def test_after_sample_checks_other_fields_before_zero_runtime(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, read_only=True)
+        sample = SampleRef(0, SampleStream.EE_STATE, 1, 'bad', 0, 0)
+        with self.assertRaisesRegex(ValueError, '^sample_id must be uint64$'):
+            client.wait_state(.01, after_sample=sample)
+        with self.assertRaisesRegex(ValueError, '^robot_runtime_id must be nonzero$'):
+            client.wait_state(.01, after_sample=dataclasses.replace(sample, sample_id=1))
+        self.assertEqual(node.commands, [])
+        self.assertEqual(harness.transport.published, [])
+
+    def test_runtime_binding_rejects_invalid_ids_before_client_access(self):
+        class IntegerSubclass(int):
+            pass
+
+        harness, node = self.harness(running=False)
+        source = PullStateSource(_transport=FakeTransport())
+        self.addCleanup(source.close)
+        for bind in (harness.controller._bind_end_effector_runtime,
+                     source._bind_end_effector_runtime):
+            for invalid in (0, False, True, -1, 2**64, IntegerSubclass(1)):
+                with self.subTest(bind=bind.__qualname__, value=invalid):
+                    with self.assertRaisesRegex(ValueError, '^robot_runtime_id must be a nonzero uint64$'):
+                        bind(None, invalid)
+        client = self.client(harness, node)
+        self.assertTrue(harness.controller._bind_end_effector_runtime(client, 100))
+        self.assertEqual(node.commands, [])
+
 
     def test_startup_observation_tuple_rejects_duplicates_and_bad_streams_before_subscription(self):
         harness, node = self.harness()

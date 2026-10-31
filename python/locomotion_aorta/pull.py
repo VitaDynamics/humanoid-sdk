@@ -266,8 +266,7 @@ class PullStateSource:
             return _detach_ee_handles(self._end_effector_clients, client)
 
     def _bind_end_effector_runtime(self, client, robot_runtime_id: int) -> bool:
-        if type(robot_runtime_id) is not int or not 0 < robot_runtime_id < 2**64:
-            raise ValueError('robot_runtime_id must be a nonzero uint64')
+        _uint64_nonzero(robot_runtime_id, 'robot_runtime_id')
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
             with client._condition:
