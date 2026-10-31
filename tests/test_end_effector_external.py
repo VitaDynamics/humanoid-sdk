@@ -718,6 +718,22 @@ class EndEffectorExampleTest(unittest.TestCase):
         self.assertEqual([],endpoint.commands)
         self.assertEqual(0,controller.calls.count('enter_external'))
 
+    def test_mutated_rates_are_rejected_before_info_or_control(self):
+        controller = self.controller()
+        endpoint = Endpoint(controller)
+        rates = {'right': 50.0}
+        options = demo._MotionOptions(rates=rates, native_hz={'right': 250},
+                                      native_config='synthetic-test-effective-config')
+        target = self.target(endpoint)
+        rates['right'] = 0.0
+        with patch.object(demo, '_current_info', side_effect=AssertionError('Info read')) as info:
+            with self.assertRaisesRegex(ValueError, 'rates must be finite and positive'):
+                demo.run(controller, [endpoint], {'right': target}, options,
+                         sleep=self.clock.sleep, monotonic=self.clock.monotonic)
+        info.assert_not_called()
+        self.assertNotIn('enter_external', controller.calls)
+        self.assertFalse(endpoint.commands)
+
 
     def test_actual_client_publish_writes_new_root_K_and_same_body_allocator(self):
         from locomotion_aorta.end_effector import EndEffectorClient
@@ -968,6 +984,36 @@ class PartialFeedbackGuardTest(unittest.TestCase):
     def guard(self):
         return demo._EndpointGuard(self.client,self.client.info,1.,self.clock.monotonic)
 
+    def test_cached_info_still_checks_runtime_retirement(self):
+        accepted = self.client.info
+        with patch.object(self.client, 'wait_info', wraps=self.client.wait_info) as wait:
+            self.assertIs(demo._current_info(self.client, .1), accepted)
+            self.harness.transport.get_robot_info = lambda timeout: replace(
+                robot_info_reply(), runtime_id=101)
+            with self.assertRaisesRegex(ValueError, 'new connection'):
+                self.harness.controller.get_robot_info(.1)
+            with self.assertRaisesRegex(ValueError, 'recreate the client'):
+                demo._current_info(self.client, .1)
+            wait.assert_not_called()
+
+    def test_missing_info_uses_original_wait_for_current_runtime(self):
+        from locomotion_aorta.end_effector import EndEffectorClient
+        client = EndEffectorClient('right', connection=self.harness.controller, read_only=True)
+        self.addCleanup(client.close)
+        self.assertIsNone(client.info)
+        original_wait = client.wait_info
+
+        def publish_then_wait(timeout):
+            info = info_object(side=2)
+            info.deviceModel = DeviceModel.LINKER_L6
+            self.node.emit('right', 'info', info)
+            return original_wait(timeout)
+
+        with patch.object(client, 'wait_info', side_effect=publish_then_wait) as wait:
+            info = demo._current_info(client, .1)
+        self.assertEqual((info.runtime_id, info.side), (100, 2))
+        wait.assert_called_once_with(.1)
+
     def test_partial_diagnosis_keeps_position_ref_without_inventing_admission(self):
         position=self.emit(1,Field.POS)
         guard=self.guard()
@@ -1062,6 +1108,7 @@ class VendorExamplesTest(unittest.TestCase):
 
     def endpoint(self, side, model):
         endpoint = Endpoint(self.control, side, hand=model != DeviceModel.AGX)
+        endpoint.wait_info = Mock(wraps=endpoint.wait_info)
         n = len(endpoint.info.axis_names)
         commands = Field.POS
         states = Field.POS | Field.TEMPERATURE | Field.ERROR_CODE
@@ -1156,6 +1203,7 @@ class VendorExamplesTest(unittest.TestCase):
                 self.assertEqual(0, self.control.command_count)
                 endpoint = self.endpoints['right']
                 self.assertTrue(endpoint.commands)
+                endpoint.wait_info.assert_not_called()
                 if model == DeviceModel.LINKER_L6:
                     self.assertEqual((Field.POS,) * 6, endpoint.info.supported_command_fields)
                     self.assertEqual((), endpoint.info.vel_limit_max)

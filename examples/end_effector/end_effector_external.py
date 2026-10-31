@@ -310,6 +310,12 @@ def wait_position(client, info, timeout, *, sleep, monotonic):
         sleep(min(.01, remaining))
 
 
+def _current_info(client, timeout):
+    # The property rechecks close/retirement; only wait for the first Info.
+    info = client.info
+    return client.wait_info(timeout) if info is None else info
+
+
 def output_ready(state):
     return (state.status_valid_mask & 7 == 7 and state.ready and
             state.output_allowed and state.inhibit_reason == InhibitReason.NONE)
@@ -589,7 +595,7 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
     infos, prepared, returns, limits = {}, {}, {}, {}
     native_hz = {} if native_hz is None else native_hz
     for client in clients:
-        info = client.wait_info(timeout)
+        info = _current_info(client, timeout)
         codec.validate_info(info)
         if info.device_model not in (DeviceModel.AGX, DeviceModel.LINKER_L6, DeviceModel.BRAINCO_REVO2):
             raise ValueError('this demo requires actual AGX/Linker/BrainCo capability; OP3 is not enabled')
@@ -673,6 +679,14 @@ def _prepare_stream(frame, clients, infos, options, touch_worker, *, sleep, mono
     return guards, initial_state
 
 
+def _motion_tick(frame, guards, monotonic, last_now):
+    frame(wait=False)
+    now = monotonic()
+    if now < last_now:
+        raise RuntimeError('source monotonic clock moved backwards')
+    return now, {side: guard.feedback(True) for side, guard in guards.items()}
+
+
 def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sleep, monotonic, emit):
     """Drive the existing single owner using independently paced endpoints."""
     infos, prepared, returns, limits, rates, native_hz = prepared_motion
@@ -716,12 +730,8 @@ def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sl
         hard_deadline = deadline + timeout
         final_sent = set()
         while len(final_sent) != len(guards) or monotonic() < deadline:
-            frame(wait=False)
-            now = monotonic()
-            if now < last_now:
-                raise RuntimeError('source monotonic clock moved backwards')
+            now, states = _motion_tick(frame, guards, monotonic, last_now)
             last_now = now
-            states = {side: g.feedback(True) for side, g in guards.items()}
             check_motion(states)
             if now >= hard_deadline:
                 raise TimeoutError('final source point not submitted within the observation budget')
@@ -757,12 +767,8 @@ def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sl
                     *([deadline] if now < deadline else [])])-monotonic()))
     observation_deadline = monotonic() + timeout
     while any(motion_unobserved(s) for s in cursor):
-        frame(wait=False)
-        now = monotonic()
-        if now < last_now:
-            raise RuntimeError('source monotonic clock moved backwards')
+        now, states = _motion_tick(frame, guards, monotonic, last_now)
         last_now = now
-        states = {side: g.feedback(True) for side, g in guards.items()}
         check_motion(states)
         if all(not motion_unobserved(s) for s in cursor):
             break
@@ -898,7 +904,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
             observation_sources=() if readonly else ((SampleStream.EE_STATE, 1 if side == 'left' else 2),))) for side in sides]
         if _expected_device_model is not None:
             for client in clients:
-                _require_vendor_info(client.wait_info(args.timeout), client.side, _expected_device_model)
+                _require_vendor_info(_current_info(client, args.timeout), client.side, _expected_device_model)
         if readonly:
             if clients:
                 observe(clients, timeout=args.timeout)
@@ -907,7 +913,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
             return
         targets = {}
         for client in clients:
-            info = client.wait_info(args.timeout)
+            info = _current_info(client, args.timeout)
             positions = getattr(args, client.side+'_pos')
             if positions is None:
                 positions = ((args.sine_min_m+args.sine_max_m)/2,) if args.pattern == 'sine' else tuple(
