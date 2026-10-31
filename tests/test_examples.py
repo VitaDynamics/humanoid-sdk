@@ -148,6 +148,11 @@ class RecordingController:
     def status(self):
         return self.controller.status
 
+    def emit_status_change(self, **changes):
+        status = self.status
+        self.transport.emit(CONTROL_STATUS_TOPIC, replace(
+            status, status_seq=status.status_seq + 1, **changes))
+
     def wait_body_state(self, timeout: float):
         self.calls.append("wait_body_state")
         self._emit_body_state()
@@ -702,9 +707,7 @@ class ExamplesSmokeTest(unittest.TestCase):
                 def publish(topic, message):
                     original(topic, message)
                     if topic == BODY_CMD_TOPIC and harness.command_count == 1:
-                        status = harness.status
-                        harness.transport.emit(CONTROL_STATUS_TOPIC, replace(
-                            status, status_seq=status.status_seq + 1, **{field: value}))
+                        harness.emit_status_change(**{field: value})
                 harness.transport.on_publish = publish
                 with self.assertRaisesRegex(RuntimeError, 'ownership is no longer'):
                     external_control.run(harness, timeout=1.0, sleep=clock.sleep,

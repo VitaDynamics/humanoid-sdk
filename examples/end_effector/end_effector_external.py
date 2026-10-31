@@ -3,7 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import importlib.util
 import math
 import signal
@@ -25,7 +25,8 @@ _body_spec = importlib.util.spec_from_file_location(
     Path(__file__).resolve().parents[1] / 'external_control/external_control.py')
 body = importlib.util.module_from_spec(_body_spec)
 _body_spec.loader.exec_module(body)
-_matches_external_identity = body._matches_external_identity
+_external_status_problem = body._external_status_problem
+_body_sample_progress = body._body_sample_progress
 
 
 def _bind_runtime(connection, timeout):
@@ -83,9 +84,10 @@ def _observe_zero_dwell(frame, target, *, body, body_info, monotonic, emit):
 
 
 @stop_signals()
-def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hold',
-                 body_pose='measured', body_enabled=True, strict_hold=False,
+def run_external(controller, command_loop, options, *, body, strict_hold=False,
                  sleep=time.sleep, monotonic=time.monotonic, emit=print):
+    timeout, body_gains = options.timeout, options.body_gains
+    body_pose, body_enabled = options.body_pose, options.body_enabled
     if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError('timeout must be finite and positive')
     if body_gains not in ('hold', 'zero'):
@@ -157,12 +159,11 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             if wait and delay > 0:
                 sleep(delay)
             status = controller.status
-            if (status is None or status.current_action != 'EXTERNAL'
-                    or status.phase not in ((body.ExternalPhase.RUNNING,) if body_enabled else
-                                           (body.ExternalPhase.RUNNING, body.ExternalPhase.TIMEOUT_HOLD))
-                    or not _matches_external_identity(status, entered.generation,
-                                                      entered.client_id, entered.control_id)
-                    or status.reject_count != entered.reject_count):
+            problem = _external_status_problem(
+                status, (body.ExternalPhase.RUNNING,) if body_enabled else
+                        (body.ExternalPhase.RUNNING, body.ExternalPhase.TIMEOUT_HOLD),
+                entered)
+            if problem is not None:
                 raise RuntimeError(f'body EXTERNAL ownership/phase/reject_count changed: {status!r}')
             if not body_enabled:
                 if monotonic() >= next_publish:
@@ -171,9 +172,9 @@ def run_external(controller, command_loop, *, body, timeout=5.0, body_gains='hol
             state = controller.wait_state(timeout)
             body._validate_body_state(state, body_info=info, require_stationary=False, target_slots=hold_slots)
             now = monotonic()
-            if state.state_id != last_id:
-                last_id, last_change = state.state_id, now
-            elif now - last_change >= body.LOWSTATE_WINDOW_S:
+            last_id, last_change, stale = _body_sample_progress(
+                state.state_id, last_id, last_change, now, body.LOWSTATE_WINDOW_S)
+            if stale:
                 raise RuntimeError('body lowstate became stale')
             if check_hold:
                 errors = tuple(float(state.q[i]) - pose[i] for i in hold_slots)
@@ -464,6 +465,83 @@ def _agx_source_step(previous, desired, rate, elapsed, native_hz):
     return value
 
 
+@dataclass(frozen=True)
+class _MotionOptions:
+    timeout: float = 5.0
+    duration: float = 1.0
+    rates: object = None
+    native_hz: object = None
+    native_config: object = None
+    body_enabled: bool = True
+    body_gains: str = 'hold'
+    body_pose: str = 'measured'
+    return_to_start: bool = False
+    touch: str = 'keep'
+    feedback_interval: float = 1.0
+    pattern: str = 'target'
+    period: float = 10.0
+    sine_min: float = .01
+    sine_max: float = .08
+    low_frac: float = .25
+    high_frac: float = .75
+    loop: bool = False
+
+
+def _iter_phases(options, guards, infos, prepared, returns, limits, positions):
+    """Generate each next trajectory phase only after the previous one ends."""
+    def transition(end, minimum=0.0):
+        start = dict(positions)
+        seconds = _transition_seconds(start, end, limits, minimum)
+
+        def targets_at(elapsed):
+            alpha = 1.0 if seconds == 0 else min(1.0, elapsed/seconds)
+            return {side: codec.prepare_target(infos[side], replace(prepared[side],
+                pos=tuple(a*(1-alpha)+b*alpha for a,b in zip(start[side], end[side])))) for side in end}
+
+        positions.update(end)
+        return targets_at, seconds
+
+    if options.pattern == 'target':
+        for selected in ((prepared, returns) if options.return_to_start else (prepared,)):
+            # Zero/default speed is explicit intent; duration is not arrival.
+            yield 'target', lambda _elapsed, values=selected: values, options.duration
+        return
+    if options.pattern == 'sine':
+        middle = {side: ((options.sine_min+options.sine_max)/2,) for side in guards}
+        target_at, seconds = transition(middle)
+        yield 'entry', target_at, seconds
+
+        def sinusoid(elapsed):
+            weight = (1+math.sin(2*math.pi*elapsed/options.period))/2
+            pos = (options.sine_min*(1-weight)+options.sine_max*weight,)
+            return {side: codec.prepare_target(infos[side], replace(prepared[side],pos=pos)) for side in guards}
+
+        yield 'sine', sinusoid, options.duration
+        positions.update({side: sinusoid(options.duration)[side].pos for side in guards})
+        target_at, seconds = transition({side: value.pos for side,value in returns.items()})
+        yield 'return', target_at, seconds
+        return
+    low = {side: limits[side][0] for side in guards}
+    high = {side: limits[side][1] for side in guards}
+    target_at, seconds = transition(low)
+    yield 'low', target_at, seconds+body.DWELL_S
+    while True:
+        if options.pattern == 'simultaneous':
+            for label,end in (('high',high),('low',low)):
+                target_at, seconds = transition(end)
+                yield label, target_at, seconds+body.DWELL_S
+        else:
+            for side in guards:
+                for index in range(len(infos[side].axis_names)):
+                    end = _single_axis_high(low, high, side, index)
+                    target_at, seconds = transition(end)
+                    yield side+'/'+infos[side].axis_names[index], target_at, seconds+body.DWELL_S
+                    target_at, seconds = transition(low)
+                    yield 'low', target_at, seconds+body.DWELL_S
+        if not options.loop:
+            return
+
+
 def _validate_motion_parameters(*, pattern, loop, period, sine_min, sine_max,
                                 low_frac, high_frac, touch, timeout, duration,
                                 feedback_interval, rates):
@@ -483,13 +561,14 @@ def _validate_motion_parameters(*, pattern, loop, period, sine_min, sine_max,
         raise ValueError('timeout/duration/feedback interval/rates must be finite and positive')
 
 
-def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
-        rates=None, native_hz=None, native_config=None, body_enabled=True, body_gains='hold', body_pose='measured',
-        return_to_start=False, touch='keep', feedback_interval=1.0,
-        pattern='target', period=10.0, sine_min=.01, sine_max=.08,
-        low_frac=.25, high_frac=.75, loop=False,
-        sleep=time.sleep, monotonic=time.monotonic, emit=print):
-    """Independent member deadlines; targets are intent, never arrival evidence."""
+def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, emit):
+    """Validate every selected endpoint before requesting ownership."""
+    timeout, duration = options.timeout, options.duration
+    rates, native_hz, native_config = options.rates, options.native_hz, options.native_config
+    body_enabled, touch, feedback_interval = options.body_enabled, options.touch, options.feedback_interval
+    pattern, period, loop = options.pattern, options.period, options.loop
+    sine_min, sine_max = options.sine_min, options.sine_max
+    low_frac, high_frac = options.low_frac, options.high_frac
     rates = {c.side: 50.0 for c in clients} if rates is None else rates
     if set(rates) != {c.side for c in clients}:
         raise ValueError('one finite positive command rate per endpoint required')
@@ -562,157 +641,80 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
     strict_hold = any(i.device_model in (DeviceModel.BRAINCO_REVO2, DeviceModel.LINKER_L6) for i in infos.values())
     if strict_hold and feedback_interval < 1.0:
         raise ValueError('hand feedback interval must be at least 1 second')
+    return (infos, prepared, returns, limits, rates, native_hz), strict_hold
 
-    def command_loop(frame):
-        guards = {c.side: _EndpointGuard(c, infos[c.side], timeout, monotonic) for c in clients}
-        deadline = monotonic() + timeout
-        while True:
-            frame(wait=False)
-            for guard in guards.values():
-                guard.feedback(False)
-            if all(output_ready(g.latest) for g in guards.values()):
-                break
-            if monotonic() >= deadline:
-                raise TimeoutError('end-effector output did not become ready after EXTERNAL entry')
-            sleep(max(0.0, min(frame.next_deadline(), deadline)-monotonic()))
-        if touch != 'keep':
-            for client in clients:
-                result = touch_worker.submit(set_touch_and_observe, client, touch == 'on',
-                                             timeout, monotonic=monotonic)
-                while not result.done():
-                    frame(wait=False)  # Same owner/body watchdog continues during bounded RPC.
-                    for guard in guards.values():
-                        guard.feedback(True)
-                    sleep(max(0.0, frame.next_deadline()-monotonic()))
-                state, sample = result.result()
-                emit(f'{client.side}: touch_state={state.sample_ref} touch_sample={None if sample is None else sample.sample_ref}')
-        # Preparation and RPC may outlive the preflight measurement. Keep the
-        # saved return target, but enter interpolation from current guarded data.
-        initial_state = {side: guard.feedback(True) for side, guard in guards.items()}
-        initial_position = {side: state.pos for side, state in initial_state.items()}
-        positions = dict(initial_position)
-        cursor = {side: _float32(state.pos[0]) for side, state in initial_state.items()
-                  if infos[side].device_model == DeviceModel.AGX}
-        last_now = monotonic()
-        cursor_time = {side: last_now for side in cursor}
-        requested_motion = {side: [0.0, 0.0] for side in cursor}
-        observed_motion = {side: [0.0, 0.0] for side in cursor}
-        motion_start_id = {side: None for side in cursor}
-        motion_start_position = {side: None for side in cursor}
 
-        def check_motion(states):
-            for side in cursor:
-                state = states[side]
-                if motion_start_id[side] is not None and state.state_id > motion_start_id[side]:
-                    delta = state.pos[0] - motion_start_position[side]
-                    observed_motion[side][0] = max(observed_motion[side][0], delta)
-                    observed_motion[side][1] = max(observed_motion[side][1], -delta)
+def _prepare_stream(frame, clients, infos, options, touch_worker, *, sleep, monotonic, emit):
+    """Wait for ready outputs and touch RPCs before choosing trajectory starts."""
+    timeout, touch = options.timeout, options.touch
+    guards = {c.side: _EndpointGuard(c, infos[c.side], timeout, monotonic) for c in clients}
+    deadline = monotonic() + timeout
+    while True:
+        frame(wait=False)
+        for guard in guards.values():
+            guard.feedback(False)
+        if all(output_ready(g.latest) for g in guards.values()):
+            break
+        if monotonic() >= deadline:
+            raise TimeoutError('end-effector output did not become ready after EXTERNAL entry')
+        sleep(max(0.0, min(frame.next_deadline(), deadline)-monotonic()))
+    if touch != 'keep':
+        for client in clients:
+            result = touch_worker.submit(set_touch_and_observe, client, touch == 'on',
+                                         timeout, monotonic=monotonic)
+            while not result.done():
+                frame(wait=False)  # Same owner/body watchdog continues during bounded RPC.
+                for guard in guards.values():
+                    guard.feedback(True)
+                sleep(max(0.0, frame.next_deadline()-monotonic()))
+            state, sample = result.result()
+            emit(f'{client.side}: touch_state={state.sample_ref} touch_sample={None if sample is None else sample.sample_ref}')
+    initial_state = {side: guard.feedback(True) for side, guard in guards.items()}
+    return guards, initial_state
 
-        def motion_unobserved(side):
-            return (any(requested_motion[side]) and not any(
-                requested > 0 and observed >= min(1e-6, requested / 2)
-                for requested, observed in zip(requested_motion[side], observed_motion[side])))
 
-        def transition(end, minimum=0.0):
-            start = dict(positions)
-            seconds = _transition_seconds(start, end, limits, minimum)
-            def targets_at(elapsed):
-                alpha = 1.0 if seconds == 0 else min(1.0, elapsed/seconds)
-                return {side: codec.prepare_target(infos[side], replace(prepared[side],
-                    pos=tuple(a*(1-alpha)+b*alpha for a,b in zip(start[side], end[side])))) for side in end}
-            positions.update(end)
-            return targets_at, seconds
+def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sleep, monotonic, emit):
+    """Drive the existing single owner using independently paced endpoints."""
+    infos, prepared, returns, limits, rates, native_hz = prepared_motion
+    timeout, feedback_interval = options.timeout, options.feedback_interval
+    guards, initial_state = _prepare_stream(
+        frame, clients, infos, options, touch_worker, sleep=sleep, monotonic=monotonic, emit=emit)
+    # Preparation and RPC may outlive the preflight measurement. Keep the
+    # saved return target, but enter interpolation from current guarded data.
+    initial_position = {side: state.pos for side, state in initial_state.items()}
+    positions = dict(initial_position)
+    cursor = {side: _float32(state.pos[0]) for side, state in initial_state.items()
+              if infos[side].device_model == DeviceModel.AGX}
+    last_now = monotonic()
+    cursor_time = {side: last_now for side in cursor}
+    requested_motion = {side: [0.0, 0.0] for side in cursor}
+    observed_motion = {side: [0.0, 0.0] for side in cursor}
+    motion_start_id = {side: None for side in cursor}
+    motion_start_position = {side: None for side in cursor}
 
-        def phases():
-            if pattern == 'target':
-                for selected in ((prepared, returns) if return_to_start else (prepared,)):
-                    # Preserve explicit target intent, including zero/default speed;
-                    # duration bounds streaming only, never measured arrival.
-                    yield 'target', lambda _elapsed, values=selected: values, duration
-                return
-            if pattern == 'sine':
-                middle = {side: ((sine_min+sine_max)/2,) for side in guards}
-                target_at, seconds = transition(middle)
-                yield 'entry', target_at, seconds
-                def sinusoid(elapsed):
-                    weight = (1+math.sin(2*math.pi*elapsed/period))/2
-                    pos = (sine_min*(1-weight)+sine_max*weight,)
-                    return {side: codec.prepare_target(infos[side], replace(prepared[side],pos=pos)) for side in guards}
-                yield 'sine', sinusoid, duration
-                positions.update({side: sinusoid(duration)[side].pos for side in guards})
-                target_at, seconds = transition({side: value.pos for side,value in returns.items()})
-                yield 'return', target_at, seconds
-                return
-            low = {side: limits[side][0] for side in guards}
-            high = {side: limits[side][1] for side in guards}
-            target_at, seconds = transition(low)
-            yield 'low', target_at, seconds+body.DWELL_S
-            while True:
-                if pattern == 'simultaneous':
-                    for label,end in (('high',high),('low',low)):
-                        target_at, seconds = transition(end)
-                        yield label, target_at, seconds+body.DWELL_S
-                else:
-                    for side in guards:
-                        for index in range(len(infos[side].axis_names)):
-                            end = _single_axis_high(low, high, side, index)
-                            target_at, seconds = transition(end)
-                            yield side+'/'+infos[side].axis_names[index], target_at, seconds+body.DWELL_S
-                            target_at, seconds = transition(low)
-                            yield 'low', target_at, seconds+body.DWELL_S
-                if not loop:
-                    return
+    def check_motion(states):
+        for side in cursor:
+            state = states[side]
+            if motion_start_id[side] is not None and state.state_id > motion_start_id[side]:
+                delta = state.pos[0] - motion_start_position[side]
+                observed_motion[side][0] = max(observed_motion[side][0], delta)
+                observed_motion[side][1] = max(observed_motion[side][1], -delta)
 
-        next_due = {side: monotonic() for side in guards}
-        for leg, target_at, seconds in phases():
-            began = monotonic()
-            if began < last_now:
-                raise RuntimeError('source monotonic clock moved backwards')
-            deadline, next_print = began+seconds, began
-            hard_deadline = deadline + timeout
-            final_sent = set()
-            while len(final_sent) != len(guards) or monotonic() < deadline:
-                frame(wait=False)
-                now = monotonic()
-                if now < last_now:
-                    raise RuntimeError('source monotonic clock moved backwards')
-                last_now = now
-                states = {side: g.feedback(True) for side, g in guards.items()}
-                check_motion(states)
-                if now >= hard_deadline:
-                    raise TimeoutError('final source point not submitted within the observation budget')
-                selected = target_at(min(seconds, now-began))
-                for side, guard in guards.items():
-                    if now >= next_due[side]:
-                        target = selected[side]
-                        if side in cursor:
-                            desired = _float32(target.pos[0])
-                            value = _agx_source_step(cursor[side], desired, limits[side][2][0],
-                                                     now - cursor_time[side], native_hz[side])
-                            target = codec.prepare_target(infos[side], replace(target, pos=(value,)))
-                        command = guard.publish(target, states[side])
-                        if side in cursor:
-                            if motion_start_id[side] is None and target.pos[0] != cursor[side]:
-                                motion_start_id[side] = states[side].state_id
-                                motion_start_position[side] = states[side].pos[0]
-                            cursor[side], cursor_time[side] = target.pos[0], now
-                            if motion_start_id[side] is not None:
-                                delta = target.pos[0] - motion_start_position[side]
-                                requested_motion[side][0] = max(requested_motion[side][0], delta)
-                                requested_motion[side][1] = max(requested_motion[side][1], -delta)
-                        emit(f'EE leg={leg} side={side} submitted={command.key} observations={command.input_observations}; admission/arrival not inferred')
-                        if now >= deadline and (side not in cursor or cursor[side] == _float32(selected[side].pos[0])):
-                            final_sent.add(side)
-                        next_due[side] = monotonic() + 1.0/rates[side]  # Never catch-up burst.
-                if now >= next_print:
-                    for client in clients:
-                        print_feedback(client, emit)
-                    next_print = now+feedback_interval
-                if len(final_sent) != len(guards) or monotonic() < deadline:
-                    sleep(max(0.0, min([frame.next_deadline(), hard_deadline, *next_due.values(),
-                        *([deadline] if now < deadline else [])])-monotonic()))
-        observation_deadline = monotonic() + timeout
-        while any(motion_unobserved(s) for s in cursor):
+    def motion_unobserved(side):
+        return (any(requested_motion[side]) and not any(
+            requested > 0 and observed >= min(1e-6, requested / 2)
+            for requested, observed in zip(requested_motion[side], observed_motion[side])))
+
+    next_due = {side: monotonic() for side in guards}
+    for leg, target_at, seconds in _iter_phases(
+            options, guards, infos, prepared, returns, limits, positions):
+        began = monotonic()
+        if began < last_now:
+            raise RuntimeError('source monotonic clock moved backwards')
+        deadline, next_print = began+seconds, began
+        hard_deadline = deadline + timeout
+        final_sent = set()
+        while len(final_sent) != len(guards) or monotonic() < deadline:
             frame(wait=False)
             now = monotonic()
             if now < last_now:
@@ -720,18 +722,69 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
             last_now = now
             states = {side: g.feedback(True) for side, g in guards.items()}
             check_motion(states)
-            if all(not motion_unobserved(s) for s in cursor):
-                break
-            if now >= observation_deadline:
-                raise TimeoutError('AGX movement not observed; local submissions are unconfirmed')
-            sleep(max(0.0, min(frame.next_deadline(), observation_deadline)-now))
-        for side in cursor:
-            if any(requested_motion[side]):
-                emit(f'{side}: fresh feedback observed movement; command admission/output/arrival remain unconfirmed')
-    touch_worker = ThreadPoolExecutor(max_workers=1) if touch != 'keep' else None
+            if now >= hard_deadline:
+                raise TimeoutError('final source point not submitted within the observation budget')
+            selected = target_at(min(seconds, now-began))
+            for side, guard in guards.items():
+                if now >= next_due[side]:
+                    target = selected[side]
+                    if side in cursor:
+                        desired = _float32(target.pos[0])
+                        value = _agx_source_step(cursor[side], desired, limits[side][2][0],
+                                                 now - cursor_time[side], native_hz[side])
+                        target = codec.prepare_target(infos[side], replace(target, pos=(value,)))
+                    command = guard.publish(target, states[side])
+                    if side in cursor:
+                        if motion_start_id[side] is None and target.pos[0] != cursor[side]:
+                            motion_start_id[side] = states[side].state_id
+                            motion_start_position[side] = states[side].pos[0]
+                        cursor[side], cursor_time[side] = target.pos[0], now
+                        if motion_start_id[side] is not None:
+                            delta = target.pos[0] - motion_start_position[side]
+                            requested_motion[side][0] = max(requested_motion[side][0], delta)
+                            requested_motion[side][1] = max(requested_motion[side][1], -delta)
+                    emit(f'EE leg={leg} side={side} submitted={command.key} observations={command.input_observations}; admission/arrival not inferred')
+                    if now >= deadline and (side not in cursor or cursor[side] == _float32(selected[side].pos[0])):
+                        final_sent.add(side)
+                    next_due[side] = monotonic() + 1.0/rates[side]  # Never catch-up burst.
+            if now >= next_print:
+                for client in clients:
+                    print_feedback(client, emit)
+                next_print = now+feedback_interval
+            if len(final_sent) != len(guards) or monotonic() < deadline:
+                sleep(max(0.0, min([frame.next_deadline(), hard_deadline, *next_due.values(),
+                    *([deadline] if now < deadline else [])])-monotonic()))
+    observation_deadline = monotonic() + timeout
+    while any(motion_unobserved(s) for s in cursor):
+        frame(wait=False)
+        now = monotonic()
+        if now < last_now:
+            raise RuntimeError('source monotonic clock moved backwards')
+        last_now = now
+        states = {side: g.feedback(True) for side, g in guards.items()}
+        check_motion(states)
+        if all(not motion_unobserved(s) for s in cursor):
+            break
+        if now >= observation_deadline:
+            raise TimeoutError('AGX movement not observed; local submissions are unconfirmed')
+        sleep(max(0.0, min(frame.next_deadline(), observation_deadline)-now))
+    for side in cursor:
+        if any(requested_motion[side]):
+            emit(f'{side}: fresh feedback observed movement; command admission/output/arrival remain unconfirmed')
+
+
+def run(controller, clients, targets, options, *, sleep=time.sleep, monotonic=time.monotonic, emit=print):
+    """Independent member deadlines; targets are intent, never arrival evidence."""
+    prepared_motion, strict_hold = _prepare_motion(
+        controller, clients, targets, options, sleep=sleep, monotonic=monotonic, emit=emit)
+    touch_worker = ThreadPoolExecutor(max_workers=1) if options.touch != 'keep' else None
+
+    def command_loop(frame):
+        _stream_motion(frame, clients, prepared_motion, options, touch_worker,
+                       sleep=sleep, monotonic=monotonic, emit=emit)
+
     try:
-        run_external(controller, command_loop, body=body, timeout=timeout, body_enabled=body_enabled,
-                     body_gains=body_gains, body_pose=body_pose, strict_hold=strict_hold,
+        run_external(controller, command_loop, options, body=body, strict_hold=strict_hold,
                      sleep=sleep, monotonic=monotonic, emit=emit)
     finally:
         # run_external attempts CANCEL before waiting for a failed/inflight RPC.
@@ -862,7 +915,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
                 unit=getattr(args, client.side+'_unit'), vel_limit=getattr(args, client.side+'_vel_limit'),
                 torque=getattr(args, client.side+'_torque_nm'))
         try:
-            run(connection, clients, targets, timeout=args.timeout, duration=args.duration,
+            options = _MotionOptions(timeout=args.timeout, duration=args.duration,
                 rates={side: getattr(args, side+'_hz') for side in sides},
                 native_hz={side: getattr(args, side+'_native_hz') for side in sides}, native_config=args.native_config,
                 body_enabled=not args.ee_only,
@@ -870,6 +923,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
                 touch=args.touch, feedback_interval=args.feedback_interval,
                 pattern=args.pattern, period=args.period_s, sine_min=args.sine_min_m, sine_max=args.sine_max_m,
                 low_frac=args.low_frac, high_frac=args.high_frac, loop=args.loop)
+            run(connection, clients, targets, options)
         except KeyboardInterrupt:
             print('interrupted; CANCEL attempted once, no neutral end-effector target sent')
 

@@ -7,12 +7,15 @@ from dataclasses import replace
 from contextlib import contextmanager
 import io
 import math
+from pathlib import Path
+import runpy
 import signal
+import sys
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 from examples.end_effector import end_effector_external as demo
-from locomotion_aorta import BODY_CMD_TOPIC, CONTROL_STATUS_TOPIC, ExternalPhase
+from locomotion_aorta import BODY_CMD_TOPIC, ExternalPhase
 from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector_types import (
     CommandKey, ControlMode, DeviceModel, EndEffectorSubmission,
@@ -98,6 +101,9 @@ class EndEffectorExampleTest(unittest.TestCase):
         self.addCleanup(controller.close)
         return controller
 
+    def endpoints(self, controller, *, hand=False, touch=False):
+        return [Endpoint(controller, side, hand=hand, touch=touch) for side in ('left', 'right')]
+
     def target(self, endpoint, **kwargs):
         return demo.position_target(endpoint.info,
             kwargs.pop('positions', (.0625,)*len(endpoint.info.axis_names)),
@@ -107,15 +113,15 @@ class EndEffectorExampleTest(unittest.TestCase):
         options.setdefault('native_hz', {c.side: 250 for c in clients
                                          if c.info.device_model == DeviceModel.AGX})
         options.setdefault('native_config', 'synthetic-test-effective-config')
+        motion = demo._MotionOptions(timeout=options.pop('timeout', .3),
+                                     duration=options.pop('duration', .08), **options)
         return demo.run(controller, clients,
-            targets=targets or {c.side: self.target(c) for c in clients},
-            timeout=options.pop('timeout', .3), duration=options.pop('duration', .08),
-            sleep=self.clock.sleep, monotonic=self.clock.monotonic,
-            emit=self.events.append, **options)
+            targets or {c.side: self.target(c) for c in clients}, motion,
+            sleep=self.clock.sleep, monotonic=self.clock.monotonic, emit=self.events.append)
 
     def test_actual_entry_shares_one_owner_allocator_and_original_body_hold(self):
         c = self.controller()
-        clients = [Endpoint(c, side) for side in ('left', 'right')]
+        clients = self.endpoints(c)
         self.run_case(c, clients, body_gains='zero')
         body_commands = [v for topic,v in c.transport.published if topic == BODY_CMD_TOPIC]
         self.assertTrue(body_commands)
@@ -167,10 +173,7 @@ class EndEffectorExampleTest(unittest.TestCase):
                 c = self.controller()
                 endpoint = Endpoint(c)
                 def enter_hold(_submission):
-                    status = c.status
-                    c.transport.emit(CONTROL_STATUS_TOPIC, replace(
-                        status, status_seq=status.status_seq + 1,
-                        phase=ExternalPhase.TIMEOUT_HOLD, timeout_hold=True))
+                    c.emit_status_change(phase=ExternalPhase.TIMEOUT_HOLD, timeout_hold=True)
                     endpoint.after_publish = None
                 endpoint.after_publish = enter_hold
                 if body_enabled:
@@ -205,9 +208,7 @@ class EndEffectorExampleTest(unittest.TestCase):
                 c = self.controller()
                 endpoint = Endpoint(c)
                 def change_owner(_submission):
-                    status = c.status
-                    c.transport.emit(CONTROL_STATUS_TOPIC, replace(
-                        status, status_seq=status.status_seq + 1, **{field: value}))
+                    c.emit_status_change(**{field: value})
                     endpoint.after_publish = None
                 endpoint.after_publish = change_owner
                 with self.assertRaisesRegex(RuntimeError, 'ownership/phase/reject_count'):
@@ -215,9 +216,18 @@ class EndEffectorExampleTest(unittest.TestCase):
                 self.assertEqual(len(endpoint.commands), 1)
                 self.assertEqual(c.calls.count('exit_external'), 1)
 
+    def test_ee_only_missing_status_cancels_without_target(self):
+        c = self.controller()
+        endpoint = Endpoint(c)
+        with patch.object(RecordingController, 'status', new_callable=PropertyMock, return_value=None):
+            with self.assertRaisesRegex(RuntimeError, 'ownership/phase/reject_count'):
+                self.run_case(c, [endpoint], body_enabled=False)
+        self.assertFalse(endpoint.commands)
+        self.assertEqual(c.calls.count('exit_external'), 1)
+
     def test_mixed_rates_do_not_couple_endpoints_or_speed_up_body(self):
         c = self.controller()
-        clients = [Endpoint(c,side) for side in ('left','right')]
+        clients = self.endpoints(c)
         self.run_case(c,clients,duration=.4,rates={'left':20.,'right':100.},
                       native_hz={'left':200,'right':125})
         self.assertGreater(len(clients[1].commands),len(clients[0].commands)*3)
@@ -375,7 +385,7 @@ class EndEffectorExampleTest(unittest.TestCase):
         for during in ('entry', 'touch'):
             with self.subTest(during=during):
                 c = self.controller()
-                clients = [Endpoint(c, side, touch=True) for side in ('left', 'right')]
+                clients = self.endpoints(c, touch=True)
                 saved = {e.side: e._state.pos for e in clients}
                 def changed():
                     for e in clients:
@@ -407,7 +417,7 @@ class EndEffectorExampleTest(unittest.TestCase):
 
     def test_nondividing_body_and_endpoint_deadlines_keep_each_cadence(self):
         c = self.controller()
-        clients = [Endpoint(c, side) for side in ('left', 'right')]
+        clients = self.endpoints(c)
         self.run_case(c, clients, duration=.12, rates={'left': 1/.015, 'right': 1/.025})
         for times, period, minimum in ((c.command_times, .02, 7),
                                        (clients[0].times, .015, 9),
@@ -518,21 +528,21 @@ class EndEffectorExampleTest(unittest.TestCase):
         self.assertFalse(any('arrival confirmed' in line for line in self.events))
 
     def test_sine_same_phase_return_and_peak_speed_limit(self):
-        c=self.controller(); clients=[Endpoint(c,side) for side in ('left','right')]
+        c=self.controller(); clients=self.endpoints(c)
         self.run_case(c,clients,pattern='sine',period=1.,duration=1.,sine_min=.01,sine_max=.08)
         self.assertEqual(clients[0].times,clients[1].times)
         self.assertEqual([x.target.pos for x in clients[0].commands],[x.target.pos for x in clients[1].commands])
         for e in clients:
             self.assertTrue(all(.01 <= command.target.pos[0] <= .08 for command in e.commands))
             self.assertEqual(e.commands[-1].target.pos,(.03125,))
-        c2=self.controller(); clients2=[Endpoint(c2,side) for side in ('left','right')]
+        c2=self.controller(); clients2=self.endpoints(c2)
         with self.assertRaisesRegex(ValueError,'peak command slope'):
             self.run_case(c2,clients2,pattern='sine',period=.01)
         self.assertNotIn('enter_external',c2.calls)
 
     def test_fraction_patterns_keep_actual_axis_ranges_and_sequential_is_single_axis(self):
         for pattern in ('simultaneous','sequential'):
-            c=self.controller(); clients=[Endpoint(c,side,hand=True) for side in ('left','right')]
+            c=self.controller(); clients=self.endpoints(c, hand=True)
             # Different actual descriptor ranges per axis, no shared fake min/max.
             for e in clients:
                 e.info=replace(e.info,pos_max=tuple(1.+i/10 for i in range(6)))
@@ -588,6 +598,24 @@ class EndEffectorExampleTest(unittest.TestCase):
                     self.assertEqual(c.calls.count('exit_external'), 1)
                     self.assertEqual(c.status.current_action, 'PASSIVE')
                     self.assertEqual({s: signal.getsignal(s) for s in previous_handlers}, previous_handlers)
+
+    def test_interrupted_fraction_does_not_prepare_later_phases(self):
+        c = self.controller()
+        endpoint = Endpoint(c, hand=True)
+
+        def interrupt(_command):
+            signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+
+        endpoint.after_publish = interrupt
+        with patch.object(demo, '_transition_seconds', wraps=demo._transition_seconds) as transition:
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_case(c, [endpoint], pattern='sequential')
+
+        # Only the first low phase was requested before the first command;
+        # eager construction would also prepare the later finger phases.
+        self.assertEqual(transition.call_count, 1)
+        self.assertEqual(len(endpoint.commands), 1)
+        self.assertEqual(c.calls.count('exit_external'), 1)
 
     def test_failed_entry_attempts_cancel_once_before_any_ee_target(self):
         c = self.controller(); e = Endpoint(c, hand=True)
@@ -683,8 +711,9 @@ class EndEffectorExampleTest(unittest.TestCase):
         target=demo.position_target(endpoint.info,(.0625,),unit='m')
         with patch.object(demo,'_validate_motion_parameters',side_effect=ValueError('shared validation')) as validate:
             with self.assertRaisesRegex(ValueError,'shared validation'):
-                demo.run(controller,[endpoint],{endpoint.side:target},native_hz={'right':250},
-                         native_config='synthetic-test-effective-config')
+                demo.run(controller,[endpoint],{endpoint.side:target},
+                         demo._MotionOptions(native_hz={'right':250},
+                                             native_config='synthetic-test-effective-config'))
         self.assertEqual(1,validate.call_count)
         self.assertEqual([],endpoint.commands)
         self.assertEqual(0,controller.calls.count('enter_external'))
@@ -726,8 +755,8 @@ class EndEffectorExampleTest(unittest.TestCase):
              patch.object(controller,'enter_external',wraps=enter) as entered, \
              patch.object(controller,'exit_external',wraps=exit_) as cancelled:
             demo.run(controller,clients,{c.side:demo.position_target(c.info,(.03125,),unit='m') for c in clients},
-                duration=.08,timeout=.3,native_hz={'left':250,'right':250},
-                native_config='synthetic-test-effective-config',sleep=self.clock.sleep,
+                demo._MotionOptions(duration=.08,timeout=.3,native_hz={'left':250,'right':250},
+                                    native_config='synthetic-test-effective-config'),sleep=self.clock.sleep,
                 monotonic=self.clock.monotonic,emit=self.events.append)
         entered.assert_called_once(); cancelled.assert_called_once()
         keys=[(value.session_id,value.sequence) for topic,value in recorded.transport.published if topic==BODY_CMD_TOPIC]
@@ -1004,6 +1033,27 @@ class PartialFeedbackGuardTest(unittest.TestCase):
 
 class VendorExamplesTest(unittest.TestCase):
     """Real shared entry/run with synthetic transport, not device evidence."""
+    def test_vendor_wrapper_help_binds_model_without_constructing_clients(self):
+        entries = (('agx_gripper.py', '{target,sine}'),
+                   ('brainco_revo2.py', '{target,simultaneous,sequential}'),
+                   ('linker_l6.py', '{target}'))
+        directory = Path(demo.__file__).parent
+        for name, patterns in entries:
+            with self.subTest(entry=name):
+                path = str(directory / name)
+                with patch.object(sys, 'argv', [path, '--help']), \
+                     patch('sys.stdout', new_callable=io.StringIO) as output, \
+                     patch('locomotion_aorta.PullController') as controller, \
+                     patch('locomotion_aorta.PullStateSource') as source, \
+                     patch('locomotion_aorta.end_effector.EndEffectorClient') as client:
+                    with self.assertRaises(SystemExit) as stopped:
+                        runpy.run_path(path, run_name='__main__')
+                self.assertEqual(stopped.exception.code, 0)
+                self.assertIn('--pattern ' + patterns, output.getvalue())
+                controller.assert_not_called()
+                source.assert_not_called()
+                client.assert_not_called()
+
     def setup_case(self):
         self.clock = FakeClock()
         self.control = RecordingController(self.clock)

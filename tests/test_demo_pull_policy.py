@@ -67,7 +67,8 @@ class TimedDemoTests(unittest.TestCase):
             for _ in range(10):
                 frame()
         self.assert_body_timer(lambda c, clock: end_effector_external.run_external(
-            c, loop, body=external_control, timeout=1, sleep=clock.sleep,
+            c, loop, end_effector_external._MotionOptions(timeout=1),
+            body=external_control, sleep=clock.sleep,
             monotonic=clock.monotonic, emit=lambda _: None))
 
     def test_teleop_50hz_logs_actual_keys_and_keeps_timer_with_400hz_state(self):

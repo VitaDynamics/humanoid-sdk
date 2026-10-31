@@ -7,7 +7,7 @@ from examples.external_control import external_control as body
 from test_examples import FakeClock, RecordingController
 from locomotion_aorta import BODY_CMD_TOPIC
 
-from examples.end_effector.end_effector_external import run_external
+from examples.end_effector.end_effector_external import _MotionOptions, run_external
 
 
 class ExternalLifecycleTest(unittest.TestCase):
@@ -21,9 +21,9 @@ class ExternalLifecycleTest(unittest.TestCase):
         return c
 
     def run_loop(self, controller, loop, **options):
-        return run_external(controller, loop, body=body, timeout=1,
+        return run_external(controller, loop, _MotionOptions(timeout=1, **options), body=body,
                             sleep=self.clock.sleep, monotonic=self.clock.monotonic,
-                            emit=self.events.append, **options)
+                            emit=self.events.append)
 
     def test_held_body_pose_and_zero_gain_option_leave_no_new_target(self):
         for gains in ('hold', 'zero'):

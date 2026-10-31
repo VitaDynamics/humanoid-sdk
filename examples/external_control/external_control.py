@@ -42,6 +42,22 @@ def _matches_external_identity(status, generation, client_id, control_id):
                 or status.control_id != control_id)
 
 
+def _external_status_problem(status, phases, entered):
+    if status is None or status.current_action != 'EXTERNAL' or status.phase not in phases:
+        return 'owner'
+    if not _matches_external_identity(status, entered.generation, entered.client_id, entered.control_id):
+        return 'owner'
+    if status.reject_count != entered.reject_count:
+        return 'reject'
+    return None
+
+
+def _body_sample_progress(state_id, last_id, last_change, now, window):
+    if state_id != last_id:
+        return state_id, now, False
+    return last_id, last_change, now - last_change >= window
+
+
 def run(
     controller: PullController,
     *,
@@ -87,10 +103,6 @@ def run(
         entered_status = controller.enter_external(timeout)
         entered = True
 
-        generation = entered_status.generation
-        reject_count = entered_status.reject_count
-        client_id = entered_status.client_id
-        control_id = entered_status.control_id
         last_state_id = start_state.state_id
         last_state_change = monotonic()
         next_publish = monotonic()
@@ -101,13 +113,12 @@ def run(
             if delay > 0:
                 sleep(delay)
             status = controller.status
-            if (status is None or status.current_action != "EXTERNAL"
-                    or status.phase != ExternalPhase.RUNNING
-                    or not _matches_external_identity(status, generation, client_id, control_id)):
+            problem = _external_status_problem(status, (ExternalPhase.RUNNING,), entered_status)
+            if problem == 'owner':
                 raise RuntimeError(
                     "EXTERNAL ownership is no longer the entered RUNNING session"
                 )
-            if status.reject_count != reject_count:
+            if problem == 'reject':
                 raise RuntimeError(
                     "robot reject_count changed during the trajectory"
                 )
@@ -115,10 +126,9 @@ def run(
             state = controller.wait_state(timeout)
             _validate_body_state(state, body_info=info, require_stationary=False, target_slots=target_slots)
             now = monotonic()
-            if state.state_id != last_state_id:
-                last_state_id = state.state_id
-                last_state_change = now
-            elif now - last_state_change >= LOWSTATE_WINDOW_S:
+            last_state_id, last_state_change, stale = _body_sample_progress(
+                state.state_id, last_state_id, last_state_change, now, LOWSTATE_WINDOW_S)
+            if stale:
                 raise RuntimeError("body state became stale during the trajectory")
 
             controller.publish(_position_command(q, state), target_names=target_names, required_fields=0x19)

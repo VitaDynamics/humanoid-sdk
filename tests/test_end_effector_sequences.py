@@ -218,8 +218,7 @@ class EndEffectorSequenceTest(unittest.TestCase):
                 def sleep(seconds):
                     clock.sleep(seconds)
                     self.assertLess(clock.monotonic(), 30., 'bounded synthetic scenario did not finish')
-                options = dict(timeout=1, duration=.2, sleep=sleep, monotonic=clock.monotonic,
-                    emit=lambda _: None, body_pose='zero' if zero else 'measured',
+                options = demo._MotionOptions(timeout=1, duration=.2, body_pose='zero' if zero else 'measured',
                     native_hz={e.side:250 for e in endpoints}, native_config='synthetic-test-effective-config',
                     return_to_start=back, pattern='sine' if sine else 'target',
                     period=1., sine_min=.015625, sine_max=.078125)
@@ -227,9 +226,11 @@ class EndEffectorSequenceTest(unittest.TestCase):
                            for e in endpoints}
                 if reject:
                     with self.assertRaisesRegex(RuntimeError, 'inhibited|permission'):
-                        demo.run(c, endpoints, targets, **options)
+                        demo.run(c, endpoints, targets, options, sleep=sleep,
+                                 monotonic=clock.monotonic, emit=lambda _: None)
                 else:
-                    demo.run(c, endpoints, targets, **options)
+                    demo.run(c, endpoints, targets, options, sleep=sleep,
+                             monotonic=clock.monotonic, emit=lambda _: None)
                 body = [value for topic, value in c.transport.published if topic == BODY_CMD_TOPIC]
                 self.assertTrue(body)
                 keys = [CommandKey(value.session_id, value.sequence) for value in body]

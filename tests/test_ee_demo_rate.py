@@ -27,9 +27,9 @@ class EECommandRateTest(unittest.TestCase):
             'native_hz': {endpoint.side: 250},
             'native_config': 'synthetic-test-effective-config',
         }
-        demo.run(body, [endpoint], {endpoint.side: target}, duration=.12, timeout=1,
-                 sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None,
-                 **native)
+        demo.run(body, [endpoint], {endpoint.side: target},
+                 demo._MotionOptions(duration=.12, timeout=1, **native),
+                 sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
         body_commands = [message for topic, message in body.transport.published
                          if topic == BODY_CMD_TOPIC]
         self.assertGreaterEqual(len(body_commands), 4)

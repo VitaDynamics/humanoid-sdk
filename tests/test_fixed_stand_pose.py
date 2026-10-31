@@ -39,7 +39,7 @@ class ZeroPoseTest(unittest.TestCase):
         return c, clock
 
     def run_zero(self, c, clock, loop, events=None):
-        return run_external(c, loop, body=body, body_pose='zero', timeout=1,
+        return run_external(c, loop, gripper_demo._MotionOptions(body_pose='zero', timeout=1), body=body,
                             sleep=clock.sleep, monotonic=clock.monotonic,
                             emit=(events if events is not None else []).append)
 
@@ -84,15 +84,15 @@ class ZeroPoseTest(unittest.TestCase):
         info = replace(info, joints=tuple(caps))
         c, clock = self.controller(info=info)
         c.measured_q[0] = .7
-        run_external(c, lambda frame: frame(), body=body, body_pose='measured',
-                     timeout=1, sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
+        run_external(c, lambda frame: frame(), gripper_demo._MotionOptions(body_pose='measured', timeout=1),
+                     body=body, sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
         self.assertTrue(self.commands(c))
         self.assertEqual(c.calls.count('exit_external'), 1)
         c2, clock2 = self.controller(info=info)
         c2.measured_q[0] = .7
         with self.assertRaisesRegex(ValueError, 'zero outside'):
-            run_external(c2, lambda frame: self.fail('zero mode must not enter'), body=body,
-                         body_pose='zero', timeout=1, sleep=clock2.sleep,
+            run_external(c2, lambda frame: self.fail('zero mode must not enter'),
+                         gripper_demo._MotionOptions(body_pose='zero', timeout=1), body=body, sleep=clock2.sleep,
                          monotonic=clock2.monotonic, emit=lambda _: None)
         self.assertNotIn('enter_external', c2.calls)
         self.assertFalse(self.commands(c2))
@@ -174,8 +174,10 @@ class ZeroPoseTest(unittest.TestCase):
                     return publish(*args, **kwargs)
                 gripper.publish = gripper_publish
                 target = gripper_demo.position_target(gripper.info, (.075,), unit='m')
-                gripper_demo.run(c, [gripper], {gripper.side: target}, duration=.08, body_pose='zero',
-                                 timeout=1, sleep=clock.sleep, monotonic=clock.monotonic, emit=events.append)
+                gripper_demo.run(c, [gripper], {gripper.side: target},
+                                 gripper_demo._MotionOptions(duration=.08, body_pose='zero', timeout=1,
+                                     native_hz={gripper.side: 250}, native_config='synthetic-test-effective-config'),
+                                 sleep=clock.sleep, monotonic=clock.monotonic, emit=events.append)
                 self.assertTrue(gripper.commands)
                 complete = [e for e in events if 'ZERO_DWELL complete observation_only=true' in e]
                 self.assertEqual(len(complete), 1)
@@ -220,9 +222,22 @@ class ZeroPoseTest(unittest.TestCase):
             return publish(*args, **kwargs)
         g.publish = checked_publish
         target = gripper_demo.position_target(g.info, (.075,), unit='m')
-        gripper_demo.run(c, [g], {g.side: target}, duration=.08, body_pose='zero', return_to_start=True,
-                         timeout=1, sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
-        self.assertEqual(list(dict.fromkeys(cmd.target.pos[0] for cmd in g.commands)), [.075, initial])
+        gripper_demo.run(c, [g], {g.side: target},
+                         gripper_demo._MotionOptions(duration=.08, body_pose='zero', return_to_start=True, timeout=1,
+                             native_hz={g.side: 250}, native_config='synthetic-test-effective-config'),
+                         sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
+        positions = [cmd.target.pos[0] for cmd in g.commands]
+        target_indices = [i for i, value in enumerate(positions) if abs(value - .075) < 1e-7]
+        self.assertTrue(target_indices)
+        target_index = target_indices[0]
+        self.assertGreater(target_index, 0)
+        self.assertLess(target_index, len(positions) - 1)
+        self.assertAlmostEqual(positions[target_index], .075, places=7)
+        self.assertAlmostEqual(positions[-1], initial, places=7)
+        self.assertTrue(all(a <= b + 1e-7 for a, b in zip(positions[:target_index], positions[1:target_index+1])))
+        self.assertTrue(all(a >= b - 1e-7 for a, b in zip(positions[target_index:], positions[target_index+1:])))
+        for first, second, start, end in zip(g.commands, g.commands[1:], g.times, g.times[1:]):
+            self.assertLessEqual(abs(second.target.pos[0] - first.target.pos[0]), min(end - start, 1/250) + 1e-8)
         self.assertEqual(c.calls.count('enter_external'), 1)
         self.assertEqual(c.calls.count('exit_external'), 1)
 
