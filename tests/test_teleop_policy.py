@@ -266,6 +266,8 @@ class LifecycleTests(unittest.TestCase):
                 events.append('enter')
                 return status
             def publish(self, command, *, target_names, required_fields):
+                if target_names != tuple(n for n in body.joint_names if n != 'waist_roll_joint') or required_fields != 0x19:
+                    raise AssertionError('policy must declare its complete physical target scope and PD fields')
                 # Exercise the real controller guard at startup and both sides
                 # of the uint16 boundary, without transport or a real model.
                 if len(commands) in (0, 65534, 65535, 65536):

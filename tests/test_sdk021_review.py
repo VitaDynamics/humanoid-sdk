@@ -265,6 +265,9 @@ class VelocityReviewTest(unittest.TestCase):
             return np.zeros(2, np.float32)
         policy.infer = infer
         def publish(command, *, target_names, required_fields):
+            self.assertEqual(target_names, tuple(name for i, name in enumerate(policy.order)
+                                                if i in policy.driven_slots))
+            self.assertEqual(required_fields, 0x1b | (0x04 if policy.config.get('ankle_clamp_feedforward', False) else 0))
             self.published.append(clock.now)
             return replace(command, session_id=1, sequence=len(self.published))
         controller.publish = publish
@@ -368,6 +371,9 @@ class TeleopReviewTest(unittest.TestCase):
                 controller.status = S(**dict(vars(status), timeout_hold=True))
             return state
         def publish(command, *, target_names, required_fields):
+            self.assertEqual(target_names, tuple(name for name in body.joint_names
+                                                if name != 'waist_roll_joint'))
+            self.assertEqual(required_fields, 0x19)
             self.published.append(clock.now)
             if len(self.published) == 3:
                 stop.set()
