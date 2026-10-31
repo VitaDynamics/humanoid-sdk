@@ -685,6 +685,26 @@ class ExamplesSmokeTest(unittest.TestCase):
 
         self.assertEqual(harness.calls[-1], "exit_external")
 
+    def test_external_example_cancels_on_owner_identity_change(self):
+        for field, value in (('generation', 84), ('client_id', 17), ('control_id', 19)):
+            with self.subTest(field=field):
+                clock = FakeClock()
+                harness = RecordingController(clock)
+                self.addCleanup(harness.close)
+                original = harness.transport.on_publish
+                def publish(topic, message):
+                    original(topic, message)
+                    if topic == BODY_CMD_TOPIC and harness.command_count == 1:
+                        status = harness.status
+                        harness.transport.emit(CONTROL_STATUS_TOPIC, replace(
+                            status, status_seq=status.status_seq + 1, **{field: value}))
+                harness.transport.on_publish = publish
+                with self.assertRaisesRegex(RuntimeError, 'ownership is no longer'):
+                    external_control.run(harness, timeout=1.0, sleep=clock.sleep,
+                                         monotonic=clock.monotonic, emit=lambda _: None)
+                self.assertEqual(harness.command_count, 1)
+                self.assertEqual(harness.calls.count('exit_external'), 1)
+
     def test_external_example_cancels_when_reject_count_increases(self):
         clock = FakeClock()
         harness = RecordingController(clock, reject_after_commands=1)

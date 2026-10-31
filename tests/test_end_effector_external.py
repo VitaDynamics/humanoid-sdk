@@ -199,6 +199,22 @@ class EndEffectorExampleTest(unittest.TestCase):
         self.assertEqual(low, {'left': (.1, .2), 'right': (.3, .4)})
         self.assertEqual(high, {'left': (.5, .6), 'right': (.7, .8)})
 
+    def test_ee_only_cancels_on_owner_identity_change(self):
+        for field, value in (('generation', 84), ('client_id', 17), ('control_id', 19)):
+            with self.subTest(field=field):
+                c = self.controller()
+                endpoint = Endpoint(c)
+                def change_owner(_submission):
+                    status = c.status
+                    c.transport.emit(CONTROL_STATUS_TOPIC, replace(
+                        status, status_seq=status.status_seq + 1, **{field: value}))
+                    endpoint.after_publish = None
+                endpoint.after_publish = change_owner
+                with self.assertRaisesRegex(RuntimeError, 'ownership/phase/reject_count'):
+                    self.run_case(c, [endpoint], body_enabled=False)
+                self.assertEqual(len(endpoint.commands), 1)
+                self.assertEqual(c.calls.count('exit_external'), 1)
+
     def test_mixed_rates_do_not_couple_endpoints_or_speed_up_body(self):
         c = self.controller()
         clients = [Endpoint(c,side) for side in ('left','right')]
