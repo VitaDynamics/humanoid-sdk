@@ -707,7 +707,8 @@ def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sl
 
     next_due = {side: monotonic() for side in guards}
     for leg, target_at, seconds in _iter_phases(
-            options, guards, infos, prepared, returns, limits, positions):
+            options=options, guards=guards, infos=infos, prepared=prepared,
+            returns=returns, limits=limits, positions=positions):
         began = monotonic()
         if began < last_now:
             raise RuntimeError('source monotonic clock moved backwards')

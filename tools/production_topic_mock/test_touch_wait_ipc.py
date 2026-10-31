@@ -162,8 +162,8 @@ def touch_wait_client(mode, output):
             return rpc
         body_publish, cancel, enter = controller.publish, controller.exit_external, controller.enter_external
         ee_publish = endpoint.publish
-        def body_send(command):
-            sent = body_publish(command)
+        def body_send(command, *, target_names, required_fields):
+            sent = body_publish(command, target_names=target_names, required_fields=required_fields)
             mark('body_send', sample=command.input_state_id, sequence=sent.sequence)
             return sent
         def ee_send(*args, **kwargs):
