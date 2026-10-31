@@ -177,18 +177,17 @@ def require_body_info(controller: PullController, timeout: float, *, emit_info=N
 
 def _body_target_slots(body_info, *, require_zero=False):
     """Validate the existing FIXED_STAND 30-joint action profile, not slot presence."""
+    from locomotion_aorta._policy_state import body_joint_order
+
     path = Path(__file__).resolve().parents[1] / 'fixed_stand_pose/fixed_stand_profile.json'
     names = tuple(body_info.joint_names)
     targets = frozenset(json.loads(path.read_text())['joint_gains'])
-    if (body_info.slot_count != COMMAND_SLOTS or len(names) != COMMAND_SLOTS or len(set(names)) != COMMAND_SLOTS
-            or len(body_info.joints) != COMMAND_SLOTS or len(targets) != 30
-            or not targets.issubset(names)
+    if (body_info.slot_count != COMMAND_SLOTS or len(body_info.joints) != COMMAND_SLOTS
+            or len(targets) != 30 or not targets.issubset(names)
             or any(cap.body_index != i for i, cap in enumerate(body_info.joints))):
         raise ValueError('the full 30-joint Body action profile is required')
+    body_joint_order(body_info, required_names=targets)
     slots = tuple(i for i, name in enumerate(names) if name in targets)
-    unavailable = [names[i] for i in slots if body_info.joints[i].is_mock]
-    if unavailable:
-        raise ValueError('Body targets unavailable: ' + ', '.join(unavailable))
     for i in slots:
         cap = body_info.joints[i]
         if (cap.supported_fields & 0x19 != 0x19 or not cap.valid_limits & 1

@@ -21,7 +21,7 @@ from locomotion_aorta import (
     BodyState,
 )
 from fake_transport import FakeTransport
-from locomotion_aorta._policy_state import ASAMPLE_BODY_JOINT_NAMES
+from locomotion_aorta._policy_state import ASAMPLE_BODY_JOINT_NAMES, body_joint_order
 
 
 def example_robot_info_reply():
@@ -336,6 +336,23 @@ class ExamplesSmokeTest(unittest.TestCase):
             ],
         )
 
+    def test_subscriber_uses_fixed_position_domain_units(self):
+        from examples.end_effector_state_subscriber import end_effector_state_subscriber as subscriber
+        from locomotion_aorta.end_effector_types import _POSITION_DOMAIN_UNITS
+
+        state = SimpleNamespace(runtime_id=100, layout_id=7, side=1, state_id=4,
+                                sample_status=0, pos=(.25,), valid_fields=(1,), error_code=(0,))
+        info = SimpleNamespace(runtime_id=100, layout_id=7, side=1, axis_names=('finger',),
+                               position_domain=(next(iter(_POSITION_DOMAIN_UNITS)),), is_mock=(False,))
+        client = SimpleNamespace(side='left', wait_info=mock.Mock(return_value=info),
+                                 wait_state=mock.Mock(return_value=state))
+        with mock.patch('locomotion_aorta.end_effector_types._POSITION_DOMAIN_UNITS',
+                        wraps=_POSITION_DOMAIN_UNITS) as units:
+            lines = []
+            subscriber.run_once(client, timeout=.1, emit=lines.append)
+        self.assertIs(_POSITION_DOMAIN_UNITS, units)
+        self.assertIn('pos=0.250000 rad', lines[-1])
+
     def test_body_info_masks_absent_slots_and_installed_errors_are_rejected(self):
         from dataclasses import replace
         motors = [sample_motor() for _ in range(31)]
@@ -358,8 +375,29 @@ class ExamplesSmokeTest(unittest.TestCase):
         joints = list(info.joints)
         joints[0] = replace(joints[0], is_mock=True)
         self.assertNotEqual(joints[0].supported_fields, 0)
-        with self.assertRaisesRegex(ValueError, 'targets unavailable'):
+        with self.assertRaisesRegex(ValueError, 'policy joints are unavailable'):
             external_control._body_target_slots(replace(info, joints=tuple(joints)))
+        with mock.patch('locomotion_aorta._policy_state.body_joint_order',
+                        wraps=body_joint_order) as shared_order:
+            self.assertEqual(slots, external_control._body_target_slots(info))
+        self.assertEqual(1, shared_order.call_count)
+        required = shared_order.call_args.kwargs['required_names']
+        self.assertEqual(30, len(required))
+        self.assertEqual({info.joint_names[i] for i in slots}, set(required))
+        missing = replace(info, joint_names=tuple('missing_joint' if i == 0 else name
+                                                 for i, name in enumerate(info.joint_names)))
+        with self.assertRaisesRegex(ValueError, 'full 30-joint'):
+            external_control._body_target_slots(missing)
+        unavailable = list(info.joints)
+        unavailable[0] = replace(unavailable[0], supported_fields=0)
+        with self.assertRaisesRegex(ValueError, 'position capability or limit unavailable'):
+            external_control._body_target_slots(replace(info, joints=tuple(unavailable)))
+        bad_zero = list(info.joints)
+        bad_zero[0] = replace(bad_zero[0], q_min=1.0, q_max=2.0)
+        with self.assertRaisesRegex(ValueError, 'zero outside position limit'):
+            external_control._body_target_slots(replace(info, joints=tuple(bad_zero)), require_zero=True)
+        self.assertEqual(slots, external_control._body_target_slots(
+            replace(info, joints=tuple(bad_zero))))
         state = BodyState(1, tuple(sample_motor() for _ in range(31)), attitude_valid=True)
         with self.assertRaisesRegex(ValueError, 'no target slots'):
             external_control._validate_body_state(body_array_frame(state), body_info=info,

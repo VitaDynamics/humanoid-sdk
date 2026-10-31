@@ -450,13 +450,9 @@ def _agx_source_step(previous, desired, rate, elapsed, native_hz):
     return value
 
 
-def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
-        rates=None, native_hz=None, native_config=None, body_enabled=True, body_gains='hold', body_pose='measured',
-        return_to_start=False, touch='keep', feedback_interval=1.0,
-        pattern='target', period=10.0, sine_min=.01, sine_max=.08,
-        low_frac=.25, high_frac=.75, loop=False,
-        sleep=time.sleep, monotonic=time.monotonic, emit=print):
-    """Independent member deadlines; targets are intent, never arrival evidence."""
+def _validate_motion_parameters(*, pattern, loop, period, sine_min, sine_max,
+                                low_frac, high_frac, touch, timeout, duration,
+                                feedback_interval, rates):
     if pattern not in ('target', 'sine', 'simultaneous', 'sequential'):
         raise ValueError('unknown motion pattern')
     if loop and pattern not in ('simultaneous', 'sequential'):
@@ -466,24 +462,37 @@ def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
             or not math.isfinite(low_frac) or not math.isfinite(high_frac)
             or not 0 <= low_frac < high_frac <= 1):
         raise ValueError('invalid period, sine bounds or fractions')
+    if touch not in ('keep', 'on', 'off'):
+        raise ValueError('touch must be keep/on/off')
+    if any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0
+           for v in (timeout, duration, feedback_interval, *rates)):
+        raise ValueError('timeout/duration/feedback interval/rates must be finite and positive')
+
+
+def run(controller, clients, targets, *, timeout=5.0, duration=1.0,
+        rates=None, native_hz=None, native_config=None, body_enabled=True, body_gains='hold', body_pose='measured',
+        return_to_start=False, touch='keep', feedback_interval=1.0,
+        pattern='target', period=10.0, sine_min=.01, sine_max=.08,
+        low_frac=.25, high_frac=.75, loop=False,
+        sleep=time.sleep, monotonic=time.monotonic, emit=print):
+    """Independent member deadlines; targets are intent, never arrival evidence."""
+    rates = {c.side: 50.0 for c in clients} if rates is None else rates
+    if set(rates) != {c.side for c in clients}:
+        raise ValueError('one finite positive command rate per endpoint required')
+    _validate_motion_parameters(pattern=pattern, loop=loop, period=period,
+        sine_min=sine_min, sine_max=sine_max, low_frac=low_frac, high_frac=high_frac,
+        touch=touch, timeout=timeout, duration=duration, feedback_interval=feedback_interval,
+        rates=rates.values())
     if pattern == 'sine' and tuple(c.side for c in clients) != ('left', 'right'):
         raise ValueError('sine requires left and right AGX endpoints')
     if pattern != 'target' and not clients:
         raise ValueError('pattern requires end effectors')
-    if touch not in ('keep', 'on', 'off'):
-        raise ValueError('touch must be keep/on/off')
-    if any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0
-           for v in (timeout, duration, feedback_interval)):
-        raise ValueError('timeout/duration/feedback interval must be finite and positive')
     if not clients and not body_enabled:
         raise ValueError('none requires Body; EE-only requires a selected endpoint')
     if len({c.side for c in clients}) != len(clients) or set(targets) != {c.side for c in clients}:
         raise ValueError('exactly one target and client per selected endpoint required')
     if any(c.connection is not controller for c in clients):
         raise ValueError('all end effectors must borrow this one controller')
-    rates = {c.side: 50.0 for c in clients} if rates is None else rates
-    if set(rates) != set(targets) or any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0 for v in rates.values()):
-        raise ValueError('one finite positive command rate per endpoint required')
     infos, prepared, returns, limits = {}, {}, {}, {}
     native_hz = {} if native_hz is None else native_hz
     for client in clients:
@@ -781,8 +790,6 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         parser.error('sine requires --side both')
     if args.loop and args.pattern not in ('simultaneous', 'sequential'):
         parser.error('--loop requires an angular fraction pattern')
-    if not all(math.isfinite(v) for v in (args.period_s,args.sine_min_m,args.sine_max_m,args.low_frac,args.high_frac)) or args.period_s <= 0 or args.sine_min_m >= args.sine_max_m or not 0 <= args.low_frac < args.high_frac <= 1:
-        parser.error('invalid pattern bounds/period')
     if args.dry_run and args.confirm_motion:
         parser.error('--dry-run and --confirm-motion are mutually exclusive')
     if args.ee_only and not sides:
@@ -796,6 +803,14 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     for name in ('timeout', 'duration', 'feedback_interval', 'left_hz', 'right_hz'):
         if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
             parser.error(name+' must be finite and positive')
+    try:
+        _validate_motion_parameters(pattern=args.pattern, loop=args.loop, period=args.period_s,
+            sine_min=args.sine_min_m, sine_max=args.sine_max_m,
+            low_frac=args.low_frac, high_frac=args.high_frac, touch=args.touch,
+            timeout=args.timeout, duration=args.duration, feedback_interval=args.feedback_interval,
+            rates=(getattr(args, side+'_hz') for side in sides))
+    except ValueError as exc:
+        parser.error(str(exc))
     for side in ('left', 'right'):
         pos, unit = getattr(args, side+'_pos'), getattr(args, side+'_unit')
         for name in ('pos', 'vel_limit', 'torque_nm'):

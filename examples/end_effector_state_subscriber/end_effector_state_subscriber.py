@@ -9,7 +9,7 @@ from contextlib import closing
 
 
 def run_once(client, *, timeout, include_touch=False, emit=print):
-    from locomotion_aorta.end_effector_types import Field, PositionDomain
+    from locomotion_aorta.end_effector_types import Field, _POSITION_DOMAIN_UNITS
 
     info = client.wait_info(timeout)
     state = client.wait_state(timeout)
@@ -23,8 +23,7 @@ def run_once(client, *, timeout, include_touch=False, emit=print):
          f'state_id={state.state_id} sample_status={state.sample_status}')
     for i, name in enumerate(info.axis_names):
         # valid_fields is authoritative: a placeholder zero is not a reading.
-        unit = {PositionDomain.JOINT_ANGLE: 'rad', PositionDomain.TOTAL_OPENING: 'm',
-                PositionDomain.MOTOR_SHAFT: 'rad'}.get(info.position_domain[i], 'unknown')
+        unit = _POSITION_DOMAIN_UNITS.get(info.position_domain[i], 'unknown')
         pos = f'{state.pos[i]:.6f} {unit}' if state.valid_fields[i] & Field.POS else 'n/a'
         fault = str(state.error_code[i]) if state.valid_fields[i] & Field.ERROR_CODE else 'unknown'
         emit(f'axis[{i}] {name} pos={pos} error_code={fault} mock={info.is_mock[i]}')

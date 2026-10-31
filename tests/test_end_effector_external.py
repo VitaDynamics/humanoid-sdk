@@ -596,7 +596,8 @@ class EndEffectorExampleTest(unittest.TestCase):
         cases=(['--ee-only','--side','none'],['--dry-run','--touch','on'],
                ['--confirm-motion','--side','right'],['--confirm-motion','--dry-run'],
                ['--right-vel-limit','-1'],['--duration','nan'],['--loop'],
-               ['--side','left','--pattern','sine'],['--acceleration-limit-m-s2','1'])
+               ['--side','left','--pattern','sine'],['--acceleration-limit-m-s2','1'],
+               ['--period-s','0'],['--low-frac','.8','--high-frac','.2'],['--touch','invalid'])
         for flags in cases:
             with self.subTest(flags=flags),patch('sys.stderr',new_callable=io.StringIO):
                 source,client,controller=Mock(),Mock(),Mock()
@@ -604,6 +605,27 @@ class EndEffectorExampleTest(unittest.TestCase):
                     demo.main(flags,_state_source_factory=source,_client_factory=client,
                               _controller_factory=controller)
                 source.assert_not_called(); client.assert_not_called(); controller.assert_not_called()
+
+    def test_main_and_run_share_finite_motion_parameter_validation(self):
+        source,connection,client=Mock(),Mock(),Mock()
+        source.return_value.__enter__=Mock(return_value=connection)
+        source.return_value.__exit__=Mock(return_value=False)
+        connection.get_robot_info.return_value=robot_info_reply()
+        client.return_value.__enter__=Mock(return_value=Mock(side='right'))
+        client.return_value.__exit__=Mock(return_value=False)
+        with patch.object(demo,'_validate_motion_parameters',wraps=demo._validate_motion_parameters) as validate:
+            demo.main(['--side','right'],_state_source_factory=source,
+                      _client_factory=client,_controller_factory=Mock())
+        self.assertEqual(1,validate.call_count)
+        controller=self.controller(); endpoint=Endpoint(controller)
+        target=demo.position_target(endpoint.info,(.0625,),unit='m')
+        with patch.object(demo,'_validate_motion_parameters',side_effect=ValueError('shared validation')) as validate:
+            with self.assertRaisesRegex(ValueError,'shared validation'):
+                demo.run(controller,[endpoint],{endpoint.side:target},native_hz={'right':250},
+                         native_config='synthetic-test-effective-config')
+        self.assertEqual(1,validate.call_count)
+        self.assertEqual([],endpoint.commands)
+        self.assertEqual(0,controller.calls.count('enter_external'))
 
 
     def test_actual_client_publish_writes_new_root_K_and_same_body_allocator(self):
