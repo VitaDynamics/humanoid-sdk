@@ -138,6 +138,11 @@ def _uint(value, bits, name):
         raise ValueError(name + ' must be uint' + str(bits))
 
 
+def _uint_fields(value, fields):
+    for name, bits in fields:
+        _uint(getattr(value, name), bits, name)
+
+
 def _tuple(value, count, name):
     if not isinstance(value, tuple) or len(value) != count:
         raise ValueError(name + ' has an incompatible fixed length')
@@ -170,10 +175,9 @@ def validate_info(info):
     n = len(info.axis_names)
     if not n or any(not isinstance(v, str) or not v.strip() for v in info.axis_names) or len(set(info.axis_names)) != n:
         raise ValueError('axis_names must be nonempty and unique')
-    for name, bits in (('device_model', 16), ('identity_valid_mask', 8),
-                       ('time_valid_mask', 8),
-                       ('ts_descriptor_acquired_us', 64), ('ts_state_pub_us', 64)):
-        _uint(getattr(info, name), bits, name)
+    _uint_fields(info, (('device_model', 16), ('identity_valid_mask', 8),
+                        ('time_valid_mask', 8),
+                        ('ts_descriptor_acquired_us', 64), ('ts_state_pub_us', 64)))
     for name, bits in (('position_domain', 8), ('torque_domain', 8), ('supported_modes', 32),
                        ('supported_command_fields', 32), ('supported_state_fields', 32), ('valid_limits', 32)):
         _tuple(getattr(info, name), n, name)
@@ -254,8 +258,7 @@ def validate_state(info, state):
     for name in ('state_id', 'ts_state_real_us', 'ts_state_pub_us', 'ts_acquired_hw_us',
                  'ts_ingested_us', 'ts_assembled_us'):
         _uint(getattr(state, name), 64, name)
-    for name, bits in (('sample_status', 8), ('inhibit_reason', 8), ('status_valid_mask', 8)):
-        _uint(getattr(state, name), bits, name)
+    _uint_fields(state, (('sample_status', 8), ('inhibit_reason', 8), ('status_valid_mask', 8)))
     _tuple(state.valid_fields, n, 'valid_fields')
     for i, mask in enumerate(state.valid_fields):
         _uint(mask, 32, 'valid_fields')
@@ -289,10 +292,9 @@ def validate_touch(info, touch):
     if len(touch.payload) != size:
         raise ValueError('touch payload has an incompatible fixed length')
     for stamp in touch.region_stamps:
-        for name, bits in (('sample_seq', 32), ('ts_request_us', 64), ('ts_acquired_hw_us', 64),
-                           ('ts_source_us', 64), ('ts_ingested_us', 64), ('status_flags', 16),
-                           ('direction_flags', 16), ('validity', 8)):
-            _uint(getattr(stamp, name), bits, name)
+        _uint_fields(stamp, (('sample_seq', 32), ('ts_request_us', 64), ('ts_acquired_hw_us', 64),
+                             ('ts_source_us', 64), ('ts_ingested_us', 64), ('status_flags', 16),
+                             ('direction_flags', 16), ('validity', 8)))
 
 
 def prepare_target(info, target):
@@ -383,6 +385,17 @@ def validate_observations(runtime_id, observations, *, sources=None):
     # consecutive calls may actually use the same independent sensor sample.
 
 
+def _validate_command_envelope(command):
+    _identity(command, EE_CMD_PROTOCOL_VERSION)
+    _uint(command.control_id, 64, 'control_id')
+    if not command.control_id:
+        raise ValueError('control_id must be nonzero')
+    _validate_key(command.key, True)
+    validate_observations(command.runtime_id, command.input_observations)
+    _uint(command.ts_client_created_us, 64, 'ts_client_created_us')
+    _uint(command.ts_client_send_us, 64, 'ts_client_send_us')
+
+
 def decode_cmd(view):
     if view.ProtocolVersion() != EE_CMD_PROTOCOL_VERSION:
         raise ValueError('incompatible EndEffectorCmd protocol_version')
@@ -401,26 +414,12 @@ def decode_cmd(view):
                                  for name, _ in _COMMAND_COLUMNS})
     command = _dto(view, EndEffectorSubmission, runtime_id=runtime,
                 key=_key(view.Key()), target=target, input_observations=tuple(observations))
-    _identity(command, EE_CMD_PROTOCOL_VERSION)
-    _uint(command.control_id, 64, 'control_id')
-    if not command.control_id:
-        raise ValueError('control_id must be nonzero')
-    _validate_key(command.key, True)
-    validate_observations(command.runtime_id, command.input_observations)
-    _uint(command.ts_client_created_us, 64, 'ts_client_created_us')
-    _uint(command.ts_client_send_us, 64, 'ts_client_send_us')
+    _validate_command_envelope(command)
     return command
 
 
 def fill_command(bindings, command, builder, header):
-    _identity(command, EE_CMD_PROTOCOL_VERSION)
-    _uint(command.control_id, 64, 'control_id')
-    if not command.control_id:
-        raise ValueError('control_id must be nonzero')
-    _validate_key(command.key, True)
-    validate_observations(command.runtime_id, command.input_observations)
-    _uint(command.ts_client_created_us, 64, 'ts_client_created_us')
-    _uint(command.ts_client_send_us, 64, 'ts_client_send_us')
+    _validate_command_envelope(command)
     if command.ts_client_created_us or command.ts_client_send_us:
         raise ValueError('SDK time remains invalid/zero until a verified Vita mapping exists')
     module = bindings.EndEffectorCmd

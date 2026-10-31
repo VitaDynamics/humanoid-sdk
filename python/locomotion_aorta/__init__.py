@@ -52,9 +52,6 @@ __all__ = [
     "CONTROL_REQUEST_VERSION",
 ]
 
-from .hand_types import HandSide, HandType, InhibitReason
-__all__ += ["HandSide", "HandType", "InhibitReason"]
-
 from .body_types import (
     BODY_SLOTS, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION, BodyJointCmd, BodyCmd, BodyCmdAction,
     BodyState, BodyJointState, BodyImuState, BodyImuSample, BodyImuLocation,

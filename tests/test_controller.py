@@ -1437,14 +1437,18 @@ class ExternalControllerTest(unittest.TestCase):
             target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual((published.session_id, published.sequence), (42, 1))
 
-    def test_v3_request_uses_v3_ack_and_status_without_fallback(self):
+    def test_v4_request_uses_v4_ack_and_status_without_fallback(self):
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)
+        acks = []
+        subscription = harness.transport.subscribe(CONTROL_ACK_TOPIC, acks.append)
+        self.addCleanup(subscription.close)
         harness.accept_enter()
         status = harness.controller.enter_external(timeout=0.1)
         requests = [m for topic, m in harness.transport.published if topic == CONTROL_REQUEST_TOPIC]
-        self.assertEqual([r.protocol_version for r in requests], [3, 3])
-        self.assertEqual(status.protocol_version, 3)
+        self.assertEqual([r.protocol_version for r in requests], [4, 4])
+        self.assertEqual([ack.protocol_version for ack in acks], [4, 4])
+        self.assertEqual(status.protocol_version, 4)
 
     def test_publish_requires_the_public_fixed31_span(self) -> None:
         harness = ControllerHarness()

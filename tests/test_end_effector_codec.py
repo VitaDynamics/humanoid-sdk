@@ -343,6 +343,18 @@ class EndEffectorCodecTest(unittest.TestCase):
         for changed in ({'ts_client_created_us': 1}, {'ts_client_send_us': 1}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 codec.fill_command(bindings, dataclasses.replace(result, **changed), flatbuffers.Builder(1), 0)
+        # The independent decoder may observe nonzero timestamps from a wire
+        # producer even though this SDK is not allowed to fabricate them.
+        obj = module('EndEffectorCmd').EndEffectorCmdT(
+            protocolVersion=2, runtimeId=info.runtime_id, layoutId=7, side=1, controlId=13,
+            key=module('CommandKey').CommandKeyT(42, 1),
+            axes=[module('AxisCommand').AxisCommandT(commandFields=Field.POS,
+                                                      mode=ControlMode.POSITION, pos=.03125)],
+            tsClientCreatedUs=1, tsClientSendUs=2)
+        decoded = codec.decode_cmd(bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(pack(obj)))
+        self.assertEqual((decoded.ts_client_created_us, decoded.ts_client_send_us), (1, 2))
+        with self.assertRaises(ValueError):
+            codec.fill_command(bindings, decoded, flatbuffers.Builder(1), 0)
 
     def test_nonempty_observations_use_real_struct_vector_and_roundtrip(self):
         bindings = codec.load_bindings()

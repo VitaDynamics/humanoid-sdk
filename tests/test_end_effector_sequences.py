@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import locomotion_aorta as sdk
 from locomotion_aorta import BODY_CMD_TOPIC
-from locomotion_aorta.end_effector_types import CommandKey, Field, SampleStream
+from locomotion_aorta.end_effector_types import CommandKey, Field, InhibitReason, SampleStream
 from examples.end_effector import end_effector_external as demo
 from test_examples import FakeClock, RecordingController
 from test_end_effector_external import Endpoint
@@ -274,15 +274,18 @@ class EndEffectorSequenceTest(unittest.TestCase):
             with self.subTest(symbol=name):
                 self.assertFalse(hasattr(sdk, name))
                 self.assertNotIn(name, sdk.__all__)
-        for name in ('hand', '_hand_codec', 'gripper', '_gripper_codec', '_gripper_lifecycle'):
+        for name in ('hand', '_hand_codec', 'gripper', '_gripper_codec', '_gripper_lifecycle',
+                     'hand_types', 'gripper_types'):
             with self.subTest(module=name):
                 self.assertIsNone(importlib.util.find_spec('locomotion_aorta.' + name))
-        for name in ('HandInfo', 'GripperInfo', 'EndEffectorKind', 'GripperLimitSource'):
+        for name in ('HandInfo', 'GripperInfo', 'EndEffectorKind', 'GripperLimitSource',
+                     'HandSide', 'HandType', 'InhibitReason'):
             self.assertFalse(hasattr(sdk, name))
             self.assertNotIn(name, sdk.__all__)
-        for name in ('HandSide', 'HandType', 'InhibitReason', 'EndEffectorClient'):
-            self.assertIn(name, sdk.__all__)
-            self.assertIsNotNone(getattr(sdk, name))
+        self.assertIn('EndEffectorClient', sdk.__all__)
+        self.assertIsNotNone(sdk.EndEffectorClient)
+        self.assertEqual(InhibitReason.NONE, 0)
+        self.assertEqual(InhibitReason.NOT_READY, 4)
         # GripperType is retired from the final public schema closure.
         self.assertNotIn('GripperType', sdk.__all__)
         self.assertFalse(hasattr(sdk, 'GripperType'))
