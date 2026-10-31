@@ -157,11 +157,16 @@ class EndEffectorState:
 
     @property
     def sample_ref(self) -> SampleRef:
-        validity = 1 | (2 if self.ts_state_real_us else 0)
-        validity |= 4 if self.sample_status == SampleStatus.OK else 0
-        validity |= 8 if self.sample_status == SampleStatus.STALE else 0
+        validity = _SAMPLE_REF_IDENTITY_VALID
+        if self.ts_state_real_us:
+            validity |= _SAMPLE_REF_SOURCE_TIME_VALID
+        if self.sample_status == SampleStatus.OK:
+            validity |= _SAMPLE_REF_CONTENT_VALID
+        if self.sample_status == SampleStatus.STALE:
+            validity |= _SAMPLE_REF_STALE
         return SampleRef(self.runtime_id, SampleStream.EE_STATE, self.side,
-                         self.state_id, self.ts_state_real_us if validity & 2 else 0,
+                         self.state_id,
+                         self.ts_state_real_us if validity & _SAMPLE_REF_SOURCE_TIME_VALID else 0,
                          validity)
 
 
@@ -193,8 +198,11 @@ class EndEffectorTouch:
     def sample_ref(self) -> SampleRef:
         # Independent regions have no common acquisition time. Publication is
         # not acquisition; never invent a simultaneous Touch source timestamp.
-        validity = 1 | (4 if all(s.validity & 1 for s in self.region_stamps) else 0)
-        validity |= 8 if any(s.validity & 64 for s in self.region_stamps) else 0
+        validity = _SAMPLE_REF_IDENTITY_VALID
+        if all(s.validity & _TOUCH_REGION_PAYLOAD_VALID for s in self.region_stamps):
+            validity |= _SAMPLE_REF_CONTENT_VALID
+        if any(s.validity & _TOUCH_REGION_STALE for s in self.region_stamps):
+            validity |= _SAMPLE_REF_STALE
         return SampleRef(self.runtime_id, SampleStream.EE_TOUCH, self.side,
                          self.touch_state_id, 0, validity)
 
