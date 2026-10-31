@@ -746,7 +746,7 @@ class BodyCodecTest(unittest.TestCase):
                                    get_robot_info_request=request_module, get_robot_info_response=reply_module,
                                    get_robot_info_schema_meta=importlib.import_module('get_robot_info_schema_meta'))
         with patch.object(transport,'_load_aorta_bindings',return_value=bindings), \
-             patch('locomotion_aorta._native_body_codec.NativeBodyPublisher'):
+             patch('locomotion_aorta._native_body_codec.NativeBodyPublisher') as native_body_publisher:
             t = transport.create_aorta_transport(node_name='rpc-test',group='default')
         try:
             for _ in range(2):
@@ -760,7 +760,9 @@ class BodyCodecTest(unittest.TestCase):
             self.assertEqual(t.node.calls[0][1]['options'].service_schema_hash_hex,
                              bindings.get_robot_info_schema_meta.SCHEMA_HASH_HEX)
             self.assertEqual(client.matches,[500,500])
-            self.assertEqual(set(t.publishers),{transport.BODY_CMD_TOPIC, transport.CONTROL_REQUEST_TOPIC})
+            self.assertEqual(set(t.publishers),{transport.CONTROL_REQUEST_TOPIC})
+            self.assertIsNone(t._body_publisher)
+            native_body_publisher.assert_not_called()
             from fake_transport import FakeTransport
             from locomotion_aorta.controller import ExternalController
             fake = FakeTransport()
