@@ -105,16 +105,14 @@ def format_robot_info(response):
                      f'status={endpoint.status} reason={endpoint.reason}')
         if endpoint.info is not None:
             from ._end_effector_codec import validate_info
-            from .end_effector_types import Field, PositionDomain, TorqueDomain
+            from .end_effector_types import Field, TorqueDomain, _POSITION_DOMAIN_UNITS
 
             info = endpoint.info
             validate_info(info)
             if info.runtime_id != response.runtime_id or info.side != endpoint.side:
                 raise ValueError('endpoint Info runtime_id/side differs from service reply')
             for i, name in enumerate(info.axis_names):
-                position_unit = {PositionDomain.JOINT_ANGLE: 'rad',
-                                 PositionDomain.MOTOR_SHAFT: 'rad',
-                                 PositionDomain.TOTAL_OPENING: 'm'}.get(info.position_domain[i], 'unknown unit')
+                position_unit = _POSITION_DOMAIN_UNITS.get(info.position_domain[i], 'unknown unit')
                 velocity_unit = position_unit + '/s' if position_unit != 'unknown unit' else 'unknown unit'
                 torque_unit = ('N*m' if info.torque_domain[i] in
                                (TorqueDomain.JOINT_AXIS, TorqueDomain.MOTOR_SHAFT) else 'unknown unit')

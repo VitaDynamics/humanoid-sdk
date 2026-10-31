@@ -26,6 +26,12 @@ except ImportError as error:
         "the new EE pack; no Hand/Gripper fallback"
     ) from error
 
+_POSITION_DOMAIN_UNITS = {
+    PositionDomain.JOINT_ANGLE: 'rad',
+    PositionDomain.MOTOR_SHAFT: 'rad',
+    PositionDomain.TOTAL_OPENING: 'm',
+}
+
 EE_INFO_PROTOCOL_VERSION = 1
 EE_STATE_PROTOCOL_VERSION = 2
 EE_TOUCH_PROTOCOL_VERSION = 1

@@ -6,7 +6,7 @@ import uuid
 from dataclasses import replace
 
 from .controller import (ExternalController, ExternalControlTimeoutError,
-                         ControllerClosedError, _deadline, _discovered_runtime, _nonempty_text,
+                         ControllerClosedError, _close_handles, _deadline, _discovered_runtime, _nonempty_text,
                          _uint64_nonzero, _valid_generation)
 from .body_types import BODY_STATE_PROTOCOL_VERSION
 from .types import ControlStatus, PROTOCOL_VERSION
@@ -241,11 +241,7 @@ class PullStateSource:
                             if not client._closed and client._fatal is None:
                                 handles.extend(client._retire_descriptor_locked(
                                     ValueError('robot runtime changed; create a new connection')))
-        for handle in handles:
-            try:
-                handle.close()
-            except Exception:
-                pass
+        _close_handles(handles)
         if self._runtime_changed:
             raise ValueError('robot runtime changed; create a new connection')
         return reply
@@ -296,11 +292,7 @@ class PullStateSource:
                 with client._condition:
                     handles.extend(client._close_locked())
             self._end_effector_clients.clear()
-        for handle in handles:
-            try:
-                handle.close()
-            except Exception:
-                pass
+        _close_handles(handles)
         self.transport.close()
 
 

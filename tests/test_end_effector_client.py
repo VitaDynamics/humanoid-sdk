@@ -18,7 +18,7 @@ from body_fixtures import robot_info_reply
 from test_controller import ControllerHarness, make_command
 from test_end_effector_codec import info_object, state_object, touch_object, pack, target
 from locomotion_aorta import (
-    CONTROL_REQUEST_TOPIC, CONTROL_STATUS_TOPIC, ControllerClosedError,
+    AortaBindingsUnavailableError, CONTROL_REQUEST_TOPIC, CONTROL_STATUS_TOPIC, ControllerClosedError,
     ControlAck, ControlStatus, ControlOperation,
     ExternalController, ExternalPhase, InvalidCommandError, NotRunningError,
     PullController, PullStateSource,
@@ -34,6 +34,20 @@ def confirm_info(client, node, value):
     """Deliver one immutable startup Info publication."""
     node.emit(client.side, 'info', value)
     return client.wait_info(.01)
+
+
+def _load_subscriber_cli(name):
+    script = Path(__file__).resolve().parents[1] / 'examples/end_effector_state_subscriber/end_effector_state_subscriber.py'
+    spec = importlib.util.spec_from_file_location(name, script)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    return cli
+
+
+def _reach_barrier(entered, release, message, error_type=AssertionError):
+    entered.set()
+    if not release.wait(2):
+        raise error_type(message)
 
 
 class Handle:
@@ -255,6 +269,19 @@ class EndEffectorClientTest(unittest.TestCase):
                 node.emit(side, 'touch', touch_object(side=wire_side))
         return client
 
+    def pull_harness(self):
+        harness = ControllerHarness(runtime_id=100)
+        harness.controller.close()
+        harness.transport = PendingTransport()
+        harness.transport.get_robot_info = lambda timeout: dataclasses.replace(
+            robot_info_reply(), runtime_id=100)
+        harness.controller = PullController(client_id=7, _transport=harness.transport)
+        self.addCleanup(harness.controller.close)
+        harness.controller.get_robot_info(.1)
+        node = Node(); harness.transport.node = node
+        harness.accept_enter(); harness.controller.enter_external(.1)
+        return harness, node
+
     def test_real_publish_shares_body_left_right_allocator_and_full_control_ref(self):
         harness, node = self.harness()
         left = self.client(harness, node)
@@ -368,16 +395,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertFalse(any(topic == CONTROL_REQUEST_TOPIC for topic, _ in harness.transport.published))
 
     def test_pull_connection_drains_pending_foreign_status_before_real_ee_publish(self):
-        harness = ControllerHarness(runtime_id=100)
-        harness.controller.close()
-        harness.transport = PendingTransport()
-        harness.transport.get_robot_info = lambda timeout: dataclasses.replace(
-            robot_info_reply(), runtime_id=100)
-        harness.controller = PullController(client_id=7, _transport=harness.transport)
-        self.addCleanup(harness.controller.close)
-        harness.controller.get_robot_info(.1)
-        node = Node(); harness.transport.node = node
-        harness.accept_enter(); harness.controller.enter_external(timeout=.1)
+        harness, node = self.pull_harness()
         client = self.client(harness, node)
         owned = harness.controller.status
         harness.transport.pending.append(dataclasses.replace(owned, status_seq=2, client_id=17))
@@ -472,9 +490,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 original = getattr(harness.controller, method_name)
 
                 def block(*args, **kwargs):
-                    entered.set()
-                    if not release.wait(2):
-                        raise AssertionError('runtime poison barrier was not released')
+                    _reach_barrier(entered, release, 'runtime poison barrier was not released')
                     return original(*args, **kwargs)
 
                 def publish():
@@ -517,9 +533,7 @@ class EndEffectorClientTest(unittest.TestCase):
         errors = []
 
         def block():
-            entered.set()
-            if not release.wait(2):
-                raise AssertionError('RPC retirement barrier was not released')
+            _reach_barrier(entered, release, 'RPC retirement barrier was not released')
 
         def call():
             try:
@@ -555,9 +569,7 @@ class EndEffectorClientTest(unittest.TestCase):
         original_decode = codec.decode_info
 
         def decode(view):
-            entered.set()
-            if not release.wait(2):
-                raise AssertionError('decode retirement barrier was not released')
+            _reach_barrier(entered, release, 'decode retirement barrier was not released')
             return original_decode(view)
 
         with patch.object(codec, 'decode_info', side_effect=decode):
@@ -806,9 +818,7 @@ class EndEffectorClientTest(unittest.TestCase):
         harness, node = self.harness(running=False)
         source = PullStateSource(_transport=harness.transport)
         source.get_robot_info(.1)
-        script = Path(__file__).resolve().parents[1] / 'examples/end_effector_state_subscriber/end_effector_state_subscriber.py'
-        spec = importlib.util.spec_from_file_location('ee_readonly_cli', script)
-        cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+        cli = _load_subscriber_cli('ee_readonly_cli')
         lines = []
         with EndEffectorClient('left', connection=source, read_only=True) as client:
             confirm_info(client, node, info_object(n=2, touch=True))
@@ -845,9 +855,7 @@ class EndEffectorClientTest(unittest.TestCase):
     def test_cli_rejects_runtime_restart_between_info_and_state_without_output(self):
         harness, node = self.harness(running=False)
         client = self.client(harness, node, read_only=True)
-        script = Path(__file__).resolve().parents[1] / 'examples/end_effector_state_subscriber/end_effector_state_subscriber.py'
-        spec = importlib.util.spec_from_file_location('ee_readonly_cli_state_runtime', script)
-        cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+        cli = _load_subscriber_cli('ee_readonly_cli_state_runtime')
         original_wait = client.wait_state
         def change_runtime(timeout):
             self.confirm_restart(harness)
@@ -864,9 +872,7 @@ class EndEffectorClientTest(unittest.TestCase):
     def test_cli_rejects_runtime_restart_before_touch_without_partial_output(self):
         harness, node = self.harness(running=False)
         client = self.client(harness, node, touch=True, read_only=True)
-        script = Path(__file__).resolve().parents[1] / 'examples/end_effector_state_subscriber/end_effector_state_subscriber.py'
-        spec = importlib.util.spec_from_file_location('ee_readonly_cli_touch_runtime', script)
-        cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+        cli = _load_subscriber_cli('ee_readonly_cli_touch_runtime')
         original_wait = client.wait_touch
         def change_runtime(timeout):
             self.confirm_restart(harness)
@@ -886,9 +892,7 @@ class EndEffectorClientTest(unittest.TestCase):
         confirm_info(client, node, info_object(touch=True))
         node.emit('left', 'state', state_object(sample=2**64-1))
         node.emit('left', 'touch', touch_object(sample=2**63+3))
-        script = Path(__file__).resolve().parents[1] / 'examples/end_effector_state_subscriber/end_effector_state_subscriber.py'
-        spec = importlib.util.spec_from_file_location('ee_readonly_cli_complete_ref', script)
-        cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+        cli = _load_subscriber_cli('ee_readonly_cli_complete_ref')
         lines = []
         cli.run_once(client, timeout=0.01, include_touch=True, emit=lines.append)
         self.assertIn(f'runtime_id={client.state.runtime_id}', lines[0])
@@ -927,6 +931,35 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual((first.sequence, client.publish(target()).key.sequence,
                           harness.controller.publish(make_command(0)).sequence), (1, 2, 3))
         self.assertTrue(all(h.close_count == 1 for h in node.handles if isinstance(h, TouchRPC)))
+
+    def test_set_touch_lazily_caches_only_validated_bindings_not_rpc_clients(self):
+        harness, node = self.harness()
+        client = self.client(harness, node, touch=True)
+        bindings = codec.load_touch_bindings()
+        def create(topic, decoder, *, request_schema_meta, options):
+            self.assertTrue(topic.endswith('/set_touch'))
+            self.assertIs(request_schema_meta, bindings.request_meta)
+            node.touch_bindings = bindings
+            node.rpc_options.append(options)
+            handle = TouchRPC(node, decoder)
+            node.handles.append(handle)
+            return handle
+        with patch.object(node, 'create_client_typed', side_effect=create), \
+             patch.object(codec, 'load_touch_bindings', side_effect=[AortaBindingsUnavailableError('bad meta'), bindings]) as load:
+            with self.assertRaisesRegex(AortaBindingsUnavailableError, 'bad meta'):
+                client.set_touch(True, .125)
+            self.assertEqual(node.rpc_options, [])
+            self.assertEqual(client.set_touch(True, .125).status, ServiceStatus.SUCCESS)
+            self.assertEqual(client.set_touch(False, .25).status, ServiceStatus.SUCCESS)
+            self.assertEqual(load.call_count, 2)  # failure not cached; success reused
+        self.assertEqual([o.timeout_ms for o in node.rpc_options], [125, 250])
+        self.assertTrue(all(o.allow_retry is False for o in node.rpc_options))
+        handles = [h for h in node.handles if isinstance(h, TouchRPC)]
+        self.assertEqual(len(handles), 2)
+        self.assertIsNot(handles[0], handles[1])
+        self.assertTrue(all(h.close_count == 1 for h in handles))
+        self.assertEqual([wire.Enable() for wire in node.touch_requests], [True, False])
+        self.assertEqual(harness.controller._next_external_sequence, 1)
 
     def test_set_touch_local_preconditions_fail_before_service_creation_or_motion_allocation(self):
         for reason in ('enable', 'timeout', 'read-only', 'closed', 'no-info', 'no-touch', 'wrong-side', 'bad-ref'):
@@ -1097,8 +1130,7 @@ class EndEffectorClientTest(unittest.TestCase):
                         original_publish(topic, request)
                 harness.transport.on_publish = accept_leave
                 def block():
-                    entered.set()
-                    if not release.wait(2): raise AssertionError('test did not release RPC')
+                    _reach_barrier(entered, release, 'test did not release RPC')
                 if stage == 'matching': node.match_hook = block
                 else: node.rpc_hook = block
                 def worker():
@@ -1142,15 +1174,7 @@ class EndEffectorClientTest(unittest.TestCase):
     def test_set_touch_pull_drains_initial_and_post_matching_and_inflight_revocations(self):
         for stage in ('initial', 'matching', 'fill', 'rpc'):
             with self.subTest(stage=stage):
-                harness = ControllerHarness(runtime_id=100); harness.controller.close()
-                harness.transport = PendingTransport()
-                harness.transport.get_robot_info = lambda timeout: dataclasses.replace(
-                    robot_info_reply(), runtime_id=100)
-                harness.controller = PullController(client_id=7, _transport=harness.transport)
-                self.addCleanup(harness.controller.close)
-                harness.controller.get_robot_info(.1)
-                node = Node(); harness.transport.node = node
-                harness.accept_enter(); harness.controller.enter_external(.1)
+                harness, node = self.pull_harness()
                 client = self.client(harness, node, touch=True)
                 owned = harness.controller.status
                 def revoke():
@@ -1282,9 +1306,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 entered, release = threading.Event(), threading.Event()
                 errors = []
                 def blocked(*args, **kwargs):
-                    entered.set()
-                    if not release.wait(2):
-                        raise TimeoutError('test gate not released')
+                    _reach_barrier(entered, release, 'test gate not released', TimeoutError)
                     return original(*args, **kwargs)
                 def send():
                     try:
@@ -1341,9 +1363,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 entered, release = threading.Event(), threading.Event()
                 errors = []
                 def blocked(*args, **kwargs):
-                    entered.set()
-                    if not release.wait(2):
-                        raise TimeoutError('test gate not released')
+                    _reach_barrier(entered, release, 'test gate not released', TimeoutError)
                     return original(*args, **kwargs)
                 def send():
                     try:

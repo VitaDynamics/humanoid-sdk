@@ -93,6 +93,19 @@ def _discovered_runtime(reply, observed_runtime, current_runtime):
     return runtime
 
 
+def _matches_control_context(current, request_id, client_id, control_id, generation):
+    return not (current.request_id != request_id or current.client_id != client_id
+                or current.control_id != control_id or current.generation != generation)
+
+
+def _close_handles(handles):
+    for handle in handles:
+        try:
+            handle.close()
+        except Exception:
+            pass
+
+
 class ExternalController:
     def __init__(
         self,
@@ -191,11 +204,7 @@ class ExternalController:
                     handles = self._retire_runtime_locked()
                 if not handles and self._end_effector_runtime_error is None:
                     self._body_info = reply.info.body
-        for handle in handles:
-            try:
-                handle.close()
-            except Exception:
-                pass
+        _close_handles(handles)
         if self._end_effector_runtime_error is not None:
             raise self._end_effector_runtime_changed()
         # Preserve partial or failed discovery and each end-effector status for the caller.
@@ -331,9 +340,10 @@ class ExternalController:
             validation = time.perf_counter_ns() if trace is not None else 0
             try:
                 _validate_command(command)
-                if (command.runtime_id is not None and
-                        (not _valid_generation(command.runtime_id) or
-                         command.runtime_id != self._end_effector_runtime_id)):
+                command_runtime_id = command.runtime_id
+                if (command_runtime_id is not None and
+                        (not _valid_generation(command_runtime_id) or
+                         command_runtime_id != self._end_effector_runtime_id)):
                     raise InvalidCommandError('BodyCmd belongs to a different robot runtime')
             finally:
                 if trace is not None:
@@ -344,19 +354,16 @@ class ExternalController:
         with self._condition:
             self._ensure_open()
             status = self._require_owned_status()
-            if (current.request_id != self._request_id or current.client_id != self.client_id
-                    or current.control_id != self._control_id or current.generation != status.generation):
+            if not _matches_control_context(current, self._request_id, self.client_id,
+                                            self._control_id, status.generation):
                 raise NotRunningError('Body control context changed before reservation')
-            _validate_command(command)
             body_info = self._body_info
             runtime_id = self._end_effector_runtime_id
             _validate_body_targets(command, body_info, target_names, required_fields)
-            status = self._require_owned_status()
-            if (self._body_info is not body_info or self._end_effector_runtime_id != runtime_id
-                    or current.request_id != self._request_id or current.client_id != self.client_id
-                    or current.control_id != self._control_id or current.generation != status.generation):
-                raise NotRunningError('Body context changed during target validation')
-            context = self._reserve_command_locked(for_body=True, expected_runtime_id=command.runtime_id)
+            context = self._reserve_command_locked(
+                for_body=True, expected_runtime_id=command_runtime_id,
+                expected_control=current, expected_body_info=body_info,
+                expected_discovery_runtime=runtime_id)
         external_command = replace(
             command,
             protocol_version=BODY_CMD_PROTOCOL_VERSION,
@@ -384,16 +391,14 @@ class ExternalController:
                     if (self._end_effector_runtime_id != context.runtime_id
                             or self._body_info is not body_info
                             or self._request_id != context.request_id
-                            or current.request_id != context.request_id
-                            or current.client_id != context.client_id
-                            or current.control_id != context.control_id
-                            or current.generation != context.session_id
+                            or not _matches_control_context(current, context.request_id,
+                                context.client_id, context.control_id, context.session_id)
                             or self.client_id != context.client_id
                             or self._control_id != context.control_id
                             or self._external_session_id != context.session_id
                             or status.generation != context.session_id
-                            or (command.runtime_id is not None and
-                                command.runtime_id != context.runtime_id)
+                            or (command_runtime_id is not None and
+                                command_runtime_id != context.runtime_id)
                             or self._request_action != 'EXTERNAL'):
                         raise NotRunningError('Body control context changed before submission')
                     return submit()
@@ -422,9 +427,18 @@ class ExternalController:
             return self._reserve_command_locked(for_body=for_body, expected_runtime_id=expected_runtime_id)
 
     def _reserve_command_locked(self, *, for_body: bool = False,
-                                expected_runtime_id: int | None = None) -> _CommandContext:
+                                expected_runtime_id: int | None = None,
+                                expected_control: _ControlContext | None = None,
+                                expected_body_info: BodyInfo | None = None,
+                                expected_discovery_runtime: int | None = None) -> _CommandContext:
         """Reserve one key while the caller holds the connection condition."""
         status = self._require_owned_status()
+        if (expected_control is not None and
+                (self._body_info is not expected_body_info or
+                 self._end_effector_runtime_id != expected_discovery_runtime or
+                 not _matches_control_context(expected_control, self._request_id,
+                     self.client_id, self._control_id, status.generation))):
+            raise NotRunningError('Body context changed during target validation')
         if for_body and self._request_action != "EXTERNAL":
             raise NotRunningError("BodyCmd requires an owned EXTERNAL session")
         if expected_runtime_id is not None and (
@@ -634,11 +648,7 @@ class ExternalController:
                 self._publish_control(cancel)
             except BaseException:
                 pass
-        for handle in handles:
-            try:
-                handle.close()
-            except Exception:
-                pass
+        _close_handles(handles)
         for subscription in self._subscriptions:
             try:
                 subscription.close()
@@ -699,11 +709,7 @@ class ExternalController:
                     if key not in self._acks:
                         self._acks[key] = ack
                         self._condition.notify_all()
-        for handle in handles:
-            try:
-                handle.close()
-            except Exception:
-                pass
+        _close_handles(handles)
 
     def _on_status(self, status: Any) -> None:
         if (

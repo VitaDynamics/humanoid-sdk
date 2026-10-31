@@ -10,7 +10,8 @@ import time
 from dataclasses import fields, is_dataclass, replace
 
 from . import _end_effector_codec as codec
-from .controller import ControllerClosedError, ExternalController, InvalidCommandError, NotRunningError, _deadline
+from .controller import (ControllerClosedError, ExternalController, InvalidCommandError,
+                         NotRunningError, _close_handles, _deadline, _matches_control_context)
 from .pull import PullStateSource
 from .end_effector_types import (
     CommandKey, EndEffectorSide, EndEffectorSubmission,
@@ -126,6 +127,7 @@ class EndEffectorClient:
         self._subscriptions = {}
         self._registering = set()
         self._publisher = None
+        self._touch_bindings = None
         self._service_clients = set()
         self._position = self._fault = self._position_received_at = None
         try:
@@ -161,20 +163,12 @@ class EndEffectorClient:
         self._condition.notify_all()
         return handles
 
-    @staticmethod
-    def _close_handles(handles):
-        for handle in handles:
-            try:
-                handle.close()
-            except Exception:
-                pass
-
     def _fail_descriptor(self, error):
         with self._condition:
             if self._closed or self._fatal is not None:
                 return
             handles = self._retire_descriptor_locked(error)
-        self._close_handles(handles)
+        _close_handles(handles)
 
     def _close_locked(self):
         if self._closed:
@@ -186,6 +180,7 @@ class EndEffectorClient:
         self._subscriptions.clear()
         self._service_clients.clear()
         self._publisher = None
+        self._touch_bindings = None
         self._callbacks = {'info': None, 'state': None, 'touch': None}
         self._position = self._fault = self._position_received_at = None
         self._condition.notify_all()
@@ -276,7 +271,7 @@ class EndEffectorClient:
                     callback = self._callbacks[kind]
                     self._condition.notify_all()
             if retired is not None:
-                self._close_handles(retired)
+                _close_handles(retired)
                 return
         except (ValueError, TypeError, AttributeError, IndexError, OverflowError, struct.error) as error:
             with self._condition:
@@ -419,10 +414,8 @@ class EndEffectorClient:
 
             def submit(current):
                 self._ensure_open()
-                if (current.client_id != context.client_id or
-                        current.control_id != context.control_id or
-                        current.generation != context.session_id or
-                        current.request_id != context.request_id):
+                if not _matches_control_context(current, context.request_id, context.client_id,
+                                                context.control_id, context.session_id):
                     raise NotRunningError('control context changed before EE submission')
                 latest = self._latest['info']
                 if latest is None or (latest.runtime_id, latest.layout_id, latest.side) != (
@@ -475,8 +468,15 @@ class EndEffectorClient:
             info = self._get('info')
             if info is None or not info.touch_available:
                 raise InvalidCommandError('validated Info with touch capability is required')
+            service = self._touch_bindings
         context = self._check_touch_context(info)
-        service = codec.load_touch_bindings()
+        if service is None:
+            loaded = codec.load_touch_bindings()
+            with self._condition:
+                self._ensure_open()
+                if self._touch_bindings is None:
+                    self._touch_bindings = loaded
+                service = self._touch_bindings
         rpc = self._node.create_client_typed(
             self._topic + '/set_touch', service.response.EndEffectorSetTouchResponse.GetRootAs,
             request_schema_meta=service.request_meta,
@@ -521,7 +521,7 @@ class EndEffectorClient:
 
     def close(self):
         handles = self.connection._close_end_effector_client(self)
-        self._close_handles(handles)
+        _close_handles(handles)
 
     def __enter__(self):
         with self._condition:

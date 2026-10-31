@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import locomotion_aorta.transport as transport_module
+import locomotion_aorta.controller as controller_module
 from fake_transport import FakeTransport
 
 from locomotion_aorta import (
@@ -1436,6 +1437,57 @@ class ExternalControllerTest(unittest.TestCase):
             BodyCmd(joints=tuple(BodyJointCmd(q=.5, tau=-.5) for _ in range(31))),
             target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
         self.assertEqual((published.session_id, published.sequence), (42, 1))
+
+    def test_body_payload_is_validated_once_before_reservation(self):
+        harness = ControllerHarness()
+        self.addCleanup(harness.controller.close)
+        harness.accept_enter()
+        harness.controller.enter_external(.1)
+        command = make_command(0)
+        with mock.patch.object(controller_module, '_validate_command',
+                               wraps=controller_module._validate_command) as validate:
+            published = harness.controller.publish(command, target_names=_BODY_TEST_TARGETS,
+                                                   required_fields=0x1f)
+        validate.assert_called_once_with(command)
+        self.assertEqual((published.session_id, published.sequence), (42, 1))
+
+    def test_body_target_reentry_rechecks_live_context_before_key(self):
+        for change in ('generation', 'body_info', 'owner', 'cancel', 'close'):
+            with self.subTest(change=change):
+                h = ControllerHarness()
+                self.addCleanup(h.controller.close)
+                h.accept_enter()
+                h.controller.enter_external(.1)
+                reply = h.transport.get_robot_info(.1)
+                fired = []
+                def change_context():
+                    if change == 'generation':
+                        h.status(action='EXTERNAL', phase=ExternalPhase.RUNNING, generation=84)
+                    elif change == 'body_info':
+                        h.transport.get_robot_info = lambda _: replace(
+                            reply, info=replace(reply.info, body=replace(reply.info.body)))
+                        h.controller.get_robot_info(.1)
+                    elif change == 'owner':
+                        status = h.controller.status
+                        h.transport.emit(CONTROL_STATUS_TOPIC,
+                            replace(status, status_seq=status.status_seq + 1, client_id=17))
+                    elif change == 'cancel':
+                        h.controller._best_effort_cancel()
+                    else:
+                        h.controller.close()
+                class TargetName(str):
+                    def __hash__(self):
+                        if not fired:
+                            fired.append(True)
+                            change_context()
+                        return super().__hash__()
+                names = (TargetName(_BODY_TEST_TARGETS[0]),) + _BODY_TEST_TARGETS[1:]
+                with self.assertRaises((NotRunningError, ControllerClosedError, ValueError)):
+                    h.controller.publish(make_command(0), target_names=names, required_fields=0x1f)
+                self.assertEqual(fired, [True])
+                self.assertEqual(h.controller._next_external_sequence, 1)
+                self.assertEqual(h.controller._external_session_id, 42)
+                self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in h.transport.published))
 
     def test_v4_request_uses_v4_ack_and_status_without_fallback(self):
         harness = ControllerHarness()
