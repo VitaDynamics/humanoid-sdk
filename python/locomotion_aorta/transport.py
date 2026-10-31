@@ -29,6 +29,12 @@ CONTROL_STATUS_TOPIC = "/sdk/foot_humanoid/control/status"
 
 def _call_get_robot_info(node, aorta, clients, timeout_ms, request, response, schema_meta):
     if timeout_ms not in clients:
+        while clients:
+            _, previous = clients.popitem()
+            # A failed close remains owned but cannot be reused for an RPC.
+            clients[None] = previous
+            previous.close()
+            clients.clear()
         clients[timeout_ms] = node.create_client_typed(
             GET_ROBOT_INFO_SERVICE, response.GetRobotInfoResponse.GetRootAs,
             request_schema_meta=schema_meta, options=aorta.ClientOptions(timeout_ms=timeout_ms))
@@ -87,7 +93,7 @@ class _AortaTransport:
         self.node = self._bindings.aorta.Node(node_name, group)
         self.publishers: dict[str, Any] = {}
         self.subscriptions: list[Any] = []
-        self._info_clients: dict[int, Any] = {}
+        self._info_clients: dict[int | None, Any] = {}
         self._info_lock = threading.Lock()
         self._body_lock = threading.Lock()
         self._publishers_enabled = _publishers

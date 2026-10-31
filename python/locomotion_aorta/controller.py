@@ -27,6 +27,8 @@ from .types import (
     _positive_timeout,
 )
 
+from ._body_codec import _same_body_description
+
 from .body_types import (
     BODY_SLOTS, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION, BodyState, BodyCmd, BodyJointCmd, BodyCmdAction,
     BodyInfo, GetRobotInfoResponse, ServiceStatus,
@@ -238,7 +240,10 @@ class ExternalController:
         with self._condition:
             self._ensure_open()
             if self._runtime_binding.accept_discovery(reply, observed_runtime):
-                self._body_info = reply.info.body
+                if self._body_info is None:
+                    self._body_info = reply.info.body
+                elif not _same_body_description(self._body_info, reply.info.body):
+                    handles = self._retire_runtime_locked()
             elif self._runtime_binding.poisoned:
                 handles = self._retire_runtime_locked()
         _close_handles(handles)

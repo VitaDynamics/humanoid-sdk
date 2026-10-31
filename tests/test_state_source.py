@@ -274,6 +274,12 @@ class StateSourceTest(unittest.TestCase):
                 self.matching = True
                 self.waits = []
                 self.headers = []
+                self.closed = False
+                self.close_error = None
+            def close(self):
+                if self.close_error is not None:
+                    raise self.close_error
+                self.closed = True
             def raw(self): return self
             def wait_for_matching(self, timeout_ms):
                 self.waits.append(timeout_ms)
@@ -284,7 +290,13 @@ class StateSourceTest(unittest.TestCase):
 
         def make_node():
             node = SimpleNamespace()
-            node.create_client_typed = mock.Mock(side_effect=lambda *args, **kwargs: Client())
+            node.clients = []
+            def create(*args, **kwargs):
+                self.assertFalse(any(not c.closed for c in node.clients))
+                client = Client()
+                node.clients.append(client)
+                return client
+            node.create_client_typed = mock.Mock(side_effect=create)
             return node
 
         aorta = SimpleNamespace(ClientOptions=lambda **kw: SimpleNamespace(**kw))
@@ -310,6 +322,7 @@ class StateSourceTest(unittest.TestCase):
             for source in (stream, transport):
                 self.assertIs(source.get_robot_info(.1001), reply)
                 self.assertIs(source.get_robot_info(.1001), reply)
+                first = source._info_clients[101]
                 self.assertIs(source.get_robot_info(.2), reply)
                 self.assertEqual(source.node.create_client_typed.call_count, 2)
                 calls = source.node.create_client_typed.call_args_list
@@ -317,13 +330,31 @@ class StateSourceTest(unittest.TestCase):
                 self.assertTrue(all(call.args[0] == transport_module.GET_ROBOT_INFO_SERVICE and
                                     call.args[1] is response.GetRobotInfoResponse.GetRootAs and
                                     call.kwargs['request_schema_meta'] is meta for call in calls))
-                self.assertEqual(source._info_clients[101].waits, [101, 101])
-                self.assertEqual(source._info_clients[101].headers, [23, 23])
-                source._info_clients[101].matching = False
+                self.assertEqual(first.waits, [101, 101])
+                self.assertEqual(first.headers, [23, 23])
+                self.assertTrue(first.closed)
+                self.assertEqual(list(source._info_clients), [200])
+                source._info_clients[200].matching = False
                 with self.assertRaisesRegex(TimeoutError, 'provider not found'):
-                    source.get_robot_info(.1001)
+                    source.get_robot_info(.2)
             self.assertEqual(decode.call_count, 6)
-            self.assertIsNot(stream._info_clients[101], transport._info_clients[101])
+            self.assertIsNot(stream._info_clients[200], transport._info_clients[200])
+            for source in (stream, transport):
+                for ms in range(1000, 21000, 1000):
+                    self.assertIs(source.get_robot_info(ms / 1000), reply)
+                    self.assertEqual(list(source._info_clients), [ms])
+                    self.assertEqual(sum(not c.closed for c in source.node.clients), 1)
+                current = source._info_clients[20000]
+                current.close_error = OSError('close failed')
+                before = source.node.create_client_typed.call_count
+                with self.assertRaisesRegex(OSError, 'close failed'):
+                    source.get_robot_info(21.)
+                self.assertEqual(source.node.create_client_typed.call_count, before)
+                self.assertEqual(list(source._info_clients), [None])
+                current.close_error = None
+                self.assertIs(source.get_robot_info(21.), reply)
+                self.assertTrue(current.closed)
+                self.assertEqual(list(source._info_clients), [21000])
             stream._closed = transport._closed = True
             with self.assertRaises(ValueError): stream.get_robot_info('bad')
             with self.assertRaisesRegex(RuntimeError, 'closed'): transport.get_robot_info('bad')

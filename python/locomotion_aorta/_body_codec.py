@@ -1,5 +1,6 @@
 """Bulk 31-slot vector paths for the pinned public schema, guarded by generated goldens."""
 import struct
+import math
 from dataclasses import fields
 from typing import Any
 from .body_types import (
@@ -114,6 +115,22 @@ def decode_body_state(view: Any) -> BodyState:
 
 
 _decode_body_state_python = decode_body_state  # Reference for native golden tests.
+
+
+def _same_body_description(left: BodyInfo, right: BodyInfo) -> bool:
+    # Cold discovery only: invalid ranges may carry NaN, not a new description.
+    if (left.roster_version, left.slot_count, left.joint_names, left.motor_identities) != (
+            right.roster_version, right.slot_count, right.joint_names, right.motor_identities):
+        return False
+    if len(left.joints) != len(right.joints):
+        return False
+    for a, b in zip(left.joints, right.joints):
+        for field in fields(BodyJointCapability):
+            x, y = getattr(a, field.name), getattr(b, field.name)
+            if x != y and not (isinstance(x, float) and isinstance(y, float)
+                               and math.isnan(x) and math.isnan(y)):
+                return False
+    return True
 
 
 def decode_robot_info(view: Any) -> RobotInfo:

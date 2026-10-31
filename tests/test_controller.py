@@ -229,7 +229,7 @@ class ExternalControllerTest(unittest.TestCase):
                         if transition == 'runtime':
                             reply = replace(reply, runtime_id=12)
                         else:
-                            reply = replace(reply, info=replace(reply.info, body=replace(reply.info.body)))
+                            reply = replace(reply, info=replace(reply.info, body=replace(reply.info.body, roster_version=reply.info.body.roster_version + 1)))
                         h.transport.get_robot_info = lambda _: reply
                         if transition == 'runtime':
                             with self.assertRaisesRegex(ValueError, 'new connection'):
@@ -1510,6 +1510,47 @@ class ExternalControllerTest(unittest.TestCase):
                 self.assertEqual(h.controller._next_external_sequence, 1)
                 self.assertEqual(h.controller._external_session_id, 42)
                 self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in h.transport.published))
+
+    def test_equal_body_rediscovery_during_publish_keeps_canonical_and_key(self):
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+        h.accept_enter(); h.controller.enter_external(.1)
+        canonical = h.controller._body_info
+        reply = h.controller.get_robot_info(.1)
+        rebuilt = replace(canonical, joints=tuple(replace(j) for j in canonical.joints))
+        h.transport.get_robot_info = lambda _: replace(reply, info=replace(reply.info, body=rebuilt))
+        original = h.transport._publish_body
+        reserved = []
+        def rediscover_then_submit(command, guard):
+            reserved.append((command.session_id, command.sequence, h.controller._next_external_sequence))
+            h.controller.get_robot_info(.1)
+            return original(command, guard)
+        h.transport._publish_body = rediscover_then_submit
+        sent = h.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
+        self.assertIs(h.controller._body_info, canonical)
+        self.assertIsNot(rebuilt, canonical)
+        self.assertEqual(reserved, [(42, 1, 2)])
+        self.assertEqual((sent.session_id, sent.sequence), (42, 1))
+        self.assertEqual(sum(t == BODY_CMD_TOPIC for t, _ in h.transport.published), 1)
+
+    def test_equal_unknown_body_ranges_do_not_retire_but_real_change_does(self):
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+        reply = h.controller.get_robot_info(.1)
+        # Establish a separate connection with an unknown (invalid) q range.
+        joint = replace(reply.info.body.joints[0], valid_limits=0, q_min=float('nan'))
+        body = replace(reply.info.body, joints=(joint,) + reply.info.body.joints[1:])
+        h = ControllerHarness(info_reply=replace(reply, info=replace(reply.info, body=body)))
+        self.addCleanup(h.controller.close)
+        rebuilt = replace(body, joints=(replace(joint, q_min=float('nan')),) + body.joints[1:])
+        h.transport.get_robot_info = lambda _: replace(reply, info=replace(reply.info, body=rebuilt))
+        h.controller.get_robot_info(.1)
+        self.assertIs(h.controller._body_info, body)
+        changed = replace(rebuilt, joints=(replace(rebuilt.joints[0], is_mock=True),) + rebuilt.joints[1:])
+        h.transport.get_robot_info = lambda _: replace(reply, info=replace(reply.info, body=changed))
+        with self.assertRaises(ValueError):
+            h.controller.get_robot_info(.1)
+        self.assertTrue(h.controller._runtime_binding.poisoned)
 
     def test_v4_request_uses_v4_ack_and_status_without_fallback(self):
         harness = ControllerHarness()
