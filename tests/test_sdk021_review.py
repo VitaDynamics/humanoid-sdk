@@ -371,8 +371,10 @@ class TeleopReviewTest(unittest.TestCase):
                 controller.status = S(**dict(vars(status), timeout_hold=True))
             return state
         def publish(command, *, target_names, required_fields):
-            self.assertEqual(target_names, tuple(name for name in body.joint_names
-                                                if name != 'waist_roll_joint'))
+            declared = tuple((fixtures.METADATA['joint_names'] + ',' +
+                              fixtures.METADATA['upper_joint_names']).split(','))
+            self.assertEqual(target_names, declared)
+            self.assertEqual(set(target_names), set(body.joint_names) - {'waist_roll_joint'})
             self.assertEqual(required_fields, 0x19)
             self.published.append(clock.now)
             if len(self.published) == 3:
