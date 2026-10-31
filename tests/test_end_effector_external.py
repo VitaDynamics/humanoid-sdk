@@ -1014,6 +1014,27 @@ class PartialFeedbackGuardTest(unittest.TestCase):
         self.assertEqual((info.runtime_id, info.side), (100, 2))
         wait.assert_called_once_with(.1)
 
+    def test_guard_checks_info_once_and_rechecks_each_dynamic_status(self):
+        position = self.emit(1, Field.POS)
+        with patch.object(codec, 'validate_info', wraps=codec.validate_info) as validate:
+            guard = self.guard()
+            self.assertIs(guard.feedback(True), position)
+            self.assertIs(guard.feedback(True), position)
+            self.assertEqual(validate.call_count, 1)
+            self.emit(1, Field.POS, tsStatePubUs=120, outputAllowed=False,
+                      inhibitReason=InhibitReason.DOMAIN_FAULT)
+            with self.assertRaisesRegex(RuntimeError, 'inhibited'):
+                guard.feedback(True)
+            self.assertEqual(validate.call_count, 1)
+
+    def test_feedback_entry_rejects_invalid_info_before_position_wait(self):
+        info = replace(self.client.info, axis_names=())
+        with patch.object(self.client, 'motion_feedback', side_effect=AssertionError('feedback read')) as read:
+            with self.assertRaisesRegex(ValueError, 'axis_names'):
+                demo.wait_position(self.client, info, .03, sleep=self.clock.sleep,
+                                   monotonic=self.clock.monotonic)
+        read.assert_not_called()
+
     def test_partial_diagnosis_keeps_position_ref_without_inventing_admission(self):
         position=self.emit(1,Field.POS)
         guard=self.guard()

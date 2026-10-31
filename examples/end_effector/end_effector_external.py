@@ -253,8 +253,7 @@ def run_external(controller, command_loop, options, *, body, strict_hold=False,
                     trace.close()
 
 
-def validate_position(info, state):
-    codec.validate_info(info)
+def _validate_position(info, state):
     if info.device_model not in (DeviceModel.AGX, DeviceModel.LINKER_L6, DeviceModel.BRAINCO_REVO2):
         raise ValueError('this demo requires actual AGX/Linker/BrainCo capability; OP3 is not enabled')
     if state is None:
@@ -281,7 +280,7 @@ def validate_status(info, state, *, require_output=False):
         raise RuntimeError('end-effector output was inhibited or permission is unavailable')
 
 
-def motion_feedback(client, info, moving, monotonic):
+def _motion_feedback(client, info, moving, monotonic):
     latest, position, fault, received_at = client.motion_feedback()
     if latest is not None:
         validate_status(info, latest, require_output=moving)
@@ -292,7 +291,7 @@ def motion_feedback(client, info, moving, monotonic):
     if position is not None:
         # Status/admission belong to latest; these checks use only this original
         # position sample's measurement and source validity.
-        validate_position(info, position)
+        _validate_position(info, position)
         if received_at is None or not 0 <= monotonic() - received_at < body.LOWSTATE_WINDOW_S:
             raise RuntimeError('end-effector position became stale')
     return latest, position
@@ -300,8 +299,9 @@ def motion_feedback(client, info, moving, monotonic):
 
 def wait_position(client, info, timeout, *, sleep, monotonic):
     deadline = monotonic() + timeout
+    codec.validate_info(info)
     while True:
-        _, position = motion_feedback(client, info, False, monotonic)
+        _, position = _motion_feedback(client, info, False, monotonic)
         if position is not None:
             return position
         remaining = deadline - monotonic()
@@ -414,9 +414,10 @@ class _EndpointGuard:
         self.client, self.info = client, info
         self.timeout, self.monotonic = timeout, monotonic
         self.latest = client.motion_feedback()[0]
+        codec.validate_info(info)
 
     def feedback(self, moving):
-        state, position = motion_feedback(self.client, self.info, moving, self.monotonic)
+        state, position = _motion_feedback(self.client, self.info, moving, self.monotonic)
         if state is None or position is None:
             raise ValueError('end-effector measured position is unavailable')
         self.latest = state
