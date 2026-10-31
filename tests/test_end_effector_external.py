@@ -698,25 +698,28 @@ class EndEffectorExampleTest(unittest.TestCase):
         source.return_value.__exit__=Mock(return_value=False)
         client.return_value.__enter__=Mock(return_value=readonly_endpoint)
         client.return_value.__exit__=Mock(return_value=False)
-        with patch.object(demo,'_validate_motion_parameters',wraps=demo._validate_motion_parameters) as validate, \
-             patch('sys.stdout', new_callable=io.StringIO) as output:
+        with patch('sys.stdout', new_callable=io.StringIO) as output:
             demo.main(['--side','right'],_state_source_factory=source,
                       _client_factory=client,_controller_factory=Mock())
-        self.assertEqual(1,validate.call_count)
         self.assertEqual(readonly_endpoint.info.runtime_id, readonly_endpoint.state.runtime_id)
         self.assertIn('Info=', output.getvalue())
         self.assertEqual([], readonly_endpoint.commands)
         self.assertNotIn('enter_external', connection.calls)
         controller=self.controller(); endpoint=Endpoint(controller)
         target=demo.position_target(endpoint.info,(.0625,),unit='m')
-        with patch.object(demo,'_validate_motion_parameters',side_effect=ValueError('shared validation')) as validate:
-            with self.assertRaisesRegex(ValueError,'shared validation'):
-                demo.run(controller,[endpoint],{endpoint.side:target},
-                         demo._MotionOptions(native_hz={'right':250},
-                                             native_config='synthetic-test-effective-config'))
-        self.assertEqual(1,validate.call_count)
-        self.assertEqual([],endpoint.commands)
-        self.assertEqual(0,controller.calls.count('enter_external'))
+        for invalid in ({'period': 0}, {'duration': math.nan}, {'timeout': 0},
+                        {'feedback_interval': math.inf}, {'touch': 'invalid'},
+                        {'low_frac': .9, 'high_frac': .1}, {'pattern': 'unknown'}):
+            with self.subTest(options=invalid), \
+                 patch.object(demo, '_current_info', side_effect=AssertionError('Info read')) as info:
+                with self.assertRaises(ValueError):
+                    demo.run(controller, [endpoint], {endpoint.side: target},
+                             demo._MotionOptions(**invalid), sleep=self.clock.sleep,
+                             monotonic=self.clock.monotonic)
+                info.assert_not_called()
+        self.assertEqual([], endpoint.commands)
+        self.assertEqual(0, controller.calls.count('enter_external'))
+
 
     def test_mutated_rates_are_rejected_before_info_or_control(self):
         controller = self.controller()

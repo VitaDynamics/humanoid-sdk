@@ -499,6 +499,13 @@ class _MotionOptions:
     high_frac: float = .75
     loop: bool = False
 
+    def __post_init__(self):
+        _validate_motion_parameters(pattern=self.pattern, loop=self.loop, period=self.period,
+            sine_min=self.sine_min, sine_max=self.sine_max,
+            low_frac=self.low_frac, high_frac=self.high_frac, touch=self.touch,
+            timeout=self.timeout, duration=self.duration,
+            feedback_interval=self.feedback_interval)
+
 
 def _iter_phases(options, guards, infos, prepared, returns, limits, positions):
     """Generate each next trajectory phase only after the previous one ends."""
@@ -557,7 +564,7 @@ def _iter_phases(options, guards, infos, prepared, returns, limits, positions):
 
 def _validate_motion_parameters(*, pattern, loop, period, sine_min, sine_max,
                                 low_frac, high_frac, touch, timeout, duration,
-                                feedback_interval, rates):
+                                feedback_interval):
     if pattern not in ('target', 'sine', 'simultaneous', 'sequential'):
         raise ValueError('unknown motion pattern')
     if loop and pattern not in ('simultaneous', 'sequential'):
@@ -570,25 +577,27 @@ def _validate_motion_parameters(*, pattern, loop, period, sine_min, sine_max,
     if touch not in ('keep', 'on', 'off'):
         raise ValueError('touch must be keep/on/off')
     if any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0
-           for v in (timeout, duration, feedback_interval, *rates)):
+           for v in (timeout, duration, feedback_interval)):
+        raise ValueError('timeout/duration/feedback interval/rates must be finite and positive')
+
+
+def _validate_rates(rates):
+    if any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0 for v in rates):
         raise ValueError('timeout/duration/feedback interval/rates must be finite and positive')
 
 
 def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, emit):
     """Validate every selected endpoint before requesting ownership."""
-    timeout, duration = options.timeout, options.duration
+    timeout = options.timeout
     rates, native_hz, native_config = options.rates, options.native_hz, options.native_config
     body_enabled, touch, feedback_interval = options.body_enabled, options.touch, options.feedback_interval
-    pattern, period, loop = options.pattern, options.period, options.loop
+    pattern, period = options.pattern, options.period
     sine_min, sine_max = options.sine_min, options.sine_max
     low_frac, high_frac = options.low_frac, options.high_frac
     rates = {c.side: 50.0 for c in clients} if rates is None else rates
     if set(rates) != {c.side for c in clients}:
         raise ValueError('one finite positive command rate per endpoint required')
-    _validate_motion_parameters(pattern=pattern, loop=loop, period=period,
-        sine_min=sine_min, sine_max=sine_max, low_frac=low_frac, high_frac=high_frac,
-        touch=touch, timeout=timeout, duration=duration, feedback_interval=feedback_interval,
-        rates=rates.values())
+    _validate_rates(rates.values())
     if pattern == 'sine' and tuple(c.side for c in clients) != ('left', 'right'):
         raise ValueError('sine requires left and right AGX endpoints')
     if pattern != 'target' and not clients:
@@ -881,11 +890,15 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     if args.touch != 'keep' and (readonly or not sides):
         parser.error('--touch on/off requires a selected endpoint and --confirm-motion')
     try:
-        _validate_motion_parameters(pattern=args.pattern, loop=args.loop, period=args.period_s,
-            sine_min=args.sine_min_m, sine_max=args.sine_max_m,
-            low_frac=args.low_frac, high_frac=args.high_frac, touch=args.touch,
-            timeout=args.timeout, duration=args.duration, feedback_interval=args.feedback_interval,
-            rates=(args.left_hz, args.right_hz))
+        options = _MotionOptions(timeout=args.timeout, duration=args.duration,
+            rates={side: getattr(args, side+'_hz') for side in sides},
+            native_hz={side: getattr(args, side+'_native_hz') for side in sides}, native_config=args.native_config,
+            body_enabled=not args.ee_only,
+            body_gains=args.body_gains, body_pose=args.body_pose, return_to_start=args.return_to_start,
+            touch=args.touch, feedback_interval=args.feedback_interval,
+            pattern=args.pattern, period=args.period_s, sine_min=args.sine_min_m, sine_max=args.sine_max_m,
+            low_frac=args.low_frac, high_frac=args.high_frac, loop=args.loop)
+        _validate_rates((args.left_hz, args.right_hz))
     except ValueError as exc:
         parser.error(str(exc))
     for side in ('left', 'right'):
@@ -929,14 +942,6 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
                 unit=getattr(args, client.side+'_unit'), vel_limit=getattr(args, client.side+'_vel_limit'),
                 torque=getattr(args, client.side+'_torque_nm'))
         try:
-            options = _MotionOptions(timeout=args.timeout, duration=args.duration,
-                rates={side: getattr(args, side+'_hz') for side in sides},
-                native_hz={side: getattr(args, side+'_native_hz') for side in sides}, native_config=args.native_config,
-                body_enabled=not args.ee_only,
-                body_gains=args.body_gains, body_pose=args.body_pose, return_to_start=args.return_to_start,
-                touch=args.touch, feedback_interval=args.feedback_interval,
-                pattern=args.pattern, period=args.period_s, sine_min=args.sine_min_m, sine_max=args.sine_max_m,
-                low_frac=args.low_frac, high_frac=args.high_frac, loop=args.loop)
             run(connection, clients, targets, options)
         except KeyboardInterrupt:
             print('interrupted; CANCEL attempted once, no neutral end-effector target sent')

@@ -1,6 +1,7 @@
 """Existing body test fixtures plus a fake loop; no end-effector wire traffic."""
 import signal
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from examples.external_control import external_control as body
@@ -81,6 +82,33 @@ class ExternalLifecycleTest(unittest.TestCase):
             self.run_loop(c, lambda _frame: self.fail('loop ran'), body_gains='invalid')
         self.assertNotIn('enter_external', c.calls)
         self.assertEqual(c.command_count, 0)
+
+    def test_body_only_options_need_no_motion_fields(self):
+        c = self.controller()
+        options = SimpleNamespace(timeout=1, body_enabled=True,
+                                  body_gains='hold', body_pose='measured')
+        run_external(c, lambda frame: frame(), options, body=body,
+                     sleep=self.clock.sleep, monotonic=self.clock.monotonic,
+                     emit=self.events.append)
+        self.assertEqual(c.command_count, 1)
+        self.assertEqual(c.calls.count('exit_external'), 1)
+
+    def test_body_only_bad_options_fail_before_body_read_or_entry(self):
+        for invalid in ({'timeout': 0}, {'body_gains': 'invalid'},
+                        {'body_pose': 'invalid'}, {'body_pose': 'zero', 'body_gains': 'zero'},
+                        {'body_enabled': False, 'body_pose': 'zero'}):
+            with self.subTest(options=invalid):
+                c = self.controller()
+                values = dict(timeout=1, body_enabled=True, body_gains='hold', body_pose='measured')
+                values.update(invalid)
+                with patch.object(body, 'require_body_info', side_effect=AssertionError('Body read')) as read:
+                    with self.assertRaises(ValueError):
+                        run_external(c, lambda frame: self.fail('loop ran'), SimpleNamespace(**values),
+                                     body=body, sleep=self.clock.sleep,
+                                     monotonic=self.clock.monotonic, emit=self.events.append)
+                read.assert_not_called()
+                self.assertNotIn('enter_external', c.calls)
+                self.assertEqual(c.command_count, 0)
 
     def test_body_drift_is_observed_but_reject_changes_abort_then_cancel(self):
         for options in ({'drift_command_range': (1, 3)}, {'reject_after_commands': 1}):
