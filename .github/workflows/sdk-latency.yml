@@ -163,6 +163,12 @@ jobs:
             python -m build --wheel --no-isolation --outdir "$RUNNER_TEMP/sdk-raw" . 2>&1 | tee "$RUNNER_TEMP/sdk-build.log"
           python -m auditwheel repair --only-plat --plat manylinux_2_35_x86_64 \
             --wheel-dir "$RUNNER_TEMP/sdk-wheel" "$RUNNER_TEMP"/sdk-raw/*.whl 2>&1 | tee "$RUNNER_TEMP/sdk-repair.log"
+      - name: Verify reviewed C2I producer inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$(python tools/verify_c2i_inputs.py)"
+          printf 'PR2_C2I_PRODUCER_FIXTURES=%s\n' "$root" >> "$GITHUB_ENV"
       - name: Install and test the actual SDK wheel
         shell: bash
         run: |
