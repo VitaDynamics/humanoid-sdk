@@ -1,0 +1,116 @@
+{
+  "format_version": 1,
+  "files": {
+    "static/left_info.fb": {
+      "bytes": 632,
+      "sha256": "2419f24aa9c9b943637e872a858804d13ac0e09e9ee6f0147aa162168172530a"
+    },
+    "static/right_info.fb": {
+      "bytes": 656,
+      "sha256": "e730164f63e539735abeb4157c0c28a9dbe7f45ba28033ef913e0c4dd2dfc198"
+    },
+    "static/left_state.fb": {
+      "bytes": 280,
+      "sha256": "6f4604a96c1c408bc59493c748ca9731f6ab850898b4eae8d39dbcc8d01fe61d"
+    },
+    "static/right_state.fb": {
+      "bytes": 280,
+      "sha256": "f44ecbd0509c07b39b26b3efecfe20fc7e7a86ab55791084b8cd115d7e072426"
+    },
+    "static/left_info_republished.fb": {
+      "bytes": 640,
+      "sha256": "5ca5ae1d70e2b7050510a27c64df3742cb5b8941fd791d80d16018f480ee532f"
+    },
+    "static/left_next_state.fb": {
+      "bytes": 280,
+      "sha256": "fb3b599a57ac930d64047aa45e5d67a639819fe9615a8dd9b856af12588b6d19"
+    },
+    "static/right_inhibited.fb": {
+      "bytes": 280,
+      "sha256": "85545f0cae5b0a8f8e97bef17fa988828cc7ac5be108dcc456fe4166cfb8f9f9"
+    },
+    "static/left_new_runtime_info.fb": {
+      "bytes": 632,
+      "sha256": "d7beb6d0f108453b9a15b0f5a9f808e88339e88e4e31a7a8820c5c13c48278a6"
+    },
+    "linker/info.fb": {
+      "bytes": 568,
+      "sha256": "241428b34b6feeee09743f16f185a027ab3acf3ffd71c25bc770aed3a68ab49f"
+    },
+    "linker/position.fb": {
+      "bytes": 288,
+      "sha256": "612d9b762d862ef12311b52cdecb2cd00fe7f1fa0d977045ed3671b24ffa9745"
+    },
+    "linker/zero_fault.fb": {
+      "bytes": 288,
+      "sha256": "1bdedd8b35555a941351b3abca84672b4b0d45b9edf5ccdeaa926f261fa4c8af"
+    },
+    "linker/temperature.fb": {
+      "bytes": 288,
+      "sha256": "2a6a5779bdf2d938c44fe227574a0f60ae19de3cce8bdfe31ce670f180e09dda"
+    },
+    "linker/next_position.fb": {
+      "bytes": 288,
+      "sha256": "732a30554559921234cee024e1b7c6a42e64200a38cf7d94b02b255627efb13d"
+    },
+    "linker/nonzero_fault.fb": {
+      "bytes": 288,
+      "sha256": "44e856e2021afa3b2508ca26d8db54450dbdd9426c376eea0df0b375f1bf8bc3"
+    },
+    "linker/temperature_after_fault.fb": {
+      "bytes": 288,
+      "sha256": "12ecca3987d0950c7c281dcbb5e8c99e97abaeaf2a7bcad68d254f70565d5032"
+    },
+    "linker/permission_revoked.fb": {
+      "bytes": 288,
+      "sha256": "18c99a33f35ce67057143ba2537413fd9fc308bf286c31d9ee009bc8ade344b8"
+    },
+    "linker/position_stale.fb": {
+      "bytes": 288,
+      "sha256": "3e7c782632c6e854f0156a5c06e67c63e82502e4656a50a1d2c275adbdbab474"
+    },
+    "brainco/info.fb": {
+      "bytes": 1920,
+      "sha256": "f732b3932e2c60db2f8c09fd962d8013eac0f57b0cae70414c41ef7e42998b16"
+    },
+    "brainco/touch.fb": {
+      "bytes": 392,
+      "sha256": "a6cb1290a7ca9b35463b6b0afaf466d2164acb12996b9ef0fb8af8543386aa03"
+    },
+    "brainco/touch_disabled.fb": {
+      "bytes": 392,
+      "sha256": "1ce353d54d339ed10661fa7cf81b110326b16f5b5ef1e5223d31a4b1f0ce3190"
+    },
+    "brainco/touch_new.fb": {
+      "bytes": 392,
+      "sha256": "9dacbb31d20fd15432f7d675e394ca2487e0e7a0d206785cf9fd25f9939769a6"
+    },
+    "static/robot_info.fb": {
+      "bytes": 4528,
+      "sha256": "b325eeb63ceb3bdde287a2856d59570c7c2de09302cad6731cd5920bbb055cbc"
+    },
+    "static/new_runtime_robot_info.fb": {
+      "bytes": 4528,
+      "sha256": "5cfacfd5d604d2e9a8cb6c60716ebc955561c0ec04d1be34bef43c3fa4dd9aa3"
+    },
+    "linker/robot_info.fb": {
+      "bytes": 3928,
+      "sha256": "116ff686ff980ec256a40ccb54b9513538410955a101b4c8a57b153600351400"
+    },
+    "brainco/robot_info.fb": {
+      "bytes": 5280,
+      "sha256": "462e9ef1f9891fce3ace5c3d38b8a5885569663b5e56eb2a5a3f4777385d787f"
+    }
+  },
+  "producer": {
+    "repository": "VitaDynamics/vita-robot",
+    "target": "//src/application/locomotion/humanoid:end_effector_command_runtime_test",
+    "commit": "a5ef2afebc1b86ceb8dd44a2107cf68abf07cd40",
+    "tree": "e1ccddc64ce465215fef13196534a4fb54efbdae",
+    "elf_sha256": "c6562f7bc8c8d6373b5986a5ab55df0717a2b98e80d2c5f6f26eab978935d777",
+    "invocation_sha256": "6ab7b9e9f310106475cda5ff00a63d99cc881881af89c7887c29956dd32efe26"
+  },
+  "schema_sha256": {
+    "status": "PENDING_ACTUAL_BFBS_PROOF_REQUIRED"
+  }
+}

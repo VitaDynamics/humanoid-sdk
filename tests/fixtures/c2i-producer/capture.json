@@ -1,0 +1,32 @@
+{
+  "producer": {
+    "repository": "VitaDynamics/vita-robot",
+    "target": "//src/application/locomotion/humanoid:end_effector_command_runtime_test",
+    "commit": "a5ef2afebc1b86ceb8dd44a2107cf68abf07cd40",
+    "tree": "e1ccddc64ce465215fef13196534a4fb54efbdae",
+    "elf_sha256": "c6562f7bc8c8d6373b5986a5ab55df0717a2b98e80d2c5f6f26eab978935d777",
+    "invocation_sha256": "6ab7b9e9f310106475cda5ff00a63d99cc881881af89c7887c29956dd32efe26"
+  },
+  "schema_sha256": {
+    "status": "PENDING_ACTUAL_BFBS_PROOF_REQUIRED"
+  },
+  "source_capture": {
+    "path": "/tmp/developer-high-pr2-full-a5ef-20261102/build-evidence/c2i-a5ef-actual-exports/capture.json",
+    "bytes": 9093,
+    "sha256": "58d69000fb62572813e868607538edff24f856681b6a101481dae2bc2ea95d50"
+  },
+  "evidence_status": {
+    "native_rc": 3,
+    "producer_target_status": "FAILED",
+    "export_cases": {
+      "ExportsStaticTypedSequenceForSdk": true,
+      "ExportsBoundedLinkerTypedSequenceForSdk": true,
+      "NativeTouchCacheClearExportsSameIdDisableAndNewPoll": true
+    },
+    "x122_target_counts": {
+      "PASSED": 114,
+      "FAILED": 8
+    },
+    "note": "Original argv/native failure evidence retained; argv identity is not execution success."
+  }
+}
