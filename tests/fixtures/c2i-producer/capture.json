@@ -8,7 +8,58 @@
     "invocation_sha256": "6ab7b9e9f310106475cda5ff00a63d99cc881881af89c7887c29956dd32efe26"
   },
   "schema_sha256": {
-    "status": "PENDING_ACTUAL_BFBS_PROOF_REQUIRED"
+    "end_effector_info": "7c81801fb7aac397b6ce8d5f37f78a86eeb489f426260ecf143e0a4ea06bc8fa",
+    "end_effector_state": "6dd6730bec2b1da402471ce7abedff795df079c993442c691c399b7218188363",
+    "end_effector_touch": "8523e1b5f60e6f000e4d03d1b4d7b2d5414da70a15a1a58b338f4e3ce537fe7a",
+    "get_robot_info": "9e04a287309acf6e50ab8912ba883543ff78146bca9379c108e57c511a9d16ff"
+  },
+  "schema_evidence": {
+    "report": {
+      "path": "/tmp/operation-a5ef-c2i-four-bfbs-readonly-20261102/report.md",
+      "bytes": 6052,
+      "sha256": "1e13ffbfceed4ccf62cf75139d832b096132d652acfe4f3969f98538585b81e3"
+    },
+    "readback": {
+      "path": "/tmp/operation-a5ef-c2i-four-bfbs-readonly-20261102/readback.json",
+      "bytes": 6377,
+      "sha256": "91945e4a3ae040c6f2cb4c9bbc75e8c8bc11caf0179337e79061db21e8226288"
+    },
+    "elf": {
+      "path": "/tmp/developer-high-pr2-full-a5ef-20261102/build-evidence/c2i-a5ef-actual-exports/producer.elf",
+      "bytes": 202006576,
+      "sha256": "c6562f7bc8c8d6373b5986a5ab55df0717a2b98e80d2c5f6f26eab978935d777"
+    },
+    "bfbs": {
+      "end_effector_info": {
+        "path": "/mnt/cache/fangda.zhu/.cache/bazel/_bazel_root/f0d434bff2994bc6c732c3cf31b7f3a1/execroot/_main/bazel-out/x86_64-opt/bin/external/aorta_schemas_internal~/message/schemas/topic/lowlevel/end_effector_info.bfbs",
+        "bytes": 11248,
+        "sha256": "7c81801fb7aac397b6ce8d5f37f78a86eeb489f426260ecf143e0a4ea06bc8fa",
+        "header_embedded_bytes_equal": true,
+        "elf_exact_byte_offset": 36113472
+      },
+      "end_effector_state": {
+        "path": "/mnt/cache/fangda.zhu/.cache/bazel/_bazel_root/f0d434bff2994bc6c732c3cf31b7f3a1/execroot/_main/bazel-out/x86_64-opt/bin/external/aorta_schemas_internal~/message/schemas/topic/lowlevel/end_effector_state.bfbs",
+        "bytes": 10040,
+        "sha256": "6dd6730bec2b1da402471ce7abedff795df079c993442c691c399b7218188363",
+        "header_embedded_bytes_equal": true,
+        "elf_exact_byte_offset": 36103392
+      },
+      "end_effector_touch": {
+        "path": "/mnt/cache/fangda.zhu/.cache/bazel/_bazel_root/f0d434bff2994bc6c732c3cf31b7f3a1/execroot/_main/bazel-out/x86_64-opt/bin/external/aorta_schemas_internal~/message/schemas/topic/lowlevel/end_effector_touch.bfbs",
+        "bytes": 9280,
+        "sha256": "8523e1b5f60e6f000e4d03d1b4d7b2d5414da70a15a1a58b338f4e3ce537fe7a",
+        "header_embedded_bytes_equal": true,
+        "elf_exact_byte_offset": 36174400
+      },
+      "get_robot_info": {
+        "path": "/mnt/cache/fangda.zhu/.cache/bazel/_bazel_root/f0d434bff2994bc6c732c3cf31b7f3a1/execroot/_main/bazel-out/x86_64-opt/bin/external/aorta_schemas_internal~/message/schemas/service/humanoid_locomotion/get_robot_info.bfbs",
+        "bytes": 15960,
+        "sha256": "9e04a287309acf6e50ab8912ba883543ff78146bca9379c108e57c511a9d16ff",
+        "header_embedded_bytes_equal": true,
+        "elf_exact_byte_offset": 36087424
+      }
+    },
+    "boundary": "Linked BFBS bytes match the SDK pins; runtime schema registration/selection per exported message was not independently observed."
   },
   "source_capture": {
     "path": "/tmp/developer-high-pr2-full-a5ef-20261102/build-evidence/c2i-a5ef-actual-exports/capture.json",

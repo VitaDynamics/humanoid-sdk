@@ -1,5 +1,9 @@
 {
   "format_version": 1,
+  "capture": {
+    "bytes": 4253,
+    "sha256": "04785e1c8ce198978e683d701aaf29917d8710588cf4689f2b871780fa886066"
+  },
   "files": {
     "static/left_info.fb": {
       "bytes": 632,
@@ -111,6 +115,9 @@
     "invocation_sha256": "6ab7b9e9f310106475cda5ff00a63d99cc881881af89c7887c29956dd32efe26"
   },
   "schema_sha256": {
-    "status": "PENDING_ACTUAL_BFBS_PROOF_REQUIRED"
+    "end_effector_info": "7c81801fb7aac397b6ce8d5f37f78a86eeb489f426260ecf143e0a4ea06bc8fa",
+    "end_effector_state": "6dd6730bec2b1da402471ce7abedff795df079c993442c691c399b7218188363",
+    "end_effector_touch": "8523e1b5f60e6f000e4d03d1b4d7b2d5414da70a15a1a58b338f4e3ce537fe7a",
+    "get_robot_info": "9e04a287309acf6e50ab8912ba883543ff78146bca9379c108e57c511a9d16ff"
   }
 }
