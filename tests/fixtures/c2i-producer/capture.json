@@ -2,10 +2,10 @@
   "producer": {
     "repository": "VitaDynamics/vita-robot",
     "target": "//src/application/locomotion/humanoid:end_effector_command_runtime_test",
-    "commit": "e40a980daefddfa6ddca1b3f027e04bd0201278e",
-    "tree": "f0b64d138903eab72c0c45b444f1e7fa56f667e3",
-    "elf_sha256": "05f88b6ad18e06e2138af4c9af9b9aaca8ca78f06b0d31d3ecb70174760a998e",
-    "invocation_sha256": "6ab7b9e9f310106475cda5ff00a63d99cc881881af89c7887c29956dd32efe26"
+    "commit": "f73aa8e88dcdc003cd4556aededa099781fc3ffe",
+    "tree": "5cf6103a7b4fad2efa5eb44b7a487d186ec4f0fa",
+    "elf_sha256": "5405c44da0b8c3b0b52e44bcfc5ed0dac7d9d0584340a66cc720ea9d6db7001b",
+    "invocation_sha256": "6ae721d69817634365bb6970dadf670aa88a52a3acb604b59c337c09ed8e1f03"
   },
   "schema_sha256": {
     "end_effector_info": "7c81801fb7aac397b6ce8d5f37f78a86eeb489f426260ecf143e0a4ea06bc8fa",
@@ -15,19 +15,19 @@
   },
   "schema_evidence": {
     "report": {
-      "path": "/tmp/coord-sdk-c175-contract-followup-20261102/operation/receipt.md",
-      "bytes": 2606,
-      "sha256": "bd48eb56902172105ad008372e2fdcc9b237baf907744ab8f4321f5744cbb4ff"
+      "path": "/tmp/coord-sdk-f73-real-c2i-handoff-20261102/simple-intake/receipt.md",
+      "bytes": 4148,
+      "sha256": "4723ecbf6ce4b8b8aa1209a2f6c040c3ddbb2fd4b16b1532fcc1d385e27c40c0"
     },
     "readback": {
-      "path": "/tmp/coord-sdk-c175-contract-followup-20261102/operation/readback.json",
-      "bytes": 6994,
-      "sha256": "3c776e13f9b43d44d8f7332e9a18c34b82a2ce847370c6778dd766cc24e79154"
+      "path": "/tmp/coord-sdk-f73-real-c2i-handoff-20261102/four-bfbs/evidence.json",
+      "bytes": 6296,
+      "sha256": "416628169f8850626ae4e5f6cdfc8c101a5957a3a4d8fa0109921eacbce36f46"
     },
     "elf": {
-      "path": "/tmp/developer-high-pr2-full-e40a-20261102/build-evidence/c2i-e40a/producer.elf",
-      "bytes": 203490480,
-      "sha256": "05f88b6ad18e06e2138af4c9af9b9aaca8ca78f06b0d31d3ecb70174760a998e"
+      "path": "/tmp/developer-high-pr2-f73-targeted3-20261102/continuation-R2/c2i-f73/producer.elf",
+      "bytes": 203669136,
+      "sha256": "5405c44da0b8c3b0b52e44bcfc5ed0dac7d9d0584340a66cc720ea9d6db7001b"
     },
     "bfbs": {
       "end_effector_info": {
@@ -35,71 +35,73 @@
         "bytes": 11248,
         "sha256": "7c81801fb7aac397b6ce8d5f37f78a86eeb489f426260ecf143e0a4ea06bc8fa",
         "header_embedded_bytes_equal": true,
-        "elf_exact_byte_offsets": [36173472, 49100815, 80855899]
+        "elf_exact_byte_offsets": [36185888, 49117304, 80936866]
       },
       "end_effector_state": {
         "path": "/mnt/cache/fangda.zhu/.cache/bazel/_bazel_root/f0d434bff2994bc6c732c3cf31b7f3a1/execroot/_main/bazel-out/x86_64-opt/bin/external/aorta_schemas_internal~/message/schemas/topic/lowlevel/end_effector_state.bfbs",
         "bytes": 10040,
         "sha256": "6dd6730bec2b1da402471ce7abedff795df079c993442c691c399b7218188363",
         "header_embedded_bytes_equal": true,
-        "elf_exact_byte_offsets": [36163392, 49112081, 76279539]
+        "elf_exact_byte_offsets": [36175808, 49128570, 76360506]
       },
       "end_effector_touch": {
         "path": "/mnt/cache/fangda.zhu/.cache/bazel/_bazel_root/f0d434bff2994bc6c732c3cf31b7f3a1/execroot/_main/bazel-out/x86_64-opt/bin/external/aorta_schemas_internal~/message/schemas/topic/lowlevel/end_effector_touch.bfbs",
         "bytes": 9280,
         "sha256": "8523e1b5f60e6f000e4d03d1b4d7b2d5414da70a15a1a58b338f4e3ce537fe7a",
         "header_embedded_bytes_equal": true,
-        "elf_exact_byte_offsets": [36234240, 76289597]
+        "elf_exact_byte_offsets": [36246656, 76370564]
       },
       "get_robot_info": {
         "path": "/mnt/cache/fangda.zhu/.cache/bazel/_bazel_root/f0d434bff2994bc6c732c3cf31b7f3a1/execroot/_main/bazel-out/x86_64-opt/bin/external/aorta_schemas_internal~/message/schemas/service/humanoid_locomotion/get_robot_info.bfbs",
         "bytes": 15960,
         "sha256": "9e04a287309acf6e50ab8912ba883543ff78146bca9379c108e57c511a9d16ff",
         "header_embedded_bytes_equal": true,
-        "elf_exact_byte_offsets": [36147424, 49122139, 80881271]
+        "elf_exact_byte_offsets": [36159840, 49138628, 80962238]
       }
     },
     "boundary": "Linked BFBS bytes match the SDK pins; runtime schema registration/selection per exported message was not independently observed."
   },
   "source_capture": {
-    "path": "/tmp/developer-high-pr2-full-e40a-20261102/build-evidence/c2i-e40a/capture.json",
-    "bytes": 8008,
-    "sha256": "00157052fb328509a2c80a7b102e04cc10428abb383fbeda241c76679d470f30"
+    "path": "/tmp/developer-high-pr2-f73-targeted3-20261102/continuation-R2/c2i-f73/capture.json",
+    "bytes": 8721,
+    "sha256": "2a6d5f484c2c72042e28b111b4ddfd5ac9da0409655ad60182f3cf2d82ec0923"
   },
   "source_identity": {
     "path": "src/application/locomotion/humanoid/test/end_effector_command_runtime_test.cpp",
-    "blob": "1c8cb755f66254181248de9729037a7c9ea05de0",
-    "bytes": 218294,
-    "sha256": "3a03ba93e714753c2b8e5f1ddf41e6a7f8b398c61d5bbeef12cfd317b7637889",
+    "blob": "c70eaa82ec0d139b6abd0d374e5937173a46ce28",
+    "bytes": 221733,
+    "sha256": "489212c881558dac098bac4184fc2a110002aeba70b693ddc7bd5dd3d469f868",
     "schema_commit": "c783514130bb3686af8c14237ed6da0463b9b438",
     "aorta_commit": "309b8691cb7b31949a8977c4ed9db36bddaf6fd6",
     "module_sha256": "a3a8c38236aa2300b423e2c4c4e2c7d568f85e343910889575004d732c33cc3e",
     "lock_sha256": "48f7662ac36620cd066888af4554a8ea19a17f1a12b5b77e2e6d31974f49d4eb"
   },
   "evidence_status": {
-    "raw_capture_status": "CAPTURED_25_WITH_NONPASS_OR_INCOMPLETE_EXPORT_CASES",
-    "usable_evidence_level": "RAW_CAPTURE_ONLY_NOT_C2I_SDK_PRODUCT_PASS",
-    "native_rc": 3,
-    "producer_target_status": "FAILED",
+    "raw_capture_status": "CAPTURED_25_TARGETED_PRODUCER_PASS",
+    "usable_evidence_level": "TARGETED_PRODUCER_PASS_NOT_SDK_CONSUMER_OR_FULL_X122",
+    "native_rc": 0,
+    "producer_target_status": "PASSED",
     "producer_case_counts": {
       "TOTAL": 69,
-      "PASSED": 68,
-      "FAILED": 1
+      "PASSED": 69,
+      "FAILED": 0,
+      "SKIPPED": 0
     },
-    "producer_failed_case": "SyntheticProductionTest.TeleopOwnedOfflineReplayUsesNativeFeedbackWriterAndStopBarrier",
     "export_cases": {
       "ExportsStaticTypedSequenceForSdk": true,
       "ExportsBoundedLinkerTypedSequenceForSdk": true,
       "NativeTouchCacheClearExportsSameIdDisableAndNewPoll": true
     },
-    "x122_target_counts": {
-      "PASSED": 119,
-      "FAILED": 3,
-      "NO_STATUS": 0
+    "targeted_counts": {
+      "TARGETS": 3,
+      "PASSED": 263,
+      "FAILED": 0,
+      "SKIPPED": 0
     },
-    "x122_native_wrapper_collection_rc": [3, 0, 0],
-    "x122_start": "2026-11-02T20:59:09.391435+08:00",
-    "x122_end": "2026-11-02T21:02:12.031146+08:00",
-    "note": "Original capture, native failure and RAW grade retained; argv identity is not execution success and three passing exports do not make the producer or SDK consumer pass."
+    "targeted_native_wrapper_collection_rc": [0, 0, 0],
+    "targeted_start": "2026-11-02T22:41:54.399213+08:00",
+    "targeted_end": "2026-11-02T22:43:52.519160+08:00",
+    "full_x122_status": "NOT_VALIDATED_AT_F73",
+    "note": "Original targeted capture and passing producer retained; this is not SDK consumer, full X122, ARM, strict, device or c175 joint acceptance."
   }
 }
