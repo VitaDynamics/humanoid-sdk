@@ -1,41 +1,41 @@
 {
   "format_version": 1,
   "capture": {
-    "bytes": 4253,
-    "sha256": "04785e1c8ce198978e683d701aaf29917d8710588cf4689f2b871780fa886066"
+    "bytes": 5529,
+    "sha256": "c639d2d6b894fff074310add850f0fee2dd8133c6850fb42f15df8b3dfc22196"
   },
   "files": {
     "static/left_info.fb": {
       "bytes": 632,
-      "sha256": "2419f24aa9c9b943637e872a858804d13ac0e09e9ee6f0147aa162168172530a"
+      "sha256": "5767768e21a3d3d650ba200a9ca106ee21057a3eb03a7a1f16adaa815c0f345c"
     },
     "static/right_info.fb": {
       "bytes": 656,
-      "sha256": "e730164f63e539735abeb4157c0c28a9dbe7f45ba28033ef913e0c4dd2dfc198"
+      "sha256": "324b965f2ed3ab8a2f7091e476f43ebcd00accb3f51b255aa1ccd8b6f6379c48"
     },
     "static/left_state.fb": {
       "bytes": 280,
-      "sha256": "6f4604a96c1c408bc59493c748ca9731f6ab850898b4eae8d39dbcc8d01fe61d"
+      "sha256": "184203bd22791fd032c8da48f3ce66f6a2ad40071e0325a1fb66d54988b61041"
     },
     "static/right_state.fb": {
       "bytes": 280,
-      "sha256": "f44ecbd0509c07b39b26b3efecfe20fc7e7a86ab55791084b8cd115d7e072426"
+      "sha256": "562080ad5b7e24071f8d1efe59d1e73d1a24dd83eca115b4f8c60193ee3570f5"
     },
     "static/left_info_republished.fb": {
       "bytes": 640,
-      "sha256": "5ca5ae1d70e2b7050510a27c64df3742cb5b8941fd791d80d16018f480ee532f"
+      "sha256": "a0df56b73e2ff53ad47e48610127efbdc329381b09b4065118c77d06cc0f9cb3"
     },
     "static/left_next_state.fb": {
       "bytes": 280,
-      "sha256": "fb3b599a57ac930d64047aa45e5d67a639819fe9615a8dd9b856af12588b6d19"
+      "sha256": "6423e2b4e5178fcf54a07a85f5f06486628e139cfd71892e01f852bc8082f0b9"
     },
     "static/right_inhibited.fb": {
       "bytes": 280,
-      "sha256": "85545f0cae5b0a8f8e97bef17fa988828cc7ac5be108dcc456fe4166cfb8f9f9"
+      "sha256": "d9c30ee04da587642a42feb35b09e217c674ff29b67bf59dcde4ac4eb74c4bdf"
     },
     "static/left_new_runtime_info.fb": {
       "bytes": 632,
-      "sha256": "d7beb6d0f108453b9a15b0f5a9f808e88339e88e4e31a7a8820c5c13c48278a6"
+      "sha256": "22f3417ffb7699db04f6be1d77c8092151714061b50e33709aeeb570ec932fc5"
     },
     "linker/info.fb": {
       "bytes": 568,
@@ -79,39 +79,39 @@
     },
     "brainco/touch.fb": {
       "bytes": 392,
-      "sha256": "a6cb1290a7ca9b35463b6b0afaf466d2164acb12996b9ef0fb8af8543386aa03"
+      "sha256": "a7465cadbbd38a6d229cbf30184d0e35fac13115e038cb835825e14bb7d6c3be"
     },
     "brainco/touch_disabled.fb": {
       "bytes": 392,
-      "sha256": "1ce353d54d339ed10661fa7cf81b110326b16f5b5ef1e5223d31a4b1f0ce3190"
+      "sha256": "daa4bb709f5ddabe60b2733587449338de11e5e06548c91ba779138788fc8dee"
     },
     "brainco/touch_new.fb": {
       "bytes": 392,
-      "sha256": "9dacbb31d20fd15432f7d675e394ca2487e0e7a0d206785cf9fd25f9939769a6"
+      "sha256": "7672414501a492f8df23fd2cd53391ab8b3f5d569fb103b753b8345c3a81b890"
     },
     "static/robot_info.fb": {
       "bytes": 4528,
-      "sha256": "b325eeb63ceb3bdde287a2856d59570c7c2de09302cad6731cd5920bbb055cbc"
+      "sha256": "0a8f8dc53fca58898b75797c9b51424e91eae6ca45a1c0ac21a29f13fe1c5b7f"
     },
     "static/new_runtime_robot_info.fb": {
       "bytes": 4528,
-      "sha256": "5cfacfd5d604d2e9a8cb6c60716ebc955561c0ec04d1be34bef43c3fa4dd9aa3"
+      "sha256": "fd825fcc86b9e0300cef701e329b1d52fdd454604b663c9ad4a0e7fa3f0c585e"
     },
     "linker/robot_info.fb": {
       "bytes": 3928,
-      "sha256": "116ff686ff980ec256a40ccb54b9513538410955a101b4c8a57b153600351400"
+      "sha256": "c02e4083f02839578b8721872b6fc8c4671d119289b31c4474353a26f0398fb3"
     },
     "brainco/robot_info.fb": {
       "bytes": 5280,
-      "sha256": "462e9ef1f9891fce3ace5c3d38b8a5885569663b5e56eb2a5a3f4777385d787f"
+      "sha256": "cc93210c5a084121c0c17ef74bdd36808af407b263ef7aa1c72fe14d6b05486e"
     }
   },
   "producer": {
     "repository": "VitaDynamics/vita-robot",
     "target": "//src/application/locomotion/humanoid:end_effector_command_runtime_test",
-    "commit": "a5ef2afebc1b86ceb8dd44a2107cf68abf07cd40",
-    "tree": "e1ccddc64ce465215fef13196534a4fb54efbdae",
-    "elf_sha256": "c6562f7bc8c8d6373b5986a5ab55df0717a2b98e80d2c5f6f26eab978935d777",
+    "commit": "e40a980daefddfa6ddca1b3f027e04bd0201278e",
+    "tree": "f0b64d138903eab72c0c45b444f1e7fa56f667e3",
+    "elf_sha256": "05f88b6ad18e06e2138af4c9af9b9aaca8ca78f06b0d31d3ecb70174760a998e",
     "invocation_sha256": "6ab7b9e9f310106475cda5ff00a63d99cc881881af89c7887c29956dd32efe26"
   },
   "schema_sha256": {
