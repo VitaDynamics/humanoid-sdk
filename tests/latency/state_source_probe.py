@@ -14,15 +14,39 @@ sys.path[:0]=[str(ROOT/'tests'),str(ROOT/'tests/latency')]
 
 
 def publisher(directory,session):
-    import aorta,body_state_schema_meta
+    import aorta,body_state_schema_meta,get_robot_info_schema_meta
     from decode_fixtures import state_object,pack_state
+    from lowlevel.BodyInfo import BodyInfoT
+    from lowlevel.BodyJointCapability import BodyJointCapabilityT
+    from lowlevel.BodyMotorIdentity import BodyMotorIdentityT
+    from lowlevel.EndEffectorCapability import EndEffectorCapabilityT
+    from lowlevel.RobotInfo import RobotInfoT
+    from aorta.services.humanoid_locomotion.GetRobotInfoRequest import GetRobotInfoRequest
+    from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT
+    runtime=session
     node=aorta.Node('decode-source-probe-publisher','default')
     rows=[]
     try:
+        body=BodyInfoT(rosterVersion=1,slotCount=31,
+            jointNames=[f'mock_joint_{j}' for j in range(31)],
+            joints=[BodyJointCapabilityT(bodyIndex=j,slotRole=1,isMock=(j==14),
+                supportedFields=0 if j==14 else 31,validLimits=0 if j==14 else 31,
+                qMin=-3.,qMax=3.,dqMin=-10.,dqMax=10.,tauMin=-20.,tauMax=20.,
+                kpMin=0.,kpMax=200.,kdMin=0.,kdMax=10.) for j in range(31)],
+            motorIdentities=[BodyMotorIdentityT(bus='mock_can',nodeId=j+1,present=(j!=14)) for j in range(31)])
+        info=RobotInfoT(protocolVersion=2,tsInfoUs=time.time_ns()//1000,body=body,
+            endEffectors=[EndEffectorCapabilityT(side=side,isMock=True,ready=False,
+                status=3,reason='synthetic endpoint not configured') for side in (1,2)])
+        service=node.create_service_typed_view(GetRobotInfoRequest.GetRootAs,
+            f'/sdk/foot_humanoid/get_robot_info',
+            lambda _request,responder:responder.reply(
+                lambda builder,_header:GetRobotInfoResponseT(status=0,info=info,runtimeId=runtime).Pack(builder)),
+            request_schema_meta=get_robot_info_schema_meta,
+            response_schema_meta=get_robot_info_schema_meta)
         pub=node.create_publisher_typed(body_state_schema_meta,f'/bench/sdk_state_source/{session}/body_state',qos=aorta.QoS.sensor_data())
         if not pub.wait_for_matching(15000):raise RuntimeError('source subscriber did not match')
         for seq,state_id in enumerate((91,91,0),1):
-            obj=state_object(applied=True);obj.stateId=state_id
+            obj=state_object(applied=True,runtime_id=runtime);obj.stateId=state_id
             payload=pack_state(obj)
             before=time.time_ns()
             pub.publish_bytes(payload)
@@ -64,6 +88,8 @@ def run(output, *, pull=False):
             child=subprocess.Popen([sys.executable,__file__,'--output',str(directory),'--publisher',str(session)],
                 env={**clean,'ZENOH_SESSION_CONFIG_URI':str(directory/'mock.json'),'RUST_LOG':'error'},
                 stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+            discovery=source.get_robot_info(5)
+            assert discovery.runtime_id==session
             previous=None
             for seq,state_id in enumerate((91,91,0),1):
                 if pull:
