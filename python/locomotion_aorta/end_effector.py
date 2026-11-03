@@ -218,12 +218,14 @@ class EndEffectorClient:
                 decoder, self._topic + '/' + kind,
                 lambda view, context: self._receive(kind, view), qos=qos)
         except BaseException:
-            with self._condition:
-                self._registering.discard(kind)
-                self._condition.notify_all()
+            if not reserved:
+                with self._condition:
+                    self._registering.discard(kind)
+                    self._condition.notify_all()
             raise
         with self._condition:
-            self._registering.discard(kind)
+            if not reserved:
+                self._registering.discard(kind)
             discard = self._closed or self._fatal is not None
             if not discard:
                 self._subscriptions[kind] = handle
@@ -251,16 +253,19 @@ class EndEffectorClient:
                     raise
 
     def _registration_loop(self):
+        registration_error = None
         try:
             self._register('touch', reserved=True)
         except Exception as error:
-            with self._condition:
-                if not self._closed and self._fatal is None:
-                    self._errors['touch'] = error
-                    self._condition.notify_all()
+            registration_error = error
         finally:
             with self._condition:
+                # Release the reservation and its worker together, so an Info
+                # retry cannot claim work while the old worker still owns it.
+                self._registering.discard('touch')
                 self._registration_worker = None
+                if registration_error is not None and not self._closed and self._fatal is None:
+                    self._errors['touch'] = registration_error
                 self._condition.notify_all()
 
     def _receive(self, kind, view):

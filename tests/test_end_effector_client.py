@@ -36,9 +36,7 @@ from locomotion_aorta.end_effector_types import (
 
 def confirm_info(client, node, value, *, wait=True):
     """Deliver one immutable startup Info publication."""
-    with node.registration(
-            client.side, 'touch', required=value.touchAvailable, wait=wait):
-        node.emit(client.side, 'info', value)
+    node.emit(client.side, 'info', value, wait=wait)
     return client.wait_info(.01)
 
 
@@ -126,6 +124,7 @@ class Node:
         self.callback_context = threading.local()
         self.registration_condition = threading.Condition()
         self.registration_attempts = []
+        self.registration_results = {}
         self.registration_threads = {}
         self.close_count = 0
         self.touch_requests, self.rpc_options, self.match_timeouts = [], [], []
@@ -138,20 +137,18 @@ class Node:
     def registration(self, side, kind, *, required, wait=True):
         topic = f'/sdk/foot_humanoid/end_effector/{side}/{kind}'
         with self.registration_condition:
-            if topic in self.subscriptions or not required:
-                yield
-                return
-            initial_attempts = len(self.registration_attempts)
+            already_registered = topic in self.subscriptions or not required
+            initial_results = len(self.registration_results.get(topic, ()))
         yield
-        if not wait:
+        if already_registered or not wait:
             return
         with self.registration_condition:
-            if len(self.registration_attempts) == initial_attempts:
-                if not self.registration_condition.wait_for(
-                        lambda: len(self.registration_attempts) > initial_attempts, 1):
-                    raise AssertionError('touch registration did not complete')
-            if topic not in self.subscriptions:
-                raise OSError('subscriber creation failed')
+            if not self.registration_condition.wait_for(
+                    lambda: len(self.registration_results.get(topic, ())) > initial_results, 1):
+                raise AssertionError('touch registration did not complete')
+            error = self.registration_results[topic][initial_results]
+            if error is not None:
+                raise error
 
     def create_subscriber_typed(self, decoder, topic, handler, *, qos):
         if getattr(self.callback_context, 'active', False):
@@ -159,14 +156,23 @@ class Node:
         with self.registration_condition:
             self.registration_attempts.append(topic)
             self.registration_threads[topic] = threading.get_ident()
-            self.registration_condition.notify_all()
-        if topic.endswith('/' + str(self.fail_kind)):
-            raise OSError('subscriber creation failed')
-        handle = Handle()
-        self.handles.append(handle)
-        self.subscriptions[topic] = decoder, handler
-        if self.register_hook is not None:
-            self.register_hook(topic)
+        error = None
+        try:
+            if topic.endswith('/' + str(self.fail_kind)):
+                raise OSError('subscriber creation failed')
+            handle = Handle()
+            with self.registration_condition:
+                self.handles.append(handle)
+                self.subscriptions[topic] = decoder, handler
+            if self.register_hook is not None:
+                self.register_hook(topic)
+        except BaseException as failure:
+            error = failure
+            raise
+        finally:
+            with self.registration_condition:
+                self.registration_results.setdefault(topic, []).append(error)
+                self.registration_condition.notify_all()
         return handle
 
     def create_publisher_typed(self, meta, topic, *, qos):
@@ -865,6 +871,78 @@ class EndEffectorClientTest(unittest.TestCase):
         client.close()
         self.assertTrue(all(handle.close_count == 1 for handle in node.handles))
 
+    def test_failed_touch_registration_releases_worker_and_reservation_together(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, feedback=False)
+        failed, release = threading.Event(), threading.Event()
+        original_register = client._register
+
+        def pause_failed_attempt(kind, **kwargs):
+            try:
+                return original_register(kind, **kwargs)
+            except OSError:
+                _reach_barrier(failed, release, 'failed registration was not released')
+                raise
+
+        node.fail_kind = 'touch'
+        with patch.object(client, '_register', side_effect=pause_failed_attempt):
+            try:
+                node.emit('left', 'info', info_object(touch=True), wait=False)
+                self.assertTrue(failed.wait(1))
+                node.fail_kind = None
+                node.emit('left', 'info', info_object(touch=True), wait=False)
+                release.set()
+                with client._condition:
+                    self.assertTrue(client._condition.wait_for(
+                        lambda: client._registration_worker is None, 1))
+                    self.assertNotIn('touch', client._registering)
+                with self.assertRaisesRegex(ValueError, 'invalid EE touch'):
+                    client.wait_touch(.01)
+                node.emit('left', 'info', info_object(touch=True))
+                node.emit('left', 'touch', touch_object())
+                self.assertEqual(client.wait_touch(.01).touch_state_id, 1)
+                topic = '/sdk/foot_humanoid/end_effector/left/touch'
+                self.assertEqual(node.registration_attempts.count(topic), 2)
+                self.assertEqual(len(node.registration_results[topic]), 2)
+                self.assertIsInstance(node.registration_results[topic][0], OSError)
+                self.assertIsNone(node.registration_results[topic][1])
+            finally:
+                release.set()
+                with client._condition:
+                    worker = client._registration_worker
+                if worker is not None:
+                    worker.join(2)
+                    self.assertFalse(worker.is_alive())
+
+    def test_info_waits_for_touch_registration_result_not_attempt_start(self):
+        harness, node = self.harness(running=False)
+        self.client(harness, node, feedback=False)
+        entered, release = threading.Event(), threading.Event()
+        waiting, completed = threading.Event(), threading.Event()
+
+        def block(topic):
+            if topic.endswith('/touch'):
+                _reach_barrier(entered, release, 'registration result gate was not released')
+
+        def emit_info():
+            node.emit('left', 'info', info_object(touch=True))
+            completed.set()
+
+        original_wait_for = node.registration_condition.wait_for
+
+        def wait_for(predicate, timeout):
+            waiting.set()
+            return original_wait_for(predicate, timeout)
+
+        node.register_hook = block
+        with patch.object(node.registration_condition, 'wait_for', side_effect=wait_for):
+            with running_call(emit_info, release=release, join_timeout=2) as errors:
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(waiting.wait(1))
+                self.assertFalse(completed.is_set())
+        self.assertEqual(errors, [])
+        self.assertTrue(completed.is_set())
+
     def test_owner_close_joins_blocked_touch_registration_outside_locks(self):
         harness, node = self.harness(running=False)
         client = self.client(harness, node, feedback=False)
@@ -877,17 +955,32 @@ class EndEffectorClientTest(unittest.TestCase):
         node.register_hook = block
         node.emit('left', 'info', info_object(touch=True), wait=False)
         self.assertTrue(entered.wait(1))
-        with running_call(harness.controller.close, release=release, join_timeout=2) as errors:
-            original_close_handles = end_effector._close_handles
+        observed, inspected = threading.Event(), threading.Event()
+        from locomotion_aorta import controller as controller_module
+        original_close_handles = controller_module._close_handles
 
-            def before_join(handles):
-                with harness.controller._condition, client._condition:
+        def before_join(handles):
+            _reach_barrier(observed, inspected, 'owner close locks were not inspected')
+            original_close_handles(handles)
+
+        with patch.object(controller_module, '_close_handles', side_effect=before_join) as close_handles:
+            with running_call(harness.controller.close, release=release, join_timeout=2) as errors:
+                try:
+                    self.assertTrue(observed.wait(1))
+                    # The closer is gated on another thread: an RLock owned by
+                    # it cannot pass this nonblocking acquisition by the test.
+                    for condition in (harness.controller._condition, client._condition):
+                        acquired = condition.acquire(blocking=False)
+                        self.assertTrue(acquired, 'owner close retained a lifecycle lock')
+                        if acquired:
+                            condition.release()
                     self.assertTrue(client._closed)
-                release.set()
-                original_close_handles(handles)
-
-            with patch.object(end_effector, '_close_handles', side_effect=before_join):
-                pass
+                    topic = '/sdk/foot_humanoid/end_effector/left/touch'
+                    with node.registration_condition:
+                        self.assertEqual(node.registration_results.get(topic, []), [])
+                finally:
+                    inspected.set()
+            close_handles.assert_called_once()
         self.assertEqual(errors, [])
         self.assertNotIn('/sdk/foot_humanoid/end_effector/left/touch', client._subscriptions)
         self.assertTrue(all(handle.close_count == 1 for handle in node.handles))
