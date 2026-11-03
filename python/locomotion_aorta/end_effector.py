@@ -95,6 +95,12 @@ class TouchSetError(RuntimeError):
         super().__init__(f'set_touch not confirmed: status={response.status} reason={response.reason}')
 
 
+class _RegistrationWorker(threading.Thread):
+    def close(self):
+        if self is not threading.current_thread():
+            self.join()
+
+
 class EndEffectorClient:
     def __init__(self, side, *, connection, read_only=False,
                  on_info=None, on_state=None, on_touch=None, observation_sources=()):
@@ -129,10 +135,7 @@ class EndEffectorClient:
         self._callbacks = {'info': on_info, 'state': on_state, 'touch': on_touch}
         self._subscriptions = {}
         self._registering = set()
-        self._registration_condition = threading.Condition()
-        self._registration_queue = []
         self._registration_worker = None
-        self._registration_worker_busy = False
         self._publisher = None
         self._touch_bindings = None
         self._service_clients = set()
@@ -182,6 +185,8 @@ class EndEffectorClient:
             return []
         self._closed = True
         handles = [*self._subscriptions.values(), *self._service_clients]
+        if self._registration_worker is not None:
+            handles.append(self._registration_worker)
         if self._publisher is not None:
             handles.append(self._publisher)
         self._subscriptions.clear()
@@ -191,15 +196,19 @@ class EndEffectorClient:
         self._callbacks = {'info': None, 'state': None, 'touch': None}
         self._position = self._fault = self._position_received_at = None
         self._condition.notify_all()
-        with self._registration_condition:
-            self._registration_condition.notify_all()
         return handles
 
-    def _register(self, kind):
+    def _register(self, kind, *, reserved=False):
         with self._condition:
-            if self._closed or kind in self._subscriptions or kind in self._registering:
+            if self._closed or self._fatal is not None or kind in self._subscriptions:
                 return
-            self._registering.add(kind)
+            if reserved:
+                if kind not in self._registering:
+                    return
+            elif kind in self._registering:
+                return
+            else:
+                self._registering.add(kind)
         try:
             module = getattr(self._bindings, 'EndEffector' + kind.capitalize())
             decoder = getattr(module, 'EndEffector' + kind.capitalize()).GetRootAs
@@ -215,7 +224,7 @@ class EndEffectorClient:
             raise
         with self._condition:
             self._registering.discard(kind)
-            discard = self._closed
+            discard = self._closed or self._fatal is not None
             if not discard:
                 self._subscriptions[kind] = handle
         # A registration started before close may finish later. Never attach it
@@ -225,48 +234,34 @@ class EndEffectorClient:
 
     def _defer_registration(self, kind):
         with self._condition:
-            if self._closed or kind in self._subscriptions or kind in self._registering:
+            if (self._closed or self._fatal is not None or
+                    kind in self._subscriptions or kind in self._registering):
                 return
             self._registering.add(kind)
-            with self._registration_condition:
-                self._registration_queue.append(kind)
-                if self._registration_worker is None:
-                    self._registration_worker = threading.Thread(
-                        target=self._registration_loop,
-                        name='ee-subscription-registration', daemon=True)
+            if self._registration_worker is None:
+                self._registration_worker = _RegistrationWorker(
+                    target=self._registration_loop,
+                    name='ee-subscription-registration', daemon=True)
+                try:
                     self._registration_worker.start()
-                self._registration_condition.notify_all()
+                except BaseException:
+                    self._registration_worker = None
+                    self._registering.discard(kind)
+                    self._condition.notify_all()
+                    raise
 
     def _registration_loop(self):
-        while True:
-            with self._registration_condition:
-                while not self._registration_queue and not self._closed:
-                    self._registration_condition.wait()
-                if self._closed:
-                    return
-                kind = self._registration_queue.pop(0)
-                self._registration_worker_busy = True
-            try:
-                self._register(kind)
-            except Exception as error:
-                with self._condition:
-                    if not self._closed:
-                        self._errors[kind] = error
-                        self._condition.notify_all()
-            finally:
-                with self._registration_condition:
-                    self._registration_worker_busy = False
-                    self._registration_condition.notify_all()
-
-    def _join_registration_worker(self):
-        with self._registration_condition:
-            worker = self._registration_worker
-            while self._registration_worker_busy or self._registration_queue:
-                if self._closed:
-                    break
-                self._registration_condition.wait()
-        if worker is not None and worker is not threading.current_thread():
-            worker.join()
+        try:
+            self._register('touch', reserved=True)
+        except Exception as error:
+            with self._condition:
+                if not self._closed and self._fatal is None:
+                    self._errors['touch'] = error
+                    self._condition.notify_all()
+        finally:
+            with self._condition:
+                self._registration_worker = None
+                self._condition.notify_all()
 
     def _receive(self, kind, view):
         with self._condition:
@@ -347,7 +342,6 @@ class EndEffectorClient:
             callback(value)
 
     def _get(self, kind):
-        self._join_registration_worker()
         with self._condition:
             self._ensure_open()
             if self._errors[kind] is not None:
@@ -569,7 +563,6 @@ class EndEffectorClient:
                     pass
 
     def close(self):
-        self._join_registration_worker()
         handles = self.connection._close_end_effector_client(self)
         _close_handles(handles)
 
