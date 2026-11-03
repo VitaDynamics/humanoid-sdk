@@ -89,12 +89,12 @@ def build(directory):
     flags = ["g++", "-std=c++17", "-O2", "-pthread", "-Wall", "-Wextra", "-Werror",
              "-DAORTA_EXPECTED_ABI=" + str(manifest["aorta_abi_version"]),
              "-I" + str(source / "include"), "-I" + str(generated),
-             "-I" + str(ROOT / "tests/latency"),
+             "-I" + str(ROOT / "benchmarks/latency"),
              "-I" + str(ROOT / "tools/production_topic_mock")]
     protocol = ROOT / "tools/production_topic_mock/protocol.cpp"
-    units = [("mock", ROOT / "tests/latency/mock.cpp", None),
-             ("state", ROOT / "tests/latency/state.cpp", None),
-             ("robot_info", ROOT / "tests/latency/robot_info.cpp", None),
+    units = [("mock", ROOT / "benchmarks/latency/mock.cpp", None),
+             ("state", ROOT / "benchmarks/latency/state.cpp", None),
+             ("robot_info", ROOT / "benchmarks/latency/robot_info.cpp", None),
              ("protocol", protocol, None)]
     units += [(kind, protocol, "PRODUCTION_MOCK_" + kind.upper() + "_CODEC")
               for kind in ("request", "ack", "status")]

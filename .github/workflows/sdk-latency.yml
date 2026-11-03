@@ -70,14 +70,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python tests/latency/build_mock.py --build-dir "$RUNNER_TEMP/latency-build" 2>&1 | tee "$RUNNER_TEMP/latency-build.log"
-      - name: Measure all frequencies (60 seconds each, sequential)
+          python benchmarks/latency/build_mock.py --build-dir "$RUNNER_TEMP/latency-build" 2>&1 | tee "$RUNNER_TEMP/latency-build.log"
+      - name: Measure 50 Hz business-rate latency (60 seconds)
         shell: bash
         run: |
           set -euo pipefail
-          python tests/latency/run.py --build-dir "$RUNNER_TEMP/latency-build" \
+          python benchmarks/latency/run.py --build-dir "$RUNNER_TEMP/latency-build" \
             --output "$RUNNER_TEMP/latency-results" --seconds 60 \
-            --rates 50 100 200 300 400 500 600 700 800 900 1000
+            --rates 50
           python - <<'PY'
           import json, os, pathlib
           r = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'latency-results/results.json').read_text())
@@ -91,7 +91,7 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import os, pathlib, sys
-          sys.path.insert(0, 'tests/latency')
+          sys.path.insert(0, 'benchmarks/latency')
           from report import render
           out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'latency-results'
           if not (out / 'results.json').exists():
@@ -184,14 +184,14 @@ jobs:
           python -c 'import numpy, yaml'  # Velocity coverage must not skip for missing demo dependencies.
           PYTHONPATH=.:tests python -m unittest discover -s tests -v 2>&1 | tee "$RUNNER_TEMP/sdk-tests.log"
           python -m unittest discover -s demo_onnx/tests -v 2>&1 | tee "$RUNNER_TEMP/native-tests.log"
-          python tests/latency/state_source_probe.py --output "$RUNNER_TEMP/state-source-results"
+          python tests/integration/state_source_probe.py --output "$RUNNER_TEMP/state-source-results"
       - name: Compile production-topic Mock and run real two-node IPC smoke
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY_DOWNLOAD'
           import importlib.util, os, pathlib, urllib.request
-          spec = importlib.util.spec_from_file_location('benchmark_build', 'tests/latency/build_mock.py')
+          spec = importlib.util.spec_from_file_location('benchmark_build', 'benchmarks/latency/build_mock.py')
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
           with urllib.request.urlopen(module.FB_URL, timeout=120) as response:

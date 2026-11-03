@@ -1,7 +1,7 @@
 # Production-topic robot Mock
 
 This standalone C++ Mock exercises SDK functionality on private loopback peers.
-It does not connect to a robot or simulate actuator dynamics. Use `tests/latency`
+It does not connect to a robot or simulate actuator dynamics. Use `benchmarks/latency`
 for transport latency measurements; this Mock produces counters, not latency
 reports or per-frame evidence.
 

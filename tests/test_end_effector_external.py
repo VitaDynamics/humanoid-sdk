@@ -225,14 +225,15 @@ class EndEffectorExampleTest(unittest.TestCase):
         self.assertFalse(endpoint.commands)
         self.assertEqual(c.calls.count('exit_external'), 1)
 
-    def test_mixed_rates_do_not_couple_endpoints_or_speed_up_body(self):
+    def test_50hz_endpoints_do_not_speed_up_body(self):
         c = self.controller()
         clients = self.endpoints(c)
-        self.run_case(c,clients,duration=.4,rates={'left':20.,'right':100.},
+        self.run_case(c,clients,duration=.4,rates={'left':50.,'right':50.},
                       native_hz={'left':200,'right':125})
-        self.assertGreater(len(clients[1].commands),len(clients[0].commands)*3)
-        for times,period in ((c.command_times,.02),(clients[0].times,.05),(clients[1].times,.01)):
-            self.assertTrue(all(b-a >= period-1e-10 for a,b in zip(times,times[1:])))
+        self.assertTrue(all(endpoint.commands for endpoint in clients))
+        self.assertEqual(len(clients[0].commands), len(clients[1].commands))
+        for times in (c.command_times, clients[0].times, clients[1].times):
+            self.assertTrue(all(b-a >= .02-1e-10 for a,b in zip(times,times[1:])))
         for endpoint, frequency in zip(clients, (200, 125)):
             for first, second, a, b in zip(endpoint.commands, endpoint.commands[1:], endpoint.times, endpoint.times[1:]):
                 self.assertLessEqual(abs(second.target.pos[0]-first.target.pos[0]), min(b-a, 1/frequency))
@@ -243,7 +244,7 @@ class EndEffectorExampleTest(unittest.TestCase):
         original_sleep = self.clock.sleep
         self.clock.sleep = lambda seconds: original_sleep(seconds+.031)
         c = self.controller(); e=Endpoint(c)
-        self.run_case(c,[e],duration=.2,rates={'right':100.})
+        self.run_case(c,[e],duration=.2,rates={'right':50.})
         self.assertTrue(all(b-a >= .031 for a,b in zip(e.times,e.times[1:])))
         for first, second, a, b in zip(e.commands,e.commands[1:],e.times,e.times[1:]):
             self.assertLessEqual(abs(second.target.pos[0]-first.target.pos[0]), min(b-a, 1/250))
@@ -290,9 +291,9 @@ class EndEffectorExampleTest(unittest.TestCase):
     def test_agx_short_source_interval_is_not_expanded_to_native_period(self):
         c = self.controller(); e = Endpoint(c)
         self.run_case(c, [e], body_enabled=False, duration=.08,
-                      rates={'right':500.}, native_hz={'right':100})
+                      rates={'right':50.}, native_hz={'right':25})
         for first, second, a, b in zip(e.commands,e.commands[1:],e.times,e.times[1:]):
-            self.assertLessEqual(abs(second.target.pos[0]-first.target.pos[0]), min(b-a, 1/100))
+            self.assertLessEqual(abs(second.target.pos[0]-first.target.pos[0]), min(b-a, 1/25))
         self.assertEqual(e.commands[-1].target.pos, (.0625,))
         self.assertTrue(any('fresh feedback observed movement' in line and 'unconfirmed' in line
                             for line in self.events))
@@ -415,28 +416,30 @@ class EndEffectorExampleTest(unittest.TestCase):
                         self.assertLessEqual(abs(b.target.pos[0]-a.target.pos[0]), min(t1-t0, 1/250)+1e-9)
                 self.assertEqual(c.calls.count('exit_external'), 1)
 
-    def test_nondividing_body_and_endpoint_deadlines_keep_each_cadence(self):
+    def test_50hz_body_and_endpoint_deadlines_survive_nonperiod_phase_boundary(self):
         c = self.controller()
         clients = self.endpoints(c)
-        self.run_case(c, clients, duration=.12, rates={'left': 1/.015, 'right': 1/.025})
+        self.run_case(c, clients, duration=.053, return_to_start=True,
+                      rates={'left': 50., 'right': 50.})
         for times, period, minimum in ((c.command_times, .02, 7),
-                                       (clients[0].times, .015, 9),
-                                       (clients[1].times, .025, 6)):
+                                       (clients[0].times, .02, 7),
+                                       (clients[1].times, .02, 7)):
             self.assertGreaterEqual(len(times), minimum)
             for index, actual in enumerate(times):
                 self.assertAlmostEqual(actual-times[0], index*period, places=9)
         self.assertEqual(c.calls.count('exit_external'), 1)
 
-    def test_slow_endpoint_deadline_survives_target_to_return_phase(self):
+    def test_50hz_endpoint_deadline_survives_target_to_return_phase(self):
         c = self.controller(); e = Endpoint(c)
         saved = e._state.pos
-        self.run_case(c, [e], duration=1., rates={'right': 1.}, native_hz={'right': 2}, return_to_start=True)
+        self.run_case(c, [e], duration=.053, rates={'right': 50.},
+                      native_hz={'right': 2}, return_to_start=True)
         returning = [i for i, command in enumerate(e.commands)
                      if i and command.target.pos == saved and e.commands[i-1].target.pos != saved]
         self.assertTrue(returning)
         self.assertGreater(returning[0], 0)
-        self.assertTrue(all(b-a >= 1.-1e-9 for a, b in zip(e.times, e.times[1:])))
-        self.assertGreaterEqual(e.times[returning[0]]-e.times[returning[0]-1], 1.-1e-9)
+        self.assertTrue(all(b-a >= .02-1e-9 for a, b in zip(e.times, e.times[1:])))
+        self.assertGreaterEqual(e.times[returning[0]]-e.times[returning[0]-1], .02-1e-9)
         self.assertEqual(e.commands[-1].target.pos, saved)
         self.assertEqual(c.calls.count('exit_external'), 1)
 

@@ -10,7 +10,7 @@ import time
 import threading
 
 ROOT=Path(__file__).resolve().parents[2]
-sys.path[:0]=[str(ROOT/'tests'),str(ROOT/'tests/latency')]
+sys.path[:0]=[str(ROOT/'tests'),str(ROOT/'benchmarks/latency')]
 
 
 def publisher(directory,session):

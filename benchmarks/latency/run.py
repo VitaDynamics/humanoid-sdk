@@ -1,4 +1,4 @@
-"""Bounded real IPC sweep with an isolated synthetic control session."""
+"""Standalone IPC benchmark; defaults to the 50 Hz business rate, not a unit test."""
 import argparse
 import hashlib
 import json
@@ -14,7 +14,7 @@ import time
 from report import analyze, render
 
 ROOT = Path(__file__).resolve().parents[2]
-RATES = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+BASELINE_RATES = [50]
 
 
 def config_files(directory, port):
@@ -50,7 +50,7 @@ def window(build, directory, rate, seconds):
     env["RUST_LOG"] = "error"
     processes, logs = [], []
     commands = [
-        ("python", [sys.executable, str(ROOT / "tests/latency/client.py"), str(directory), str(session), str(seconds)]),
+        ("python", [sys.executable, str(ROOT / "benchmarks/latency/client.py"), str(directory), str(session), str(seconds)]),
         ("mock", [str(build / "mock"), str(directory), str(session), str(rate), str(seconds),
                   str(build / "generated/body_state.bfbs"),
                   str(build / "generated/get_robot_info.bfbs"),
@@ -84,7 +84,8 @@ def main():
     parser.add_argument("--build-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seconds", type=float, default=60)
-    parser.add_argument("--rates", type=int, nargs="+", default=RATES)
+    parser.add_argument("--rates", type=int, nargs="+", default=BASELINE_RATES,
+                        help="50 Hz by default; other rates are explicit standalone stress measurements")
     args = parser.parse_args()
     if not 1 <= args.seconds <= 120 or len(set(args.rates)) != len(args.rates) or any(
             hz < 1 or hz > 1000 or args.seconds * hz + 1 > 65000 for hz in args.rates):
@@ -92,6 +93,7 @@ def main():
     output, build = args.output.resolve(), args.build_dir.resolve()
     output.mkdir(parents=True, exist_ok=False)
     manifest = {"status": "NOT_MEASURED", "results": [], "rates": args.rates,
+                "scope": "business_50hz" if args.rates == BASELINE_RATES else "standalone_stress",
                 "seconds": args.seconds, "platform": platform.platform(), "python": sys.version,
                 "cpu_count": os.cpu_count(), "clock": "CLOCK_REALTIME ns across processes; MONOTONIC for watchdogs/frequencies/local publish elapsed", "transport": "TCP loopback; SHM off",
                 "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
@@ -99,7 +101,7 @@ def main():
                 "loadavg": os.getloadavg(),
                 "pr_head": os.environ.get("PR_HEAD_SHA"), "run_id": os.environ.get("GITHUB_RUN_ID"),
                 "source_sha256": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
-                                  for base in (ROOT / "tests/latency", ROOT / "python/locomotion_aorta")
+                                  for base in (ROOT / "benchmarks/latency", ROOT / "python/locomotion_aorta")
                                   for p in sorted(base.rglob("*")) if p.suffix in (".py", ".h", ".cpp")}}
     try:
         manifest["build"] = json.loads((build / "build.json").read_text())
@@ -107,7 +109,10 @@ def main():
             print(f"START {rate} Hz, {args.seconds} s", flush=True)
             manifest["results"].append(window(build, output / f"{rate}hz", rate, args.seconds))
             render(output, manifest)
-        manifest["status"] = "PASS" if args.rates == RATES and args.seconds >= 60 else "SMOKE_ONLY"
+        if args.seconds < 60:
+            manifest["status"] = "SMOKE_ONLY"
+        else:
+            manifest["status"] = "PASS" if args.rates == BASELINE_RATES else "BENCHMARK_ONLY"
     except Exception as error:
         manifest["status"] = "FAIL"
         manifest["error"] = repr(error)

@@ -38,7 +38,7 @@ def build(args):
     directory = args.build_dir.resolve()
     directory.mkdir(parents=True, exist_ok=False)
     # Reuse the unchanged benchmark's archive verifier, not its x86-only builder.
-    spec = importlib.util.spec_from_file_location("original_latency_build", ROOT / "tests/latency/build_mock.py")
+    spec = importlib.util.spec_from_file_location("original_latency_build", ROOT / "benchmarks/latency/build_mock.py")
     original = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(original)
     archive = args.flatbuffers_archive.resolve()
@@ -75,7 +75,7 @@ def build(args):
     core_link.symlink_to(core)
     flags = [args.cxx, "-std=c++17", "-O2", "-g", "-pthread", "-Wall", "-Wextra", "-Werror",
              "-DAORTA_EXPECTED_ABI=" + str(manifest["aorta_abi_version"]),
-             "-I" + str(HERE), "-I" + str(ROOT / "tests/latency"),
+             "-I" + str(HERE), "-I" + str(ROOT / "benchmarks/latency"),
              "-I" + str(source / "include"), "-I" + str(generated)]
     objects = []
     for name, path, macro in [

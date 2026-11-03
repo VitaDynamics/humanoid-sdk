@@ -1,14 +1,17 @@
-# Python SDK ↔ C++ Mock latency CI
+# Python SDK ↔ C++ Mock standalone latency benchmark
 
 This benchmark measures the Python SDK and C++ Mock over isolated TCP loopback
-with exact-ID correlation and a sequential rate sweep. It requires the pinned
+with exact-ID correlation. It requires the pinned
 binary wheels and compiler inputs, without robot connectivity or hardware.
 
 ## What runs
 
 `SDK latency report` runs on every PR update (and merge-group/manual events),
-without path filters. Each of **50, 100, 200, …, 1000 Hz** runs for at least
-**60 seconds**, sequentially, without perf/strace/py-spy. A C++ process publishes
+without path filters. The business-rate integration check is **50 Hz for
+60 seconds**, separately from unit-test discovery. Higher-rate pressure
+measurements require an explicit standalone invocation outside `tests/`; they
+are not part of the automatic PR matrix. No perf/strace/py-spy is used.
+A C++ process publishes
 31-slot `BodyState` (fixed motor structs, two IMUs; applied echo omitted);
 the current checkout's Python SDK decodes it, constructs31 `BodyJointCmd`s,
 and publishes `BodyCmd`. The Mock verifies the FlatBuffer and copies all31 slots.
@@ -32,7 +35,8 @@ process watchdogs only terminate the benchmark's own process groups.
 - Python wheels come from this repository's `dependency_release_tag` in
   `compatibility.json` (`v0.1.0-rc.4`), verified against exact SHA-256s.
   The five dependency wheels are Aorta SDK 2026.10.20 for both Linux
-  architectures, aorta-msgs 2026.10.20, vbot-humanoid-msgs 0.1.4, and
+  architectures, aorta-msgs 2026.10.20, the exact vbot-humanoid-msgs version
+  in the manifest, and
   FlatBuffers 25.12.19. CI uses this repository's `contents: read` token.
   Each job builds and installs the checkout's SDK wheel before measuring.
   The client rejects source shadowing and records both SDK and native codec paths.
@@ -80,7 +84,7 @@ do not represent physical negative latency. All eight same-host MONOTONIC
 stage boundaries must still be nondecreasing, including publish→decode,
 bytes→callback and callback→copied, whether or not REALTIME columns exist.
 A MONOTONIC ordering violation fails integrity; REALTIME inversions only count.
-The eight original stage boundaries, full windows, ID/content gates and rate sweep remain. Rates use `(count - 1) / (last stamp - first stamp)` per stream;
+The eight original stage boundaries, full windows and ID/content gates remain. Rates use `(count - 1) / (last stamp - first stamp)` per stream;
 counts and durations are retained so losses cannot be hidden by that estimator.
 Stage bars use **means of the same matched rows**, whose sum is mean RTT.
 Percentiles do not add. SDK publish-call time overlaps transport and is reported
@@ -103,30 +107,41 @@ from this repository:
 
 ```bash
 PYTHONPATH=.:tests python -m unittest discover -s tests -v
-python tests/latency/build_mock.py --build-dir build/latency
-python tests/latency/run.py --build-dir build/latency \
+python benchmarks/latency/build_mock.py --build-dir build/latency
+python benchmarks/latency/run.py --build-dir build/latency \
   --output build/latency-report --seconds 60 \
-  --rates 50 100 200 300 400 500 600 700 800 900 1000
+  --rates 50
 ```
 
 Use a new report directory for each run; build dependencies may be reused at the
-same build path. For a smoke only, use `--seconds 2 --rates 50 1000`. Preserve
+same build path. For a smoke only, use `--seconds 2 --rates 50`. Preserve
 failed reports rather than retrying until green. Run builds serially on shared build machines. No robot connectivity is needed.
 
 ## Independent state source integration
 
-`state_source_probe.py --output <new-directory>` verifies real Aorta state-only
+`tests/integration/state_source_probe.py --output <new-directory>` verifies real Aorta state-only
 a lazy state-only subscription, snapshot object identity across repeated/reset
 state_id, direct MONOTONIC/REALTIME receipt and snapshots surviving close. The per-frame file
 handshake is integration evidence, not a speed benchmark. It uses isolated loopback
 and private topics, one synthetic state publisher, no control publisher or lease.
-It does not replace the original 11×60s gate or establish device/aarch64 acceptance.
+It does not replace the 50 Hz integration check or establish device/aarch64 acceptance.
 
-The original 11×60s matrix retains its required CI job. An independent parallel
+The 50 Hz integration check retains its required CI job. An independent parallel
 job builds and installs the SDK wheel, runs SDK/native unit tests and the read-only
 source probe. A failure in either job cannot skip the other job.
 
 The encoding boundaries retain the CSV names `fill_ns` / `filled_ns`. They now
 wrap the actual native encoder, including Python input copying, released-GIL
 FlatBuffers construction and the returned bytes. They no longer instrument the
-retained Python golden encoder. Rates, durations, clocks, joins and gates are unchanged.
+retained Python golden encoder. Clocks, joins and integrity gates are unchanged.
+
+
+## Optional stress measurement
+
+An explicitly requested standalone measurement may pass other rates with
+`--rates`. The previous 50–1000 Hz matrix can still be reproduced manually
+through this benchmark; it is not imported or executed by unit tests and is
+not required for the 50 Hz business-rate check. A complete non-baseline run
+is labeled `BENCHMARK_ONLY`; a short run remains `SMOKE_ONLY`. Process or
+data-integrity failures remain `FAIL` at every rate. Changing the test scope
+does not repair or erase a control-entry identity failure in an older run.

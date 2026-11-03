@@ -1,4 +1,4 @@
-"""Positive controls and fail-closed report checks; no network or Aorta needed."""
+"""50 Hz synthetic report correctness checks; no timed load, network or Aorta."""
 import csv
 import json
 from pathlib import Path
@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).parent / "latency"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmarks/latency"))
 from report import STAGES, analyze, proportional_bar, render
 
 
@@ -17,7 +17,7 @@ class LatencyReportTest(unittest.TestCase):
         self.directory = Path(self.temp.name)
         self.sent, self.client, self.received = [], [], []
         for seq in range(1, 4):
-            begin = seq * 1_000_000_000
+            begin = seq * 20_000_000
             self.sent.append(dict(sequence=seq, publish_ns=begin, return_ns=begin + 50, bytes=4096))
             self.client.append(dict(session=123, sequence=seq, decode_ns=begin + 100,
                 decoded_ns=begin + 200, built_ns=begin + 300, fill_ns=begin + 400,
@@ -31,14 +31,14 @@ class LatencyReportTest(unittest.TestCase):
                 writer = csv.DictWriter(out, fieldnames=rows[0].keys())
                 writer.writeheader()
                 writer.writerows(rows)
-        return analyze(self.directory, 123, 2, 50)
+        return analyze(self.directory, 123, .04, 50)
 
     def test_positive_control_exact_stages(self):
         result = self.analyze()
         self.assertEqual(result["rtt"]["n"], 3)
         self.assertEqual(len(result["stages"]), len(STAGES))
         self.assertAlmostEqual(sum(s["mean_ms"] for s in result["stages"]), result["rtt"]["mean_ms"])
-        self.assertEqual(result["mock_send_hz"], 1)
+        self.assertEqual(result["mock_send_hz"], 50)
         self.assertEqual(result["missing_reply"], 0)
 
     def test_actual_command_keys_are_distinct_from_selected_state_identity(self):
@@ -207,8 +207,8 @@ class LatencyReportTest(unittest.TestCase):
 
     def test_full_summary_stays_within_github_size_limit(self):
         result = self.analyze()
-        results = [dict(result, rate_hz=hz) for hz in (50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000)]
-        render(self.directory, {"status": "PASS", "results": results})
+        self.assertEqual(result['rate_hz'], 50)
+        render(self.directory, {"status": "PASS", "results": [result]})
         self.assertLess((self.directory / "summary.md").stat().st_size, 1_000_000)
 
 

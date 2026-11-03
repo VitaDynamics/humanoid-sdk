@@ -369,8 +369,10 @@ Never substitute an older schema or skip a missing asset, empty tag or failed
 checksum. A dependency mirror is not an SDK release or robot validation.
 
 The `SDK latency report` check exercises Python SDK ↔ C++ Mock communication
-at 50–1000 Hz for at least 60 seconds per rate. See the
-[benchmark documentation](tests/latency/README.md) for its measurement boundary
+at the 50 Hz business rate for 60 seconds, separately from unit tests.
+Higher-rate pressure measurements are optional standalone benchmarks, not
+unit tests or a required high-frequency sweep on every PR. See the
+[benchmark documentation](benchmarks/latency/README.md) for its measurement boundary
 and reports. It does not establish robot performance or motion acceptance.
 
 ## PC policy example (in preparation)
