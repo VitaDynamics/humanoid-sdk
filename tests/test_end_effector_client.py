@@ -119,6 +119,7 @@ class Node:
         self.publish_error = None
         self.register_hook = None
         self.fail_kind = None
+        self.in_callback = False
         self.close_count = 0
         self.touch_requests, self.rpc_options, self.match_timeouts = [], [], []
         self.touch_bindings = None
@@ -127,6 +128,8 @@ class Node:
         self.rpc_error = self.reply_edit = self.create_rpc_hook = None
 
     def create_subscriber_typed(self, decoder, topic, handler, *, qos):
+        if self.in_callback:
+            raise RuntimeError('REENTRANT: subscriber creation in callback')
         if topic.endswith('/' + str(self.fail_kind)):
             raise OSError('subscriber creation failed')
         handle = Handle()
@@ -157,7 +160,11 @@ class Node:
 
     def emit(self, side, kind, value):
         decoder, handler = self.subscriptions[f'/sdk/foot_humanoid/end_effector/{side}/{kind}']
-        handler(decoder(pack(value)), None)
+        self.in_callback = True
+        try:
+            handler(decoder(pack(value)), None)
+        finally:
+            self.in_callback = False
 
     def close(self):
         self.close_count += 1

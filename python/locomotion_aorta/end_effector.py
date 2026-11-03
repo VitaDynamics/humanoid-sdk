@@ -129,6 +129,10 @@ class EndEffectorClient:
         self._callbacks = {'info': on_info, 'state': on_state, 'touch': on_touch}
         self._subscriptions = {}
         self._registering = set()
+        self._registration_condition = threading.Condition()
+        self._registration_queue = []
+        self._registration_worker = None
+        self._registration_worker_busy = False
         self._publisher = None
         self._touch_bindings = None
         self._service_clients = set()
@@ -187,6 +191,8 @@ class EndEffectorClient:
         self._callbacks = {'info': None, 'state': None, 'touch': None}
         self._position = self._fault = self._position_received_at = None
         self._condition.notify_all()
+        with self._registration_condition:
+            self._registration_condition.notify_all()
         return handles
 
     def _register(self, kind):
@@ -216,6 +222,51 @@ class EndEffectorClient:
         # to the closed object, and never wait for a callback while holding locks.
         if discard:
             handle.close()
+
+    def _defer_registration(self, kind):
+        with self._condition:
+            if self._closed or kind in self._subscriptions or kind in self._registering:
+                return
+            self._registering.add(kind)
+            with self._registration_condition:
+                self._registration_queue.append(kind)
+                if self._registration_worker is None:
+                    self._registration_worker = threading.Thread(
+                        target=self._registration_loop,
+                        name='ee-subscription-registration', daemon=True)
+                    self._registration_worker.start()
+                self._registration_condition.notify_all()
+
+    def _registration_loop(self):
+        while True:
+            with self._registration_condition:
+                while not self._registration_queue and not self._closed:
+                    self._registration_condition.wait()
+                if self._closed:
+                    return
+                kind = self._registration_queue.pop(0)
+                self._registration_worker_busy = True
+            try:
+                self._register(kind)
+            except Exception as error:
+                with self._condition:
+                    if not self._closed:
+                        self._errors[kind] = error
+                        self._condition.notify_all()
+            finally:
+                with self._registration_condition:
+                    self._registration_worker_busy = False
+                    self._registration_condition.notify_all()
+
+    def _join_registration_worker(self):
+        with self._registration_condition:
+            worker = self._registration_worker
+            while self._registration_worker_busy or self._registration_queue:
+                if self._closed:
+                    break
+                self._registration_condition.wait()
+        if worker is not None and worker is not threading.current_thread():
+            worker.join()
 
     def _receive(self, kind, view):
         with self._condition:
@@ -286,13 +337,7 @@ class EndEffectorClient:
 
     def _deliver(self, kind, value, callback):
         if kind == 'info' and value.touch_available:
-            try:
-                self._register('touch')
-            except Exception as error:
-                with self._condition:
-                    if not self._closed:
-                        self._errors['touch'] = error
-                        self._condition.notify_all()
+            self._defer_registration('touch')
         with self._condition:
             if self._closed or self._fatal is not None:
                 return
@@ -302,6 +347,7 @@ class EndEffectorClient:
             callback(value)
 
     def _get(self, kind):
+        self._join_registration_worker()
         with self._condition:
             self._ensure_open()
             if self._errors[kind] is not None:
@@ -523,6 +569,7 @@ class EndEffectorClient:
                     pass
 
     def close(self):
+        self._join_registration_worker()
         handles = self.connection._close_end_effector_client(self)
         _close_handles(handles)
 
