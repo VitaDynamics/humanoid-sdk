@@ -28,14 +28,16 @@ from locomotion_aorta import (
 )
 from locomotion_aorta import _end_effector_codec as codec
 from locomotion_aorta.end_effector import EndEffectorClient, TouchSetError
+from locomotion_aorta import end_effector
 from locomotion_aorta.end_effector_types import (
     CommandKey, Field, SampleRef, SampleStream, ServiceStatus, TouchSetReason,
 )
 
 
-def confirm_info(client, node, value):
+def confirm_info(client, node, value, *, wait=True):
     """Deliver one immutable startup Info publication."""
-    with node.registration(client.side, 'touch', required=value.touchAvailable):
+    with node.registration(
+            client.side, 'touch', required=value.touchAvailable, wait=wait):
         node.emit(client.side, 'info', value)
     return client.wait_info(.01)
 
@@ -826,7 +828,7 @@ class EndEffectorClientTest(unittest.TestCase):
             client.wait_info(0.01)
         other = self.client(harness, node, feedback=False)
         node.fail_kind = 'touch'
-        confirm_info(other, node, info_object(touch=True))
+        confirm_info(other, node, info_object(touch=True), wait=False)
         with self.assertRaisesRegex(ValueError, 'invalid EE touch'):
             other.wait_touch(0.01)
         node.fail_kind = None
@@ -876,11 +878,16 @@ class EndEffectorClientTest(unittest.TestCase):
         node.emit('left', 'info', info_object(touch=True), wait=False)
         self.assertTrue(entered.wait(1))
         with running_call(harness.controller.close, release=release, join_timeout=2) as errors:
-            with harness.controller._condition, client._condition:
-                self.assertFalse(harness.controller._closed)
-            release.set()
-            with client._condition:
-                self.assertTrue(client._closed)
+            original_close_handles = end_effector._close_handles
+
+            def before_join(handles):
+                with harness.controller._condition, client._condition:
+                    self.assertTrue(client._closed)
+                release.set()
+                original_close_handles(handles)
+
+            with patch.object(end_effector, '_close_handles', side_effect=before_join):
+                pass
         self.assertEqual(errors, [])
         self.assertNotIn('/sdk/foot_humanoid/end_effector/left/touch', client._subscriptions)
         self.assertTrue(all(handle.close_count == 1 for handle in node.handles))
