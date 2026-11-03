@@ -127,7 +127,7 @@ int main() {
   r.control_id = 0;
   r.version = 1;
   assert(p.RequestControl(r, 1130).error == 1001);
-  r.version = 3;
+  r.version = 4;
   r.action = "OTHER";
   assert(p.RequestControl(r, 1131).error == 1003);
   r.action = "EXTERNAL";
@@ -141,7 +141,7 @@ int main() {
   auto exhausted_request = r; exhausted_request.runtime = std::numeric_limits<uint64_t>::max();
   assert(exhausted.RequestControl(exhausted_request, 1200).error == 1009);
   Protocol limits(50, 1000, 1000);
-  Request lr{3, 1, "limits", "EXTERNAL", 7, 0, 50};
+  Request lr{4, 1, "limits", "EXTERNAL", 7, 0, 50};
   auto la = limits.RequestControl(lr, 1000);
   assert(la.accepted);
   lr.operation = 2;
@@ -188,7 +188,7 @@ int main() {
   gripper.side = 2; gripper.device_model = 3;
   gripper.touch_available = false; gripper.observation_sources = {{2,2}};
   shared.ConfigureEE(gripper, {.02f});
-  Request owner{3, 1, "shared", "EXTERNAL", 7, 0, 100};
+  Request owner{4, 1, "shared", "EXTERNAL", 7, 0, 100};
   auto armed = shared.RequestControl(owner, 1000);
   assert(armed.accepted);
   owner.operation = 2; owner.control_id = armed.control_id;
