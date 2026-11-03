@@ -133,29 +133,20 @@ class Node:
         self.rpc_error = self.reply_edit = self.create_rpc_hook = None
 
     @contextmanager
-    def registration(self, side, kind, *, required):
+    def registration(self, side, kind, *, required, wait=True):
         topic = f'/sdk/foot_humanoid/end_effector/{side}/{kind}'
         with self.registration_condition:
-            self.registration_attempts.clear()
             if topic in self.subscriptions or not required:
                 yield
                 return
             initial_attempts = len(self.registration_attempts)
         yield
+        if not wait:
+            return
         with self.registration_condition:
             if len(self.registration_attempts) == initial_attempts:
                 if not self.registration_condition.wait_for(
                         lambda: len(self.registration_attempts) > initial_attempts, 1):
-                    raise AssertionError('touch registration did not complete')
-            if topic not in self.subscriptions:
-                raise OSError('subscriber creation failed')
-                yield
-                return
-        yield
-        with self.registration_condition:
-            if topic not in self.registration_attempts:
-                if not self.registration_condition.wait_for(
-                        lambda: topic in self.registration_attempts, 1):
                     raise AssertionError('touch registration did not complete')
             if topic not in self.subscriptions:
                 raise OSError('subscriber creation failed')
@@ -195,10 +186,11 @@ class Node:
             self.create_rpc_hook()
         return handle
 
-    def emit(self, side, kind, value):
+    def emit(self, side, kind, value, *, wait=True):
         with self.registration(
                 side, 'touch',
-                required=kind == 'touch' or kind == 'info' and value.touchAvailable):
+                required=kind == 'touch' or kind == 'info' and value.touchAvailable,
+                wait=wait and not getattr(self.callback_context, 'active', False)):
             decoder, handler = self.subscriptions[f'/sdk/foot_humanoid/end_effector/{side}/{kind}']
             previous = getattr(self.callback_context, 'active', False)
             self.callback_context.active = True
@@ -881,7 +873,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 _reach_barrier(entered, release, 'registration close gate was not released')
 
         node.register_hook = block
-        node.emit('left', 'info', info_object(touch=True))
+        node.emit('left', 'info', info_object(touch=True), wait=False)
         self.assertTrue(entered.wait(1))
         with running_call(harness.controller.close, release=release, join_timeout=2) as errors:
             with harness.controller._condition, client._condition:
