@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location('latency_client_codec', Path(__file__).parent / 'latency/client.py')
+spec = importlib.util.spec_from_file_location(
+    'latency_client_codec', Path(__file__).resolve().parents[1] / 'benchmarks/latency/client.py')
 client = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client)
 
