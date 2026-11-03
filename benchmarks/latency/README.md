@@ -145,3 +145,22 @@ not required for the 50 Hz business-rate check. A complete non-baseline run
 is labeled `BENCHMARK_ONLY`; a short run remains `SMOKE_ONLY`. Process or
 data-integrity failures remain `FAIL` at every rate. Changing the test scope
 does not repair or erase a control-entry identity failure in an older run.
+
+## Independent cadence correctness
+
+The SDK still accepts independent endpoint rates. The original finite FakeClock
+checks for different left/right periods and non-dividing Body/EE periods live
+in `check_scheduler_cadences.py`. They reuse the existing example test fixture
+and the two original method bodies, without
+nodes, sockets, elapsed-time load or a frequency sweep. They are not discovered
+by normal unit tests and are not added to automatic CI. Explicitly select them
+from a development checkout with matching generated bindings when validating
+that independent-rate API:
+
+```bash
+PYTHONPATH=python:tests python benchmarks/latency/check_scheduler_cadences.py
+```
+
+The normal unit cases exercise SDK command publication at 50 Hz. Native cadence
+and synthetic feedback-ID advancement in those cases are separate input domains,
+not a request to run the SDK at a higher frequency.

@@ -1,10 +1,13 @@
 """50 Hz synthetic report correctness checks; no timed load, network or Aorta."""
 import csv
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
+import textwrap
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmarks/latency"))
 from report import STAGES, analyze, proportional_bar, render
@@ -210,6 +213,32 @@ class LatencyReportTest(unittest.TestCase):
         self.assertEqual(result['rate_hz'], 50)
         render(self.directory, {"status": "PASS", "results": [result]})
         self.assertLess((self.directory / "summary.md").stat().st_size, 1_000_000)
+
+    def test_ci_accepts_only_complete_50hz_business_report(self):
+        workflow = (Path(__file__).resolve().parents[1]
+                    / '.github/workflows/sdk-latency.yml').read_text()
+        step = workflow.split('name: Measure 50 Hz business-rate latency (60 seconds)', 1)[1]
+        source = step.split("python - <<'PY'\n", 1)[1].split('\n          PY', 1)[0]
+        consumer = compile(textwrap.dedent(source), 'sdk-latency-report-consumer', 'exec')
+        report_dir = self.directory / 'latency-results'
+        report_dir.mkdir()
+        complete = dict(status='PASS', scope='business_50hz', rates=[50], seconds=60,
+                        results=[dict(rate_hz=50, requested_seconds=60)])
+
+        def consume(value):
+            (report_dir / 'results.json').write_text(json.dumps(value))
+            with patch.dict(os.environ, RUNNER_TEMP=str(self.directory)):
+                exec(consumer, {})
+
+        consume(complete)
+        for changes in (dict(status='SMOKE_ONLY'), dict(scope='standalone_stress'),
+                        dict(rates=[]), dict(rates=[50, 50]), dict(seconds=59),
+                        dict(results=[]), dict(results=complete['results'] * 2),
+                        dict(results=[dict(rate_hz=0, requested_seconds=60)]),
+                        dict(results=[dict(rate_hz=50, requested_seconds=59)])):
+            with self.subTest(changes=changes), self.assertRaisesRegex(
+                    RuntimeError, 'incomplete 50 Hz'):
+                consume(dict(complete, **changes))
 
 
 if __name__ == "__main__":

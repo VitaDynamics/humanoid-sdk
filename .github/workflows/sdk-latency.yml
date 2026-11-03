@@ -81,8 +81,12 @@ jobs:
           python - <<'PY'
           import json, os, pathlib
           r = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'latency-results/results.json').read_text())
-          if r['status'] != 'PASS' or len(r['results']) != 11:
-              raise RuntimeError('incomplete full latency report')
+          results = r.get('results', [])
+          if (r.get('status') != 'PASS' or r.get('scope') != 'business_50hz'
+                  or r.get('rates') != [50] or r.get('seconds') != 60
+                  or len(results) != 1 or results[0].get('rate_hz') != 50
+                  or results[0].get('requested_seconds') != 60):
+              raise RuntimeError('incomplete 50 Hz business-rate latency report')
           PY
       - name: Publish summary (including setup/test failures)
         if: ${{ always() }}
