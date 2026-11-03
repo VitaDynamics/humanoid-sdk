@@ -828,7 +828,7 @@ class EndEffectorClientTest(unittest.TestCase):
             client.wait_info(0.01)
         other = self.client(harness, node, feedback=False)
         node.fail_kind = 'touch'
-        confirm_info(other, node, info_object(touch=True), wait=False)
+        node.emit('left', 'info', info_object(touch=True), wait=False)
         with self.assertRaisesRegex(ValueError, 'invalid EE touch'):
             other.wait_touch(0.01)
         node.fail_kind = None
