@@ -23,6 +23,7 @@ def publisher(directory,session):
     from lowlevel.RobotInfo import RobotInfoT
     from aorta.services.humanoid_locomotion.GetRobotInfoRequest import GetRobotInfoRequest
     from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT
+    from aorta.options import ServiceOptions
     runtime=session
     node=aorta.Node('decode-source-probe-publisher','default')
     rows=[]
@@ -41,12 +42,21 @@ def publisher(directory,session):
             f'/sdk/foot_humanoid/get_robot_info',
             lambda _request,responder:responder.reply(
                 lambda builder,_header:GetRobotInfoResponseT(status=0,info=info,runtimeId=runtime).Pack(builder)),
-            request_schema_meta=get_robot_info_schema_meta,
-            response_schema_meta=get_robot_info_schema_meta)
+            options=ServiceOptions(
+                service_schema_bfbs=get_robot_info_schema_meta.SCHEMA_BFBS,
+                service_schema_hash_hex=get_robot_info_schema_meta.SCHEMA_HASH_HEX,
+                request_root_type='aorta.services.humanoid_locomotion.GetRobotInfoRequest',
+                response_root_type='aorta.services.humanoid_locomotion.GetRobotInfoResponse'))
         pub=node.create_publisher_typed(body_state_schema_meta,f'/bench/sdk_state_source/{session}/body_state',qos=aorta.QoS.sensor_data())
         if not pub.wait_for_matching(15000):raise RuntimeError('source subscriber did not match')
+        deadline=time.monotonic()+5
+        while not (directory/'discovery-ready').exists():
+            if time.monotonic()>deadline:raise TimeoutError('source discovery not ready')
+            time.sleep(.001)
         for seq,state_id in enumerate((91,91,0),1):
-            obj=state_object(applied=True,runtime_id=runtime);obj.stateId=state_id
+            obj=state_object(applied=True)
+            obj.runtimeId=runtime
+            obj.stateId=state_id
             payload=pack_state(obj)
             before=time.time_ns()
             pub.publish_bytes(payload)
@@ -90,6 +100,7 @@ def run(output, *, pull=False):
                 stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
             discovery=source.get_robot_info(5)
             assert discovery.runtime_id==session
+            (directory/'discovery-ready').touch()
             previous=None
             for seq,state_id in enumerate((91,91,0),1):
                 if pull:
