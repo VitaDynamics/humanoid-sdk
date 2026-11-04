@@ -22,6 +22,9 @@ from locomotion_aorta.end_effector_types import (
     _STATE_TOUCH_ENABLED_VALID, _TOUCH_REGION_PAYLOAD_VALID, _TOUCH_REGION_STALE,
 )
 
+BODY_HOLD_POSITION_TOLERANCE_RAD = 0.1
+EE_POSITION_FRESHNESS_WINDOW_S = 1.0
+
 def _load_sibling_module(name, relative_path):
     spec = importlib.util.spec_from_file_location(
         name, Path(__file__).resolve().parents[1] / relative_path)
@@ -184,8 +187,16 @@ def run_external(controller, command_loop, options, *, body, strict_hold=False,
                 errors = tuple(float(state.q[i]) - pose[i] for i in hold_slots)
                 for i, error in zip(hold_slots, errors):
                     hold_peak_abs_error[i] = max(hold_peak_abs_error[i], abs(error))
-                if strict_hold and any(abs(e) > body.RETURN_ENDPOINT_POSITION_TOLERANCE_RAD for e in errors):
-                    raise RuntimeError('body departed from its held pose')
+                if any(abs(e) > BODY_HOLD_POSITION_TOLERANCE_RAD for e in errors):
+                    details = [
+                        f'{info.joint_names[i]}[{i}] target={pose[i]:.6f} '
+                        f'actual={state.q[i]:.6f} error={error:.6f} '
+                        f'dq={state.dq[i]:.6f}'
+                        for i, error in zip(hold_slots, errors)
+                    ]
+                    raise RuntimeError(
+                        f'body departed from its held pose; state_id={state.state_id}; '
+                        'radians and radians/s: ' + '; '.join(details))
                 hold_samples += 1
                 emit(f'BODY_HOLD observation_only=true sample={hold_samples} '
                      f'slots={hold_slots!r} q_error_rad={errors!r} '
@@ -271,6 +282,23 @@ def _validate_position(info, state):
         raise ValueError('position limits are unavailable')
 
 
+def _output_permission_error(state):
+    failed = []
+    for name, bit, expected in (
+            ('ready', _STATE_READY_VALID, True),
+            ('output_allowed', _STATE_OUTPUT_ALLOWED_VALID, True),
+            ('inhibit_reason', _STATE_INHIBIT_REASON_VALID, InhibitReason.NONE)):
+        if not state.status_valid_mask & bit:
+            failed.append(name + '_unavailable')
+        elif getattr(state, name) != expected:
+            failed.append(f'{name}={getattr(state, name)!r}')
+    side = {EndEffectorSide.LEFT: 'left', EndEffectorSide.RIGHT: 'right'}[state.side]
+    return (
+        'end-effector output was inhibited or permission is unavailable: '
+        f'side={side} failed_checks={",".join(failed)} '
+        f'trigger_state={state!r}')
+
+
 def validate_status(info, state, *, require_output=False):
     if state is None:
         raise ValueError('end-effector feedback is absent')
@@ -281,7 +309,7 @@ def validate_status(info, state, *, require_output=False):
     if any(mask & Field.ERROR_CODE and code for mask, code in zip(state.valid_fields, state.error_code)):
         raise RuntimeError('end-effector reports a valid nonzero error code')
     if require_output and not output_ready(state):
-        raise RuntimeError('end-effector output was inhibited or permission is unavailable')
+        raise RuntimeError(_output_permission_error(state))
 
 
 def _motion_feedback(client, info, moving, monotonic):
@@ -296,8 +324,15 @@ def _motion_feedback(client, info, moving, monotonic):
         # Status/admission belong to latest; these checks use only this original
         # position sample's measurement and source validity.
         _validate_position(info, position)
-        if received_at is None or not 0 <= monotonic() - received_at < body.LOWSTATE_WINDOW_S:
-            raise RuntimeError('end-effector position became stale')
+        age = None if received_at is None else monotonic() - received_at
+        if age is None or not 0 <= age < EE_POSITION_FRESHNESS_WINDOW_S:
+            age_ms = 'unknown' if age is None else f'{age * 1000:.3f}'
+            raise RuntimeError(
+                f'end-effector position became stale: side={client.side} '
+                f'sample={position.state_id} age_ms={age_ms} '
+                f'limit_ms={EE_POSITION_FRESHNESS_WINDOW_S * 1000:.0f} '
+                f'published_us={position.ts_state_pub_us} '
+                f'ingested_us={position.ts_ingested_us}')
     return latest, position
 
 
@@ -352,6 +387,9 @@ def print_feedback(client, emit=print):
     if state is None:
         emit(f'{client.side}: no EndEffectorState')
         return
+    display = getattr(emit, 'observe_state', None)
+    if display is not None:
+        display(client.side, client.info, state)
     emit(f'{client.side}: ref={state.runtime_id} sample={state.state_id} '
          f'pos={state.pos} vel={state.vel} tau={state.tau} current_A={state.current} '
          f'valid={state.valid_fields} status_valid={state.status_valid_mask} '
@@ -670,6 +708,27 @@ def _prepare_stream(frame, clients, infos, options, touch_worker, *, sleep, mono
     """Wait for ready outputs and touch RPCs before choosing trajectory starts."""
     timeout, touch = options.timeout, options.touch
     guards = {c.side: _EndpointGuard(c, infos[c.side], timeout, monotonic) for c in clients}
+
+    def change_touch(enabled, *, check_position):
+        for client in clients:
+            emit(f'{client.side}: requesting touch_enabled={enabled}')
+            result = touch_worker.submit(set_touch_and_observe, client, enabled,
+                                         timeout, monotonic=monotonic)
+            while not result.done():
+                frame(wait=False)  # Keep owner/body checks active during the RPC.
+                if check_position:
+                    for guard in guards.values():
+                        guard.feedback(True)
+                sleep(max(0.0, frame.next_deadline()-monotonic()))
+            state, sample = result.result()
+            emit(f'{client.side}: touch_enabled={state.touch_enabled} confirmed '
+                 f'touch_state={state.sample_ref} '
+                 f'touch_sample={None if sample is None else sample.sample_ref}')
+
+    # Disabling touch needs control authority, but does not issue an EE target.
+    # Confirm it before evaluating positions; all motion guards still run below.
+    if touch == 'off':
+        change_touch(False, check_position=False)
     deadline = monotonic() + timeout
     while True:
         frame(wait=False)
@@ -680,17 +739,8 @@ def _prepare_stream(frame, clients, infos, options, touch_worker, *, sleep, mono
         if monotonic() >= deadline:
             raise TimeoutError('end-effector output did not become ready after EXTERNAL entry')
         sleep(max(0.0, min(frame.next_deadline(), deadline)-monotonic()))
-    if touch != 'keep':
-        for client in clients:
-            result = touch_worker.submit(set_touch_and_observe, client, touch == 'on',
-                                         timeout, monotonic=monotonic)
-            while not result.done():
-                frame(wait=False)  # Same owner/body watchdog continues during bounded RPC.
-                for guard in guards.values():
-                    guard.feedback(True)
-                sleep(max(0.0, frame.next_deadline()-monotonic()))
-            state, sample = result.result()
-            emit(f'{client.side}: touch_state={state.sample_ref} touch_sample={None if sample is None else sample.sample_ref}')
+    if touch == 'on':
+        change_touch(True, check_position=True)
     initial_state = {side: guard.feedback(True) for side, guard in guards.items()}
     return guards, initial_state
 
@@ -747,6 +797,10 @@ def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sl
         final_sent = set()
         while len(final_sent) != len(guards) or monotonic() < deadline:
             now, states = _motion_tick(frame, guards, monotonic, last_now)
+            display = getattr(emit, 'observe_state', None)
+            if display is not None:
+                for side, state in states.items():
+                    display(side, infos[side], state)
             last_now = now
             check_motion(states)
             if now >= hard_deadline:
@@ -761,6 +815,9 @@ def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sl
                                                  now - cursor_time[side], native_hz[side])
                         target = codec.prepare_target(infos[side], replace(target, pos=(value,)))
                     command = guard.publish(target, states[side])
+                    display_target = getattr(emit, 'submitted', None)
+                    if display_target is not None:
+                        display_target(side, target, command.key)
                     if side in cursor:
                         if motion_start_id[side] is None and target.pos[0] != cursor[side]:
                             motion_start_id[side] = states[side].state_id
@@ -798,6 +855,7 @@ def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sl
 
 def run(controller, clients, targets, options, *, sleep=time.sleep, monotonic=time.monotonic, emit=print):
     """Independent member deadlines; targets are intent, never arrival evidence."""
+    emit(f'EE position freshness window={EE_POSITION_FRESHNESS_WINDOW_S:.3f}s')
     prepared_motion, strict_hold = _prepare_motion(
         controller, clients, targets, options, sleep=sleep, monotonic=monotonic, emit=emit)
     touch_worker = ThreadPoolExecutor(max_workers=1) if options.touch != 'keep' else None
@@ -853,6 +911,9 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     parser.add_argument('--timeout', type=float, default=5.0)
     parser.add_argument('--duration', type=float, default=1.0, help='streaming duration, not physical arrival')
     parser.add_argument('--feedback-interval', type=float, default=1.0)
+    parser.add_argument('--display', choices=('table', 'log'),
+                        default='table' if _expected_device_model == DeviceModel.BRAINCO_REVO2 else 'log')
+    parser.add_argument('--display-hz', type=float, default=5.0, help='table refresh only; does not change command rates')
     parser.add_argument('--ee-only', action='store_true', help='no implicit Body command or Body preflight')
     parser.add_argument('--body-gains', choices=('hold', 'zero'), default='hold')
     parser.add_argument('--body-pose', choices=('measured', 'zero'), default='measured')
@@ -869,6 +930,8 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         parser.add_argument('--'+side+'-hz', type=float, default=50.0)
         parser.add_argument('--'+side+'-native-hz', type=int, help='AGX arm-group native send_frequency from the effective configuration')
     args = parser.parse_args(argv)
+    if not math.isfinite(args.display_hz) or args.display_hz <= 0:
+        parser.error('--display-hz must be finite and positive')
     if _expected_device_model is not None and args.side == 'none':
         parser.error('vendor example requires a selected endpoint')
     readonly = args.dry_run or not args.confirm_motion
@@ -919,17 +982,23 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         connection = stack.enter_context((state_factory if readonly else controller_factory)(group=args.group))
         reply = _bind_runtime(connection, args.timeout)
         from locomotion_aorta._policy_state import format_robot_info
-        print(format_robot_info(reply))
         clients = [stack.enter_context(client_factory(side, connection=connection, read_only=readonly,
             observation_sources=() if readonly else ((SampleStream.EE_STATE, 1 if side == 'left' else 2),))) for side in sides]
         if _expected_device_model is not None:
             for client in clients:
                 _require_vendor_info(_current_info(client, args.timeout), client.side, _expected_device_model)
+        emit = print
+        if args.display == 'table':
+            table = _load_sibling_module('ee_live_table', 'end_effector/live_table.py')
+            emit = stack.enter_context(table.LiveTable(refresh_hz=args.display_hz))
+            emit(f'Robot runtime {reply.runtime_id}; {"read-only" if readonly else "EXTERNAL motion"}')
+        else:
+            print(format_robot_info(reply))
         if readonly:
             if clients:
-                observe(clients, timeout=args.timeout)
+                observe(clients, timeout=args.timeout, emit=emit)
             else:
-                print(f'none: BodyState={connection.wait_state(args.timeout)}; no EE wait/lease/write')
+                emit(f'none: BodyState={connection.wait_state(args.timeout)}; no EE wait/lease/write')
             return
         targets = {}
         for client in clients:
@@ -942,9 +1011,9 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
                 unit=getattr(args, client.side+'_unit'), vel_limit=getattr(args, client.side+'_vel_limit'),
                 torque=getattr(args, client.side+'_torque_nm'))
         try:
-            run(connection, clients, targets, options)
+            run(connection, clients, targets, options, emit=emit)
         except KeyboardInterrupt:
-            print('interrupted; CANCEL attempted once, no neutral end-effector target sent')
+            emit('interrupted; CANCEL attempted once, no neutral end-effector target sent')
 
 
 if __name__ == '__main__':

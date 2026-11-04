@@ -54,7 +54,10 @@ class ZeroPoseTest(unittest.TestCase):
         self.assertEqual(plan.profile['robot_source_head'], 'fda136e91b47e6771026043ae69a8b48b756122e')
         gains = plan.profile['joint_gains']
         self.assertEqual(gains['left_shoulder_pitch_joint']['kp'], 60)
-        self.assertEqual(gains['left_elbow_joint']['kp'], 40)
+        self.assertEqual(gains['left_elbow_joint']['kp'], 150)
+        self.assertEqual(gains['right_elbow_joint']['kp'], 150)
+        self.assertEqual(gains['left_elbow_joint']['kd'], 1)
+        self.assertEqual(gains['right_elbow_joint']['kd'], 1)
         self.assertEqual(gains['right_wrist_pitch_joint']['kd'], 4)
         self.assertEqual(gains['neck_pitch_joint']['kp'], 20)
 
@@ -160,7 +163,7 @@ class ZeroPoseTest(unittest.TestCase):
         self.assertTrue(any('confirmed PASSIVE' in e for e in events))
         self.assertTrue(any('CONTROL' in e.upper() and 'ACK' in e.upper() for e in events))
 
-    def test_settle_zero_nonfollowing_or_drift_is_observation_and_gripper_still_runs(self):
+    def test_zero_settlement_is_observational_but_body_drift_still_aborts(self):
         for options in ({'follow_commands': False},
                         {'drift_command_range': (8, 60), 'drift_position_rad': .2}):
             with self.subTest(options=options):
@@ -174,11 +177,18 @@ class ZeroPoseTest(unittest.TestCase):
                     return publish(*args, **kwargs)
                 gripper.publish = gripper_publish
                 target = gripper_demo.position_target(gripper.info, (.075,), unit='m')
-                gripper_demo.run(c, [gripper], {gripper.side: target},
-                                 gripper_demo._MotionOptions(duration=.08, body_pose='zero', timeout=1,
-                                     native_hz={gripper.side: 250}, native_config='synthetic-test-effective-config'),
-                                 sleep=clock.sleep, monotonic=clock.monotonic, emit=events.append)
-                self.assertTrue(gripper.commands)
+                def run():
+                    gripper_demo.run(c, [gripper], {gripper.side: target},
+                                     gripper_demo._MotionOptions(duration=.08, body_pose='zero', timeout=1,
+                                         native_hz={gripper.side: 250}, native_config='synthetic-test-effective-config'),
+                                     sleep=clock.sleep, monotonic=clock.monotonic, emit=events.append)
+                if 'drift_command_range' in options:
+                    with self.assertRaisesRegex(RuntimeError, 'body departed from its held pose'):
+                        run()
+                    self.assertFalse(gripper.commands)
+                else:
+                    run()
+                    self.assertTrue(gripper.commands)
                 complete = [e for e in events if 'ZERO_DWELL complete observation_only=true' in e]
                 self.assertEqual(len(complete), 1)
                 peak = float(complete[0].split('peak_abs_q_error_rad=')[1].split()[0])

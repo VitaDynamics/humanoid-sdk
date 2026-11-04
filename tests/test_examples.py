@@ -465,8 +465,11 @@ class ExamplesSmokeTest(unittest.TestCase):
                 self.assertEqual(command.joints[slot].kp, 80.0)
                 self.assertEqual(
                     command.joints[slot].kd,
-                    1.0 if slot in (18, 25) else 2.0,
+                    2.0,
                 )
+            self.assertEqual(command.joints[29].kp, 50.0)
+            self.assertEqual(command.joints[29].kd, 2.0)
+            self.assertEqual(command.joints[30].kd, 2.0)
             for slot in (16, 17, 23, 24):
                 self.assertEqual(command.joints[slot].kp, 40.0)
         self.assertEqual(output[-1], "CANCEL confirmed PASSIVE")

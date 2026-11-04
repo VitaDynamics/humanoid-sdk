@@ -2,6 +2,8 @@
 
 这是供统一末端 demo调用的 `FixedStandPose`，**没有独立CLI，也不会自己连接/进入EXTERNAL**。`fixed_stand_profile.json` 保存已有机器人零姿态增益/过渡合同，不修改设备或动作号；不能用它替代机器人现有FIXED_STAND动作。
 
+本轮现场参数将左右肘关节的 profile 增益设为 `kp=150、kd=1`，按实际 BodyInfo 的关节名映射。文件保留的内部索引 17/21 不是公共槽号；原来源元数据用于追溯基线，150 是本轮现场覆盖值。这是 SDK 示例的命令默认值，不会修改机器人上的配置文件；使用前仍须核对实际关节与现场支撑条件。
+
 ```bash
 python -c 'from examples.fixed_stand_pose.fixed_stand_pose import FixedStandPose; print(FixedStandPose.__name__)'
 python examples/end_effector/end_effector_external.py --help

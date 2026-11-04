@@ -554,6 +554,29 @@ class PullTest(unittest.TestCase):
         self.assertIs(source.wait_state(.1),state);self.assertFalse(hasattr(source, "wait_body_state"))
         self.assertIs(source.control_status,status);source.close();self.assertEqual(calls,[.1,'close'])
 
+class ReadOnlyContextManagerTest(unittest.TestCase):
+    def test_normal_and_exceptional_exit_close_without_publishing(self):
+        for fail in (False, True):
+            with self.subTest(exceptional_exit=fail):
+                transport = FakeTransport()
+                source = PullStateSource(_transport=transport)
+                if fail:
+                    with self.assertRaisesRegex(RuntimeError, 'read-only failure'):
+                        with source as entered:
+                            self.assertIs(entered, source)
+                            raise RuntimeError('read-only failure')
+                else:
+                    with source as entered:
+                        self.assertIs(entered, source)
+                self.assertTrue(transport.closed)
+                self.assertEqual(transport.close_count, 1)
+                self.assertEqual(transport.published, [])
+                with self.assertRaises(ControllerClosedError):
+                    source.__enter__()
+                source.close()
+                self.assertEqual(transport.close_count, 1)
+
+
 class RuntimeIdentityPullR3Test(unittest.TestCase):
     def test_late_discovery_does_not_retire_new_pull_binding(self):
         from body_fixtures import robot_info_reply

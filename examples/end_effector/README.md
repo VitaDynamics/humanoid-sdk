@@ -12,6 +12,25 @@ motion preflight and Body commands. Each endpoint uses its own
 explicit `--left-hz`/`--right-hz`; missed deadlines are not replayed. A combined
 Body/EE call is not an atomic frame.
 
+The BrainCo entry defaults to `--display table`: a fixed table refreshed at
+5 Hz in a terminal, with per-axis submitted position, measured position,
+velocity, current, and valid error codes. Missing/invalid fields show `--`;
+an unavailable inhibit reason shows `?`. Targets remain submitted intent,
+not admission or arrival evidence. `--display-hz` changes display refresh only;
+the original command periods and safety checks remain independent. With stdout
+redirected and a terminal on stderr, the table uses stderr; without a terminal,
+only phase/event snapshots and the final table are emitted. Use `--display log`
+to retain the complete original per-command diagnostic log.
+
+This candidate uses a 0.1 rad Body hold error threshold for both hands and
+grippers, and a separate 1.0 s EE measured-position freshness window. Body
+feedback still uses its original 0.2 s window. Repeated publications and
+temperature/error-only messages do not renew the position deadline. A Body
+hold error includes the joint name, target, measured position, velocity and
+state ID; an output-permission error retains the complete triggering State.
+These are example defaults validated in the supported hum-42 scenario, not
+new hardware limits or general robot safety certification.
+
 AGX motion additionally requires each selected side's `--left-native-hz` or
 `--right-native-hz`, taken from that arm group's effective deployed
 `send_frequency` after overrides, and `--native-config` naming that effective
@@ -80,6 +99,10 @@ RPC deadline. On failure or interrupt the original lifecycle attempts CANCEL
 once before joining the service worker. No retry, second control owner, autonomous
 heartbeat or neutral end-effector target is sent. An unconfirmed CANCEL is an
 error; PASSIVE may let unsupported limbs fall.
+
+When `--touch off` is selected, the existing owned touch RPC and new State
+confirmation run before waiting for motion-position feedback. Enabling touch
+still requires output/position checks first and a real new Touch sample.
 
 The old HandClient/GripperClient, their online DTOs/codecs and separate motion
 entries are removed. RobotInfo uses unified endpoint Info; the explicit

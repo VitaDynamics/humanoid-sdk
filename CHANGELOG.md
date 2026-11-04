@@ -2,6 +2,15 @@
 
 ## Unreleased — effective group validation
 
+- Support normal and exceptional `with PullStateSource(...)` cleanup without
+  publishing commands; reject context entry after closure.
+- Keep the Body watchdog active while confirming touch disable before the
+  position wait, and preserve detailed original State on output-permission
+  failures. Adopt the documented hum-42 example gains and separate Body hold /
+  EE freshness defaults.
+- Default the BrainCo demo to a throttled live table; keep full diagnostic
+  logging available through `--display log` and preserve command scheduling.
+
 Controller and body state source startup now rejects a requested SDK group
 that differs from the effective `AORTA_GROUP` (or Core's `default`). Programs
 that set `AORTA_GROUP` but leave the SDK `group="default"` must pass the matching

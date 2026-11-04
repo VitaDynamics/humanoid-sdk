@@ -110,7 +110,7 @@ class ExternalLifecycleTest(unittest.TestCase):
                 self.assertNotIn('enter_external', c.calls)
                 self.assertEqual(c.command_count, 0)
 
-    def test_body_drift_is_observed_but_reject_changes_abort_then_cancel(self):
+    def test_body_drift_and_reject_changes_abort_then_cancel(self):
         for options in ({'drift_command_range': (1, 3)}, {'reject_after_commands': 1}):
             with self.subTest(options=options):
                 c = self.controller(**options)
@@ -122,10 +122,9 @@ class ExternalLifecycleTest(unittest.TestCase):
                         self.run_loop(c, loop)
                     self.assertLess(c.command_count, 10)
                 else:
-                    self.run_loop(c, loop)
-                    self.assertEqual(c.command_count, 10)
-                    self.assertTrue(any('BODY_HOLD summary' in e and '0.200000' in e
-                                        for e in self.events))
+                    with self.assertRaisesRegex(RuntimeError, 'held pose.*state_id='):
+                        self.run_loop(c, loop)
+                    self.assertLess(c.command_count, 10)
                 self.assertEqual(c.calls.count('exit_external'), 1)
 
     def test_stale_body_state_aborts_then_cancels(self):

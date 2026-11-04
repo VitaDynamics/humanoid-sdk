@@ -95,7 +95,7 @@
     },
     "left_elbow_joint": {
       "internal_cmd_index": 17,
-      "kp": 40.0,
+      "kp": 150.0,
       "kd": 1.0
     },
     "left_wrist_roll_joint": {
@@ -130,7 +130,7 @@
     },
     "right_elbow_joint": {
       "internal_cmd_index": 21,
-      "kp": 40.0,
+      "kp": 150.0,
       "kd": 1.0
     },
     "right_wrist_roll_joint": {

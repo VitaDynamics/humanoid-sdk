@@ -483,6 +483,21 @@ class EndEffectorExampleTest(unittest.TestCase):
                 self.assertEqual(c.calls.count('enter_external'),1)
                 self.assertEqual(c.calls.count('exit_external'),1)
 
+    def test_permission_failure_sends_no_more_targets_and_cancels_once(self):
+        controller = self.controller()
+        endpoint = Endpoint(controller)
+
+        def revoke(_submission):
+            endpoint._state = replace(endpoint._state, output_allowed=False,
+                                      inhibit_reason=4, status_valid_mask=11)
+
+        endpoint.after_publish = revoke
+        with self.assertRaisesRegex(RuntimeError, 'side=right failed_checks='):
+            self.run_case(controller, [endpoint])
+        self.assertEqual(len(endpoint.commands), 1)
+        self.assertEqual(controller.calls.count('enter_external'), 1)
+        self.assertEqual(controller.calls.count('exit_external'), 1)
+
     def test_descriptor_change_after_first_send_stops_and_cancels(self):
         c=self.controller(); e=Endpoint(c)
         e.after_publish=lambda _: setattr(e,'_state',replace(e._state,runtime_id=999))
@@ -490,15 +505,57 @@ class EndEffectorExampleTest(unittest.TestCase):
         self.assertEqual(len(e.commands),1)
         self.assertEqual(c.calls.count('exit_external'),1)
 
-    def test_hand_drift_aborts_while_gripper_drift_is_observational(self):
+    def test_body_drift_aborts_for_hands_and_grippers(self):
         for hand in (False,True):
             c=self.controller(drift_command_range=(1,200)); e=Endpoint(c,hand=hand)
-            if hand:
-                with self.assertRaisesRegex(RuntimeError,'held pose'): self.run_case(c,[e])
-            else:
-                self.run_case(c,[e])
-                self.assertTrue(any('BODY_HOLD summary' in line for line in self.events))
+            with self.subTest(hand=hand):
+                with self.assertRaisesRegex(RuntimeError,'held pose.*state_id='):
+                    self.run_case(c,[e])
             self.assertEqual(c.calls.count('exit_external'),1)
+
+    def test_touch_disable_is_confirmed_before_position_wait(self):
+        from concurrent.futures import Future
+        controller = self.controller()
+        endpoint = Endpoint(controller, hand=True, touch=True)
+        calls = []
+        guard = Mock()
+        guard.latest = endpoint._state
+
+        def feedback(_moving):
+            self.assertEqual(calls[0], ('touch', False))
+            calls.append(('feedback', True))
+            return endpoint._state
+
+        def set_touch(client, enabled, _timeout, **_kwargs):
+            self.assertIs(client, endpoint)
+            calls.append(('touch', enabled))
+            return replace(endpoint._state, touch_enabled=enabled), None
+
+        def submit(function, *args, **kwargs):
+            future = Future()
+            future.set_result(function(*args, **kwargs))
+            return future
+
+        guard.feedback.side_effect = feedback
+        worker = Mock()
+        worker.submit.side_effect = submit
+        with patch.object(demo, '_EndpointGuard', return_value=guard), \
+             patch.object(demo, 'set_touch_and_observe', side_effect=set_touch):
+            demo._prepare_stream(Mock(), [endpoint], {'right': endpoint.info},
+                demo._MotionOptions(touch='off'), worker, sleep=self.clock.sleep,
+                monotonic=self.clock.monotonic, emit=self.events.append)
+        self.assertEqual(calls[0], ('touch', False))
+        self.assertGreater(guard.feedback.call_count, 0)
+        self.assertEqual(endpoint.commands, [])
+
+    def test_body_drift_below_hold_tolerance_remains_observational(self):
+        for hand in (False, True):
+            c = self.controller(drift_command_range=(1, 200),
+                                drift_position_rad=demo.BODY_HOLD_POSITION_TOLERANCE_RAD / 2)
+            e = Endpoint(c, hand=hand)
+            self.run_case(c, [e])
+            self.assertTrue(any('BODY_HOLD summary' in line for line in self.events))
+            self.assertEqual(c.calls.count('exit_external'), 1)
 
     def test_body_ownership_and_stale_guards_are_not_bypassed(self):
         for options in ({'reject_after_commands':1},{'fail_phase_after_commands':1},
@@ -874,8 +931,9 @@ class EndEffectorExampleTest(unittest.TestCase):
                         order.append(('client-close', c.command_count))
                 original_run = demo.run
                 def run_with_clock(*args, **kwargs):
-                    return original_run(*args, **kwargs, sleep=sleep,
-                                        monotonic=clock.monotonic, emit=self.events.append)
+                    kwargs.update(sleep=sleep, monotonic=clock.monotonic,
+                                  emit=self.events.append)
+                    return original_run(*args, **kwargs)
                 argv = ['--confirm-motion', '--side', 'right', '--right-pos', '.0625',
                         '--right-unit', 'm', '--touch', 'on', '--timeout', '.3',
                         '--right-native-hz', '250', '--native-config', 'synthetic-test-effective-config']
@@ -1067,10 +1125,11 @@ class PartialFeedbackGuardTest(unittest.TestCase):
     def test_diagnostics_and_same_sample_publications_never_extend_position_deadline(self):
         position=self.emit(1,Field.POS)
         guard=self.guard()
-        self.clock.sleep(demo.body.LOWSTATE_WINDOW_S/2)
+        self.clock.sleep(demo.EE_POSITION_FRESHNESS_WINDOW_S/2)
+        self.assertIs(guard.feedback(True), position)
         self.emit(2,Field.TEMPERATURE)
         self.emit(2,Field.TEMPERATURE,tsStatePubUs=120)
-        self.clock.sleep(demo.body.LOWSTATE_WINDOW_S/2)
+        self.clock.sleep(demo.EE_POSITION_FRESHNESS_WINDOW_S/2)
         with self.assertRaisesRegex(RuntimeError,'position became stale'):
             guard.feedback(True)
 
@@ -1257,7 +1316,12 @@ class VendorExamplesTest(unittest.TestCase):
                     self.invoke(model, ['--side', 'right'] + option, mutate=unavailable)
                     self.assertEqual(['source'], self.factories)
                     self.executed.assert_not_called()
-                    self.assertIn('Info=', self.output)
+                    if model == DeviceModel.BRAINCO_REVO2:
+                        self.assertIn('End effectors |', self.output)
+                        self.assertIn('right: sample', self.output)
+                        self.assertIn('ready no | output no', self.output)
+                    else:
+                        self.assertIn('Info=', self.output)
                     self.assert_no_control()
 
     def test_vendor_side_model_shape_and_domain_fail_before_control(self):

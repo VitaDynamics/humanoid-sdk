@@ -282,6 +282,14 @@ class PullStateSource:
         _close_handles(handles)
         self.transport.close()
 
+    def __enter__(self):
+        with self._end_effector_runtime_lock:
+            self._ensure_runtime_locked()
+        return self
+
+    def __exit__(self, *_exc):
+        self.close()
+
 
 class PullController(ExternalController):
     """Original session protocol with pull status pumping on the caller thread."""

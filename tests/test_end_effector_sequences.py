@@ -144,10 +144,11 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
 
     def test_actual_robot_diagnostics_cannot_extend_position_receipt_deadline(self):
         position, guard = self.linker()
-        self.clock.sleep(demo.body.LOWSTATE_WINDOW_S / 2)
+        self.clock.sleep(demo.EE_POSITION_FRESHNESS_WINDOW_S / 2)
+        self.assertIs(guard.feedback(True), position)
         self.feed('state', 'linker/zero_fault.fb')
         self.feed('state', 'linker/temperature.fb')
-        self.clock.sleep(demo.body.LOWSTATE_WINDOW_S / 2)
+        self.clock.sleep(demo.EE_POSITION_FRESHNESS_WINDOW_S / 2)
         with self.assertRaisesRegex(RuntimeError, 'position became stale'):
             guard.feedback(True)
         self.assertEqual(self.client.motion_feedback()[1].sample_ref, position.sample_ref)
