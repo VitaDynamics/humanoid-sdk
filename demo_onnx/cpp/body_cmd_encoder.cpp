@@ -11,6 +11,7 @@
 
 #include "body_cmd_vendor/message/schemas/topic/lowlevel/body_cmd_generated.h"
 #include "body_state_decoder.h"
+#include "end_effector_decoder.h"
 
 namespace py = pybind11;
 namespace {
@@ -128,6 +129,7 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
 
 PYBIND11_MODULE(_body_cmd_native, module) {
   BindBodyState(module);
+  BindEndEffectorFeedback(module);
   module.attr("BODY_SCHEMA_SHA256") = BODY_CMD_SCHEMA_SHA256;
   module.attr("BODY_CMD_PROTOCOL_VERSION") = 3;
   module.def("encode", &Encode, py::arg("command"), py::arg("publish_stamp_ns"),

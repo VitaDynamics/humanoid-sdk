@@ -1,0 +1,20 @@
+{
+  "schema_commit": "d96c9003e71b96385ad571b0a0102e25ef9135ca",
+  "source": "Existing PR2-219 AArch64 generated outputs; copied without regeneration or edits.",
+  "headers_sha256": {
+    "end_effector_state_generated.h": "5f03fbb47c345a360affd4387d6c31aa4d301ee7f5fc2ceb187f22654a61e45f",
+    "end_effector_touch_generated.h": "11af30a74f23ec69be7a6f2728181ab852628bd9ad655ee20b5a6c4fc91cab34"
+  },
+  "bfbs_sha256": {
+    "end_effector_state": "6dd6730bec2b1da402471ce7abedff795df079c993442c691c399b7218188363",
+    "end_effector_touch": "8523e1b5f60e6f000e4d03d1b4d7b2d5414da70a15a1a58b338f4e3ce537fe7a"
+  },
+  "shared_body_vendor_include_sha256": {
+    "message/schemas/topic/lowlevel/end_effector_common_generated.h": "6b53afed9682a6bda797c1ac3f4c1e958b08bd7d9a374ae2430bf4d99ceb07f9",
+    "declared-headers/generated/external/aorta~/message/schemas/system/aorta_base_generated.h": "fde3ee3fad85501632552fe45abdb4793dc0b2995c1ce06db62d7ab2487a3be6"
+  },
+  "flatbuffers_version": "25.12.19",
+  "wheel_version": "0.0.0+gc783514130bb",
+  "wheel_sha256": "0faf300ee8254695963bfd34fd9cf6fd977264104c46a64253b5608231623df7",
+  "binding_note": "Both current D96 BFBS are byte-identical to the pinned gc783 wheel schema identities; shared include headers are byte-identical to the existing Body vendor."
+}

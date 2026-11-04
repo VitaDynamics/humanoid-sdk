@@ -41,16 +41,45 @@ set_target_properties(ort PROPERTIES
   IMPORTED_LOCATION "${ort_root}/lib/libonnxruntime.so.${ort_version}"
   INTERFACE_INCLUDE_DIRECTORIES "${ort_root}/include")
 pybind11_add_module(_body_cmd_native NO_EXTRAS WITH_SOABI
-  cpp/body_cmd_encoder.cpp cpp/body_state_decoder.cpp)
+  cpp/body_cmd_encoder.cpp cpp/body_state_decoder.cpp cpp/end_effector_decoder.cpp)
 target_include_directories(_body_cmd_native PRIVATE
   cpp/body_cmd_vendor
+  cpp/body_cmd_vendor/message/schemas/topic/lowlevel
   "${CMAKE_CURRENT_SOURCE_DIR}/cpp/body_cmd_vendor/declared-headers/generated/external/aorta~/message/schemas/system")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cpp/body_cmd_vendor/provenance.json" body_manifest)
 string(JSON body_cmd_sha GET "${body_manifest}" body_cmd_bfbs_sha256)
 string(JSON body_state_sha GET "${body_manifest}" body_state_bfbs_sha256)
+set(ee_vendor "${CMAKE_CURRENT_SOURCE_DIR}/cpp/end_effector_vendor")
+file(READ "${ee_vendor}/provenance.json" ee_manifest)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../compatibility.json" compatibility_manifest)
+foreach(kind IN ITEMS state touch)
+  set(stem "end_effector_${kind}")
+  string(JSON ee_${kind}_sha GET "${ee_manifest}" bfbs_sha256 "${stem}")
+  string(JSON expected_schema_sha GET "${compatibility_manifest}" schema_sha256 "${stem}")
+  if(NOT "${ee_${kind}_sha}" STREQUAL expected_schema_sha)
+    message(FATAL_ERROR "${stem} native schema differs from compatibility.json")
+  endif()
+  string(JSON expected_header_sha GET "${ee_manifest}" headers_sha256 "${stem}_generated.h")
+  file(SHA256 "${ee_vendor}/${stem}_generated.h" actual_header_sha)
+  if(NOT actual_header_sha STREQUAL expected_header_sha)
+    message(FATAL_ERROR "${stem} generated header differs from its pinned provenance")
+  endif()
+endforeach()
+string(JSON ee_include_count LENGTH "${ee_manifest}" shared_body_vendor_include_sha256)
+math(EXPR ee_include_last "${ee_include_count} - 1")
+foreach(index RANGE ${ee_include_last})
+  string(JSON include_path MEMBER "${ee_manifest}" shared_body_vendor_include_sha256 ${index})
+  string(JSON expected_include_sha GET "${ee_manifest}" shared_body_vendor_include_sha256 "${include_path}")
+  file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/cpp/body_cmd_vendor/${include_path}" actual_include_sha)
+  if(NOT actual_include_sha STREQUAL expected_include_sha)
+    message(FATAL_ERROR "${include_path} differs from the pinned EE include closure")
+  endif()
+endforeach()
 target_compile_definitions(_body_cmd_native PRIVATE
   BODY_CMD_SCHEMA_SHA256="${body_cmd_sha}"
-  BODY_STATE_SCHEMA_SHA256="${body_state_sha}")
+  BODY_STATE_SCHEMA_SHA256="${body_state_sha}"
+  EE_STATE_SCHEMA_SHA256="${ee_state_sha}"
+  EE_TOUCH_SCHEMA_SHA256="${ee_touch_sha}")
 target_compile_features(_body_cmd_native PRIVATE cxx_std_17)
 target_compile_options(_body_cmd_native PRIVATE "$<$<CONFIG:Release>:-O3;-g;-DNDEBUG>")
 install(TARGETS _body_cmd_native LIBRARY DESTINATION locomotion_aorta)

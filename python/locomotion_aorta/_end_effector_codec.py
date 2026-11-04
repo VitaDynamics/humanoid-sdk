@@ -4,6 +4,7 @@ import importlib
 import math
 import struct
 from dataclasses import replace
+from functools import lru_cache
 from types import SimpleNamespace
 
 from ._body_codec import _dto, _getter, _text
@@ -116,7 +117,7 @@ def decode_info(view):
                 touch_regions=regions, **{name: _vector(view, name) for name in _INFO_VECTORS})
 
 
-def decode_state(view):
+def _decode_state_python(view):
     if view.ProtocolVersion() != EE_STATE_PROTOCOL_VERSION:
         raise ValueError('incompatible EndEffectorState protocol_version')
     axes = tuple(view.Axes(i) for i in range(view.AxesLength()))
@@ -127,11 +128,37 @@ def decode_state(view):
                    for name in _STATE_VECTORS})
 
 
-def decode_touch(view):
+def _decode_touch_python(view):
     return _dto(view, EndEffectorTouch, runtime_id=_ref(view),
                 region_stamps=tuple(_dto(view.RegionStamps(i), RegionStamp)
                                     for i in range(view.RegionStampsLength())),
                 payload=bytes(_vector(view, 'payload')))
+
+
+@lru_cache(maxsize=2)
+def _feedback_decoder(kind):
+    from . import _body_cmd_native
+    version = EE_STATE_PROTOCOL_VERSION if kind == 'state' else EE_TOUCH_PROTOCOL_VERSION
+    meta = _schema_meta('end_effector_' + kind, 'lowlevel.ee.EndEffector' + kind.capitalize())
+    prefix = 'EE_' + kind.upper()
+    if (getattr(_body_cmd_native, prefix + '_PROTOCOL_VERSION', None) != version
+            or getattr(_body_cmd_native, prefix + '_SCHEMA_SHA256', None) != meta.SCHEMA_HASH_HEX):
+        raise RuntimeError('native EndEffector' + kind.capitalize() + ' requires the pinned schema')
+    return getattr(_body_cmd_native, 'decode_end_effector_' + kind)
+
+
+def _decode_feedback_native(kind, view):
+    payload, offset = ((view._tab.Bytes, view._tab.Pos) if hasattr(view, '_tab')
+                       else (view, 0))
+    return _feedback_decoder(kind)(payload, offset)
+
+
+def decode_state(view):
+    return _decode_feedback_native('state', view)
+
+
+def decode_touch(view):
+    return _decode_feedback_native('touch', view)
 
 
 def _uint(value, bits, name):
