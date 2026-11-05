@@ -13,7 +13,9 @@ from unittest.mock import patch
 import flatbuffers
 
 from locomotion_aorta import _end_effector_codec as codec
-from locomotion_aorta.end_effector_types import EndEffectorState, EndEffectorTouch, RegionStamp
+from locomotion_aorta.end_effector_types import (
+    EndEffectorState, EndEffectorTouch, InhibitReason, RegionStamp,
+)
 from test_end_effector_codec import module, pack, state_object, touch_object
 
 try:
@@ -208,9 +210,12 @@ class NativeEndEffectorFeedbackTest(unittest.TestCase):
         self.assertIs(type(before), EndEffectorState)
         self.assertTrue(before.output_allowed)
         obj.outputAllowed = obj.touchEnabled = False
+        obj.inhibitReason = InhibitReason.PASSIVE
+        obj.tsStatePubUs += 1
         node.emit('left', 'state', obj)
         after = client.wait_state(.01)
         self.assertEqual(after.state_id, before.state_id)
+        self.assertEqual(after.ts_state_real_us, before.ts_state_real_us)
         self.assertFalse(after.output_allowed)
         node.emit('left', 'touch', touch_object())
         touch = client.wait_touch(.01)
