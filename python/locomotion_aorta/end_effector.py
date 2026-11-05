@@ -17,19 +17,22 @@ from .end_effector_types import (
     CommandKey, EndEffectorSide, EndEffectorSubmission,
     SampleRef, SampleStream, Field, SampleStatus,
     EndEffectorSetTouchRequest, ServiceStatus, TouchSetReason,
-    _INFO_TIME_PUBLISHED_VALID, _TOUCH_REGION_PAYLOAD_VALID, _TOUCH_REGION_STALE,
+    RegionStamp, _INFO_TIME_PUBLISHED_VALID, _TOUCH_REGION_PAYLOAD_VALID, _TOUCH_REGION_STALE,
 )
 
 
 def _token(value):
     """Compare immutable description data, including invalid/NaN float32 bits."""
-    if is_dataclass(value):
-        return tuple(_token(getattr(value, f.name)) for f in fields(value))
     if isinstance(value, float):
         return struct.pack('<f', value)
     if isinstance(value, tuple):
         return tuple(_token(item) for item in value)
+    if is_dataclass(value):
+        return tuple(_token(getattr(value, f.name)) for f in fields(value))
     return value
+
+
+_REGION_IDENTITY_FIELDS = tuple(f.name for f in fields(RegionStamp) if f.name != "validity")
 
 
 def _description(info):
@@ -50,7 +53,8 @@ def _same_sample(kind, old, new):
         dynamic_bits = _TOUCH_REGION_PAYLOAD_VALID | _TOUCH_REGION_STALE
         for a, b in zip(old.region_stamps, new.region_stamps):
             # Payload availability/staleness vary; native region identity does not.
-            if (replace(a, validity=a.validity & ~dynamic_bits) != replace(b, validity=b.validity & ~dynamic_bits)
+            if (a.validity & ~dynamic_bits != b.validity & ~dynamic_bits
+                    or any(getattr(a, name) != getattr(b, name) for name in _REGION_IDENTITY_FIELDS)
                     or b.validity & _TOUCH_REGION_PAYLOAD_VALID and not a.validity & _TOUCH_REGION_PAYLOAD_VALID):
                 raise ValueError('same Touch sample changed source or restored validity')
         return
@@ -102,9 +106,22 @@ class _RegistrationWorker(threading.Thread):
 
 
 class EndEffectorClient:
+    """Shared-session endpoint client.
+
+    ``subscribe_touch=False`` omits only the optional tactile stream. Info and
+    State (including faults, permissions and original position) remain active.
+    The default preserves automatic touch subscription for existing consumers.
+    """
     def __init__(self, side, *, connection, read_only=False,
-                 on_info=None, on_state=None, on_touch=None, observation_sources=()):
+                 on_info=None, on_state=None, on_touch=None, observation_sources=(),
+                 subscribe_touch=True):
         codec.validate_observation_sources(observation_sources)
+        if type(subscribe_touch) is not bool:
+            raise ValueError('subscribe_touch must be boolean')
+        if not subscribe_touch and (on_touch is not None or any(
+                stream == SampleStream.EE_TOUCH for stream, _ in observation_sources)):
+            raise ValueError('touch callback/observation requires subscribe_touch=True')
+        self._subscribe_touch = subscribe_touch
         self._observation_sources = observation_sources
         if side not in ('left', 'right'):
             raise ValueError('side must be left or right')
@@ -336,7 +353,7 @@ class EndEffectorClient:
         self._deliver(kind, value, callback)
 
     def _deliver(self, kind, value, callback):
-        if kind == 'info' and value.touch_available:
+        if kind == 'info' and value.touch_available and self._subscribe_touch:
             self._defer_registration('touch')
         with self._condition:
             if self._closed or self._fatal is not None:

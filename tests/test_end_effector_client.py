@@ -298,6 +298,31 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(harness.controller._next_external_sequence, 1)
         self.assertEqual(node.handles[-1].close_count, 1)
 
+    def test_touch_subscription_can_be_disabled_without_losing_state(self):
+        harness, node = self.harness()
+        client = EndEffectorClient('left', connection=harness.controller, subscribe_touch=False)
+        self.addCleanup(client.close)
+        node.emit('left', 'info', info_object(side=1, touch=True), wait=False)
+        node.emit('left', 'state', state_object(side=1))
+        self.assertIsNotNone(client.motion_feedback()[1])
+        self.assertNotIn('/sdk/foot_humanoid/end_effector/left/touch', node.subscriptions)
+        self.assertIsNone(client._registration_worker)
+        revoked = state_object(side=1, sample=2)
+        revoked.outputAllowed = False
+        revoked.inhibitReason = 1
+        revoked.tsStatePubUs = 120
+        node.emit('left', 'state', revoked)
+        self.assertFalse(client.state.output_allowed)
+        self.assertEqual(node.commands, [])
+
+    def test_disabled_touch_rejects_conflicting_consumers(self):
+        harness, node = self.harness()
+        for kwargs in (dict(subscribe_touch=0),
+                       dict(subscribe_touch=False, on_touch=lambda value: None),
+                       dict(subscribe_touch=False, observation_sources=((SampleStream.EE_TOUCH, 1),))):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                EndEffectorClient('left', connection=harness.controller, **kwargs)
+
     def harness(self, *, running=True, runtime_id=100):
         harness = ControllerHarness(runtime_id=runtime_id)
         self.addCleanup(harness.controller.close)
