@@ -513,6 +513,59 @@ class EndEffectorExampleTest(unittest.TestCase):
                     self.run_case(c,[e])
             self.assertEqual(c.calls.count('exit_external'),1)
 
+    def test_touch_off_without_capability_sends_no_rpc_and_keeps_motion_lifecycle(self):
+        for touch in ('off', 'keep'):
+            with self.subTest(touch=touch):
+                controller = self.controller()
+                clients = self.endpoints(controller, hand=True)
+                with patch.object(demo, 'set_touch_and_observe',
+                                  side_effect=AssertionError('unexpected touch RPC')) as toggle:
+                    self.run_case(controller, clients, touch=touch)
+                toggle.assert_not_called()
+                self.assertTrue(all(client.commands for client in clients))
+                self.assertEqual(controller.calls.count('enter_external'), 1)
+                self.assertEqual(controller.calls.count('exit_external'), 1)
+
+    def test_touch_on_without_capability_rejects_before_owner_or_motion(self):
+        controller = self.controller()
+        clients = [Endpoint(controller, 'left', hand=True, touch=True),
+                   Endpoint(controller, 'right', hand=True)]
+        with patch.object(demo, 'set_touch_and_observe') as toggle:
+            with self.assertRaisesRegex(ValueError, 'no touch capability'):
+                self.run_case(controller, clients, touch='on')
+        toggle.assert_not_called()
+        self.assertNotIn('enter_external', controller.calls)
+        self.assertEqual(controller.command_count, 0)
+        self.assertTrue(all(not client.commands for client in clients))
+
+    def test_touch_off_mixed_capabilities_only_confirms_supported_endpoint(self):
+        from concurrent.futures import Future
+        controller = self.controller()
+        clients = [Endpoint(controller, 'left', hand=True),
+                   Endpoint(controller, 'right', hand=True, touch=True)]
+        supported = clients[1]
+
+        def set_touch(client, enabled, _timeout, **_kwargs):
+            self.assertIs(client, supported)
+            self.assertFalse(enabled)
+            return replace(client._state, touch_enabled=False), None
+
+        def submit(function, *args, **kwargs):
+            result = Future()
+            result.set_result(function(*args, **kwargs))
+            return result
+
+        worker = Mock()
+        worker.submit.side_effect = submit
+        with patch.object(demo, 'ThreadPoolExecutor', return_value=worker), \
+             patch.object(demo, 'set_touch_and_observe', side_effect=set_touch) as toggle:
+            self.run_case(controller, clients, touch='off')
+        toggle.assert_called_once_with(supported, False, .3, monotonic=self.clock.monotonic)
+        worker.submit.assert_called_once()
+        worker.shutdown.assert_called_once_with(wait=True, cancel_futures=True)
+        self.assertTrue(all(client.commands for client in clients))
+        self.assertEqual(controller.calls.count('exit_external'), 1)
+
     def test_touch_disable_is_confirmed_before_position_wait(self):
         from concurrent.futures import Future
         controller = self.controller()

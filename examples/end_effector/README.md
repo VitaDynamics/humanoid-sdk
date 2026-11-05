@@ -90,7 +90,8 @@ silent loss, busy path or stalled device may therefore end as unconfirmed
 failure. Stop, fault, permission loss and the original CANCEL still take
 precedence over producing the final point.
 
-`--touch on/off` makes one existing typed RPC under the shared owner. The main
+For endpoints with touch capability, `--touch on/off` makes one existing typed
+RPC under the shared owner. The main
 thread continues the original Body watchdog while one service-only worker
 waits for a new valid State; enabling additionally requires a new Touch sample.
 Info is never used as dynamic touch confirmation. The synchronous API separately
@@ -103,6 +104,10 @@ error; PASSIVE may let unsupported limbs fall.
 When `--touch off` is selected, the existing owned touch RPC and new State
 confirmation run before waiting for motion-position feedback. Enabling touch
 still requires output/position checks first and a real new Touch sample.
+For an endpoint without touch capability (including locomotion touch sampling
+disabled by configuration), `--touch off` is a no-op and sends no RPC; it does
+not claim a service acknowledgement. `--touch on` is still rejected during
+preflight, and `--touch keep` leaves the existing touch setting unchanged.
 
 The old HandClient/GripperClient, their online DTOs/codecs and separate motion
 entries are removed. RobotInfo uses unified endpoint Info; the explicit

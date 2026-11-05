@@ -664,7 +664,7 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
         state = wait_position(client, info, timeout, sleep=sleep, monotonic=monotonic)
         if client.observation_sources != ((SampleStream.EE_STATE, info.side),):
             raise ValueError('demo requires its actual endpoint State as fixed K=1 input')
-        if touch != 'keep' and not info.touch_available:
+        if touch == 'on' and not info.touch_available:
             raise ValueError('selected endpoint has no touch capability')
         infos[client.side] = info
         prepared[client.side] = codec.prepare_target(info, targets[client.side])
@@ -711,6 +711,9 @@ def _prepare_stream(frame, clients, infos, options, touch_worker, *, sleep, mono
 
     def change_touch(enabled, *, check_position):
         for client in clients:
+            if not enabled and not infos[client.side].touch_available:
+                emit(f'{client.side}: touch unavailable; --touch off sends no RPC')
+                continue
             emit(f'{client.side}: requesting touch_enabled={enabled}')
             result = touch_worker.submit(set_touch_and_observe, client, enabled,
                                          timeout, monotonic=monotonic)
