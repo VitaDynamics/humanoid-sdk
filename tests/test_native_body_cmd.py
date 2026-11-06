@@ -40,15 +40,58 @@ def oracle(command, stamp=123, node='codec', sequence=0):
 _BODY_TEST_TARGETS = tuple('fake_joint_' + str(i) for i in range(31))
 
 class Publisher:
-    def __init__(self):
+    def __init__(self, *, include_node=True, node_name="test-node"):
         self._seq_lock = threading.Lock()
         self._sequence = 0
         self._closed = False
-        self._include_node = True
-        self._node_name = 'test-node'
+        self._include_node = include_node
+        self._node_name = node_name
         self._lib = SimpleNamespace(aorta_now_ns=self.clock)
         self.stamp, self.sent = 1234567, []
         self.failure = None
+
+    def native_header_binding(self):
+        # Synthetic public binding over real native HeaderContext. Actual bee
+        # Core exports/ABI are a separate required Pkg lane, not proven here.
+        from aorta._ffi.structs import AortaNativeHeader
+        reserve_type = ctypes.CFUNCTYPE(ctypes.c_int32, ctypes.c_void_p,
+                                       ctypes.POINTER(AortaNativeHeader))
+        free_type = ctypes.CFUNCTYPE(ctypes.c_int32, ctypes.c_void_p)
+        self.contexts = set()
+        self.freed = []
+        self.reserve_error = 0
+        self.clock_error = 0
+        self.free_error = 0
+        def reserve(context, output):
+            if context not in self.contexts or self._closed:
+                return -2
+            if self.reserve_error:
+                return self.reserve_error
+            with self._seq_lock:
+                seq = self._sequence
+                self._sequence += 1
+            if self.clock_error:
+                return self.clock_error
+            output.contents.sequence = seq
+            output.contents.publish_stamp_ns = self.stamp
+            return 0
+        def free(context):
+            if context not in self.contexts:
+                return -1
+            self.contexts.remove(context)
+            self.freed.append(context)
+            return self.free_error
+        self._callbacks = reserve_type(reserve), free_type(free)
+        def acquire():
+            context = len(self.freed) + len(self.contexts) + 1
+            self.contexts.add(context)
+            return context
+        return SimpleNamespace(
+            publisher_node=self._node_name.encode('utf-8') if self._include_node else b'',
+            include_publisher_node=self._include_node,
+            reserve_address=ctypes.cast(self._callbacks[0], ctypes.c_void_p).value,
+            free_address=ctypes.cast(self._callbacks[1], ctypes.c_void_p).value,
+            acquire_context=acquire, close=mock.Mock(), library_keepalive=self)
 
     def clock(self, ptr):
         ctypes.cast(ptr, ctypes.POINTER(ctypes.c_int64))[0] = self.stamp
@@ -175,11 +218,16 @@ class NativeBodyCmdTest(unittest.TestCase):
 
     def test_raw_adapter_keeps_core_clock_node_policy_and_failure_sequence(self):
         from locomotion_aorta._native_body_codec import NativeBodyPublisher
-        pub = Publisher();adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
         for node in [True, False]:
-            pub._include_node = node;seq = pub._sequence;adapter.publish(make_command(), guard=lambda send: send())
+            pub = Publisher(include_node=node, node_name='test-μ-node')
+            adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+            seq = pub._sequence
+            adapter.publish(make_command(), guard=lambda send: send())
             self.assertEqual(pub.sent[-1], oracle(make_command(), pub.stamp,
                                                  pub._node_name if node else None, seq))
+            adapter.close()
+            self.assertEqual(pub.freed, [1])
+        pub = Publisher();adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
         pub.failure = OSError('send failed');seq = pub._sequence
         with self.assertRaisesRegex(OSError, 'send failed'): adapter.publish(make_command(), guard=lambda send: send())
         self.assertEqual(pub._sequence, seq+1)
@@ -208,12 +256,159 @@ class NativeBodyCmdTest(unittest.TestCase):
         self.assertEqual(pub.sent, [oracle(inner, pub.stamp, pub._node_name, 1),
                                     oracle(outer, pub.stamp, pub._node_name, 0)])
 
+    def test_native_header_rejection_clock_error_and_context_close(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        from aorta.errors import BusyError, InternalError, NotFoundError
+        pub = Publisher()
+        adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+        pub.reserve_error = -4
+        with self.assertRaises(BusyError):
+            adapter.publish(make_command(), guard=lambda send: send())
+        self.assertEqual(pub._sequence, 0)
+        self.assertFalse(pub.sent)
+        pub.reserve_error = 0
+        pub.clock_error = -5
+        with self.assertRaises(InternalError):
+            adapter.publish(make_command(), guard=lambda send: send())
+        self.assertEqual(pub._sequence, 1)
+        self.assertFalse(pub.sent)
+        pub.clock_error = 0
+        adapter.publish(make_command(), guard=lambda send: send())
+        self.assertEqual(pub._sequence, 2)
+        adapter.close(); adapter.close()
+        self.assertEqual(pub.freed, [1])
+        with self.assertRaises(NotFoundError):
+            adapter.publish(make_command(), guard=lambda send: send())
+        self.assertEqual(pub._sequence, 2)
+
+    def test_header_free_internal_consumes_handle_without_second_free(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        from aorta.errors import InternalError
+        pub = Publisher()
+        adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+        pub.free_error = -5
+        with self.assertRaises(InternalError):
+            adapter.close()
+        self.assertEqual(pub.freed, [1])
+        adapter.close()
+        self.assertEqual(pub.freed, [1])
+
+    def test_header_failure_precedes_command_getters_and_final_send(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        from aorta.errors import BusyError, InternalError
+        pub = Publisher()
+        adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+        self.addCleanup(adapter.close)
+        inspected = []
+        gate = mock.Mock(side_effect=lambda send: send())
+
+        class Command:
+            @property
+            def joints(self):
+                inspected.append('joints')
+                raise AssertionError('command evaluated after header failure')
+
+        pub.reserve_error = -4
+        with self.assertRaises(BusyError):
+            adapter.publish(Command(), guard=gate)
+        self.assertEqual(pub._sequence, 0)
+        pub.reserve_error, pub.clock_error = 0, -5
+        with self.assertRaises(InternalError):
+            adapter.publish(Command(), guard=gate)
+        self.assertEqual(pub._sequence, 1)
+        pub.clock_error, pub.stamp = 0, -1
+        with self.assertRaisesRegex(TypeError, 'timestamp'):
+            adapter.publish(Command(), guard=gate)
+        self.assertEqual(pub._sequence, 2)
+        self.assertEqual(inspected, [])
+        gate.assert_not_called()
+        self.assertEqual(pub.sent, [])
+
+    def test_public_header_encoding_still_requires_final_connection_gate(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        pub = Publisher()
+        adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+        self.addCleanup(adapter.close)
+        denied = mock.Mock(side_effect=InvalidCommandError('ownership changed'))
+        with self.assertRaisesRegex(InvalidCommandError, 'ownership changed'):
+            adapter.publish(make_command(), guard=denied)
+        denied.assert_called_once()
+        self.assertEqual(pub._sequence, 1)
+        self.assertEqual(pub.sent, [])
+        adapter.publish(make_command(), guard=lambda send: send())
+        self.assertEqual(pub.sent, [oracle(make_command(), pub.stamp, pub._node_name, 1)])
+
+    def test_transport_close_frees_header_context_before_node_close(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        from aorta.errors import InternalError, NotFoundError
+        for free_error in (0, -5):
+            with self.subTest(free_error=free_error):
+                pub = Publisher()
+                adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+                pub.free_error = free_error
+                transport = object.__new__(_AortaTransport)
+                transport._closed = False
+                transport._info_lock = threading.Lock()
+                transport._body_lock = threading.Lock()
+                transport._info_clients = {}
+                transport._body_publisher = adapter
+                observed = []
+                transport.node = SimpleNamespace(close=lambda: observed.append(tuple(pub.freed)))
+                if free_error:
+                    with self.assertRaises(InternalError):
+                        transport.close()
+                else:
+                    transport.close()
+                transport.close()
+                self.assertEqual(pub.freed, [1])
+                self.assertEqual(observed, [(1,)])
+                with self.assertRaises(NotFoundError):
+                    adapter.publish(make_command(), guard=lambda send: send())
+                self.assertFalse(pub.sent)
+
+    def test_header_construction_failure_preserves_primary_and_root_cleanup(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        pub = Publisher()
+        binding = pub.native_header_binding()
+        binding.close.side_effect = OSError('root cleanup failed')
+        with mock.patch.object(pub, 'native_header_binding', return_value=binding), \
+                mock.patch.object(native, 'HeaderContext', side_effect=ValueError('context create failed')):
+            with self.assertRaisesRegex(ValueError, 'context create failed') as raised:
+                NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+        self.assertIsInstance(raised.exception.__cause__, OSError)
+        binding.close.assert_called_once_with()
+        self.assertFalse(pub.contexts)
+        self.assertFalse(pub.sent)
+
+    def test_root_cleanup_failure_consumes_clone_and_preserves_first_error(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        from aorta.errors import InternalError
+        pub = Publisher()
+        binding = pub.native_header_binding()
+        binding.close.side_effect = OSError('root cleanup failed')
+        pub.free_error = -5
+        with mock.patch.object(pub, 'native_header_binding', return_value=binding):
+            with self.assertRaisesRegex(OSError, 'root cleanup failed') as raised:
+                NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+        self.assertIsInstance(raised.exception.__cause__, InternalError)
+        binding.close.assert_called_once_with()
+        self.assertEqual(pub.freed, [1])
+        self.assertFalse(pub.contexts)
+        self.assertFalse(pub.sent)
+
     def test_schema_mismatch_fails_before_publish(self):
         from locomotion_aorta._native_body_codec import NativeBodyPublisher
         pub = Publisher()
         with self.assertRaisesRegex(RuntimeError, 'pinned BodyCmd3'):
             NativeBodyPublisher(pub, SimpleNamespace(SCHEMA_HASH_HEX='wrong', SCHEMA_BFBS=b''))
         self.assertFalse(pub.sent)
+
+    def test_missing_public_header_binding_has_no_private_field_fallback(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        publisher = SimpleNamespace(publish_bytes=mock.Mock())
+        with self.assertRaisesRegex(RuntimeError, 'public native_header_binding'):
+            NativeBodyPublisher(publisher, importlib.import_module('body_cmd_schema_meta'))
+        publisher.publish_bytes.assert_not_called()
 
     def test_old_native_body2_cannot_pass_matching_metadata_guard(self):
         from locomotion_aorta._native_body_codec import NativeBodyPublisher
@@ -253,7 +448,7 @@ class NativeBodyCmdTest(unittest.TestCase):
         transport._body_publisher = NativeBodyPublisher(pub, transport._bindings.body_cmd_schema_meta)
         transport._publish_body(make_command(), lambda send: send())
         trace = transport._last_publish_timing()
-        self.assertIn('core_clock_call_wall_ns', trace)
+        self.assertIn('header_reserve_ns', trace)
         self.assertIn('send_call_wall_ns', trace)
         pub.failure = OSError('send')
         with self.assertRaises(OSError):transport._publish_body(make_command(), lambda send: send())

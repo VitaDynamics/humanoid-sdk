@@ -40,9 +40,16 @@ add_library(ort SHARED IMPORTED)
 set_target_properties(ort PROPERTIES
   IMPORTED_LOCATION "${ort_root}/lib/libonnxruntime.so.${ort_version}"
   INTERFACE_INCLUDE_DIRECTORIES "${ort_root}/include")
+# Public native header types/functions must come from the matching Core output.
+# Older vendored headers cannot stand in for the fixed bee contract.
+set(AORTA_NATIVE_HEADER_INCLUDE_DIR "" CACHE PATH "Directory containing bee-generated aorta.h")
+if(NOT EXISTS "${AORTA_NATIVE_HEADER_INCLUDE_DIR}/aorta.h")
+  message(FATAL_ERROR "Real bee-generated aorta.h required: set AORTA_NATIVE_HEADER_INCLUDE_DIR")
+endif()
 pybind11_add_module(_body_cmd_native NO_EXTRAS WITH_SOABI
   cpp/body_cmd_encoder.cpp cpp/body_state_decoder.cpp cpp/end_effector_decoder.cpp)
 target_include_directories(_body_cmd_native PRIVATE
+  "${AORTA_NATIVE_HEADER_INCLUDE_DIR}"
   cpp/body_cmd_vendor
   cpp/body_cmd_vendor/message/schemas/topic/lowlevel
   "${CMAKE_CURRENT_SOURCE_DIR}/cpp/body_cmd_vendor/declared-headers/generated/external/aorta~/message/schemas/system")

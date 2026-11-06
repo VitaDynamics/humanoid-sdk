@@ -4,10 +4,14 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
+
+#include <aorta.h>
 
 #include "body_cmd_vendor/message/schemas/topic/lowlevel/body_cmd_generated.h"
 #include "body_state_decoder.h"
@@ -30,8 +34,49 @@ float Float(py::handle value) {
   return result;
 }
 
+class HeaderContext {
+ public:
+  explicit HeaderContext(py::object binding) : binding_(std::move(binding)) {
+    reserve_ = reinterpret_cast<decltype(&aorta_publisher_header_context_try_reserve)>(
+        binding_.attr("reserve_address").cast<uintptr_t>());
+    free_ = reinterpret_cast<decltype(&aorta_publisher_header_context_free)>(
+        binding_.attr("free_address").cast<uintptr_t>());
+    node_ = binding_.attr("publisher_node").cast<std::string>();
+    const bool include = binding_.attr("include_publisher_node").cast<bool>();
+    if (!reserve_ || !free_ || (!include && !node_.empty()))
+      throw py::value_error("invalid public native header binding");
+    context_ = reinterpret_cast<aorta_header_context_t>(
+        binding_.attr("acquire_context")().cast<uintptr_t>());
+    if (!context_) throw py::value_error("native header context is null");
+  }
+  HeaderContext(const HeaderContext&) = delete;
+  HeaderContext& operator=(const HeaderContext&) = delete;
+  ~HeaderContext() { Close(); }
+  aorta_result_t Close() {
+    const auto context = context_;
+    context_ = nullptr;  // Valid free consumes the handle even on INTERNAL.
+    return context ? free_(context) : AORTA_OK;
+  }
+  aorta_result_t Reserve(aorta_native_header_t* out) {
+    return context_ ? reserve_(context_, out) : AORTA_ERR_NOT_FOUND;
+  }
+  const std::string& Node() const { return node_; }
+
+ private:
+  // Retain the same publisher and the library owning these function addresses.
+  py::object binding_;
+  decltype(&aorta_publisher_header_context_try_reserve) reserve_ = nullptr;
+  decltype(&aorta_publisher_header_context_free) free_ = nullptr;
+  aorta_header_context_t context_ = nullptr;
+  std::string node_;
+};
+static_assert(sizeof(aorta_native_header_t) == 16);
+static_assert(offsetof(aorta_native_header_t, sequence) == 0);
+static_assert(offsetof(aorta_native_header_t, publish_stamp_ns) == 8);
+
 py::tuple Encode(py::object command, uint64_t stamp, py::object node,
-                 uint64_t header_sequence, bool measure) {
+                 uint64_t header_sequence, bool measure,
+                 const std::string* prepared_node = nullptr) {
   const auto begin = measure ? Clock::now() : Stamp{};
   py::object joints = command.attr("joints");
   if (!py::isinstance<py::tuple>(joints) || py::len(joints) != 31)
@@ -74,7 +119,9 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
     quat.emplace();
     for (size_t i = 0; i < 4; ++i) (*quat)[i] = Float(root[py::int_(i)]);
   }
-  std::string publisher_node = node.is_none() ? "" : node.cast<std::string>();
+  std::string node_storage;
+  const auto& publisher_node = prepared_node ? *prepared_node
+      : (node_storage = node.is_none() ? "" : node.cast<std::string>());
   const auto marshalled = measure ? Clock::now() : Stamp{};
   Stamp start{}, finish{};
   if (measure) {
@@ -125,6 +172,24 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
   timing["encode_return_bytes_ns"] = Ns(acquired, copied);
   return py::make_tuple(bytes, timing);
 }
+
+py::tuple EncodeWithHeader(py::object command, HeaderContext& context, bool measure) {
+  aorta_native_header_t header{};  // Per-call storage also isolates getter reentry.
+  const auto began = measure ? Clock::now() : Stamp{};
+  const auto rc = context.Reserve(&header);
+  const auto reserved = measure ? Clock::now() : Stamp{};
+  if (rc != AORTA_OK) return py::make_tuple(rc, py::none(), py::none());
+  if (header.publish_stamp_ns < 0)
+    throw py::type_error("native header timestamp cannot be encoded as uint64");
+  auto encoded = Encode(command, static_cast<uint64_t>(header.publish_stamp_ns),
+                        py::none(), header.sequence, measure, &context.Node());
+  if (measure) {
+    auto timing = encoded[1].cast<py::dict>();
+    timing["header_reserve_ns"] = Ns(began, reserved);
+    timing["header_sequence"] = header.sequence;
+  }
+  return py::make_tuple(rc, encoded[0], encoded[1]);
+}
 }  // namespace
 
 PYBIND11_MODULE(_body_cmd_native, module) {
@@ -132,7 +197,15 @@ PYBIND11_MODULE(_body_cmd_native, module) {
   BindEndEffectorFeedback(module);
   module.attr("BODY_SCHEMA_SHA256") = BODY_CMD_SCHEMA_SHA256;
   module.attr("BODY_CMD_PROTOCOL_VERSION") = 3;
-  module.def("encode", &Encode, py::arg("command"), py::arg("publish_stamp_ns"),
+  py::class_<HeaderContext>(module, "HeaderContext")
+      .def(py::init<py::object>())
+      .def("close", &HeaderContext::Close);
+  module.def("encode_with_header", &EncodeWithHeader, py::arg("command"),
+             py::arg("context"), py::arg("measure") = false);
+  module.def("encode", [](py::object command, uint64_t stamp, py::object node,
+                           uint64_t sequence, bool measure) {
+    return Encode(command, stamp, node, sequence, measure);
+  }, py::arg("command"), py::arg("publish_stamp_ns"),
              py::arg("publisher_node"), py::arg("header_sequence"),
              py::arg("measure") = false);
 }

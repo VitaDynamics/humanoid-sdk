@@ -1,5 +1,4 @@
 """Pinned Aorta header adapter and native BodyCmd3 encoder."""
-import ctypes
 import hashlib
 import time
 from functools import lru_cache
@@ -35,41 +34,44 @@ class NativeBodyPublisher:
                 or hashlib.sha256(schema_meta.SCHEMA_BFBS).hexdigest()
                 != _body_cmd_native.BODY_SCHEMA_SHA256):
             raise RuntimeError('native BodyCmd encoder requires the pinned BodyCmd3 schema')
-        # Aorta 2026.10.20 has public publish_bytes but no public header-reserve
-        # API. Keep its counter, Core clock and captured node policy exactly.
-        for name in ('_seq_lock', '_sequence', '_lib', '_node_name', '_include_node', '_closed'):
-            if not hasattr(publisher, name):
-                raise RuntimeError('unsupported Aorta publisher header ABI: ' + name)
+        prepare = getattr(publisher, 'native_header_binding', None)
+        if not callable(prepare):
+            raise RuntimeError('public native_header_binding from the fixed bee source is required')
         self.publisher = publisher
         self.native = _body_cmd_native
+        binding = prepare()
+        try:
+            self._header = self.native.HeaderContext(binding)
+        except BaseException as primary:
+            try:
+                binding.close()
+            except BaseException as cleanup:
+                raise primary from cleanup
+            raise
+        try:
+            binding.close()  # The native clone retains this binding/library independently.
+        except BaseException as primary:
+            try:
+                self.close()
+            except BaseException as cleanup:
+                raise primary from cleanup
+            raise
+
+    def close(self):
+        from aorta.errors import exception_for_code
+        rc = self._header.close()
+        if rc:
+            raise exception_for_code(rc, 'native header context free failed; handle consumed')
 
     def publish(self, command, trace=None, guard=None):
-        from aorta.errors import AortaError, check_rc
-        publisher = self.publisher
-        if publisher._closed:
-            raise AortaError('publish on a closed Publisher')
+        from aorta.errors import exception_for_code
         measured = trace is not None
         begin = time.perf_counter_ns() if measured else 0
-        with publisher._seq_lock:
-            sequence = publisher._sequence
-            publisher._sequence += 1
-        if measured:
-            trace['header_reserve_ns'] = time.perf_counter_ns() - begin
-            trace['header_sequence'] = sequence
-        stamp = ctypes.c_int64(0)
-        begin = time.perf_counter_ns() if measured else 0
         try:
-            rc = publisher._lib.aorta_now_ns(ctypes.byref(stamp))
-            check_rc(publisher._lib, rc, 'aorta_now_ns')
-        finally:
-            if measured:
-                trace['core_clock_call_wall_ns'] = time.perf_counter_ns() - begin
-        begin = time.perf_counter_ns() if measured else 0
-        try:
-            payload, native_trace = self.native.encode(
-                command, stamp.value,
-                publisher._node_name if publisher._include_node else None,
-                sequence, measured)
+            rc, payload, native_trace = self.native.encode_with_header(command, self._header, measured)
+            if rc:
+                # This lane returns codes; last_error may belong to an older call.
+                raise exception_for_code(rc, 'native header reservation failed')
             if measured:
                 trace.update(native_trace)
         finally:
@@ -79,9 +81,7 @@ class NativeBodyPublisher:
         try:
             if guard is None:
                 raise RuntimeError('BodyCmd submission requires the connection gate')
-            guard(lambda: publisher.publish_bytes(payload))
+            guard(lambda: self.publisher.publish_bytes(payload))
         finally:
             if measured:
-                # Includes ctypes marshaling/GIL reacquisition; not pure Core
-                # send time, network delivery or hardware output completion.
                 trace['send_call_wall_ns'] = time.perf_counter_ns() - begin

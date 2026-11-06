@@ -329,6 +329,7 @@ class StateSourceTest(unittest.TestCase):
         transport.node, transport._info_lock = make_node(), threading.Lock()
         transport._info_clients, transport._closed = {}, False
         transport._body_lock = threading.Lock()
+        transport._body_publisher = None
         transport._bindings = SimpleNamespace(aorta=aorta, get_robot_info_request=request,
             get_robot_info_response=response, get_robot_info_schema_meta=meta)
         reply = robot_info_reply()

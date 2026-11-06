@@ -234,7 +234,11 @@ class _AortaTransport:
                 try:
                     _close_info_client(self._info_clients)
                 finally:
-                    self.node.close()
+                    try:
+                        if self._body_publisher is not None:
+                            self._body_publisher.close()
+                    finally:
+                        self.node.close()
 
     def _subscriber_spec(
         self, topic: str
