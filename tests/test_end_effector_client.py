@@ -638,6 +638,7 @@ class EndEffectorClientTest(unittest.TestCase):
         self.assertEqual(confirm_info(fresh_client, fresh_node, info_object(runtime=101)).runtime_id,
                          101)
         fresh_node.emit('left', 'state', state_object(runtime=101))
+        fresh_client.wait_output_ready(.5)
         self.assertEqual(fresh_client.publish(target()).key, CommandKey(42, 1))
 
     def test_runtime_poison_linearizes_before_reservation_and_final_typed_fill(self):
@@ -1560,6 +1561,7 @@ class EndEffectorClientTest(unittest.TestCase):
         node.emit('right', 'state', state_object(side=2, sample=2**64-1))
         self.assertEqual(left.state.state_id, 0)
         used = (right.state.sample_ref, left.state.sample_ref, left.touch.sample_ref)
+        left.wait_output_ready(.5)
         before = list(harness.transport.published)
         for sequence in (1, 2):
             result = left.publish(target(), input_observations=used)
@@ -1642,6 +1644,7 @@ class EndEffectorClientTest(unittest.TestCase):
                 client = EndEffectorClient('left', connection=c)
                 self.addCleanup(client.close)
                 confirm_info(client, node, info_object())
+                client.wait_output_ready(.5)
                 original = c._end_effector_control_context
                 entered, release = threading.Event(), threading.Event()
                 def blocked(*args, **kwargs):
@@ -1711,6 +1714,7 @@ class EndEffectorClientTest(unittest.TestCase):
             observation_sources=((SampleStream.EE_STATE, 1),))
         confirm_info(client, node, info_object(runtime=101))
         node.emit('left', 'state', state_object(runtime=101))
+        client.wait_output_ready(.5)
         with self.assertRaises(InvalidCommandError):
             client.publish(target(), input_observations=(old_sample,))
         self.assertEqual(node.commands, [])
@@ -1776,6 +1780,7 @@ class EndEffectorClientTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'user callback failed'):
             node.emit('left', 'state', state_object())
         self.assertEqual(client.wait_state(.01).pos, (.03125,))
+        client.wait_output_ready(.5)
         calls = []
         for index, handle in enumerate(node.handles):
             def close(index=index):

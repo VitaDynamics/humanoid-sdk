@@ -864,6 +864,21 @@ class EndEffectorExampleTest(unittest.TestCase):
         controller=recorded.controller
         controller.get_robot_info(.1)
         node=Node(); recorded.transport.node=node
+        original_factory=node.create_publisher_typed
+        samples={'left':1,'right':1}
+        def publisher(*args,**kwargs):
+            result=original_factory(*args,**kwargs)
+            original_publish=result.publish_bytes
+            def publish(payload):
+                original_publish(payload)
+                wire=node.commands[-1][1]
+                side='left' if wire.Side()==1 else 'right'
+                samples[side]+=1
+                state=state_object(side=wire.Side(),sample=samples[side])
+                node.emit(side,'state',state)
+            result.publish_bytes=publish
+            return result
+        node.create_publisher_typed=publisher
         clients=[]
         for side,wire_side in (('left',1),('right',2)):
             client=EndEffectorClient(side,connection=controller,
@@ -871,21 +886,6 @@ class EndEffectorExampleTest(unittest.TestCase):
             self.addCleanup(client.close); clients.append(client)
             info=info_object(side=wire_side); info.deviceModel=DeviceModel.AGX
             confirm_info(client,node,info); node.emit(side,'state',state_object(side=wire_side))
-        original_factory=node.create_publisher_typed
-        samples={'left':1,'right':1}
-        def publisher(*args,**kwargs):
-            result=original_factory(*args,**kwargs)
-            original_publish=result.publish_typed
-            def publish(fill):
-                original_publish(fill)
-                wire=node.commands[-1][1]
-                side='left' if wire.Side()==1 else 'right'
-                samples[side]+=1
-                state=state_object(side=wire.Side(),sample=samples[side])
-                node.emit(side,'state',state)
-            result.publish_typed=publish
-            return result
-        node.create_publisher_typed=publisher
         def sleep_with_ee_feedback(seconds):
             self.clock.sleep(seconds)
             for side, wire_side in (('left', 1), ('right', 2)):
@@ -1097,6 +1097,7 @@ class PartialFeedbackGuardTest(unittest.TestCase):
         self.clock_patch.start(); self.addCleanup(self.clock_patch.stop)
         info=info_object(); info.deviceModel=DeviceModel.LINKER_L6
         confirm_info(self.client,self.node,info)
+        self.client.wait_output_ready(.5)
 
     def emit(self,sample,fields,**changes):
         state=state_object(sample=sample); state.axes[0].validFields=fields
