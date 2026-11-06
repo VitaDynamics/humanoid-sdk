@@ -89,6 +89,9 @@ def ee_client(device):
         assert state.protocol_version == 3
         assert state.runtime_id == infos[0].runtime_id == infos[1].runtime_id
         assert not state.applied_key_valid
+        if device:
+            for endpoint in endpoints:
+                endpoint.wait_output_ready(5)
         controller.enter_external(5)
         try:
             def body_command():

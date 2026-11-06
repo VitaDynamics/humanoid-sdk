@@ -701,6 +701,8 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
     strict_hold = any(i.device_model in (DeviceModel.BRAINCO_REVO2, DeviceModel.LINKER_L6) for i in infos.values())
     if strict_hold and feedback_interval < 1.0:
         raise ValueError('hand feedback interval must be at least 1 second')
+    for client in clients:
+        client.wait_output_ready(timeout)
     return infos, prepared, returns, limits, rates, native_hz
 
 

@@ -82,6 +82,7 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
         self.feed('state', 'static/right_inhibited.fb', client=right)
         with self.assertRaisesRegex(RuntimeError, 'inhibited|permission|ready'):
             demo._EndpointGuard(right, right.info, 1., self.clock.monotonic).feedback(True)
+        self.client.wait_output_ready(.5)
         self.harness.accept_enter(); self.harness.controller.enter_external(timeout=.1)
         guard = demo._EndpointGuard(self.client, info, 1., self.clock.monotonic)
         target = demo.position_target(info, continued.pos, unit='rad')
@@ -130,6 +131,7 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
         self.assertTrue(all(mask & Field.ERROR_CODE and not mask & Field.POS for mask in zero.valid_fields))
         self.assertTrue(all(mask & Field.TEMPERATURE and not mask & Field.POS for mask in temp.valid_fields))
         self.assertIs(guard.feedback(True), position)
+        self.client.wait_output_ready(.5)
         self.harness.accept_enter(); self.harness.controller.enter_external(timeout=.1)
         target = demo.position_target(self.client.info, position.pos, unit='rad')
         command = guard.publish(target, position)

@@ -147,6 +147,10 @@ For an independently authorized motion session with a matching robot build:
    nonzero runtime; it does not query RobotInfo. A runtime change invalidates
    the client, so reconnect and reacquire control before creating a new client.
    Do not infer observations or ownership from Info alone.
+   For each selected writable endpoint call `wait_output_ready(timeout)` before
+   control entry. It waits for that endpoint's cold native Cmd layout and
+   publisher; it grants no control or device-output acknowledgement. Read-only
+   `wait_info` remains discovery and does not wait for native output resources.
 2. Call `active = controller.enter_control("HUMANOID_TELEOP", timeout)` and
    wait for it to return before sending EE input. The robot runs its local Body
    balance model. The SDK must not send BodyCmd PD, empty Body commands or a

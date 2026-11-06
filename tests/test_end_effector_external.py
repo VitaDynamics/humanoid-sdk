@@ -71,6 +71,9 @@ class Endpoint:
     def wait_info(self, timeout):
         return self.info
 
+    def wait_output_ready(self, timeout):
+        return self.info
+
     def wait_state(self, timeout, **kwargs):
         return self.state
 

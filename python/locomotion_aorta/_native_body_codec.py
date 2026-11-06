@@ -23,6 +23,37 @@ def decode_body_state_native(view):
     return _state_decoder()(payload, offset)
 
 
+def _close_header(context):
+    from aorta.errors import exception_for_code
+    rc = context.close()
+    if rc:
+        raise exception_for_code(rc, 'native header context free failed; handle consumed')
+
+
+def _prepare_header(publisher, factory):
+    prepare = getattr(publisher, 'native_header_binding', None)
+    if not callable(prepare):
+        raise RuntimeError('public native_header_binding from the fixed bee source is required')
+    binding = prepare()
+    try:
+        context = factory(binding)
+    except BaseException as primary:
+        try:
+            binding.close()
+        except BaseException as cleanup:
+            raise primary from cleanup
+        raise
+    try:
+        binding.close()  # The native clone retains this binding/library independently.
+    except BaseException as primary:
+        try:
+            _close_header(context)
+        except BaseException as cleanup:
+            raise primary from cleanup
+        raise
+    return context
+
+
 class NativeBodyPublisher:
     def __init__(self, publisher, schema_meta):
         from . import _body_cmd_native
@@ -34,34 +65,12 @@ class NativeBodyPublisher:
                 or hashlib.sha256(schema_meta.SCHEMA_BFBS).hexdigest()
                 != _body_cmd_native.BODY_SCHEMA_SHA256):
             raise RuntimeError('native BodyCmd encoder requires the pinned BodyCmd3 schema')
-        prepare = getattr(publisher, 'native_header_binding', None)
-        if not callable(prepare):
-            raise RuntimeError('public native_header_binding from the fixed bee source is required')
         self.publisher = publisher
         self.native = _body_cmd_native
-        binding = prepare()
-        try:
-            self._header = self.native.HeaderContext(binding)
-        except BaseException as primary:
-            try:
-                binding.close()
-            except BaseException as cleanup:
-                raise primary from cleanup
-            raise
-        try:
-            binding.close()  # The native clone retains this binding/library independently.
-        except BaseException as primary:
-            try:
-                self.close()
-            except BaseException as cleanup:
-                raise primary from cleanup
-            raise
+        self._header = _prepare_header(publisher, self.native.HeaderContext)
 
     def close(self):
-        from aorta.errors import exception_for_code
-        rc = self._header.close()
-        if rc:
-            raise exception_for_code(rc, 'native header context free failed; handle consumed')
+        _close_header(self._header)
 
     def publish(self, command, trace=None, guard=None):
         from aorta.errors import exception_for_code
@@ -85,3 +94,47 @@ class NativeBodyPublisher:
         finally:
             if measured:
                 trace['send_call_wall_ns'] = time.perf_counter_ns() - begin
+
+
+class NativeEEPublisher:
+    """Cold frozen layout; encode outside the connection's final send gate.
+
+    This still returns a copied bytes payload. It does not claim owned TX or
+    the upstream bounded RX/aggregate drain contract.
+    """
+    def __init__(self, publisher, schema_meta, info, sources):
+        from . import _body_cmd_native as native, _end_effector_codec as codec
+        codec.validate_info(info)
+        codec.validate_observation_sources(sources)
+        if (getattr(native, 'EE_CMD_PROTOCOL_VERSION', None) != 2 or
+                schema_meta.SCHEMA_HASH_HEX != native.EE_CMD_SCHEMA_SHA256 or
+                hashlib.sha256(schema_meta.SCHEMA_BFBS).hexdigest() != native.EE_CMD_SCHEMA_SHA256):
+            raise RuntimeError('native EE encoder requires the pinned EndEffectorCmd2 schema')
+        self.publisher = publisher
+        self._closed = False
+        self._header = _prepare_header(publisher, lambda binding: native.EECommandContext(
+            binding, info.runtime_id, info.layout_id, info.side, len(info.axis_names), sources))
+
+    def encode(self, command):
+        from aorta.errors import exception_for_code
+        rc, payload, _ = self._header.encode(command)
+        if rc:
+            raise exception_for_code(rc, 'native EE header reservation failed')
+        return payload
+
+    def publish_bytes(self, payload):
+        self.publisher.publish_bytes(payload)
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            _close_header(self._header)
+        except BaseException as primary:
+            try:
+                self.publisher.close()
+            except BaseException as cleanup:
+                raise primary from cleanup
+            raise
+        self.publisher.close()

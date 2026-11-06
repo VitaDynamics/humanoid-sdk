@@ -131,7 +131,7 @@ class EndEffectorClient:
         self._closed = False
         self._fatal = None
         self._latest = {'info': None, 'state': None, 'touch': None}
-        self._errors = {'info': None, 'state': None, 'touch': None}
+        self._errors = {'info': None, 'state': None, 'touch': None, 'cmd': None}
         self._callbacks = {'info': on_info, 'state': on_state, 'touch': on_touch}
         self._subscriptions = {}
         self._registering = set()
@@ -234,12 +234,26 @@ class EndEffectorClient:
         if discard:
             handle.close()
 
-    def _defer_registration(self, kind):
+    def _defer_registration(self, *kinds):
         with self._condition:
-            if (self._closed or self._fatal is not None or
-                    kind in self._subscriptions or kind in self._registering):
+            if self._closed or self._fatal is not None:
                 return
-            self._registering.add(kind)
+            info = self._latest['info']
+            pending = set()
+            for kind in kinds:
+                if kind == 'cmd':
+                    if (self._read_only or info is None or self._publisher is not None or
+                            self._errors['cmd'] is not None or
+                            not any(fields and not mock for fields, mock in
+                                    zip(info.supported_command_fields, info.is_mock))):
+                        continue
+                elif info is None or not info.touch_available or kind in self._subscriptions:
+                    continue
+                if kind not in self._registering:
+                    pending.add(kind)
+            if not pending:
+                return
+            self._registering.update(pending)
             if self._registration_worker is None:
                 self._registration_worker = _RegistrationWorker(
                     target=self._registration_loop,
@@ -248,25 +262,74 @@ class EndEffectorClient:
                     self._registration_worker.start()
                 except BaseException:
                     self._registration_worker = None
-                    self._registering.discard(kind)
+                    self._registering.difference_update(pending)
                     self._condition.notify_all()
                     raise
 
     def _registration_loop(self):
-        registration_error = None
+        with self._condition:
+            tasks = tuple(kind for kind in ('cmd', 'touch') if kind in self._registering)
         try:
-            self._register('touch', reserved=True)
-        except Exception as error:
-            registration_error = error
+            for kind in tasks:
+                try:
+                    if kind == 'cmd':
+                        self._prepare_publisher()
+                    else:
+                        self._register(kind, reserved=True)
+                except Exception as error:
+                    with self._condition:
+                        if not self._closed and self._fatal is None:
+                            self._errors[kind] = error
         finally:
             with self._condition:
                 # Release the reservation and its worker together, so an Info
                 # retry cannot claim work while the old worker still owns it.
-                self._registering.discard('touch')
+                self._registering.difference_update(tasks)
                 self._registration_worker = None
-                if registration_error is not None and not self._closed and self._fatal is None:
-                    self._errors['touch'] = registration_error
                 self._condition.notify_all()
+
+    def _prepare_publisher(self):
+        with self._condition:
+            self._ensure_open()
+            info = self._get('info')
+            if info is None or self._publisher is not None:
+                return
+        # Creating transport/native resources may block or reenter. Neither
+        # SDK condition is held, and no motion/control identity is reserved.
+        from ._native_body_codec import NativeEEPublisher
+        publisher = self._node.create_publisher_typed(
+            self._bindings.metas['cmd'], self._topic + '/cmd',
+            qos=self._bindings.aorta.QoS.realtime_control())
+        try:
+            prepared = NativeEEPublisher(publisher, self._bindings.metas['cmd'],
+                                         info, self._observation_sources)
+        except BaseException as primary:
+            try:
+                publisher.close()
+            except BaseException as cleanup:
+                raise primary from cleanup
+            raise
+
+        def attach():
+            current = self._get('info')
+            if current is None or _description(current) != _description(info):
+                raise InvalidCommandError('EE Info changed during output preparation')
+            if self._publisher is not None:
+                return False
+            self._publisher = prepared
+            self._condition.notify_all()
+            return True
+
+        try:
+            attached = self.connection._run_end_effector_gate(self, info.runtime_id, attach)
+        except BaseException as primary:
+            try:
+                prepared.close()
+            except BaseException as cleanup:
+                raise primary from cleanup
+            raise
+        if not attached:
+            prepared.close()
 
     def _receive(self, kind, view):
         with self._condition:
@@ -336,8 +399,8 @@ class EndEffectorClient:
         self._deliver(kind, value, callback)
 
     def _deliver(self, kind, value, callback):
-        if kind == 'info' and value.touch_available:
-            self._defer_registration('touch')
+        if kind == 'info':
+            self._defer_registration('cmd', 'touch')
         with self._condition:
             if self._closed or self._fatal is not None:
                 return
@@ -423,6 +486,32 @@ class EndEffectorClient:
         self._after_sample(after_sample, SampleStream.EE_TOUCH)
         return self._wait('touch', timeout, after_sample)
 
+    def wait_output_ready(self, timeout=5.0):
+        """Wait for cold Cmd resources, separately from Info discovery/control.
+
+        Call before entering a periodic motion loop. This grants no ownership
+        and neither waits for a robot ACK nor claims a physical output.
+        """
+        deadline = _deadline(timeout)
+        with self._condition:
+            while True:
+                self._ensure_open()
+                if self._read_only:
+                    raise InvalidCommandError('read-only EndEffectorClient cannot prepare output')
+                info = self._get('info')
+                if self._errors['cmd'] is not None:
+                    raise RuntimeError('EE native output preparation failed') from self._errors['cmd']
+                if info is not None:
+                    if not any(fields and not mock for fields, mock in
+                               zip(info.supported_command_fields, info.is_mock)):
+                        raise InvalidCommandError('endpoint has no controllable axes')
+                    if self._publisher is not None:
+                        return info
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('EE native output preparation did not complete')
+                self._condition.wait(remaining)
+
     def publish(self, target, *, input_observations=()):
         with self._publish_lock:
             with self._condition:
@@ -441,15 +530,17 @@ class EndEffectorClient:
                     prepared = codec.prepare_target(info, target)
                 except (ValueError, TypeError, OverflowError) as error:
                     raise InvalidCommandError(str(error)) from error
+                if self._errors['cmd'] is not None:
+                    raise RuntimeError('EE native output preparation failed') from self._errors['cmd']
+                if self._publisher is None:
+                    raise InvalidCommandError('EE output is not prepared; call wait_output_ready before motion')
 
             def prepare_send():
                 self._ensure_open()
                 if self._latest['info'].runtime_id != info.runtime_id:
                     raise InvalidCommandError('runtime_id changed before reservation')
                 if self._publisher is None:
-                    self._publisher = self._node.create_publisher_typed(
-                        self._bindings.metas['cmd'], self._topic + '/cmd',
-                        qos=self._bindings.aorta.QoS.realtime_control())
+                    raise InvalidCommandError('EE publisher retired before reservation')
                 return self._publisher
 
             runtime_id = info.runtime_id
@@ -460,6 +551,7 @@ class EndEffectorClient:
                 info.runtime_id, info.layout_id, info.side,
                 context.control_id,
                 CommandKey(context.session_id, context.sequence), prepared, input_observations)
+            payload = publisher.encode(submission)
 
             def submit(current):
                 self._ensure_open()
@@ -472,11 +564,7 @@ class EndEffectorClient:
                     raise InvalidCommandError('runtime_id changed during reservation')
                 if self._publisher is not publisher:
                     raise InvalidCommandError('EE publisher retired before submission')
-                publisher.publish_typed(
-                    lambda builder, header: codec.fill_command(
-                        self._bindings, submission, builder, header
-                    )
-                )
+                publisher.publish_bytes(payload)
 
             self.connection._end_effector_control_context(self, runtime_id, submit)
             return submission

@@ -27,6 +27,8 @@ class EEPullTest(unittest.TestCase):
             client = EndEffectorClient(side, connection=owner.controller, **options)
         self.addCleanup(client.close)
         confirm_info(client, node, info_object(side=1 if side == 'left' else 2))
+        if not client._read_only:
+            client.wait_output_ready(.5)
         return client, node, owner
 
     def test_contending_waiters_sleep_and_receive_same_actual_sample_on_both_sides(self):

@@ -20,6 +20,7 @@ from fake_transport import FakeTransport
 from body_fixtures import robot_info_reply
 from test_controller import ControllerHarness, make_command, _BODY_TEST_TARGETS
 from test_end_effector_codec import info_object, state_object, touch_object, pack, target
+from test_native_body_cmd import Publisher as HeaderPublisher
 from locomotion_aorta import (
     AortaBindingsUnavailableError, CONTROL_REQUEST_TOPIC, CONTROL_STATUS_TOPIC, ControllerClosedError,
     ControlAck, ControlStatus, ControlOperation,
@@ -65,16 +66,23 @@ class Handle:
 class Publisher(Handle):
     def __init__(self, node, topic):
         super().__init__()
+        HeaderPublisher.__init__(self)
         self.node, self.topic = node, topic
 
-    def publish_typed(self, fill):
-        builder = flatbuffers.Builder(512)
-        builder.Finish(fill(builder, 0))
-        payload = bytes(builder.Output())
+    # Reuse the original synthetic C callback binding over the real native
+    # context, not a Python replacement for the native encoder or Core ABI.
+    native_header_binding = HeaderPublisher.native_header_binding
+    clock = HeaderPublisher.clock
+
+    def publish_bytes(self, payload):
         wire = self.node.bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(payload)
         self.node.commands.append((self.topic, wire))
         if self.node.publish_error is not None:
             raise self.node.publish_error
+
+    def close(self):
+        self._closed = True
+        super().close()
 
 
 class TouchRPC(Handle):
@@ -222,6 +230,102 @@ class PendingTransport(FakeTransport):
 
 
 class EndEffectorClientTest(unittest.TestCase):
+    def test_cold_native_preparation_is_outside_both_conditions_and_info_stays_readable(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, feedback=False)
+        entered, release = threading.Event(), threading.Event()
+        original = node.create_publisher_typed
+        before = harness.controller._next_external_sequence
+
+        def create(*args, **kwargs):
+            _reach_barrier(entered, release, 'cold native publisher barrier was not released')
+            return original(*args, **kwargs)
+
+        with patch.object(node, 'create_publisher_typed', side_effect=create) as factory:
+            try:
+                node.emit('left', 'info', info_object(), wait=False)
+                self.assertTrue(entered.wait(1))
+                self.assertEqual(client.wait_info(.01).runtime_id, 100)
+                for condition in (harness.controller._condition, client._condition):
+                    self.assertTrue(condition.acquire(blocking=False))
+                    condition.release()
+                with self.assertRaises(TimeoutError):
+                    client.wait_output_ready(.001)
+                self.assertEqual(harness.controller._next_external_sequence, before)
+                release.set()
+                client.wait_output_ready(.5)
+                node.emit('left', 'info', info_object())
+                self.assertEqual(factory.call_count, 1)
+                self.assertEqual(harness.controller._next_external_sequence, before)
+            finally:
+                release.set()
+
+    def test_cmd_native_failure_does_not_corrupt_info_readonly_or_body_only_entry(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, feedback=False)
+        with patch.object(node, 'create_publisher_typed', side_effect=OSError('cold output failed')) as factory:
+            node.emit('left', 'info', info_object(), wait=False)
+            with client._condition:
+                self.assertTrue(client._condition.wait_for(
+                    lambda: client._registration_worker is None, 1))
+            self.assertEqual(client.wait_info(.01).runtime_id, 100)
+            with self.assertRaisesRegex(RuntimeError, 'output preparation failed'):
+                client.wait_output_ready(.01)
+            node.emit('left', 'info', info_object())
+            self.assertEqual(factory.call_count, 1)
+        # No selected EE write: the shared BodyOnly entry is not made to wait
+        # for every discovered endpoint's native preparation.
+        harness.accept_enter()
+        harness.controller.enter_external(.1)
+        self.assertEqual(node.commands, [])
+        readonly_harness, readonly_node = self.harness(running=False)
+        with patch.object(readonly_node, 'create_publisher_typed', side_effect=AssertionError('readonly native')):
+            readonly = self.client(readonly_harness, readonly_node, read_only=True)
+            self.assertEqual(readonly.wait_info(.01).runtime_id, 100)
+
+    def test_late_cold_publisher_after_close_is_destroyed_without_attachment_or_key(self):
+        harness, node = self.harness(running=False)
+        client = self.client(harness, node, feedback=False)
+        original = node.create_publisher_typed
+        created = []
+        before = harness.controller._next_external_sequence
+
+        def create(*args, **kwargs):
+            publisher = original(*args, **kwargs)
+            created.append(publisher)
+            client.close()  # Same existing worker: close never joins itself.
+            return publisher
+
+        with patch.object(node, 'create_publisher_typed', side_effect=create):
+            node.emit('left', 'info', info_object(), wait=False)
+            with client._condition:
+                self.assertTrue(client._condition.wait_for(
+                    lambda: client._registration_worker is None, 1))
+        self.assertIsNone(client._publisher)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].close_count, 1)
+        self.assertEqual(len(created[0].freed), 1)
+        self.assertEqual(harness.controller._next_external_sequence, before)
+        self.assertEqual(node.commands, [])
+
+    def test_actual_native_encode_runs_before_final_gate_without_conditions_owned(self):
+        harness, node = self.harness()
+        client = self.client(harness, node)
+        original = client._publisher.encode
+        checked = []
+
+        def encode(command):
+            self.assertFalse(harness.controller._condition._is_owned())
+            self.assertFalse(client._condition._is_owned())
+            payload = original(command)
+            checked.append(command)
+            return payload
+
+        with patch.object(client._publisher, 'encode', side_effect=encode):
+            sent = client.publish(target())
+        self.assertEqual(checked, [sent])
+        self.assertEqual(codec.decode_cmd(node.commands[0][1]), sent)
+
     def confirm_restart(self, harness, runtime_id=101):
         harness.transport.get_robot_info = lambda timeout: dataclasses.replace(
             robot_info_reply(), runtime_id=runtime_id)
@@ -317,6 +421,8 @@ class EndEffectorClientTest(unittest.TestCase):
             node.emit(side, 'state', state_object(side=wire_side))
             if touch:
                 node.emit(side, 'touch', touch_object(side=wire_side))
+            if not client._read_only:
+                client.wait_output_ready(.5)
         return client
 
     def pull_harness(self):
@@ -576,7 +682,7 @@ class EndEffectorClientTest(unittest.TestCase):
         left = self.client(harness, node, touch=True)
         right = self.client(harness, node, 'right', touch=True)
         right.publish(target())
-        publisher = right._publisher
+        publisher = right._publisher.publisher
         entered, release = threading.Event(), threading.Event()
 
         def block():
