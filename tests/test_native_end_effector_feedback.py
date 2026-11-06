@@ -17,11 +17,176 @@ from locomotion_aorta.end_effector_types import (
     EndEffectorState, EndEffectorTouch, InhibitReason, RegionStamp,
 )
 from test_end_effector_codec import module, pack, state_object, touch_object
+from test_native_body_cmd import Publisher
+from locomotion_aorta.end_effector_types import (
+    CommandKey, EndEffectorSubmission, EndEffectorTarget, Field, SampleRef,
+)
 
 try:
     from locomotion_aorta import _body_cmd_native as native
 except ImportError:
     native = None
+
+
+@unittest.skipIf(native is None, 'installed native codec required; Pkg requires zero skips')
+class NativeEndEffectorCommandTest(unittest.TestCase):
+    @staticmethod
+    def command(n=1, sources=(), side=1):
+        target = EndEffectorTarget((1,)*n, (0x3f,)*n, (.03125,)*n,
+                                  (-.015625,)*n, (.125,)*n, (-.25,)*n, (.0625,)*n)
+        samples = tuple(SampleRef(100, stream, sample_side, 100+i, 200+i, 7)
+                        for i, (stream, sample_side) in enumerate(sources))
+        return EndEffectorSubmission(100, 7, side, 13, CommandKey(5, 0), target, samples)
+
+    def context(self, command, publisher=None):
+        publisher = Publisher() if publisher is None else publisher
+        binding = publisher.native_header_binding()
+        context = native.EECommandContext(binding, command.runtime_id, command.layout_id,
+            command.side, len(command.target.mode),
+            tuple((s.stream, s.side) for s in command.input_observations))
+        binding.close()
+        self.addCleanup(context.close)
+        return publisher, context
+
+    def oracle(self, command, publisher, sequence):
+        from aorta.header import build_aorta_header
+        builder = flatbuffers.Builder(256)
+        header = build_aorta_header(builder, publish_stamp_ns=publisher.stamp,
+            publisher_node=publisher._node_name if publisher._include_node else None,
+            sequence=sequence)
+        builder.Finish(codec.fill_command(codec.load_bindings(), command, builder, header))
+        return bytes(builder.Output())
+
+    def test_real_cmd_root_matches_python_bytes_for_frozen_n_k_sides_and_headers(self):
+        sources = ((1, 0), (2, 2), (3, 1), (2, 1), (3, 2))
+        for n in (1, 6, 7, 12, 33):
+            for selected in ((), sources[1:3], sources):
+                for side, name in ((1, ''), (2, '机器人\x00EE')):
+                    command = self.command(n, selected, side)
+                    publisher = Publisher(node_name=name)
+                    publisher.stamp = 0
+                    _, context = self.context(command, publisher)
+                    for stamp in (0, 123):
+                        publisher.stamp = stamp
+                        sequence = publisher._sequence
+                        rc, payload, trace = context.encode(command, True)
+                        self.assertEqual(rc, 0)
+                        self.assertEqual(payload, self.oracle(command, publisher, sequence))
+                        self.assertEqual(trace['encode_buffer_capacity_bytes'], context.capacity_bytes)
+                        self.assertEqual(trace['encode_buffer_allocations'], 1)
+                        self.assertEqual(trace['header_sequence'], sequence)
+        self.assertEqual(native.EE_CMD_PROTOCOL_VERSION, 2)
+        self.assertEqual(native.EE_CMD_SCHEMA_SHA256,
+                         codec.load_bindings().metas['cmd'].SCHEMA_HASH_HEX)
+
+    def test_frozen_identity_and_nonzero_control_fail_without_relabel_or_send(self):
+        command = self.command()
+        publisher, context = self.context(command)
+        for changes in ({'runtime_id': 101}, {'runtime_id': True}, {'layout_id': 8},
+                        {'side': 2}, {'control_id': 0}, {'protocol_version': 1}):
+            with self.subTest(changes=changes), self.assertRaises((ValueError, TypeError)):
+                context.encode(dataclasses.replace(command, **changes))
+        self.assertEqual(publisher.sent, [])
+        rc, payload, _ = context.encode(command)
+        self.assertEqual(rc, 0)
+        decoded = codec.decode_cmd(module('EndEffectorCmd').EndEffectorCmd.GetRootAs(payload))
+        self.assertEqual((decoded.runtime_id, decoded.control_id, decoded.key), (100, 13, command.key))
+
+    def test_local_sample_r_and_order_checked_before_compact_wire_projection(self):
+        command = self.command(sources=((2, 2), (1, 0)))
+        publisher, context = self.context(command)
+        samples = command.input_observations
+        for wrong in ((dataclasses.replace(samples[0], runtime_id=99), samples[1]),
+                      tuple(reversed(samples)), samples[:1],
+                      (dataclasses.replace(samples[0], validity=16), samples[1])):
+            with self.assertRaises(ValueError):
+                context.encode(dataclasses.replace(command, input_observations=wrong))
+        selected = (dataclasses.replace(samples[0], sample_id=100, source_time_us=0, validity=0),
+                    dataclasses.replace(samples[1], sample_id=102, source_time_us=999, validity=15))
+        actual = dataclasses.replace(command, input_observations=selected)
+        _, payload, _ = context.encode(actual)
+        self.assertEqual(payload, self.oracle(actual, publisher, publisher._sequence-1))
+        decoded = codec.decode_cmd(module('EndEffectorCmd').EndEffectorCmd.GetRootAs(payload))
+        self.assertEqual(decoded.input_observations, selected)
+
+    def test_header_busy_clock_error_and_negative_stamp_precede_command_getters(self):
+        publisher, context = self.context(self.command())
+        class Unreadable:
+            @property
+            def protocol_version(self):
+                raise AssertionError('command getter ran after Header failure')
+        for field, code, consumed in (('reserve_error', -9, 0), ('clock_error', -5, 1)):
+            setattr(publisher, field, code)
+            self.assertEqual(context.encode(Unreadable()), (code, None, None))
+            self.assertEqual(publisher._sequence, consumed)
+            setattr(publisher, field, 0)
+        publisher.stamp = -1
+        with self.assertRaises(TypeError):
+            context.encode(Unreadable())
+        self.assertEqual(publisher._sequence, 2)
+        self.assertEqual(publisher.sent, [])
+
+    def test_axis_column_shape_is_frozen_and_bad_payload_does_not_poison_next_call(self):
+        command = self.command(2)
+        publisher, context = self.context(command)
+        for wrong in (dataclasses.replace(command.target, mode=(1,)),
+                      dataclasses.replace(command.target, command_fields=(1,)),
+                      dataclasses.replace(command.target, pos=(0.,)),
+                      dataclasses.replace(command.target, tau=(math.inf, 0.))):
+            with self.assertRaises(ValueError):
+                context.encode(dataclasses.replace(command, target=wrong))
+        _, payload, _ = context.encode(command)
+        self.assertEqual(payload, self.oracle(command, publisher, publisher._sequence-1))
+        with self.assertRaises(AttributeError):
+            context.capacity_bytes = 1
+
+    def test_python_float_getter_reentry_preserves_each_call_axes_and_header(self):
+        outer = self.command(2)
+        inner = dataclasses.replace(outer, key=CommandKey(6, 9),
+            target=dataclasses.replace(outer.target, pos=(.01, .02)))
+        publisher, context = self.context(outer)
+        nested = []
+        class Reenter:
+            def __float__(self):
+                nested.append(context.encode(inner)[1])
+                return .03125
+        with_reentry = dataclasses.replace(outer,
+            target=dataclasses.replace(outer.target, pos=(Reenter(), .03125)))
+        _, payload, _ = context.encode(with_reentry)
+        self.assertEqual(payload, self.oracle(outer, publisher, 0))
+        self.assertEqual(nested, [self.oracle(inner, publisher, 1)])
+
+    def test_public_clone_close_and_closed_publisher_do_not_read_or_send(self):
+        publisher, context = self.context(self.command())
+        self.assertEqual(context.close(), 0)
+        self.assertEqual(context.close(), 0)
+        self.assertEqual(len(publisher.freed), 1)
+        self.assertEqual(context.encode(object()), (-2, None, None))
+        other, live = self.context(self.command())
+        other._closed = True
+        self.assertEqual(live.encode(object()), (-2, None, None))
+        self.assertEqual(other.sent, [])
+
+    def test_selected_zero_empty_columns_and_float32_edges_keep_wire_bits(self):
+        command = self.command(2)
+        publisher, context = self.context(command)
+        for first in (0., -0., 2**-149, -2**-149, .03125):
+            current = dataclasses.replace(command, target=dataclasses.replace(
+                command.target, pos=(first, .02), vel=(), current=(),
+                command_fields=tuple(mask & ~(Field.VEL | Field.CURRENT)
+                                     for mask in command.target.command_fields)))
+            _, payload, _ = context.encode(current)
+            self.assertEqual(payload, self.oracle(current, publisher, publisher._sequence-1))
+
+    def test_cold_bad_layout_releases_header_clone_without_reserving_a_sequence(self):
+        for n, sources in ((0, ()), (1, ((2, 1), (2, 1))), (1, ((1, 2),))):
+            publisher = Publisher()
+            binding = publisher.native_header_binding()
+            with self.assertRaises(ValueError):
+                native.EECommandContext(binding, 100, 7, 1, n, sources)
+            self.assertEqual(publisher._sequence, 0)
+            self.assertEqual(len(publisher.freed), 1)
+            self.assertEqual(publisher.sent, [])
 
 
 @unittest.skipIf(native is None, 'installed native feedback codec required; Pkg requires zero skips')

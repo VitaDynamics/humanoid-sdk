@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <aorta.h>
 
@@ -76,10 +77,11 @@ void WriteBody(flatbuffers::FlatBufferBuilder& builder,
 
 class BodyAllocator final : public flatbuffers::DefaultAllocator {
  public:
-  explicit BodyAllocator(size_t limit = 0) : limit_(limit) {}
+  explicit BodyAllocator(size_t limit = 0, const char* root = "BodyCmd")
+      : limit_(limit), root_(root) {}
   uint8_t* allocate(size_t size) override {
     if (limit_ && size > limit_)
-      throw std::length_error("BodyCmd exceeds its cold layout capacity");
+      throw std::length_error(std::string(root_) + " exceeds its cold layout capacity");
     maximum_ = std::max(maximum_, size);
     ++allocations_;
     return flatbuffers::DefaultAllocator::allocate(size);
@@ -89,6 +91,7 @@ class BodyAllocator final : public flatbuffers::DefaultAllocator {
 
  private:
   const size_t limit_;
+  const char* const root_;
   size_t maximum_ = 0;
   size_t allocations_ = 0;
 };
@@ -112,7 +115,8 @@ size_t BodyCapacity(const std::string& publisher_node) {
 
 class HeaderContext {
  public:
-  explicit HeaderContext(py::object binding) : binding_(std::move(binding)) {
+  explicit HeaderContext(py::object binding, bool prepare_body = true)
+      : binding_(std::move(binding)) {
     reserve_ = reinterpret_cast<decltype(&aorta_publisher_header_context_try_reserve)>(
         binding_.attr("reserve_address").cast<uintptr_t>());
     free_ = reinterpret_cast<decltype(&aorta_publisher_header_context_free)>(
@@ -121,7 +125,7 @@ class HeaderContext {
     const bool include = binding_.attr("include_publisher_node").cast<bool>();
     if (!reserve_ || !free_ || (!include && !node_.empty()))
       throw py::value_error("invalid public native header binding");
-    body_capacity_ = BodyCapacity(node_);
+    if (prepare_body) body_capacity_ = BodyCapacity(node_);
     context_ = reinterpret_cast<aorta_header_context_t>(
         binding_.attr("acquire_context")().cast<uintptr_t>());
     if (!context_) throw py::value_error("native header context is null");
@@ -245,6 +249,167 @@ py::tuple EncodeWithHeader(py::object command, HeaderContext& context, bool meas
   }
   return py::make_tuple(rc, encoded[0], encoded[1]);
 }
+
+uint64_t EEId(py::handle value) {
+  if (!PyLong_CheckExact(value.ptr()))
+    throw py::value_error("EE identity must be uint64");
+  return py::cast<uint64_t>(value);
+}
+
+template <typename Axis, typename Sample>
+void WriteEE(flatbuffers::FlatBufferBuilder& builder, size_t n, size_t k,
+             Axis axis, Sample sample, uint64_t runtime, uint32_t layout,
+             uint8_t side, uint64_t control, const lowlevel::ee::CommandKey& key,
+             uint64_t created, uint64_t sent, uint64_t stamp,
+             const std::string& node, uint64_t sequence) {
+  const auto name = node.empty() ? flatbuffers::Offset<flatbuffers::String>()
+                                 : builder.CreateString(node);
+  aorta::sys::AortaHeaderBuilder header(builder);
+  header.add_publish_stamp_ns(stamp);
+  if (!node.empty()) header.add_publisher_node(name);
+  header.add_sequence(sequence);
+  const auto header_offset = header.Finish();
+  lowlevel::ee::SampleRef* samples;
+  const auto observations = builder.CreateUninitializedVectorOfStructs(k, &samples);
+  for (size_t i = 0; i < k; ++i) samples[i] = sample(i);
+  lowlevel::ee::AxisCommand* axes;
+  const auto values = builder.CreateUninitializedVectorOfStructs(n, &axes);
+  for (size_t i = 0; i < n; ++i) axes[i] = axis(i);
+  lowlevel::ee::EndEffectorCmdBuilder command(builder);
+  command.add_aorta_header(header_offset);
+  command.add_input_observations(observations);
+  command.add_axes(values);
+  builder.ForceDefaults(true);
+  command.add_protocol_version(2);
+  command.add_runtime_id(runtime);
+  command.add_key(&key);
+  command.add_layout_id(layout);
+  command.add_side(side);
+  command.add_control_id(control);
+  command.add_ts_client_created_us(created);
+  command.add_ts_client_send_us(sent);
+  builder.ForceDefaults(false);
+  builder.Finish(command.Finish());
+}
+
+class EECommandContext {
+ public:
+  EECommandContext(py::object binding, uint64_t runtime, uint32_t layout,
+                   uint8_t side, size_t n, py::tuple sources)
+      : header_(std::move(binding), false), runtime_(runtime), layout_(layout),
+        side_(side), n_(n) {
+    if (!runtime || (side != 1 && side != 2) || !n || sources.size() > 5)
+      throw py::value_error("invalid frozen EE command layout");
+    for (auto value : sources) {
+      const auto pair = py::cast<py::tuple>(value);
+      if (pair.size() != 2) throw py::value_error("invalid observation source");
+      const auto stream = pair[0].cast<uint8_t>();
+      const auto source_side = pair[1].cast<uint8_t>();
+      const std::pair<uint8_t, uint8_t> source(stream, source_side);
+      if (!((stream == 1 && source_side == 0) ||
+            ((stream == 2 || stream == 3) && (source_side == 1 || source_side == 2))) ||
+          std::find(sources_.begin(), sources_.end(), source) != sources_.end())
+        throw py::value_error("invalid or duplicate observation source");
+      sources_.push_back(source);
+    }
+    BodyAllocator allocation(0, "EndEffectorCmd");
+    // The same writer sizes the actual frozen N/K/node, including scratch,
+    // vectors, tables and all zero/nonzero Header-presence combinations.
+    for (uint64_t stamp : {uint64_t{0}, uint64_t{1}}) {
+      for (uint64_t sequence : {uint64_t{0}, uint64_t{1}}) {
+        flatbuffers::FlatBufferBuilder builder(256, &allocation);
+        WriteEE(builder, n_, sources_.size(),
+                [](size_t) { return lowlevel::ee::AxisCommand(); },
+                [](size_t) { return lowlevel::ee::SampleRef(); }, runtime_, layout_,
+                side_, 0, lowlevel::ee::CommandKey(), 0, 0, stamp, header_.Node(), sequence);
+      }
+    }
+    capacity_ = allocation.Maximum();
+  }
+  aorta_result_t Close() { return header_.Close(); }
+  size_t CapacityBytes() const { return capacity_; }
+
+  py::tuple EncodeCommand(py::object command, bool measure) {
+    aorta_native_header_t header{};
+    const auto began = measure ? Clock::now() : Stamp{};
+    const auto rc = header_.Reserve(&header);
+    const auto reserved = measure ? Clock::now() : Stamp{};
+    if (rc != AORTA_OK) return py::make_tuple(rc, py::none(), py::none());
+    if (header.publish_stamp_ns < 0)
+      throw py::type_error("native header timestamp cannot be encoded as uint64");
+    if (command.attr("protocol_version").cast<uint32_t>() != 2 ||
+        EEId(command.attr("runtime_id")) != runtime_ ||
+        command.attr("layout_id").cast<uint32_t>() != layout_ ||
+        command.attr("side").cast<uint8_t>() != side_)
+      throw py::value_error("EE command differs from its frozen Info");
+    const auto control = EEId(command.attr("control_id"));
+    if (!control) throw py::value_error("EE command requires nonzero control_id");
+    const auto key = command.attr("key");
+    const lowlevel::ee::CommandKey command_key(EEId(key.attr("session_id")),
+                                              EEId(key.attr("sequence")));
+    const auto created = EEId(command.attr("ts_client_created_us"));
+    const auto sent = EEId(command.attr("ts_client_send_us"));
+    const auto target = command.attr("target");
+    const auto mode = target.attr("mode").cast<py::tuple>();
+    const auto fields = target.attr("command_fields").cast<py::tuple>();
+    if (mode.size() != n_ || fields.size() != n_)
+      throw py::value_error("EE command axis count differs from frozen Info");
+    const char* names[] = {"pos", "vel", "vel_limit", "tau", "current"};
+    std::array<py::object, 5> columns;
+    for (size_t i = 0; i < columns.size(); ++i) {
+      columns[i] = target.attr(names[i]);
+      if (!py::isinstance<py::tuple>(columns[i]) ||
+          (py::len(columns[i]) && py::len(columns[i]) != n_))
+        throw py::value_error("EE command column differs from frozen Info");
+    }
+    const auto observations = command.attr("input_observations").cast<py::tuple>();
+    if (observations.size() != sources_.size())
+      throw py::value_error("EE observations differ from startup K");
+    BodyAllocator allocation(capacity_, "EndEffectorCmd");
+    flatbuffers::FlatBufferBuilder builder(capacity_, &allocation);
+    WriteEE(builder, n_, sources_.size(), [&](size_t index) {
+      std::array<float, 5> row{};
+      for (size_t i = 0; i < row.size(); ++i) {
+        if (py::len(columns[i])) row[i] = Float(columns[i][py::int_(index)]);
+        if (!std::isfinite(row[i])) throw py::value_error("EE command must be finite float32");
+      }
+      return lowlevel::ee::AxisCommand(fields[index].cast<uint32_t>(),
+          mode[index].cast<uint16_t>(), row[0], row[1], row[2], row[3], row[4]);
+    }, [&](size_t index) {
+      const auto sample = observations[index];
+      // Local R is checked before projecting the smaller wire SampleRef.
+      if (EEId(sample.attr("runtime_id")) != runtime_)
+        throw py::value_error("observation runtime_id differs from command runtime_id");
+      const auto stream = sample.attr("stream").cast<uint8_t>();
+      const auto side = sample.attr("side").cast<uint8_t>();
+      if (std::pair<uint8_t, uint8_t>(stream, side) != sources_[index])
+        throw py::value_error("EE observations differ from startup stream/side order");
+      const auto validity = sample.attr("validity").cast<uint8_t>();
+      if (validity & ~uint8_t{15}) throw py::value_error("unknown SampleRef validity bits");
+      return lowlevel::ee::SampleRef(stream, side, EEId(sample.attr("sample_id")),
+                                    EEId(sample.attr("source_time_us")), validity);
+    }, runtime_, layout_, side_, control, command_key, created, sent,
+       static_cast<uint64_t>(header.publish_stamp_ns), header_.Node(), header.sequence);
+    py::bytes payload(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
+    if (!measure) return py::make_tuple(rc, payload, py::none());
+    py::dict trace;
+    trace["header_reserve_ns"] = Ns(began, reserved);
+    trace["header_sequence"] = header.sequence;
+    trace["encode_native_ns"] = Ns(reserved, Clock::now());
+    trace["encode_buffer_capacity_bytes"] = allocation.Maximum();
+    trace["encode_buffer_allocations"] = allocation.Allocations();
+    return py::make_tuple(rc, payload, trace);
+  }
+
+ private:
+  HeaderContext header_;
+  const uint64_t runtime_;
+  const uint32_t layout_;
+  const uint8_t side_;
+  const size_t n_;
+  std::vector<std::pair<uint8_t, uint8_t>> sources_;  // Cold, immutable after construction.
+  size_t capacity_ = 0;
+};
 }  // namespace
 
 PYBIND11_MODULE(_body_cmd_native, module) {
@@ -252,6 +417,14 @@ PYBIND11_MODULE(_body_cmd_native, module) {
   BindEndEffectorFeedback(module);
   module.attr("BODY_SCHEMA_SHA256") = BODY_CMD_SCHEMA_SHA256;
   module.attr("BODY_CMD_PROTOCOL_VERSION") = 3;
+  module.attr("EE_CMD_SCHEMA_SHA256") = EE_CMD_SCHEMA_SHA256;
+  module.attr("EE_CMD_PROTOCOL_VERSION") = 2;
+  py::class_<EECommandContext>(module, "EECommandContext")
+      .def(py::init<py::object, uint64_t, uint32_t, uint8_t, size_t, py::tuple>())
+      .def_property_readonly("capacity_bytes", &EECommandContext::CapacityBytes)
+      .def("encode", &EECommandContext::EncodeCommand, py::arg("command"),
+           py::arg("measure") = false)
+      .def("close", &EECommandContext::Close);
   py::class_<HeaderContext>(module, "HeaderContext")
       .def(py::init<py::object>())
       .def_property_readonly("body_capacity_bytes", &HeaderContext::BodyCapacityBytes)
