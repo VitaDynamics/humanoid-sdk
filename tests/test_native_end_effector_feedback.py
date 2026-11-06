@@ -69,12 +69,14 @@ class NativeEndEffectorCommandTest(unittest.TestCase):
                     for stamp in (0, 123):
                         publisher.stamp = stamp
                         sequence = publisher._sequence
-                        rc, payload, trace = context.encode(command, True)
-                        self.assertEqual(rc, 0)
-                        self.assertEqual(payload, self.oracle(command, publisher, sequence))
-                        self.assertEqual(trace['encode_buffer_capacity_bytes'], context.capacity_bytes)
-                        self.assertEqual(trace['encode_buffer_allocations'], 1)
-                        self.assertEqual(trace['header_sequence'], sequence)
+                        with self.subTest(n=n, sources=selected, side=side, node=name,
+                                          stamp=stamp, sequence=sequence):
+                            rc, payload, trace = context.encode(command, True)
+                            self.assertEqual(rc, 0)
+                            self.assertEqual(payload, self.oracle(command, publisher, sequence))
+                            self.assertEqual(trace['encode_buffer_capacity_bytes'], context.capacity_bytes)
+                            self.assertEqual(trace['encode_buffer_allocations'], 1)
+                            self.assertEqual(trace['header_sequence'], sequence)
         self.assertEqual(native.EE_CMD_PROTOCOL_VERSION, 2)
         self.assertEqual(native.EE_CMD_SCHEMA_SHA256,
                          codec.load_bindings().metas['cmd'].SCHEMA_HASH_HEX)

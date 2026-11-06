@@ -270,6 +270,9 @@ void WriteEE(flatbuffers::FlatBufferBuilder& builder, size_t n, size_t k,
   header.add_sequence(sequence);
   const auto header_offset = header.Finish();
   lowlevel::ee::SampleRef* samples;
+  // Python StartVector retains struct alignment for K=0; C++ PreAlign(0)
+  // skips it. Keep the original byte oracle even for an empty observation set.
+  if (k == 0) builder.Align(flatbuffers::AlignOf<lowlevel::ee::SampleRef>());
   const auto observations = builder.CreateUninitializedVectorOfStructs(k, &samples);
   for (size_t i = 0; i < k; ++i) samples[i] = sample(i);
   lowlevel::ee::AxisCommand* axes;
