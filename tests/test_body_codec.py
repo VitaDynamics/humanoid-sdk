@@ -17,7 +17,8 @@ BODY_RUNTIME_ID = 11
 
 
 def module(name):
-    return importlib.import_module('lowlevel.' + name)
+    namespace = 'lowlevel.ee.' if name == 'EndEffectorCapability' else 'lowlevel.'
+    return importlib.import_module(namespace + name)
 
 
 def make_command(seed=0):
@@ -488,7 +489,7 @@ class BodyCodecTest(unittest.TestCase):
         from lowlevel.BodyInfo import BodyInfoT
         from lowlevel.BodyJointCapability import BodyJointCapabilityT
         from lowlevel.BodyMotorIdentity import BodyMotorIdentityT
-        from lowlevel.EndEffectorCapability import EndEffectorCapabilityT
+        from lowlevel.ee.EndEffectorCapability import EndEffectorCapabilityT
         body = BodyInfoT(rosterVersion=8, slotCount=31, jointNames=['j'+str(i) for i in range(31)],
                          joints=[BodyJointCapabilityT(bodyIndex=i, slotRole=BodySlotRole.ACTIVE,
                                                       isMock=i == 14, supportedFields=31 if i != 14 else 0,
@@ -517,7 +518,7 @@ class BodyCodecTest(unittest.TestCase):
     def test_robot_info2_endpoints_use_six_fields_with_optional_info(self):
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
         from lowlevel.RobotInfo import RobotInfoT
-        from lowlevel.EndEffectorCapability import EndEffectorCapabilityT, EndEffectorCapability
+        from lowlevel.ee.EndEffectorCapability import EndEffectorCapabilityT, EndEffectorCapability
         self.assertFalse(hasattr(EndEffectorCapability, 'GetInfoService'))
         self.assertFalse(hasattr(EndEffectorCapabilityT(), 'getInfoService'))
         # Final unified capability DTO is the six-field contract.
@@ -559,7 +560,7 @@ class BodyCodecTest(unittest.TestCase):
         # B-52A-INFO-1 negatives at the real decode entry.
         from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT, GetRobotInfoResponse
         from lowlevel.RobotInfo import RobotInfoT
-        from lowlevel.EndEffectorCapability import EndEffectorCapabilityT
+        from lowlevel.ee.EndEffectorCapability import EndEffectorCapabilityT
         def reply_for(info_version=2, endpoint_is_mock=True, info_mock=True,
                       outer_runtime=11, inner_runtime=11, n=1, side=1, bad_shape=False):
             obj = self._synthetic_endpoint_info(side=side, runtime=inner_runtime, n=n, mock=info_mock) \

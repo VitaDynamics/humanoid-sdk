@@ -59,8 +59,10 @@ def _schema_meta(stem, root):
 def load_bindings():
     try:
         names = ('EndEffectorInfo', 'EndEffectorState', 'EndEffectorTouch',
-                 'EndEffectorCmd', 'CommandKey', 'SampleRef', 'AxisCommand')
+                 'EndEffectorCmd', 'AxisCommand')
         modules = {name: importlib.import_module('lowlevel.ee.' + name) for name in names}
+        modules['CommandKey'] = importlib.import_module('lowlevel.CommandKey')
+        modules['SampleRef'] = importlib.import_module('lowlevel.SampleRef')
         metas = {}
         for kind in ('info', 'state', 'touch', 'cmd'):
             root = 'lowlevel.ee.EndEffector' + kind.capitalize()

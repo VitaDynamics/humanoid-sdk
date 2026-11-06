@@ -16,7 +16,7 @@ class PublicEeBindingTest(unittest.TestCase):
     def test_t021_struct_layouts_and_message_level_clocks(self):
         from lowlevel.ee.AxisCommand import AxisCommand
         from lowlevel.ee.AxisState import AxisState
-        from lowlevel.ee.SampleRef import SampleRef
+        from lowlevel.SampleRef import SampleRef
         from lowlevel.ee.EndEffectorState import EndEffectorState
         self.assertEqual((AxisCommand.SizeOf(), AxisState.SizeOf(), SampleRef.SizeOf()),
                          (28, 28, 32))

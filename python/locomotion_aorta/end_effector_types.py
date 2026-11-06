@@ -15,7 +15,7 @@ try:
     from lowlevel.ee.InhibitReason import InhibitReason
     from lowlevel.ee.PositionDomain import PositionDomain
     from lowlevel.ee.SampleStatus import SampleStatus
-    from lowlevel.ee.SampleStream import SampleStream
+    from lowlevel.SampleStream import SampleStream
     from lowlevel.ee.TorqueDomain import TorqueDomain
     from lowlevel.ee.TouchPayloadType import TouchPayloadType
     from lowlevel.ee.TouchSetReason import TouchSetReason

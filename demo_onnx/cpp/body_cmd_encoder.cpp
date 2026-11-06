@@ -259,7 +259,7 @@ uint64_t EEId(py::handle value) {
 template <typename Axis, typename Sample>
 void WriteEE(flatbuffers::FlatBufferBuilder& builder, size_t n, size_t k,
              Axis axis, Sample sample, uint64_t runtime, uint32_t layout,
-             uint8_t side, uint64_t control, const lowlevel::ee::CommandKey& key,
+             uint8_t side, uint64_t control, const lowlevel::CommandKey& key,
              uint64_t created, uint64_t sent, uint64_t stamp,
              const std::string& node, uint64_t sequence) {
   const auto name = node.empty() ? flatbuffers::Offset<flatbuffers::String>()
@@ -269,10 +269,10 @@ void WriteEE(flatbuffers::FlatBufferBuilder& builder, size_t n, size_t k,
   if (!node.empty()) header.add_publisher_node(name);
   header.add_sequence(sequence);
   const auto header_offset = header.Finish();
-  lowlevel::ee::SampleRef* samples;
+  lowlevel::SampleRef* samples;
   // Python StartVector retains struct alignment for K=0; C++ PreAlign(0)
   // skips it. Keep the original byte oracle even for an empty observation set.
-  if (k == 0) builder.Align(flatbuffers::AlignOf<lowlevel::ee::SampleRef>());
+  if (k == 0) builder.Align(flatbuffers::AlignOf<lowlevel::SampleRef>());
   const auto observations = builder.CreateUninitializedVectorOfStructs(k, &samples);
   for (size_t i = 0; i < k; ++i) samples[i] = sample(i);
   lowlevel::ee::AxisCommand* axes;
@@ -323,8 +323,8 @@ class EECommandContext {
         flatbuffers::FlatBufferBuilder builder(256, &allocation);
         WriteEE(builder, n_, sources_.size(),
                 [](size_t) { return lowlevel::ee::AxisCommand(); },
-                [](size_t) { return lowlevel::ee::SampleRef(); }, runtime_, layout_,
-                side_, 0, lowlevel::ee::CommandKey(), 0, 0, stamp, header_.Node(), sequence);
+                [](size_t) { return lowlevel::SampleRef(); }, runtime_, layout_,
+                side_, 0, lowlevel::CommandKey(), 0, 0, stamp, header_.Node(), sequence);
       }
     }
     capacity_ = allocation.Maximum();
@@ -348,7 +348,7 @@ class EECommandContext {
     const auto control = EEId(command.attr("control_id"));
     if (!control) throw py::value_error("EE command requires nonzero control_id");
     const auto key = command.attr("key");
-    const lowlevel::ee::CommandKey command_key(EEId(key.attr("session_id")),
+    const lowlevel::CommandKey command_key(EEId(key.attr("session_id")),
                                               EEId(key.attr("sequence")));
     const auto created = EEId(command.attr("ts_client_created_us"));
     const auto sent = EEId(command.attr("ts_client_send_us"));
@@ -389,7 +389,7 @@ class EECommandContext {
         throw py::value_error("EE observations differ from startup stream/side order");
       const auto validity = sample.attr("validity").cast<uint8_t>();
       if (validity & ~uint8_t{15}) throw py::value_error("unknown SampleRef validity bits");
-      return lowlevel::ee::SampleRef(stream, side, EEId(sample.attr("sample_id")),
+      return lowlevel::SampleRef(stream, side, EEId(sample.attr("sample_id")),
                                     EEId(sample.attr("source_time_us")), validity);
     }, runtime_, layout_, side_, control, command_key, created, sent,
        static_cast<uint64_t>(header.publish_stamp_ns), header_.Node(), header.sequence);

@@ -19,7 +19,7 @@ def publisher(directory,session):
     from lowlevel.BodyInfo import BodyInfoT
     from lowlevel.BodyJointCapability import BodyJointCapabilityT
     from lowlevel.BodyMotorIdentity import BodyMotorIdentityT
-    from lowlevel.EndEffectorCapability import EndEffectorCapabilityT
+    from lowlevel.ee.EndEffectorCapability import EndEffectorCapabilityT
     from lowlevel.RobotInfo import RobotInfoT
     from aorta.services.humanoid_locomotion.GetRobotInfoRequest import GetRobotInfoRequest
     from aorta.services.humanoid_locomotion.GetRobotInfoResponse import GetRobotInfoResponseT

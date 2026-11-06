@@ -20,7 +20,8 @@ from locomotion_aorta.end_effector_types import (
 
 def module(name):
     import importlib
-    return importlib.import_module('lowlevel.ee.' + name)
+    namespace = 'lowlevel.' if name in ('CommandKey', 'SampleRef') else 'lowlevel.ee.'
+    return importlib.import_module(namespace + name)
 
 
 def pack(value):
@@ -390,6 +391,8 @@ class EndEffectorCodecTest(unittest.TestCase):
     def test_real_binding_gate_checks_new_namespace_and_metadata_hash(self):
         bindings = codec.load_bindings()
         self.assertEqual(bindings.metas['cmd'].ROOT_TYPE_NAME, 'lowlevel.ee.EndEffectorCmd')
+        self.assertEqual(bindings.CommandKey.__name__, 'lowlevel.CommandKey')
+        self.assertEqual(bindings.SampleRef.__name__, 'lowlevel.SampleRef')
         original = codec.importlib.import_module
         for root, digest in (('lowlevel.HandCmd', hashlib.sha256(b'wrong').hexdigest()),
                              ('lowlevel.ee.EndEffectorCmd', '0'*64)):
