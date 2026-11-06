@@ -3,11 +3,13 @@
   "source": "Existing PR2-219 AArch64 generated outputs; copied without regeneration or edits.",
   "headers_sha256": {
     "end_effector_state_generated.h": "5f03fbb47c345a360affd4387d6c31aa4d301ee7f5fc2ceb187f22654a61e45f",
-    "end_effector_touch_generated.h": "11af30a74f23ec69be7a6f2728181ab852628bd9ad655ee20b5a6c4fc91cab34"
+    "end_effector_touch_generated.h": "11af30a74f23ec69be7a6f2728181ab852628bd9ad655ee20b5a6c4fc91cab34",
+    "end_effector_cmd_generated.h": "e2c6215e56e5470cab98eeec415049e4f955147ab0fd96a3e284df6b356a8986"
   },
   "bfbs_sha256": {
     "end_effector_state": "6dd6730bec2b1da402471ce7abedff795df079c993442c691c399b7218188363",
-    "end_effector_touch": "8523e1b5f60e6f000e4d03d1b4d7b2d5414da70a15a1a58b338f4e3ce537fe7a"
+    "end_effector_touch": "8523e1b5f60e6f000e4d03d1b4d7b2d5414da70a15a1a58b338f4e3ce537fe7a",
+    "end_effector_cmd": "10ac822abc576be4cf183969e51abc4eb9a3b8e4484eebfa34b2e20f3bb9db0e"
   },
   "shared_body_vendor_include_sha256": {
     "message/schemas/topic/lowlevel/end_effector_common_generated.h": "6b53afed9682a6bda797c1ac3f4c1e958b08bd7d9a374ae2430bf4d99ceb07f9",
@@ -16,5 +18,31 @@
   "flatbuffers_version": "25.12.19",
   "wheel_version": "0.0.0+gc783514130bb",
   "wheel_sha256": "0faf300ee8254695963bfd34fd9cf6fd977264104c46a64253b5608231623df7",
-  "binding_note": "Both current D96 BFBS are byte-identical to the pinned gc783 wheel schema identities; shared include headers are byte-identical to the existing Body vendor."
+  "binding_note": "Both current D96 BFBS are byte-identical to the pinned gc783 wheel schema identities; shared include headers are byte-identical to the existing Body vendor.",
+  "command_header_intake": {
+    "kind": "RETAINED_GENERATED_BYTES_NOT_NEW_GENERATION",
+    "source_head": "26695b03600fbe06e0a743b58311e5d19c3de5e9",
+    "schema_pin": "d96c9003e71b96385ad571b0a0102e25ef9135ca",
+    "aorta_pin": "309b8691cb7b31949a8977c4ed9db36bddaf6fd6",
+    "source_intake_sha256": "f5bd9a78f5fc284b418b8c83706e6052d891d342999bd95a4a69e7813555c8f1",
+    "two_architectures_bytes_equal": true,
+    "cmd_bfbs_sha256": "10ac822abc576be4cf183969e51abc4eb9a3b8e4484eebfa34b2e20f3bb9db0e",
+    "source_fbs_blobs": [
+      {
+        "path": "message/schemas/topic/lowlevel/end_effector_cmd.fbs",
+        "D96_equals_581": true,
+        "bytes": 2246,
+        "sha256": "e6c4efbba4e3fc76900eedb7b6f51c65bfc4ace0982b0d3ad8614c6a2a2ccd94",
+        "git_blob": "9605d5a5f8be7f35d0074ed1b0f81ff16da0e88c"
+      },
+      {
+        "path": "message/schemas/topic/lowlevel/end_effector_common.fbs",
+        "D96_equals_581": true,
+        "bytes": 8120,
+        "sha256": "db6495d91bb0a8ab64b1ff64f06fd6a49f1ec11841a9e717e7fcd592e4d15f96",
+        "git_blob": "63aae5b00910870e0c52ca1c4247e1d9f0371fbb"
+      }
+    ],
+    "meaning": "Original OP3-266 generated output, not relabeled REQ254 or schema581 generation. Same Cmd BFBS as actual gc783 dependency; native codec/runtime acceptance not implied."
+  }
 }

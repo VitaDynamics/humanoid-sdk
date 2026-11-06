@@ -59,7 +59,7 @@ string(JSON body_state_sha GET "${body_manifest}" body_state_bfbs_sha256)
 set(ee_vendor "${CMAKE_CURRENT_SOURCE_DIR}/cpp/end_effector_vendor")
 file(READ "${ee_vendor}/provenance.json" ee_manifest)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../compatibility.json" compatibility_manifest)
-foreach(kind IN ITEMS state touch)
+foreach(kind IN ITEMS cmd state touch)
   set(stem "end_effector_${kind}")
   string(JSON ee_${kind}_sha GET "${ee_manifest}" bfbs_sha256 "${stem}")
   string(JSON expected_schema_sha GET "${compatibility_manifest}" schema_sha256 "${stem}")
@@ -85,6 +85,7 @@ endforeach()
 target_compile_definitions(_body_cmd_native PRIVATE
   BODY_CMD_SCHEMA_SHA256="${body_cmd_sha}"
   BODY_STATE_SCHEMA_SHA256="${body_state_sha}"
+  EE_CMD_SCHEMA_SHA256="${ee_cmd_sha}"
   EE_STATE_SCHEMA_SHA256="${ee_state_sha}"
   EE_TOUCH_SCHEMA_SHA256="${ee_touch_sha}")
 target_compile_features(_body_cmd_native PRIVATE cxx_std_17)

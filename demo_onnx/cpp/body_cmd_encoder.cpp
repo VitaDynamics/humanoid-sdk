@@ -17,6 +17,7 @@
 #include "body_cmd_vendor/message/schemas/topic/lowlevel/body_cmd_generated.h"
 #include "body_state_decoder.h"
 #include "end_effector_decoder.h"
+#include "end_effector_vendor/end_effector_cmd_generated.h"
 
 namespace py = pybind11;
 namespace {
