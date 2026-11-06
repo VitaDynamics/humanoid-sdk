@@ -458,10 +458,16 @@ def fill_command(bindings, command, builder, header):
             sample.sample_id, sample.source_time_us, sample.validity)
     observations = builder.EndVector()
     module.EndEffectorCmdStartAxesVector(builder, n)
-    columns = [getattr(target, name) for name, _ in _COMMAND_COLUMNS]
+    pos = target.pos
+    vel = target.vel
+    vel_limit = target.vel_limit
+    tau = target.tau
+    current = target.current
     for i in reversed(range(n)):
         bindings.AxisCommand.CreateAxisCommand(builder, target.command_fields[i], target.mode[i],
-            *(values[i] if values else 0.0 for values in columns))
+            pos[i] if pos else 0.0, vel[i] if vel else 0.0,
+            vel_limit[i] if vel_limit else 0.0, tau[i] if tau else 0.0,
+            current[i] if current else 0.0)
     axes = builder.EndVector()
     previous = builder.forceDefaults
     try:

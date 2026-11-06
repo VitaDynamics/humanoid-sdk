@@ -204,6 +204,29 @@ class EndEffectorCodecTest(unittest.TestCase):
                                   wire.TsClientSendUs()), (0, 0, 0))
                 self.assertFalse(hasattr(wire, 'SdkTimeValidMask'))
 
+    def test_axis_command_wire_keeps_each_column_on_its_axis(self):
+        bindings = codec.load_bindings()
+        info = decode('info', info_object(n=2))
+        fields = Field.POS | Field.VEL | Field.VEL_LIMIT | Field.TAU | Field.CURRENT
+        values = EndEffectorTarget(
+            (ControlMode.POSITION_TORQUE,) * 2, (fields,) * 2,
+            pos=(.015625, .03125), vel=(-.0625, .09375),
+            vel_limit=(.03125, .125), tau=(-.25, .5), current=(.125, -.25))
+        submission = EndEffectorSubmission(info.runtime_id, info.layout_id, info.side,
+            13, CommandKey(17, 19), codec.prepare_target(info, values))
+        builder = flatbuffers.Builder(1)
+        builder.Finish(codec.fill_command(bindings, submission, builder, 0))
+        wire = bindings.EndEffectorCmd.EndEffectorCmd.GetRootAs(builder.Output())
+        self.assertEqual(wire.AxesLength(), 2)
+        for i in range(2):
+            with self.subTest(axis=i):
+                axis = wire.Axes(i)
+                self.assertEqual(axis.CommandFields(), fields)
+                self.assertEqual(axis.Mode(), ControlMode.POSITION_TORQUE)
+                self.assertEqual((axis.Pos(), axis.Vel(), axis.VelLimit(), axis.Tau(), axis.Current()),
+                    (values.pos[i], values.vel[i], values.vel_limit[i], values.tau[i], values.current[i]))
+        self.assertEqual(codec.decode_cmd(wire), submission)
+
     def test_command_decoder_rejects_missing_axes_wrong_version_and_zero_control(self):
         bindings = codec.load_bindings()
         info = decode('info', info_object())
