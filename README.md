@@ -1,11 +1,13 @@
 # Humanoid SDK
 
 SDK **0.2.1** is in preparation; packaging and release are pending. This source
-targets the reviewed Schema73 direct-runtime contract. Its dedicated
-`gc783514130bb` messages wheel and native Body headers come from the same
-generation. Their raw files are accepted as source-integration inputs; SDK
-source review, complete validation and the official dependency release remain
-pending. Do not install or release this intermediate tree.
+targets the direct-runtime contract. Its dedicated `gc783514130bb` messages
+wheel and native Body headers come from the same generation. The vendored
+native EE feedback headers come from D96 outputs; their State/Touch BFBS hashes
+match the pinned wheel, as recorded in the vendor provenance. The pinned
+dependency wheels are published in `v0.1.0-rc.4`. This does not establish final
+robot/SDK compatibility, strict realtime or device acceptance; use the pinned
+manifest for separately authorized candidate validation.
 
 The nonzero startup `runtime_id` is carried directly, and RobotInfo has no
 descriptor-confirmation field. The connection first discovers its runtime via
@@ -24,10 +26,11 @@ aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 The Aorta SDK and messages target `2026.10.20` (ABI 13) and FlatBuffers targets
 `25.12.19`. The `vbot-humanoid-msgs` entry in
 [compatibility.json](compatibility.json) and `pyproject.toml` names the actual
-dedicated `gc783514130bb` wheel and its SHA-256. It is not yet an official
-release asset. Do not substitute a product wheel for this distribution.
-`dependency_release_tag` is null, so the existing release downloader refuses
-before downloading anything. No replacement release, URL or fallback is chosen.
+dedicated `gc783514130bb` wheel and its SHA-256. That exact wheel and the pinned
+runtime wheels are available in this repository's dependency Release
+`v0.1.0-rc.4`, selected by `dependency_release_tag`. The existing downloader
+verifies the manifest's versions and hashes; it does not choose a replacement
+release, URL or latest-version fallback. Do not substitute a product wheel.
 
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
@@ -293,16 +296,16 @@ virtual environment. These commands are not an installation or execution GO. `ma
 tests the working tree; a pure Python edit does not require a compiler or an
 editable SDK install.
 
-The final dedicated schema wheel and native headers are not available yet, so
+The pinned dedicated schema wheel and vendored native headers are available;
 the older S91220 install command is not a valid way to exercise this source.
-After the matching dependency manifest is fixed and verified, use the complete
-offline wheelhouse and the existing `make check` entry. The offline packager accepts
+Verify the current dependency manifest, then use the complete matching offline
+wheelhouse and the existing `make check` entry. The offline packager accepts
 explicit `--wheelhouse` directories and checks every pinned hash. It does not
 fetch or synthesize missing artifacts. `tools/fetch_dependencies.py` remains a
-published-Release-only downloader and intentionally refuses the null candidate
-tag; do not invent a Release to make it proceed. Published-release CI download
-jobs cannot validate this unpublished candidate without the authorized offline
-inputs. Neither path implies publication or robot acceptance.
+published-Release-only downloader and verifies the pinned `v0.1.0-rc.4` assets;
+do not invent a tag or change versions to make it proceed. CI can fetch those
+same published dependencies. Neither path implies a final SDK release or robot
+acceptance.
 For a fully offline development environment, obtain MCAP and its dependency
 wheels beforehand and add `--no-index --find-links <test-wheelhouse>` to that
 MCAP installation. Without the HIL test dependencies, capture tests are skipped;

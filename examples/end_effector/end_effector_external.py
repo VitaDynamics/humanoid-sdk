@@ -94,7 +94,7 @@ def _observe_zero_dwell(frame, target, *, body, body_info, monotonic, emit):
 
 
 @stop_signals()
-def run_external(controller, command_loop, options, *, body, strict_hold=False,
+def run_external(controller, command_loop, options, *, body,
                  sleep=time.sleep, monotonic=time.monotonic, emit=print):
     timeout, body_gains = options.timeout, options.body_gains
     body_pose, body_enabled = options.body_pose, options.body_enabled
@@ -701,7 +701,7 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
     strict_hold = any(i.device_model in (DeviceModel.BRAINCO_REVO2, DeviceModel.LINKER_L6) for i in infos.values())
     if strict_hold and feedback_interval < 1.0:
         raise ValueError('hand feedback interval must be at least 1 second')
-    return (infos, prepared, returns, limits, rates, native_hz), strict_hold
+    return infos, prepared, returns, limits, rates, native_hz
 
 
 def _prepare_stream(frame, clients, infos, options, touch_worker, *, sleep, monotonic, emit):
@@ -859,7 +859,7 @@ def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sl
 def run(controller, clients, targets, options, *, sleep=time.sleep, monotonic=time.monotonic, emit=print):
     """Independent member deadlines; targets are intent, never arrival evidence."""
     emit(f'EE position freshness window={EE_POSITION_FRESHNESS_WINDOW_S:.3f}s')
-    prepared_motion, strict_hold = _prepare_motion(
+    prepared_motion = _prepare_motion(
         controller, clients, targets, options, sleep=sleep, monotonic=monotonic, emit=emit)
     touch_worker = ThreadPoolExecutor(max_workers=1) if options.touch != 'keep' else None
 
@@ -868,7 +868,7 @@ def run(controller, clients, targets, options, *, sleep=time.sleep, monotonic=ti
                        sleep=sleep, monotonic=monotonic, emit=emit)
 
     try:
-        run_external(controller, command_loop, options, body=body, strict_hold=strict_hold,
+        run_external(controller, command_loop, options, body=body,
                      sleep=sleep, monotonic=monotonic, emit=emit)
     finally:
         # run_external attempts CANCEL before waiting for a failed/inflight RPC.
