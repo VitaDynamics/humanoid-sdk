@@ -338,6 +338,61 @@ class NativeBodyCmdTest(unittest.TestCase):
         adapter.publish(make_command(), guard=lambda send: send())
         self.assertEqual(pub.sent, [oracle(make_command(), pub.stamp, pub._node_name, 1)])
 
+    def test_cold_body_capacity_covers_header_presence_and_fixed_wire_extremes(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        for node in ('', '机器人\x00SDK', '机器人' * 257):
+            with self.subTest(node_bytes=len(node.encode('utf-8'))):
+                pub = Publisher(node_name=node)
+                adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+                self.addCleanup(adapter.close)
+                capacity = adapter._header.body_capacity_bytes
+                self.assertGreater(capacity, 0)
+                command = dataclasses.replace(
+                    make_command(), session_id=2**64-1, sequence=2**64-1,
+                    input_state_id=2**64-1, input_state_ts_real_us=2**64-1,
+                    ts_client_created_us=2**64-1, ts_client_send_us=2**64-1,
+                    runtime_id=2**64-1, control_id=2**64-1,
+                    action=14, root_quat=(1., -0., 0., .5))
+                for stamp in (0, 2**63-1):
+                    for sequence in (0, 1):
+                        pub.stamp, pub._sequence = stamp, sequence
+                        trace = {}
+                        adapter.publish(command, trace, guard=lambda send: send())
+                        self.assertEqual(pub.sent[-1], oracle(command, stamp, node, sequence))
+                        self.assertEqual(trace['encode_buffer_capacity_bytes'], capacity)
+                        self.assertEqual(trace['encode_buffer_allocations'], 1)
+                        self.assertGreaterEqual(capacity, len(pub.sent[-1]))
+                        self.assertEqual(adapter._header.body_capacity_bytes, capacity)
+
+    def test_cold_node_layout_and_policy_do_not_follow_later_python_mutation(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        pub = Publisher(node_name='captured-μ')
+        adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+        self.addCleanup(adapter.close)
+        capacity = adapter._header.body_capacity_bytes
+        pub._node_name = 'late-name' * 1000
+        pub._include_node = False
+        adapter.publish(make_command(), guard=lambda send: send())
+        self.assertEqual(pub.sent, [oracle(make_command(), pub.stamp, 'captured-μ', 0)])
+        self.assertEqual(adapter._header.body_capacity_bytes, capacity)
+        with self.assertRaises(AttributeError):
+            adapter._header.body_capacity_bytes = 1
+
+    def test_cold_body_layout_does_not_admit_a_different_joint_count(self):
+        from locomotion_aorta._native_body_codec import NativeBodyPublisher
+        pub = Publisher()
+        adapter = NativeBodyPublisher(pub, importlib.import_module('body_cmd_schema_meta'))
+        self.addCleanup(adapter.close)
+        capacity = adapter._header.body_capacity_bytes
+        command = make_command()
+        with self.assertRaisesRegex(ValueError, '31-slot tuple'):
+            adapter.publish(dataclasses.replace(command, joints=command.joints + (BodyJointCmd(),)),
+                            guard=lambda send: send())
+        self.assertEqual(pub.sent, [])
+        self.assertEqual(adapter._header.body_capacity_bytes, capacity)
+        adapter.publish(command, guard=lambda send: send())
+        self.assertEqual(pub.sent, [oracle(command, pub.stamp, pub._node_name, 1)])
+
     def test_transport_close_frees_header_context_before_node_close(self):
         from locomotion_aorta._native_body_codec import NativeBodyPublisher
         from aorta.errors import InternalError, NotFoundError
