@@ -193,11 +193,14 @@ class NativeBodyCmdTest(unittest.TestCase):
             self.assertEqual(provenance[stem + '_bfbs_sha256'], compatibility['schema_sha256'][stem])
         self.assertEqual(set(provenance['generated_include_sha256']), {
             'message/schemas/topic/lowlevel/body_common_generated.h',
-            'message/schemas/topic/lowlevel/end_effector_common_generated.h',
-            'declared-headers/generated/external/aorta~/message/schemas/system/aorta_base_generated.h',
+            'message/schemas/topic/lowlevel/ee_common_generated.h',
+            'message/schemas/system/aorta_base_generated.h',
         })
         for path, expected in provenance['generated_include_sha256'].items():
             with self.subTest(generated_include=path):
+                self.assertEqual(hashlib.sha256((vendor / path).read_bytes()).hexdigest(), expected)
+        for path, expected in provenance['generated_headers_sha256'].items():
+            with self.subTest(native_archive_header=path):
                 self.assertEqual(hashlib.sha256((vendor / path).read_bytes()).hexdigest(), expected)
         for path, expected in provenance['flatbuffers_include_sha256'].items():
             with self.subTest(flatbuffers_include=path):

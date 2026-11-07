@@ -13,8 +13,9 @@ static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
               FLATBUFFERS_VERSION_REVISION == 19,
              "Non-compatible flatbuffers version included");
 
-#include "end_effector_common_generated.h"
 #include "aorta_base_generated.h"
+#include "ee_common_generated.h"
+#include "humanoid_common_generated.h"
 
 namespace lowlevel {
 namespace ee {
@@ -67,13 +68,13 @@ struct EndEffectorCmd FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   /// Original command source session/generation plus sequence; identifies this frame,
   /// independent of control_id.
-  const lowlevel::ee::CommandKey *key() const {
-    return GetStruct<const lowlevel::ee::CommandKey *>(VT_KEY);
+  const lowlevel::CommandKey *key() const {
+    return GetStruct<const lowlevel::CommandKey *>(VT_KEY);
   }
   /// Exactly startup K original selected SampleRefs in declared order; inherit the validated
   /// outer R, never replace with latest.
-  const ::flatbuffers::Vector<const lowlevel::ee::SampleRef *> *input_observations() const {
-    return GetPointer<const ::flatbuffers::Vector<const lowlevel::ee::SampleRef *> *>(VT_INPUT_OBSERVATIONS);
+  const ::flatbuffers::Vector<const lowlevel::SampleRef *> *input_observations() const {
+    return GetPointer<const ::flatbuffers::Vector<const lowlevel::SampleRef *> *>(VT_INPUT_OBSERVATIONS);
   }
   /// Vita epoch us after verified mapping; 0=unknown
   uint64_t ts_client_created_us() const {
@@ -98,7 +99,7 @@ struct EndEffectorCmd FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint32_t>(verifier, VT_LAYOUT_ID, 4) &&
            VerifyField<uint8_t>(verifier, VT_SIDE, 1) &&
            VerifyField<uint64_t>(verifier, VT_CONTROL_ID, 8) &&
-           VerifyField<lowlevel::ee::CommandKey>(verifier, VT_KEY, 8) &&
+           VerifyField<lowlevel::CommandKey>(verifier, VT_KEY, 8) &&
            VerifyOffset(verifier, VT_INPUT_OBSERVATIONS) &&
            verifier.VerifyVector(input_observations()) &&
            VerifyField<uint64_t>(verifier, VT_TS_CLIENT_CREATED_US, 8) &&
@@ -131,10 +132,10 @@ struct EndEffectorCmdBuilder {
   void add_control_id(uint64_t control_id) {
     fbb_.AddElement<uint64_t>(EndEffectorCmd::VT_CONTROL_ID, control_id, 0);
   }
-  void add_key(const lowlevel::ee::CommandKey *key) {
+  void add_key(const lowlevel::CommandKey *key) {
     fbb_.AddStruct(EndEffectorCmd::VT_KEY, key);
   }
-  void add_input_observations(::flatbuffers::Offset<::flatbuffers::Vector<const lowlevel::ee::SampleRef *>> input_observations) {
+  void add_input_observations(::flatbuffers::Offset<::flatbuffers::Vector<const lowlevel::SampleRef *>> input_observations) {
     fbb_.AddOffset(EndEffectorCmd::VT_INPUT_OBSERVATIONS, input_observations);
   }
   void add_ts_client_created_us(uint64_t ts_client_created_us) {
@@ -165,8 +166,8 @@ inline ::flatbuffers::Offset<EndEffectorCmd> CreateEndEffectorCmd(
     uint32_t layout_id = 0,
     uint8_t side = 0,
     uint64_t control_id = 0,
-    const lowlevel::ee::CommandKey *key = nullptr,
-    ::flatbuffers::Offset<::flatbuffers::Vector<const lowlevel::ee::SampleRef *>> input_observations = 0,
+    const lowlevel::CommandKey *key = nullptr,
+    ::flatbuffers::Offset<::flatbuffers::Vector<const lowlevel::SampleRef *>> input_observations = 0,
     uint64_t ts_client_created_us = 0,
     uint64_t ts_client_send_us = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<const lowlevel::ee::AxisCommand *>> axes = 0) {
@@ -193,12 +194,12 @@ inline ::flatbuffers::Offset<EndEffectorCmd> CreateEndEffectorCmdDirect(
     uint32_t layout_id = 0,
     uint8_t side = 0,
     uint64_t control_id = 0,
-    const lowlevel::ee::CommandKey *key = nullptr,
-    const std::vector<lowlevel::ee::SampleRef> *input_observations = nullptr,
+    const lowlevel::CommandKey *key = nullptr,
+    const std::vector<lowlevel::SampleRef> *input_observations = nullptr,
     uint64_t ts_client_created_us = 0,
     uint64_t ts_client_send_us = 0,
     const std::vector<lowlevel::ee::AxisCommand> *axes = nullptr) {
-  auto input_observations__ = input_observations ? _fbb.CreateVectorOfStructs<lowlevel::ee::SampleRef>(*input_observations) : 0;
+  auto input_observations__ = input_observations ? _fbb.CreateVectorOfStructs<lowlevel::SampleRef>(*input_observations) : 0;
   auto axes__ = axes ? _fbb.CreateVectorOfStructs<lowlevel::ee::AxisCommand>(*axes) : 0;
   return lowlevel::ee::CreateEndEffectorCmd(
       _fbb,

@@ -13,8 +13,8 @@ static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
               FLATBUFFERS_VERSION_REVISION == 19,
              "Non-compatible flatbuffers version included");
 
-#include "end_effector_common_generated.h"
 #include "aorta_base_generated.h"
+#include "ee_common_generated.h"
 
 namespace lowlevel {
 namespace ee {

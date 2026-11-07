@@ -436,8 +436,8 @@ class NativeEndEffectorFeedbackTest(unittest.TestCase):
 
     def test_real_generated_header_hashes_and_bfbs_match_pinned_messages(self):
         root = Path(__file__).resolve().parents[1]
-        vendor = root / 'demo_onnx/cpp/end_effector_vendor'
-        provenance = json.loads((vendor / 'provenance.json').read_text())
+        vendor = root / 'demo_onnx/cpp/body_cmd_vendor'
+        provenance = json.loads((root / 'demo_onnx/cpp/end_effector_vendor/provenance.json').read_text())
         compatibility = json.loads((root / 'compatibility.json').read_text())
         self.assertEqual(provenance['wheel_version'], compatibility['humanoid_msgs_version'])
         wheel = 'vbot_humanoid_msgs-' + provenance['wheel_version'] + '-py3-none-any.whl'

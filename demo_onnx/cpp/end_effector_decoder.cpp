@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <stdexcept>
 
-#include "end_effector_vendor/end_effector_state_generated.h"
-#include "end_effector_vendor/end_effector_touch_generated.h"
+#include "body_cmd_vendor/message/schemas/topic/lowlevel/end_effector_state_generated.h"
+#include "body_cmd_vendor/message/schemas/topic/lowlevel/end_effector_touch_generated.h"
 
 namespace py = pybind11;
 namespace {

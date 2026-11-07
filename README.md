@@ -1,11 +1,12 @@
 # Humanoid SDK
 
 SDK **0.2.1** is in preparation; packaging and release are pending. This source
-targets the direct-runtime contract. Its dedicated `gc783514130bb` messages
-wheel and native Body headers come from the same generation. The vendored
-native EE feedback headers come from D96 outputs; their State/Touch BFBS hashes
-match the pinned wheel, as recorded in the vendor provenance. The pinned
-dependency wheels are published in `v0.1.0-rc.4`. This does not establish final
+targets the direct-runtime contract. Its dedicated `g043599d3b729` messages
+wheel and all native Body/EE headers come from the same selected-runtime
+generation. The matching Aorta wheels and generated native header use
+`0.0.0+g7649a87ebb03` (ABI 13). These actual CI artifacts are pinned for candidate
+validation; they have not been published in an SDK dependency Release.
+`dependency_release_tag` is therefore null. This does not establish final
 robot/SDK compatibility, strict realtime or device acceptance; use the pinned
 manifest for separately authorized candidate validation.
 
@@ -23,14 +24,16 @@ with **CPython 3.10**, glibc **2.35+** and GLIBCXX **3.4.29+**
 client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
 aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
 
-The Aorta SDK and messages target `2026.10.20` (ABI 13) and FlatBuffers targets
+The Aorta SDK and messages target `0.0.0+g7649a87ebb03` (ABI 13) and FlatBuffers targets
 `25.12.19`. The `vbot-humanoid-msgs` entry in
 [compatibility.json](compatibility.json) and `pyproject.toml` names the actual
-dedicated `gc783514130bb` wheel and its SHA-256. That exact wheel and the pinned
-runtime wheels are available in this repository's dependency Release
-`v0.1.0-rc.4`, selected by `dependency_release_tag`. The existing downloader
-verifies the manifest's versions and hashes; it does not choose a replacement
-release, URL or latest-version fallback. Do not substitute a product wheel.
+dedicated `g043599d3b729` wheel and its SHA-256. Its Requires-Dist names the same
+actual Aorta version. The default-2026.10.20 wheel from the same Schema run has
+the same filename but different bytes; it must not replace the selected wheel.
+The existing dependency fetcher verifies either an explicitly supplied local
+input set or a published pinned Release. With the current null tag its remote
+mode fails before downloading. There is no replacement release, latest-version
+or network fallback. Do not substitute a product wheel.
 
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
@@ -176,10 +179,11 @@ blocker; do not remove it to connect.
 
 ### Effective Aorta group
 
-Pinned Aorta 2026.10.20 Core selects its group from `AORTA_GROUP` (unset means
+The previously validated Aorta 2026.10.20 Core selected its group from `AORTA_GROUP` (unset means
 `default`), even when a different group is passed to `Node`. Before creating
 nodes, set `AORTA_GROUP` to the same value as the SDK `group=` / demo `--group`.
-The SDK checks `Node.group()` before creating publishers/subscribers and rejects
+The new pinned runtime still requires actual group/IPC validation. The SDK
+checks `Node.group()` before creating publishers/subscribers and rejects
 a mismatch, reporting requested/effective values and the `AORTA_GROUP` setting.
 It does not change the process environment. `SDK_GROUP` is only a demo/runner
 convention; setting it alone does not configure Core. The production-topic
@@ -296,16 +300,31 @@ virtual environment. These commands are not an installation or execution GO. `ma
 tests the working tree; a pure Python edit does not require a compiler or an
 editable SDK install.
 
-The pinned dedicated schema wheel and vendored native headers are available;
+The pinned dedicated schema wheel and vendored native headers are available as CI artifacts;
 the older S91220 install command is not a valid way to exercise this source.
 Verify the current dependency manifest, then use the complete matching offline
 wheelhouse and the existing `make check` entry. The offline packager accepts
 explicit `--wheelhouse` directories and checks every pinned hash. It does not
-fetch or synthesize missing artifacts. `tools/fetch_dependencies.py` remains a
-published-Release-only downloader and verifies the pinned `v0.1.0-rc.4` assets;
-do not invent a tag or change versions to make it proceed. CI can fetch those
-same published dependencies. Neither path implies a final SDK release or robot
-acceptance.
+fetch or synthesize missing artifacts. For separately authorized candidate
+validation, the existing fetcher also accepts an explicit directory containing
+the exact four architecture-matching wheels (including FlatBuffers), plus the
+matching generated `aorta.h`. It validates all local input hashes before copying,
+retains source bytes, rechecks copies and never falls back to a download:
+
+```bash
+python tools/fetch_dependencies.py --arch x86_64 --output "$VERIFIED_INPUTS" \
+  --source-dir "$RECEIVED_WHEELS" --native-header "$RECEIVED_AORTA_HEADER"
+python -m pip install --no-index --find-links "$VERIFIED_INPUTS" "$VERIFIED_INPUTS"/*.whl
+python -m pip check
+```
+
+Use a fresh output directory and a separately authorized validation environment.
+For ARM use `--arch aarch64` and the actual ARM wheels/toolchain, not x86 Core.
+Keep normal pip dependency resolution enabled. The default official workflow
+continues to require a real pinned SDK dependency Release containing the four
+wheels and `aorta.h`; that publication is pending. Do not invent a tag or use
+the old rc.4 to bypass this gate. Neither path implies a final SDK release,
+native ABI validation or robot acceptance.
 For a fully offline development environment, obtain MCAP and its dependency
 wheels beforehand and add `--no-index --find-links <test-wheelhouse>` to that
 MCAP installation. Without the HIL test dependencies, capture tests are skipped;
@@ -320,7 +339,7 @@ already verified archive; the helper preserves an existing file.
 ```bash
 python -m pip install build==1.2.2.post1 scikit-build-core==0.11.6 pybind11==2.13.6 ninja==1.11.1.3
 python tools/fetch_ort.py --output /absolute/path/to/onnxruntime.tgz
-export CMAKE_ARGS='-DORT_ARCHIVE=/absolute/path/to/onnxruntime.tgz'
+export CMAKE_ARGS="-DORT_ARCHIVE=/absolute/path/to/onnxruntime.tgz -DAORTA_NATIVE_HEADER_INCLUDE_DIR=$VERIFIED_INPUTS"
 make build
 # Optional editable install; the same archive is required:
 python -m pip install --find-links wheelhouse -e .
@@ -346,7 +365,8 @@ compatibility.
 ### Dependency Release convention
 
 Following SDK #10, fixed `aorta_msgs`, architecture-specific `aorta_sdk`,
-`flatbuffers` and `vbot_humanoid_msgs` wheels for CI and offline bundles live
+`flatbuffers` and `vbot_humanoid_msgs` wheels, plus the matching generated
+`aorta.h`, for CI and offline bundles live
 in **this repository's dependency prerelease**. The historical `v0.1.0-rc.4`
 ("dependencies for #10") does not contain the current schema candidate. CI reads it with this repository's `GITHUB_TOKEN`
 as `GH_TOKEN`; it does not read the private schema repository or require a
@@ -365,7 +385,9 @@ After publishing a schema `humanoid-msgs-<version>` Release:
 3. Pin the exact schema version, official wheel SHA and matching BFBS hashes
    in `compatibility.json`, with this repository as
    `dependency_release_repository` and a nonempty `dependency_release_tag`.
-   Synchronize package requirements, release audits, tests and documentation.
+   Include the exact native header named in `aorta_native_header_sha256`, and
+   verify its source generation matches the runtime wheels. Synchronize package
+   requirements, release audits, tests and documentation.
    Run the dependency fetcher and relevant checks before pushing the SDK PR.
 
 Never substitute an older schema or skip a missing asset, empty tag or failed

@@ -15,7 +15,7 @@ static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
 
 #include "aorta_base_generated.h"
 #include "body_common_generated.h"
-#include "end_effector_common_generated.h"
+#include "humanoid_common_generated.h"
 
 namespace lowlevel {
 

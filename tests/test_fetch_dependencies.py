@@ -17,13 +17,13 @@ class FetchDependenciesTest(unittest.TestCase):
     def setUp(self):
         self.manifest = json.loads((ROOT / "compatibility.json").read_text())
 
-    def fetch(self, root, manifest, arch="x86_64", download=None):
+    def fetch(self, root, manifest, arch="x86_64", download=None, **inputs):
         path = root / "compatibility.json"
         path.write_text(json.dumps(manifest))
         with mock.patch.object(fetch_dependencies, "MANIFEST", path), mock.patch.object(
             fetch_dependencies.subprocess, "run", side_effect=download
         ) as run:
-            result = fetch_dependencies.fetch(root / "wheels", arch)
+            result = fetch_dependencies.fetch(root / "wheels", arch, **inputs)
             return result, run.call_args_list
 
     def fixture(self):
@@ -31,6 +31,7 @@ class FetchDependenciesTest(unittest.TestCase):
         manifest["dependency_release_tag"] = "fixture-release"
         for name in manifest["wheel_sha256"]:
             manifest["wheel_sha256"][name] = hashlib.sha256(name.encode()).hexdigest()
+        manifest["aorta_native_header_sha256"] = hashlib.sha256(b"aorta.h").hexdigest()
         return manifest
 
     @staticmethod
@@ -60,8 +61,10 @@ class FetchDependenciesTest(unittest.TestCase):
         for arch in ("x86_64", "aarch64"):
             with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
                 output, calls = self.fetch(Path(directory), self.fixture(), arch, self.download)
-                self.assertEqual(len(list(output.iterdir())), 4)
-                self.assertEqual(len(calls), 4)
+                self.assertEqual(len(list(output.iterdir())), 5)
+                self.assertEqual(len(calls), 5)
+                self.assertEqual(sum(c.args[0][-1].endswith(".whl") for c in calls), 4)
+                self.assertEqual((output / "aorta.h").read_bytes(), b"aorta.h")
                 for call in calls:
                     command = call.args[0]
                     name = command[-1]
@@ -71,6 +74,73 @@ class FetchDependenciesTest(unittest.TestCase):
                     self.assertTrue(call.kwargs["check"])
                     if name.startswith("aorta_sdk-"):
                         self.assertTrue(name.endswith(f"-linux_{arch}.whl"))
+
+    def test_explicit_local_inputs_verify_both_architectures_without_a_release_or_network(self):
+        # Synthetic bytes exercise the input verifier, not generated/native ABI.
+        for arch in ("x86_64", "aarch64"):
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "received"
+                source.mkdir()
+                manifest = self.fixture()
+                manifest["dependency_release_tag"] = None
+                for name in manifest["wheel_sha256"]:
+                    (source / name).write_bytes(name.encode())
+                header = root / "actual-aorta.h"
+                header.write_bytes(b"aorta.h")
+                output, calls = self.fetch(root, manifest, arch, source=source,
+                                           native_header=header)
+                self.assertEqual(calls, [])
+                self.assertEqual(len(list(output.iterdir())), 5)
+                self.assertEqual((output / "aorta.h").read_bytes(), header.read_bytes())
+                sdk = next(p for p in output.iterdir() if p.name.startswith("aorta_sdk-"))
+                self.assertTrue(sdk.name.endswith(f"-linux_{arch}.whl"))
+                for p in output.iterdir():
+                    self.assertEqual(p.read_bytes(), b"aorta.h" if p.name == "aorta.h"
+                                     else (source / p.name).read_bytes())
+
+    def test_local_missing_or_corrupt_input_fails_before_output_without_network_fallback(self):
+        for broken in ("aorta.h", "wheel"):
+            for value in (None, b"wrong bytes"):
+                with self.subTest(broken=broken, value=value), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    source = root / "received"
+                    source.mkdir()
+                    manifest = self.fixture()
+                    manifest["dependency_release_tag"] = None
+                    for name in manifest["wheel_sha256"]:
+                        (source / name).write_bytes(name.encode())
+                    (source / "aorta.h").write_bytes(b"aorta.h")
+                    name = "aorta.h" if broken == "aorta.h" else next(
+                        n for n in manifest["wheel_sha256"] if n.startswith("aorta_msgs-"))
+                    (source / name).unlink()
+                    if value is not None:
+                        (source / name).write_bytes(value)
+                    with mock.patch.object(fetch_dependencies.subprocess, "run") as run:
+                        with self.assertRaises((OSError, ValueError)):
+                            self.fetch(root, manifest, source=source)
+                        run.assert_not_called()
+                    self.assertFalse((root / "wheels").exists())
+
+    def test_local_copy_is_rechecked_and_existing_output_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "received"
+            source.mkdir()
+            manifest = self.fixture()
+            manifest["dependency_release_tag"] = None
+            for name in manifest["wheel_sha256"]:
+                (source / name).write_bytes(name.encode())
+            (source / "aorta.h").write_bytes(b"aorta.h")
+            with mock.patch.object(fetch_dependencies.shutil, "copyfileobj",
+                                   side_effect=lambda incoming, target: target.write(b"changed")):
+                with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                    self.fetch(root, manifest, source=source)
+            first = next((root / "wheels").iterdir())
+            self.assertEqual(first.read_bytes(), b"changed")
+            with self.assertRaises(FileExistsError):
+                self.fetch(root, manifest, source=source)
+            self.assertEqual(first.read_bytes(), b"changed")
 
     def test_missing_or_invalid_tags_fail_before_any_download(self):
         for key in ("dependency_release_tag",):
