@@ -442,3 +442,112 @@ class NativeBodyPullTest(unittest.TestCase):
         self.assertEqual(frees[0][1], 0)
         pub.publish_bytes(data)
         self.assertEqual(source.wait_state(2).runtime_id, 11)
+
+    def test_saved_decode_identity_tracebacks_release_only_unaccepted_borrow(self):
+        data, _ = make_state(runtime_id=11, error_codes=(3,)*31)
+        zero_runtime, _ = make_state(runtime_id=0)
+        foreign, _ = make_state(runtime_id=12)
+        # Both actual codec entry frames and the no-old-cache identity failure.
+        for arrays, bad, seed_old in ((True, zero_runtime, True),
+                                     (False, data[:3], True),
+                                     (True, foreign, False)):
+            with self.subTest(arrays=arrays, seed_old=seed_old):
+                source, pub, reader = self.source([data, zero_runtime, foreign])
+                transport = source.transport
+                if seed_old:
+                    pub.publish_bytes(data)
+                    old = source.wait_state(2)
+                    accepted = transport._latest_sample
+                else:
+                    old = accepted = None
+                pub.publish_bytes(bad)
+                candidate = self.receive(reader)
+                errors = []
+                try:
+                    transport._accept_state(
+                        (candidate, time.time_ns(), time.monotonic_ns()), arrays=arrays)
+                except ValueError as error:
+                    errors.append(error)  # Keep the ORIGINAL traceback intact.
+                self.assertEqual(len(errors), 1)
+                self.assertIn('BodyState', str(errors[0]))
+                self.assertIsNotNone(errors[0].__traceback__)
+                self.assertIs(transport._latest_sample, accepted)
+                if accepted is not None:
+                    self.assertEqual(decode_body_state_native(accepted[0]).state_id, old.state_id)
+                stale = candidate
+                candidate = None
+                with self.assertRaisesRegex(ValueError, 'released'):
+                    decode_body_state_native(stale)
+                # With old raw held, M=2 has exactly ONE reusable slot. Without
+                # old raw, two accepted frames expose a retained foreign token.
+                for _ in range(1 if seed_old else 2):
+                    pub.publish_bytes(data)
+                    fresh = self.receive(reader)
+                    got = transport._accept_state(
+                        (fresh, time.time_ns(), time.monotonic_ns()), arrays=True)
+                    self.assertEqual(int(got.error_code[0]), 3)
+                    # Old wrapper must not observe or release this reused slot.
+                    self.assertEqual(stale._discard(), 0)
+                    with self.assertRaisesRegex(ValueError, 'released'):
+                        _ = stale.receive_stamp_ns
+                    self.assertEqual(decode_body_state_native(fresh).runtime_id, 11)
+                    fresh = None
+                accepted = None  # Drop only our own legitimate old selection.
+                source.close()  # Must succeed while errors/stale remain retained.
+                self.assertIsNotNone(errors[0].__traceback__)
+
+    def test_saved_final_closed_traceback_does_not_hold_provisional_core_slot(self):
+        from aorta.errors import BusyError
+        from locomotion_aorta import ControllerClosedError
+        data, _ = make_state(runtime_id=11)
+        source, pub, _ = self.source([data])
+        entered, errors = [False], []
+        real_clock = time.time_ns
+
+        def close_at_receipt():
+            if not entered[0]:
+                entered[0] = True
+                with self.assertRaises(BusyError):
+                    source.close()  # Actual new borrow exists, not yet accepted.
+            return real_clock()
+
+        pub.publish_bytes(data)
+        with mock.patch('locomotion_aorta.pull.time.time_ns', side_effect=close_at_receipt):
+            try:
+                source.wait_state(2)
+            except ControllerClosedError as error:
+                errors.append(error)
+        self.assertTrue(entered[0])
+        self.assertEqual(len(errors), 1)
+        self.assertIsNotNone(errors[0].__traceback__)
+        self.assertIsNone(source.transport._latest_sample)
+        source.close()  # No GC or traceback surgery before actual drain.
+        self.assertTrue(source.transport._closed)
+        self.assertIsNotNone(errors[0].__traceback__)
+
+    def test_cache_cleared_by_close_does_not_reclassify_true_selected_raw(self):
+        from aorta.errors import BusyError, ResultCode
+        from locomotion_aorta import ControllerClosedError
+        data, _ = make_state(runtime_id=11)
+        source, pub, reader = self.source([data])
+        pub.publish_bytes(data)
+        owned = source.wait_state(2)
+        selected = source.transport._latest_sample
+        with self.assertRaises(BusyError):
+            source.close()
+        self.assertIsNone(source.transport._latest_sample)
+        errors = []
+        try:
+            source.transport._accept_state(selected, arrays=False)
+        except ControllerClosedError as error:
+            errors.append(error)
+        self.assertEqual(len(errors), 1)
+        self.assertIsNotNone(errors[0].__traceback__)
+        self.assertEqual(selected[0]._discard(), 0)  # Accepted selection is NOT ended.
+        self.assertEqual(decode_body_state_native(selected[0]).state_id, owned.state_id)
+        self.assertEqual(reader.close(), ResultCode.BUSY)  # Our true selection exists.
+        # Only this true accepted-selection case drops its own external refs;
+        # the rejected-candidate tests above keep original errors through close.
+        selected = errors = None
+        source.close()
+        self.assertTrue(source.transport._closed)

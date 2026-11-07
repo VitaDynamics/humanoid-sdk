@@ -252,7 +252,9 @@ void BindBodyState(py::module_ &module) {
   auto types = py::module_::import("locomotion_aorta.body_types");
   py::class_<body_pull::Sample, std::shared_ptr<body_pull::Sample>>(
       module, "NativeBodyPullSample")
-      .def_property_readonly("receive_stamp_ns", &body_pull::Sample::ReceiveStamp);
+      .def_property_readonly("receive_stamp_ns", &body_pull::Sample::ReceiveStamp)
+      .def("_discard", &body_pull::Sample::DiscardCandidate)
+      .def("_mark_accepted", &body_pull::Sample::MarkAccepted);
   py::class_<body_pull::Reader>(module, "NativeBodyPullReader")
       .def(py::init<py::object>(), py::arg("binding"))
       .def("try_recv", &body_pull::Reader::TryReceive)

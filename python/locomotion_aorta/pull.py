@@ -136,52 +136,88 @@ class PullTransport(_AortaTransport):
 
     def _accept_state(self, received, *, arrays):
         """Commit only under the owning connection's existing identity gate."""
-        # At most the new candidate and the previously accepted sample.
-        for _ in range(2):
-            cached = self._latest_state if arrays else self._latest_body_state
-            if received is self._latest_sample and cached is not None:
-                state = cached
-            else:
-                sample, wall, mono = received
-                native = self._native_body_rx is not None
-                payload = sample if native else sample.payload
-                if arrays:
-                    state = replace(decode_body_state_arrays(payload),
-                        received_monotonic_ns=mono, received_realtime_ns=wall,
-                        pull_context_receive_stamp_ns=(sample.receive_stamp_ns
-                            if native else sample.context.receive_stamp_ns))
+        candidate = received[0]
+        provisional = (self._native_body_rx is not None
+            and (self._latest_sample is None
+                 or candidate is not self._latest_sample[0]))
+        retired_raw = None
+        try:
+            # At most the new candidate and the previously accepted sample.
+            for _ in range(2):
+                cached = self._latest_state if arrays else self._latest_body_state
+                if received is self._latest_sample and cached is not None:
+                    state = cached
                 else:
-                    state = decode_body_state_native(payload)
+                    sample, wall, mono = received
+                    native = self._native_body_rx is not None
+                    payload = sample if native else sample.payload
+                    if arrays:
+                        state = replace(decode_body_state_arrays(payload),
+                            received_monotonic_ns=mono, received_realtime_ns=wall,
+                            pull_context_receive_stamp_ns=(sample.receive_stamp_ns
+                                if native else sample.context.receive_stamp_ns))
+                    else:
+                        state = decode_body_state_native(payload)
 
-            def commit():
-                if received is not self._latest_sample:
-                    self._latest_state = self._latest_body_state = None
-                self._latest_sample = received
-                if arrays:
-                    self._latest_state = state
-                else:
-                    self._latest_body_state = state
+                def commit():
+                    nonlocal provisional, retired_raw
+                    if received is not self._latest_sample:
+                        retired_raw = self._latest_sample
+                        self._latest_state = self._latest_body_state = None
+                    self._latest_sample = received
+                    if arrays:
+                        self._latest_state = state
+                    else:
+                        self._latest_body_state = state
+                    if self._native_body_rx is not None:
+                        received[0]._mark_accepted()
+                    provisional = False
 
-            if self._accept_candidate(state, commit):
-                return state
-            # The candidate has never been committed; retain the old original
-            # sample and receipt clocks, including its other representation.
-            if self._latest_sample is None or received is self._latest_sample:
-                raise ValueError('BodyState does not belong to the discovered runtime')
-            received = self._latest_sample
-        raise ValueError('BodyState does not belong to the discovered runtime')
+                if self._accept_candidate(state, commit):
+                    return state
+                if provisional:
+                    provisional = False
+                    self._discard_native_candidate(candidate)
+                # Keep the true accepted raw and both original representations.
+                if self._latest_sample is None or received is self._latest_sample:
+                    raise ValueError('BodyState does not belong to the discovered runtime')
+                received = self._latest_sample
+            raise ValueError('BodyState does not belong to the discovered runtime')
+        except BaseException as primary:
+            if provisional:
+                self._discard_native_candidate(candidate, primary)
+            raise
+        finally:
+            # Drop replaced raw only AFTER the owning connection's gate exits.
+            retired_raw = None
+
+    def _discard_native_candidate(self, sample, primary=None):
+        if self._native_body_rx is None or sample is None:
+            return
+        if self._latest_sample is not None and sample is self._latest_sample[0]:
+            return
+        try:
+            rc = sample._discard()
+            if rc:
+                from aorta.errors import exception_for_code
+                raise exception_for_code(rc, 'failed to release rejected Body candidate')
+        except BaseException as cleanup:
+            if primary is not None:
+                raise primary from cleanup
+            raise
 
     def _probe_native_body(self, deadline, *, nonblocking=False):
         self._ensure_open()
         if not nonblocking and time.monotonic() > deadline:
             raise TimeoutError('waiting for first body state')
-        sample = self._native_body_rx.try_recv()
+        sample = None
         try:
+            sample = self._native_body_rx.try_recv()
             self._ensure_open()
             if not nonblocking and time.monotonic() > deadline:
                 raise TimeoutError('waiting for first body state')
-        except BaseException:
-            sample = None  # A traceback must not retain a rejected borrow.
+        except BaseException as primary:
+            self._discard_native_candidate(sample, primary)
             raise
         return sample
 
@@ -222,8 +258,12 @@ class PullTransport(_AortaTransport):
                     sample = self._probe_native_body(deadline)
             else:
                 sample = sub.recv(remaining)
-        wall, mono = time.time_ns(), time.monotonic_ns()
-        self._ensure_open()
+        try:
+            wall, mono = time.time_ns(), time.monotonic_ns()
+            self._ensure_open()
+        except BaseException as primary:
+            self._discard_native_candidate(sample, primary)
+            raise
         if sample is None:
             raise TimeoutError('waiting for body state')
         return sample, wall, mono

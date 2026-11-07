@@ -85,14 +85,15 @@ class Slots : public std::enable_shared_from_this<Slots> {
     // A real release callback may synchronously re-enter close. The original
     // Core gate and this admission check must both precede exposure.
     if (rc == AORTA_OK && closed_) {
-      Release(index);
+      Release(index, slot.borrow.borrow_id);
       return AORTA_ERR_NOT_FOUND;
     }
     return rc;
   }
-  void Release(size_t index) noexcept {
+  aorta_result_t Release(size_t index, uint64_t borrow_id) noexcept {
     auto& token = slots_[index].borrow;
-    if (!token.borrow_id) return;
+    if (!borrow_id) return AORTA_OK;
+    if (token.borrow_id != borrow_id) return AORTA_ERR_INVALID_ARGUMENT;
     ++active_;
     const auto rc = release_(&token);
     --active_;
@@ -104,6 +105,7 @@ class Slots : public std::enable_shared_from_this<Slots> {
       // remains retained rather than falsely reporting drained or unloading.
       failed_owner_ = shared_from_this();
     }
+    return rc;
   }
   const aorta_pull_borrow_t& Borrow(size_t index) const {
     return slots_.at(index).borrow;
@@ -130,13 +132,29 @@ class Slots : public std::enable_shared_from_this<Slots> {
 class Sample {
  public:
   Sample(std::shared_ptr<Slots> slots, size_t index)
-      : slots_(std::move(slots)), index_(index) {}
+      : slots_(std::move(slots)), index_(index),
+        borrow_id_(slots_->Borrow(index_).borrow_id) {}
   Sample(const Sample&) = delete;
   Sample& operator=(const Sample&) = delete;
-  ~Sample() { slots_->Release(index_); }
+  ~Sample() { Discard(); }
+  void MarkAccepted() {
+    CheckLive(slots_->Borrow(index_));
+    accepted_ = true;  // Memory retention only; the SDK's original R gate calls this.
+  }
+  aorta_result_t DiscardCandidate() noexcept {
+    return accepted_ ? AORTA_OK : Discard();
+  }
+  aorta_result_t Discard() noexcept {
+    if (discarding_) return AORTA_ERR_BUSY;
+    discarding_ = true;
+    const auto rc = slots_->Release(index_, borrow_id_);
+    discarding_ = false;
+    if (rc == AORTA_OK) borrow_id_ = 0;
+    return rc;
+  }
   std::pair<const uint8_t*, size_t> Bytes() const {
     const auto& sample = slots_->Borrow(index_);
-    if (!sample.borrow_id) throw py::value_error("native RX borrow was released");
+    CheckLive(sample);
     if (sample.payload.slice_count != 1 || !sample.payload.slices)
       throw py::value_error("native Body decoder requires a contiguous sample; multi-slice remains unsupported");
     const auto& slice = sample.payload.slices[0];
@@ -145,12 +163,21 @@ class Sample {
     return {slice.data, slice.len};
   }
   int64_t ReceiveStamp() const {
-    return slots_->Borrow(index_).context.receive_stamp_ns;
+    const auto& sample = slots_->Borrow(index_);
+    CheckLive(sample);
+    return sample.context.receive_stamp_ns;
   }
 
  private:
+  void CheckLive(const aorta_pull_borrow_t& current) const {
+    if (!borrow_id_ || current.borrow_id != borrow_id_)
+      throw py::value_error("native RX borrow was released");
+  }
   std::shared_ptr<Slots> slots_;
   size_t index_;
+  uint64_t borrow_id_;
+  bool accepted_ = false;
+  bool discarding_ = false;
 };
 
 class Reader {
@@ -168,9 +195,10 @@ class Reader {
     struct Pending {
       Slots& slots;
       size_t index;
+      uint64_t borrow_id;
       bool armed = true;
-      ~Pending() { if (armed) slots.Release(index); }
-    } pending{*slots_, index};
+      ~Pending() { if (armed) slots.Release(index, borrow_id); }
+    } pending{*slots_, index, slots_->Borrow(index).borrow_id};
     // Empty probes allocate no sample owner. A successful borrow remains
     // stack-owned until shared ownership is established, including bad_alloc.
     auto sample = std::make_shared<Sample>(slots_, index);
