@@ -1,0 +1,123 @@
+{
+  "format_version": 1,
+  "capture": {
+    "bytes": 5479,
+    "sha256": "df0f55ab6981940b673e5f3dac1beb01322c686b6ddef984f116caaac28dafcb"
+  },
+  "files": {
+    "static/left_info.fb": {
+      "bytes": 632,
+      "sha256": "f647a01fc8a1b3bf5bc1ae8657b9b5acb5b4cf47adc3ab3d77d2c493e401faf3"
+    },
+    "static/right_info.fb": {
+      "bytes": 656,
+      "sha256": "9300fcf828531ad3fec283a035a3d93fdca65b55b71de3b16fc1f667045a3243"
+    },
+    "static/left_state.fb": {
+      "bytes": 280,
+      "sha256": "70d08a894d4408411df18dcf6ecba85ba1fd89dcc45115a84471b7df249de4e9"
+    },
+    "static/right_state.fb": {
+      "bytes": 280,
+      "sha256": "fcf2f802bd2efd7f84897c74ce440c438a0d0520065595c7874758850f9cf834"
+    },
+    "static/left_info_republished.fb": {
+      "bytes": 640,
+      "sha256": "9b4c43b573e885649ed49abeaea73bfeaccaf5e2db7421a5c3b16bac8f30e2c2"
+    },
+    "static/left_next_state.fb": {
+      "bytes": 280,
+      "sha256": "f22601d2c14fcacb58098f6eb91047985363b78c35e61d229063c61f39d27045"
+    },
+    "static/right_inhibited.fb": {
+      "bytes": 280,
+      "sha256": "2a1f7f2c449bb6c853bc166b9ea49d47bc6442ade00287cde414ade9a97b4359"
+    },
+    "static/left_new_runtime_info.fb": {
+      "bytes": 632,
+      "sha256": "e529be8de87042e8733a2c8eb810bc4724a6202c17fa90d291ab3fc854660820"
+    },
+    "linker/info.fb": {
+      "bytes": 568,
+      "sha256": "241428b34b6feeee09743f16f185a027ab3acf3ffd71c25bc770aed3a68ab49f"
+    },
+    "linker/position.fb": {
+      "bytes": 288,
+      "sha256": "612d9b762d862ef12311b52cdecb2cd00fe7f1fa0d977045ed3671b24ffa9745"
+    },
+    "linker/zero_fault.fb": {
+      "bytes": 288,
+      "sha256": "1bdedd8b35555a941351b3abca84672b4b0d45b9edf5ccdeaa926f261fa4c8af"
+    },
+    "linker/temperature.fb": {
+      "bytes": 288,
+      "sha256": "2a6a5779bdf2d938c44fe227574a0f60ae19de3cce8bdfe31ce670f180e09dda"
+    },
+    "linker/next_position.fb": {
+      "bytes": 288,
+      "sha256": "732a30554559921234cee024e1b7c6a42e64200a38cf7d94b02b255627efb13d"
+    },
+    "linker/nonzero_fault.fb": {
+      "bytes": 288,
+      "sha256": "44e856e2021afa3b2508ca26d8db54450dbdd9426c376eea0df0b375f1bf8bc3"
+    },
+    "linker/temperature_after_fault.fb": {
+      "bytes": 288,
+      "sha256": "12ecca3987d0950c7c281dcbb5e8c99e97abaeaf2a7bcad68d254f70565d5032"
+    },
+    "linker/permission_revoked.fb": {
+      "bytes": 288,
+      "sha256": "18c99a33f35ce67057143ba2537413fd9fc308bf286c31d9ee009bc8ade344b8"
+    },
+    "linker/position_stale.fb": {
+      "bytes": 288,
+      "sha256": "3e7c782632c6e854f0156a5c06e67c63e82502e4656a50a1d2c275adbdbab474"
+    },
+    "brainco/info.fb": {
+      "bytes": 1920,
+      "sha256": "f732b3932e2c60db2f8c09fd962d8013eac0f57b0cae70414c41ef7e42998b16"
+    },
+    "brainco/touch.fb": {
+      "bytes": 392,
+      "sha256": "b91233a8eacf922fced33885b42e8b712c984093d77647b5889a7443e9da56e6"
+    },
+    "brainco/touch_disabled.fb": {
+      "bytes": 392,
+      "sha256": "9b7d5fef0ea27e004077a3962676d7f6bbde2a187860ef2e3e242e7189e75949"
+    },
+    "brainco/touch_new.fb": {
+      "bytes": 392,
+      "sha256": "b0275c04e436baa388a92eedaf640ccf7c29703cdf0176df1c09fe44146fb556"
+    },
+    "static/robot_info.fb": {
+      "bytes": 4528,
+      "sha256": "5d0d09ece5bcba7d2ffdb3586382422dc06966dfc8ba6cdc651d00fe9d429246"
+    },
+    "static/new_runtime_robot_info.fb": {
+      "bytes": 4528,
+      "sha256": "6fce48faaa06830c8757316c90fb00564d52a2f4ce9eb98d8233140f89c8f114"
+    },
+    "linker/robot_info.fb": {
+      "bytes": 3928,
+      "sha256": "3fce313a75493ed62d6bece4b2e378ddfc0c4e2fded2c02def748789da1bfbcb"
+    },
+    "brainco/robot_info.fb": {
+      "bytes": 5280,
+      "sha256": "e05e260fe826fcdc9bf78c3c32dd37fade3cfbf27194aa27a8611b5d29e388ca"
+    }
+  },
+  "producer": {
+    "repository": "VitaDynamics/vita-robot",
+    "target": "//src/application/locomotion/humanoid:end_effector_command_runtime_test",
+    "commit": "f73aa8e88dcdc003cd4556aededa099781fc3ffe",
+    "tree": "5cf6103a7b4fad2efa5eb44b7a487d186ec4f0fa",
+    "elf_sha256": "5405c44da0b8c3b0b52e44bcfc5ed0dac7d9d0584340a66cc720ea9d6db7001b",
+    "invocation_sha256": "6ae721d69817634365bb6970dadf670aa88a52a3acb604b59c337c09ed8e1f03"
+  },
+  "schema_sha256": {
+    "end_effector_info": "7c81801fb7aac397b6ce8d5f37f78a86eeb489f426260ecf143e0a4ea06bc8fa",
+    "end_effector_state": "6dd6730bec2b1da402471ce7abedff795df079c993442c691c399b7218188363",
+    "end_effector_touch": "8523e1b5f60e6f000e4d03d1b4d7b2d5414da70a15a1a58b338f4e3ce537fe7a",
+    "get_robot_info": "9e04a287309acf6e50ab8912ba883543ff78146bca9379c108e57c511a9d16ff"
+  }
+}

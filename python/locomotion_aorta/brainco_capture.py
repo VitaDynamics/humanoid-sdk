@@ -1,4 +1,4 @@
-"""Read-only HIL capture using generated bindings; never creates publishers.
+"""Read-only EE HIL capture using generated bindings; never creates publishers.
 
 Capture timestamps are observer-local, not robot or sensor clocks. Sequence
 checks by downstream judges do not prove absence of transport loss at edges.
@@ -16,7 +16,7 @@ import re
 import threading
 import time
 
-from . import _hand_codec, _gripper_codec
+from . import _end_effector_codec
 from .transport import _decode_control_status
 from ._body_codec import decode_body_state, unpack_body_cmd
 from ._motor_codec import unpack_motor_states
@@ -42,15 +42,11 @@ MODULES = {
     "control_status": ("locomotion_sdk.ControlStatus", "ControlStatus"),
 }
 for _side in ("left", "right"):
-    for _kind, _root in (("cmd", "HandCmd"), ("state", "HandState"),
-                         ("touch", "HandTouch"), ("info", "HandInfo")):
-        _key = f"{_side}_hand_{_kind}"
-        TOPICS[_key] = f"/sdk/foot_humanoid/hand/{_side}/{_kind}"
-        MODULES[_key] = ("lowlevel." + _root, _root)
-    for _kind, _root in (("cmd", "GripperCmd"), ("state", "GripperState"), ("info", "GripperInfo")):
-        _key = f"{_side}_gripper_{_kind}"
-        TOPICS[_key] = f"/sdk/foot_humanoid/gripper/{_side}/{_kind}"
-        MODULES[_key] = ("lowlevel." + _root, _root)
+    for _kind, _root in (("cmd", "EndEffectorCmd"), ("state", "EndEffectorState"),
+                         ("touch", "EndEffectorTouch"), ("info", "EndEffectorInfo")):
+        _key = f"{_side}_ee_{_kind}"
+        TOPICS[_key] = f"/sdk/foot_humanoid/end_effector/{_side}/{_kind}"
+        MODULES[_key] = ("lowlevel.ee." + _root, _root)
 
 
 def metadata_checked(metadata):
@@ -75,7 +71,7 @@ def load_bindings():
                 for kind, (module, name) in MODULES.items()}
     except (ImportError, AttributeError) as error:
         raise RuntimeError("matching vbot-humanoid-msgs public bindings are required, including "
-                           "lowlevel.HandTouch; no handwritten decoder fallback") from error
+                           "lowlevel.ee.EndEffectorTouch; no handwritten decoder fallback") from error
 
 
 def _json_feedback(result):
@@ -85,6 +81,8 @@ def _json_feedback(result):
         if isinstance(item, float) and not math.isfinite(item):
             nonfinite = True
             return None
+        if isinstance(item, bytes):
+            return list(item)  # Exact uint8 Touch payload, not decoded/inferred forces.
         if isinstance(item, dict):
             return {key: value(v) for key, v in item.items()}
         if isinstance(item, (tuple, list)):
@@ -106,19 +104,18 @@ def decode(kind, payload, bindings):
     if not isinstance(payload, bytes) or not 8 <= len(payload) <= 65536:
         raise ValueError("invalid or oversized FlatBuffer payload")
     view = bindings[kind](payload)
-    if "_gripper_" in kind:
-        side, gripper_kind = kind.split("_gripper_")
-        record = getattr(_gripper_codec, "decode_" + gripper_kind)(view)
+    if "_ee_" in kind:
+        side, ee_kind = kind.split("_ee_")
+        record = getattr(_end_effector_codec, "decode_" + ee_kind)(view)
+        version = {'info': _end_effector_codec.EE_INFO_PROTOCOL_VERSION,
+                   'state': _end_effector_codec.EE_STATE_PROTOCOL_VERSION,
+                   'touch': _end_effector_codec.EE_TOUCH_PROTOCOL_VERSION,
+                   'cmd': _end_effector_codec.EE_CMD_PROTOCOL_VERSION}[ee_kind]
+        _end_effector_codec._identity(record, version)
         if record.side != (1 if side == "left" else 2):
-            raise ValueError("Gripper message side differs from selected topic")
-        return _json_feedback(asdict(record))
-    if "_hand_" in kind:
-        side, hand_kind = kind.split("_hand_")
-        record = getattr(_hand_codec, "decode_" + hand_kind)(view)
-        if record.side != (1 if side == "left" else 2):
-            raise ValueError("Hand message side differs from selected topic")
-        # NOT_READY and an unpopulated body slot may carry NaN; JSON null
-        # records absence without synthesizing a healthy zero.
+            raise ValueError("EE message side differs from selected topic")
+        # Raw, partial and NaN observations retain their original validity;
+        # capture does not infer current capability, motion or arrival.
         return _json_feedback(asdict(record))
     if kind == "body_state":
         state = decode_body_state(view)
@@ -132,6 +129,8 @@ def decode(kind, payload, bindings):
         quat = view.RootQuat()
         command = BodyCmd(joints=motors,
                          protocol_version=view.ProtocolVersion(), action=view.Action(),
+                         runtime_id=view.RuntimeId(),
+                         control_id=view.ControlId(),
                          session_id=view.SessionId(), sequence=view.Sequence(),
                          input_state_id=view.InputStateId(), input_state_ts_real_us=view.InputStateTsRealUs(),
                          ts_client_created_us=view.TsClientCreatedUs(), ts_client_send_us=view.TsClientSendUs(),
@@ -168,7 +167,7 @@ class TraceWriter:
         self.stream = stream
         self.counts = {}
         self.write({**metadata_checked(metadata), "type": "metadata",
-                    "capture_format": "brainco_capture_v3", "capture_clock": clock,
+                    "capture_format": "end_effector_capture_v4", "capture_clock": clock,
                     "transport_loss": "not_measured"})
 
     def write(self, record):
@@ -223,7 +222,7 @@ def capture_live(output: Path, metadata, duration_s, *, group="default", capacit
         writer = TraceWriter(stream, {**metadata, "requested_group": group},
             "observer_monotonic_ns")
         try:
-            node = node_factory("brainco_hil_observer", group)
+            node = node_factory("end_effector_hil_observer", group)
             from ._group import require_node_group
             require_node_group(node, group)
             for kind, topic in TOPICS.items():
@@ -278,8 +277,8 @@ def export_mcap(source: Path, output: Path, metadata, topic_map, schema_hashes, 
         if not re.fullmatch(r"[0-9a-f]{64}", schema_hashes.get(kind, "")):
             raise ValueError(f"expected BFBS sha256 required for {kind}")
     for kind in topic_map.values():
-        if kind.endswith("_hand_touch") and schema_hashes[kind] != metadata["schema_sha256"]:
-            raise ValueError("metadata HandTouch schema_sha256 differs from requested BFBS")
+        if kind.endswith("_ee_touch") and schema_hashes[kind] != metadata["schema_sha256"]:
+            raise ValueError("metadata EndEffectorTouch schema_sha256 differs from requested BFBS")
         if schema_hashes[kind] != binding_schema_hash(kind):
             raise ValueError(f"recorded BFBS differs from loaded binding for {kind}; use its matching SDK")
     bindings = load_bindings() if bindings is None else bindings

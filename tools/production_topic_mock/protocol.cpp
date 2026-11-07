@@ -1,5 +1,6 @@
 #include "protocol.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -25,50 +26,49 @@ Request DecodeRequest(const std::vector<uint8_t>& bytes) {
   return {r->protocol_version(),
           static_cast<int>(r->operation()),
           str(r->request_id()),
-          str(r->client_id()),
-          r->lease_id() ? str(r->lease_id()) : "",
-          r->action_name() ? str(r->action_name()) : ""};
+          str(r->action_name()), r->client_id(), r->control_id(),
+          r->runtime_id()};
 }
 }  // namespace production_mock
 #elif defined(PRODUCTION_MOCK_ACK_CODEC)
 #include "control_ack_generated.h"
+#include "wire_helpers.h"
 namespace production_mock {
 std::vector<uint8_t> EncodeAck(const Ack& r, uint64_t wall_ns,
                                uint64_t publication_id) {
   locomotion_sdk::ControlAckT ack;
-  ack.protocol_version = 1;
+  ack.protocol_version = 4;
   ack.operation = static_cast<decltype(ack.operation)>(r.operation);
   ack.request_id = r.request_id;
-  ack.lease_id = r.lease_id;
+  ack.client_id = r.client_id;
+  ack.control_id = r.control_id;
+  ack.runtime_id = r.runtime;
   ack.accepted = r.accepted;
   ack.error_code = static_cast<decltype(ack.error_code)>(r.error);
   ack.reason = r.reason;
-  ack.lease_deadline_monotonic_ns = 0;
-  ack.aorta_header = std::make_unique<aorta::sys::AortaHeaderT>();
-  ack.aorta_header->sequence = publication_id;
-  ack.aorta_header->publish_stamp_ns = wall_ns;
-  ack.aorta_header->publisher_node = "production_topic_mock";
-  flatbuffers::FlatBufferBuilder b;
-  b.Finish(locomotion_sdk::ControlAck::Pack(b, &ack));
-  return {b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()};
+  ack.aorta_header = detail::MakeHeader<aorta::sys::AortaHeaderT>(
+      publication_id, wall_ns, "production_topic_mock");
+  return detail::Pack<locomotion_sdk::ControlAck>(ack);
 }
 }  // namespace production_mock
 #elif defined(PRODUCTION_MOCK_STATUS_CODEC)
 #include "control_status_generated.h"
+#include "wire_helpers.h"
 namespace production_mock {
 std::vector<uint8_t> EncodeStatus(const Status& s, uint64_t now_ns,
                                   uint64_t wall_ns, uint64_t publication_id) {
   locomotion_sdk::ControlStatusT status;
-  status.protocol_version = 1;
+  status.protocol_version = 4;
   status.status_seq = s.status_seq;
   status.current_action =
       (s.phase == 4 || s.phase == 5) ? "EXTERNAL" : "PASSIVE";
   status.action_phase = static_cast<decltype(status.action_phase)>(s.phase);
   status.client_id = s.client_id;
-  status.lease_id = s.lease_id;
+  status.control_id = s.control_id;
+  status.runtime_id = s.runtime;
   status.generation = s.generation;
   status.last_accepted_cmd_id =
-      static_cast<uint16_t>(s.accepted_sequence & 0xffff);
+      s.accepted_sequence;
   status.reject_count = s.reject_count;
   status.last_reject_code =
       static_cast<decltype(status.last_reject_code)>(s.reject_code);
@@ -77,24 +77,23 @@ std::vector<uint8_t> EncodeStatus(const Status& s, uint64_t now_ns,
                                  : 0;
   status.timeout_hold = s.phase == 5;
   status.stamp_monotonic_ns = now_ns;
-  status.aorta_header = std::make_unique<aorta::sys::AortaHeaderT>();
-  status.aorta_header->sequence = publication_id;
-  status.aorta_header->publish_stamp_ns = wall_ns;
-  status.aorta_header->publisher_node = "production_topic_mock";
-  flatbuffers::FlatBufferBuilder b;
-  b.Finish(locomotion_sdk::ControlStatus::Pack(b, &status));
-  return {b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()};
+  status.aorta_header = detail::MakeHeader<aorta::sys::AortaHeaderT>(
+      publication_id, wall_ns, "production_topic_mock");
+  return detail::Pack<locomotion_sdk::ControlStatus>(status);
 }
 }  // namespace production_mock
 #elif defined(PRODUCTION_MOCK_INFO_CODEC)
 #include "get_robot_info_generated.h"
+#include "wire_helpers.h"
 namespace production_mock {
 bool ValidInfoRequest(const std::vector<uint8_t>& bytes) {
   flatbuffers::Verifier verifier(bytes.data(), bytes.size());
   return aorta::services::humanoid_locomotion::VerifyGetRobotInfoRequestBuffer(
       verifier);
 }
-std::vector<uint8_t> EncodeInfo() {
+std::vector<uint8_t> EncodeInfo(uint64_t runtime,
+                                const std::vector<uint8_t>& left_info,
+                                const std::vector<uint8_t>& right_info) {
   static const std::array<const char*, kSlots> names{
       "left_hip_pitch_joint",
       "left_hip_roll_joint",
@@ -135,8 +134,10 @@ std::vector<uint8_t> EncodeInfo() {
   for (size_t j = 0; j < kSlots; ++j) {
     const bool present = j != 14;
     info.body->joint_names.push_back(names[j]);
-    info.body->joints.emplace_back(j, lowlevel::BodySlotRole_ACTIVE, false,
-                                   present, present ? 31 : 0, present ? 31 : 0,
+    // is_mock marks the uninstalled slot; it never flips on faults. present
+    // stays the private topology bit.
+    info.body->joints.emplace_back(j, lowlevel::BodySlotRole_ACTIVE, !present,
+                                   present ? 31 : 0, present ? 31 : 0,
                                    kJointLimits.q_min, kJointLimits.q_max,
                                    kJointLimits.dq_min, kJointLimits.dq_max,
                                    kJointLimits.tau_min, kJointLimits.tau_max,
@@ -148,27 +149,46 @@ std::vector<uint8_t> EncodeInfo() {
     identity->present = present;
     info.body->motor_identities.push_back(std::move(identity));
   }
+  const std::vector<uint8_t>* ee_info_bytes[2] = {&left_info, &right_info};
   for (int side = 1; side <= 2; ++side) {
     auto ee = std::make_unique<lowlevel::EndEffectorCapabilityT>();
-    ee->side = static_cast<lowlevel::EndEffectorSide>(side);
-    const char* requested =
-        std::getenv(side == 1 ? "PRODUCTION_MOCK_EE_LEFT_KIND"
-                              : "PRODUCTION_MOCK_EE_RIGHT_KIND");
-    const int kind = requested ? std::stoi(requested) : 0;
-    if (kind < 0 || kind > 2)
-      throw std::runtime_error("invalid synthetic EE kind");
-    ee->kind = static_cast<lowlevel::EndEffectorKind>(kind);
-    ee->ready = true;
-    ee->status = aorta::services::common::ServiceStatus_SUCCESS;
+    ee->side = static_cast<lowlevel::ee::EndEffectorSide>(side);
+    const auto& fixture = *ee_info_bytes[side - 1];
+    if (fixture.empty()) {
+      // No configured endpoint: honest absence — not ready, no Info, the
+      // validated startup configuration marks it mock. Real failures keep
+      // their reason instead of being relabeled as devices.
+      ee->is_mock = true;
+      ee->ready = false;
+      ee->status = aorta::services::common::ServiceStatus_UNAVAILABLE;
+      ee->reason = "synthetic endpoint not configured";
+    } else {
+      // Same startup fixture as the Info topic; later publication timestamps
+      // may differ, while runtime/side/capabilities remain fixed.
+      const auto checked = DecodeEEInfo(fixture);
+      const auto* wire = flatbuffers::GetRoot<lowlevel::ee::EndEffectorInfo>(fixture.data());
+      ee->info.reset(wire->UnPack());
+      if (!ee->info || ee->info->runtime_id != runtime || checked.side != side ||
+          ee->info->is_mock.size() != ee->info->axis_names.size())
+        throw std::runtime_error("startup EE Info runtime/side/mock mismatch");
+      ee->is_mock = [&] {
+        for (const bool flag : ee->info->is_mock)
+          if (!flag) return false;
+        return true;
+      }();
+      ee->ready = !ee->is_mock;
+      ee->status = ee->is_mock ? aorta::services::common::ServiceStatus_UNAVAILABLE
+                               : aorta::services::common::ServiceStatus_SUCCESS;
+      if (ee->is_mock) ee->reason = "synthetic mock endpoint unavailable";
+    }
     info.end_effectors.push_back(std::move(ee));
   }
   aorta::services::humanoid_locomotion::GetRobotInfoResponseT reply;
   reply.status = aorta::services::common::ServiceStatus_SUCCESS;
+  reply.runtime_id = runtime;  // same startup R; RobotInfo2 below
+  info.protocol_version = 2;
   reply.info = std::make_unique<lowlevel::RobotInfoT>(std::move(info));
-  flatbuffers::FlatBufferBuilder b;
-  b.Finish(aorta::services::humanoid_locomotion::GetRobotInfoResponse::Pack(
-      b, &reply));
-  return {b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()};
+  return detail::Pack<aorta::services::humanoid_locomotion::GetRobotInfoResponse>(reply);
 }
 }  // namespace production_mock
 #else
@@ -183,33 +203,39 @@ uint64_t NextApplyTick(uint64_t accepted_wall_ns, uint64_t period_ns) {
 }
 Protocol::Protocol(uint64_t seed, uint64_t stream_timeout,
                    uint64_t prepare_timeout, int reject_operation)
-    : generation_(seed),
+    : runtime_id_(seed), generation_(seed),
       command_timeout_ns_(stream_timeout),
       prepare_timeout_ns_(prepare_timeout),
       reject_operation_(reject_operation) {
   if (!seed || !stream_timeout || !prepare_timeout)
     throw std::invalid_argument("nonzero generation/timeouts required");
+  output_.runtime = runtime_id_;
+  status_.runtime = runtime_id_;
 }
 Ack Protocol::Reply(const Request& r, int error,
                     const std::string& reason) const {
-  return {r.request_id, error ? "" : status_.lease_id,
-          reason,       r.operation,
-          error,        error == 0};
+  return {r.request_id, reason, r.operation, error, error == 0,
+          error ? r.client_id : status_.client_id,
+          error ? r.control_id : status_.control_id, runtime_id_};
 }
 void Protocol::Clear() {
   const auto seq = status_.status_seq + 1;
   const auto rejects = status_.reject_count;
   status_ = Status{};
+  status_.runtime = runtime_id_;
   status_.status_seq = seq;
   status_.reject_count = rejects;
   has_pending_ = false;
   prepared_ns_ = 0;
   InvalidateApplied();
+  InvalidateEE();
 }
 void Protocol::InvalidateApplied() {
   // Hold the last synthetic positions, while invalidating evidence of a
   // current command. Cancelling does not teleport the simulated joints.
   output_.session = output_.sequence = output_.first_output_us = 0;
+  output_.applied_key_valid = false;
+  output_.association_source_type = 0;
 }
 void Protocol::Watchdog(uint64_t now) {
   if (status_.phase == 2 && now - prepared_ns_ >= prepare_timeout_ns_) Clear();
@@ -223,9 +249,10 @@ void Protocol::Watchdog(uint64_t now) {
 }
 Ack Protocol::RequestControl(const Request& r, uint64_t now) {
   Watchdog(now);
-  if (r.version != 2) return Reply(r, 1001, "unsupported request version");
-  if (r.request_id.empty() || r.client_id.empty() ||
-      r.request_id.size() > 256 || r.client_id.size() > 256 ||
+  if (r.version != 4) return Reply(r, 1001, "unsupported request version");
+  if (r.runtime != runtime_id_) return Reply(r, 1005, "runtime mismatch");
+  if (r.request_id.empty() || !r.client_id ||
+      r.request_id.size() > 256 ||
       r.operation < 1 || r.operation > 3)
     return Reply(r, 1002, "invalid request identity/operation");
   if (r.action != "EXTERNAL")
@@ -233,29 +260,30 @@ Ack Protocol::RequestControl(const Request& r, uint64_t now) {
   if (r.operation == reject_operation_)
     return Reply(r, 1003, "scripted rejection");
   if (r.operation == 1) {
-    if (!status_.client_id.empty()) {
+    if (status_.client_id) {
       if (r.client_id != status_.client_id) return Reply(r, 1008, "mock busy");
       if (r.request_id != status_.request_id)
         return Reply(r, 1004, "request conflict");
       return Reply(r, 0, "idempotent PREPARE");
     }
+    if (r.control_id) return Reply(r, 1006, "PREPARE has existing control ID");
     if (generation_ == std::numeric_limits<uint64_t>::max())
       return Reply(r, 1009, "generation exhausted");
     status_.request_id = r.request_id;
     status_.client_id = r.client_id;
-    status_.lease_id = "mock-lease-" + std::to_string(++generation_);
+    status_.control_id = ++generation_;
     status_.phase = 2;
     ++status_.status_seq;
     prepared_ns_ = now;
     return Reply(r, 0, "armed; no automatic running lease expiry");
   }
-  if (r.operation == 3 && status_.client_id.empty())
+  if (r.operation == 3 && !status_.client_id)
     return Reply(r, 0, "already idle");
   if (status_.client_id != r.client_id)
     return Reply(r, 1005, "identity mismatch");
   if (status_.request_id != r.request_id)
     return Reply(r, 1004, "request conflict");
-  if (r.lease_id != status_.lease_id) return Reply(r, 1006, "lease mismatch");
+  if (!r.control_id || r.control_id != status_.control_id) return Reply(r, 1006, "control mismatch");
   if (r.operation == 3) {
     Ack ack = Reply(r, 0, "cancelled to PASSIVE");
     Clear();
@@ -275,6 +303,8 @@ Ack Protocol::RequestControl(const Request& r, uint64_t now) {
 bool Protocol::Accept(const Command& cmd, uint64_t now) {
   Watchdog(now);
   bool valid = (status_.phase == 4 || status_.phase == 5) &&
+               cmd.runtime == runtime_id_ && cmd.control_id != 0 &&
+               cmd.control_id == status_.control_id &&
                cmd.session == status_.generation &&
                cmd.sequence > status_.accepted_sequence && cmd.sequence &&
                cmd.input_state_real_us;
@@ -313,8 +343,191 @@ bool Protocol::Tick(uint64_t now, uint64_t wall_us) {
   output_.sequence = pending_.sequence;
   output_.q = pending_.q;
   output_.first_output_us = wall_us;
+  output_.control_us = wall_us;
+  output_.applied_key_valid = true;
+  output_.association_source_type = 1;  // EXTERNAL, from this accepted synthetic frame.
   has_pending_ = false;
   return true;
+}
+
+void Protocol::ConfigureEE(const EEInfo& info, const std::vector<float>& initial) {
+  if (status_.phase != 0 || status_.client_id || info.side < 1 || info.side > 2 ||
+      info.axes.empty() || info.axes.size() > 64 || initial.size() != info.axes.size() ||
+      info.device_model < 1 || info.device_model > 3 || !info.layout_id)
+    throw std::invalid_argument("invalid synthetic EE fixture or active owner");
+  auto& endpoint = endpoints_[info.side - 1];
+  if (endpoint.configured) throw std::invalid_argument("EE fixture is fixed at startup");
+  for (size_t i = 0; i < initial.size(); ++i) {
+    const auto& a = info.axes[i];
+    if (!(a.valid_limits & 1) || !(a.state_fields & 1) || !std::isfinite(initial[i]) ||
+        !std::isfinite(a.pos_min) || !std::isfinite(a.pos_max) ||
+        initial[i] < a.pos_min || initial[i] > a.pos_max)
+      throw std::invalid_argument("invalid synthetic measured position");
+  }
+  std::vector<std::pair<uint8_t, uint8_t>> seen;
+  for (const auto& source : info.observation_sources) {
+    const auto [stream, side] = source;
+    if (!((stream == 1 && side == 0) || ((stream == 2 || stream == 3) && (side == 1 || side == 2))) ||
+        std::find(seen.begin(), seen.end(), source) != seen.end())
+      throw std::invalid_argument("invalid or duplicate synthetic observation source");
+    seen.push_back(source);
+  }
+  endpoint.configured = true;
+  endpoint.snapshot.info = info;
+  endpoint.snapshot.position = initial;
+  endpoint.snapshot.output_keys.resize(initial.size());
+  endpoint.snapshot.output_key_valid.assign(initial.size(), false);
+  endpoint.snapshot.runtime = runtime_id_;
+}
+
+bool Protocol::OwnedEE(uint64_t control_id) const {
+  return (status_.phase == 4 || status_.phase == 5) && control_id &&
+         control_id == status_.control_id;
+}
+
+void Protocol::InvalidateEE() {
+  for (auto& endpoint : endpoints_) {
+    endpoint.has_pending = false;
+    endpoint.last_valid_ns = 0;
+    endpoint.timed_out = false;
+    auto& s = endpoint.snapshot;
+    s.received_valid = s.accepted_valid = s.applied_valid = false;
+    std::fill(s.output_key_valid.begin(), s.output_key_valid.end(), false);
+    s.output_allowed = false;
+    s.inhibit_reason = 1;
+    s.received = s.accepted = s.applied = {};
+    s.received_us = s.accepted_us = s.output_us = 0;
+  }
+}
+
+bool Protocol::AcceptEE(const EECommand& cmd, uint64_t now, uint64_t wall_us) {
+  Watchdog(now);  // EE traffic never refreshes Body's original watchdog.
+  if (cmd.side < 1 || cmd.side > 2 || !endpoints_[cmd.side - 1].configured) return false;
+  auto& e = endpoints_[cmd.side - 1];
+  auto& s = e.snapshot;
+  s.received = cmd.key;
+  s.received_valid = true;
+  s.received_us = wall_us;
+  auto reject = [&](uint16_t reason) { ++s.reject_count; s.reject_code = reason; return false; };
+  if (cmd.version != 2) return reject(8);
+  if (cmd.runtime != runtime_id_) return reject(9);
+  if (cmd.layout_id != s.info.layout_id) return reject(10);
+  if (!OwnedEE(cmd.control_id) || cmd.key.session != status_.generation || !cmd.key.sequence)
+    return reject(11);
+  // Sequence spaces are per endpoint on receive, since independent topics may
+  // arrive out of order. There is no endpoint session table or second owner.
+  if (s.accepted_valid && cmd.key.sequence <= s.accepted.sequence) return false;
+  const auto n = s.info.axes.size();
+  if (cmd.modes.size() != n || cmd.fields.size() != n ||
+      cmd.observations.size() != s.info.observation_sources.size()) return reject(2);
+  for (size_t i = 0; i < cmd.observations.size(); ++i) {
+    const auto& o = cmd.observations[i];
+    if (o.runtime != runtime_id_ || (o.validity & ~15) ||
+        std::make_pair(o.stream, o.side) != s.info.observation_sources[i]) return reject(9);
+    // Actual IDs/time/validity are preserved, not regenerated or made into a
+    // time/permission gate. Reusing one actual sample is legal.
+  }
+  constexpr std::array<uint32_t, 5> bits{1, 2, 4, 8, 16};
+  bool requested = false;
+  for (size_t i = 0; i < n; ++i) {
+    const auto& a = s.info.axes[i];
+    if ((cmd.modes[i] != 1 && cmd.modes[i] != 2) || !(a.modes & (1u << cmd.modes[i]))) return reject(5);
+    if ((cmd.fields[i] & ~uint32_t{95}) || (cmd.fields[i] & ~a.command_fields)) return reject(12);
+    requested |= cmd.fields[i] != 0;
+  }
+  if (!requested) return reject(12);
+  for (size_t col = 0; col < bits.size(); ++col) {
+    const auto bit = bits[col];
+    if (cmd.columns[col].size() != n) return reject(2);
+    for (size_t i = 0; i < cmd.columns[col].size(); ++i) {
+      const auto v = cmd.columns[col][i];
+      if (!std::isfinite(v)) return reject(3);
+      if (!(cmd.fields[i] & bit)) continue;
+      const auto& a = s.info.axes[i];
+      if (!(a.valid_limits & bit)) return reject(4);
+      const std::array<float, 5> minimum{a.pos_min,a.vel_min,0.f,a.tau_min,a.current_min};
+      const std::array<float, 5> maximum{a.pos_max,a.vel_max,a.vel_limit_max,a.tau_max,a.current_max};
+      if (!std::isfinite(minimum[col]) || !std::isfinite(maximum[col]) ||
+          v < minimum[col] || v > maximum[col]) return reject(4);
+    }
+  }
+  if (e.has_pending) ++s.overwritten;
+  e.pending = cmd;
+  e.has_pending = true;
+  e.last_valid_ns = now;
+  e.timed_out = false;
+  s.accepted = cmd.key;
+  s.accepted_valid = true;
+  s.accepted_us = wall_us;
+  s.reject_code = 0;
+  return true;
+}
+
+EESnapshot Protocol::SnapshotEE(uint8_t side, uint64_t now) {
+  Watchdog(now);
+  if (side < 1 || side > 2 || !endpoints_[side - 1].configured)
+    throw std::invalid_argument("unconfigured synthetic endpoint");
+  auto& e = endpoints_[side - 1];
+  if (e.last_valid_ns && now - e.last_valid_ns >= command_timeout_ns_ && !e.timed_out) {
+    e.timed_out = true;
+    e.has_pending = false;
+    e.snapshot.applied_valid = false;
+    std::fill(e.snapshot.output_key_valid.begin(), e.snapshot.output_key_valid.end(), false);
+    ++e.snapshot.timeouts;
+  }
+  auto result = e.snapshot;
+  // Synthetic configured fixtures are ready; this is not hardware discovery.
+  result.output_allowed = status_.phase == 4 || status_.phase == 5;
+  result.inhibit_reason = result.output_allowed ? 0 : 1;
+  return result;
+}
+
+size_t Protocol::TickEE(uint64_t now, uint64_t wall_us) {
+  Watchdog(now);
+  size_t applied = 0;
+  for (size_t side = 1; side <= 2; ++side) {
+    auto& e = endpoints_[side - 1];
+    if (!e.configured) continue;
+    const auto snapshot = SnapshotEE(static_cast<uint8_t>(side), now);
+    if (!snapshot.output_allowed || !e.has_pending) continue;
+    for (size_t i = 0; i < e.snapshot.position.size(); ++i) {
+      if (e.pending.fields[i] & 1) e.snapshot.position[i] = e.pending.columns[0][i];
+      if (e.pending.fields[i]) {
+        e.snapshot.output_keys[i] = e.pending.key;
+        e.snapshot.output_key_valid[i] = true;
+      }
+    }
+    e.snapshot.applied = e.pending.key;
+    e.snapshot.applied_valid = true;
+    e.snapshot.output_us = wall_us;
+    e.has_pending = false;
+    ++applied;
+  }
+  return applied;
+}
+
+TouchReply Protocol::SetTouch(const TouchRequest& request, uint64_t now) {
+  Watchdog(now);
+  TouchReply reply;
+  reply.runtime = request.runtime;  // Reply binding echoes even a rejected request.
+  reply.side = request.side;
+  if (request.side < 1 || request.side > 2 || !endpoints_[request.side - 1].configured) {
+    reply.reason = 3;
+    return reply;
+  }
+  auto& s = endpoints_[request.side - 1].snapshot;
+  if (request.version != 2 || request.runtime != runtime_id_ ||
+      request.layout_id != s.info.layout_id) reply.reason = 3;
+  else if (!OwnedEE(request.control_id)) reply.reason = 2;
+  else if (!s.info.touch_available) reply.reason = 1;
+  else {
+    s.touch_enabled = request.enabled;
+    reply.success = true;
+    reply.enabled = s.touch_enabled;
+    reply.enabled_valid = true;
+  }
+  // No motion sequence reservation, pending output or heartbeat update.
+  return reply;
 }
 }  // namespace production_mock
 #endif

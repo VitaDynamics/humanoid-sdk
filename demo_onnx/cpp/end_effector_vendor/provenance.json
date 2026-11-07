@@ -1,0 +1,24 @@
+{
+  "schema_commit": "043599d3b7293ed8dbaa0949735ed68abcfac2fb",
+  "schema_tree": "85a459defe9ad6239ec1b8071f4d9209e99d9e0f",
+  "source": "Same official selected-runtime artifact as Body; canonical native headers are stored once in body_cmd_vendor.",
+  "headers_sha256": {
+    "message/schemas/topic/lowlevel/end_effector_cmd_generated.h": "16e6fd73fc042d401d6f2d7262fe0c68d51473ec216609931adb680a165b720a",
+    "message/schemas/topic/lowlevel/end_effector_state_generated.h": "2da833cd17d1e74c318ff8ca91b8ea826679e5428aaddfe60c1d69198b133a7a",
+    "message/schemas/topic/lowlevel/end_effector_touch_generated.h": "8283c6a58adc02184f483082ba9f221851c7aae255541704af1767269a1b4286"
+  },
+  "bfbs_sha256": {
+    "end_effector_cmd": "61f24b8d402e4e736696f950a083ca429666112b95e2d9adc82dfdd23cae684a",
+    "end_effector_state": "9fa8fccc64698b59806c5961007582fda187ccba916d1d28324828a97beee366",
+    "end_effector_touch": "0078dcd78ec93b81a0d69b64894e137a188459c9933b8058276a80fbfd063acf"
+  },
+  "shared_body_vendor_include_sha256": {
+    "message/schemas/topic/lowlevel/ee_common_generated.h": "0b39ca414f47780816da3c2dc73506346b27ac27b12cfe5ab238ac8713c76415",
+    "message/schemas/system/aorta_base_generated.h": "fde3ee3fad85501632552fe45abdb4793dc0b2995c1ce06db62d7ab2487a3be6"
+  },
+  "flatbuffers_version": "25.12.19",
+  "wheel_version": "0.0.0+g043599d3b729",
+  "wheel_sha256": "04d01e13e3e9b9979646fb98061954363272f5588a30cb8b1ab3fcb54dfea473",
+  "binding_note": "All three actual EE roots and actual Body roots come from the same selected wheel/native archive; runtime/header/compiler/APIABI and full SDK execution remain pending.",
+  "native_provenance_sha256": "e93315ad1404238ec05a38e1733cd4376e480000098941d892f16c6a0c8299e6"
+}
