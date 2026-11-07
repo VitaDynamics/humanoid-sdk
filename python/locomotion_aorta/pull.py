@@ -171,13 +171,11 @@ class PullTransport(_AortaTransport):
                         self._latest_body_state = state
                     if self._native_body_rx is not None:
                         received[0]._mark_accepted()
-                    provisional = False
+                    if received[0] is candidate:
+                        provisional = False
 
                 if self._accept_candidate(state, commit):
                     return state
-                if provisional:
-                    provisional = False
-                    self._discard_native_candidate(candidate)
                 # Keep the true accepted raw and both original representations.
                 if self._latest_sample is None or received is self._latest_sample:
                     raise ValueError('BodyState does not belong to the discovered runtime')
