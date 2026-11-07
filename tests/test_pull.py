@@ -6,7 +6,7 @@ import time
 from collections import deque
 from dataclasses import replace
 from types import SimpleNamespace as S
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from locomotion_aorta import PullController,PullStateSource,PullTransport,ExternalControlTimeoutError
 from locomotion_aorta import ControlAck,ControlStatus,ControlOperation,ExternalPhase
 from locomotion_aorta import BodyCmd,BodyJointCmd,ControllerClosedError,NotRunningError
@@ -182,6 +182,7 @@ class PullTest(unittest.TestCase):
 
     def transport(self, *, node=None, get_robot_info=None):
         t=PullTransport.__new__(PullTransport);t._closed=False;t._state_lock=threading.Lock();t._status_lock=threading.RLock();t._status=None;t._latest_state=None;t._latest_sample=None;t._latest_body_state=None
+        t._native_body_rx=None;t._body_rx_closing=threading.Event();t._body_rx_poll_s=None
         t._pulls={BODY_STATE_TOPIC:Ring(),CONTROL_STATUS_TOPIC:Ring()};t._callbacks={BODY_STATE_TOPIC:[],CONTROL_STATUS_TOPIC:[]}
         t._bindings=S(control_status_decoder=lambda v:v);t._subscriber_spec=lambda topic:(None,lambda v:v,None)
         # These original transport-only tests exercise receive mechanics; the
@@ -770,3 +771,55 @@ class PullCandidateCommitR3Test(unittest.TestCase):
         self.assertEqual(int(arrays_c.error_code[0]), 6)
         self.assertEqual(controller.wait_body_state(0).joints[0].error_code, 6)
         self.assertEqual(arrays_c.pull_context_receive_stamp_ns, 63)
+
+
+class NativeBodyFirstWaitTest(unittest.TestCase):
+    """Original timeout/close logic; actual Core borrows are covered separately."""
+
+    def transport(self):
+        t = PullTest().transport()
+        t._native_body_rx = S(try_recv=Mock(return_value=None))
+        t._body_rx_poll_s = .01  # Explicit synthetic fixture input, not a default.
+        return t
+
+    def test_zero_one_probe_keep_last_original_receipt_and_busy_not_timeout(self):
+        from aorta.errors import BusyError
+        t = self.transport()
+        with patch.object(t._body_rx_closing, 'wait', side_effect=AssertionError('sleep')):
+            with self.assertRaises(TimeoutError):
+                t._receive_state(0)
+            self.assertEqual(t._native_body_rx.try_recv.call_count, 1)
+            original = (object(), 123, 456)
+            t._latest_sample = original
+            with patch('locomotion_aorta.pull.time.time_ns', side_effect=AssertionError('refresh receipt')):
+                self.assertIs(t._receive_state(0), original)
+            t._native_body_rx.try_recv.side_effect = BusyError('held real slot status')
+            with self.assertRaises(BusyError):
+                t._receive_state(1)
+            self.assertIs(t._latest_sample, original)
+        self.assertEqual(t._pulls[BODY_STATE_TOPIC].waits, [])
+
+    def test_one_deadline_and_close_during_short_wait_prevents_second_probe(self):
+        t = self.transport()
+        clock, waits = [0.0], []
+
+        def advance(delay):
+            self.assertGreater(delay, 0)
+            waits.append(delay)
+            clock[0] += delay
+
+        with patch('locomotion_aorta.pull.time.monotonic', side_effect=lambda: clock[0]), \
+             patch.object(t._body_rx_closing, 'wait', side_effect=advance):
+            with self.assertRaises(TimeoutError):
+                t._receive_state(.025)
+        self.assertAlmostEqual(sum(waits), .025)
+        self.assertEqual(len(waits), 3)
+        self.assertEqual(t._native_body_rx.try_recv.call_count, 3)
+        self.assertEqual(t._pulls[BODY_STATE_TOPIC].waits, [])
+
+        t = self.transport()
+        with patch.object(t._body_rx_closing, 'wait', side_effect=lambda _: t._body_rx_closing.set()):
+            with self.assertRaises(ControllerClosedError):
+                t._receive_state(1)
+        self.assertEqual(t._native_body_rx.try_recv.call_count, 1)
+        self.assertIsNone(t._latest_sample)

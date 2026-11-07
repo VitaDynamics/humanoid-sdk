@@ -23,6 +23,33 @@ def decode_body_state_native(view):
     return _state_decoder()(payload, offset)
 
 
+def prepare_native_body_pull(subscriber, *, slot_count, max_payload_bytes,
+                             max_slices):
+    """Cold slots on this receiver/Core; the native owner retains the binding."""
+    _state_decoder()  # Preserve the real native protocol/BFBS gate before new.
+    from . import _body_cmd_native
+    binding = subscriber.native_rx_binding(
+        slot_count=slot_count, max_payload_bytes=max_payload_bytes,
+        max_slices=max_slices)
+    try:
+        reader = _body_cmd_native.NativeBodyPullReader(binding)
+    except BaseException as primary:
+        try:
+            binding.close()  # Transferred slots were unwound by the native ctor.
+        except BaseException as cleanup:
+            raise primary from cleanup
+        raise
+    try:
+        binding.close()  # Refuse more construction, not receiver/slot drain.
+    except BaseException as primary:
+        from aorta.errors import exception_for_code
+        rc = reader.close()
+        if rc:
+            raise primary from exception_for_code(rc, 'native Body pull cleanup')
+        raise
+    return reader
+
+
 def _close_header(context):
     from aorta.errors import exception_for_code
     rc = context.close()

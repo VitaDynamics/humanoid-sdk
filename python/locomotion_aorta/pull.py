@@ -1,5 +1,6 @@
 """Opt-in keep-last feedback: no Python BodyState/ControlStatus RX callbacks."""
 import struct
+import math
 import threading
 import time
 import uuid
@@ -13,7 +14,7 @@ from .body_types import BODY_STATE_PROTOCOL_VERSION
 from .types import ControlStatus, PROTOCOL_VERSION
 from .transport import _AortaTransport, BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC
 from .state_arrays import decode_body_state_arrays
-from ._native_body_codec import decode_body_state_native
+from ._native_body_codec import decode_body_state_native, prepare_native_body_pull
 
 
 def _matches_pull_candidate(candidate, runtime_id):
@@ -27,12 +28,31 @@ class PullTransport(_AortaTransport):
 
     Callbacks explicitly registered on this opt-in transport run on the polling
     caller. The original default transport retains asynchronous callbacks.
+
+    native_body_rx is an optional cold mapping with slot_count (at least 2),
+    whole-wire max_payload_bytes, max_slices and an explicit poll_interval_s.
+    It selects the original Body ring only, not a new subscription. Contiguous
+    borrowed input is supported; output allocation, multi-slice decoding and
+    complete controller/callback strict shutdown remain separate obligations.
     """
 
-    def __init__(self, *, node_name, group, publishers=True):
+    def __init__(self, *, node_name, group, publishers=True, native_body_rx=None):
         _nonempty_text(group, 'group')
         _nonempty_text(node_name, 'node_name')
+        rx_limits = None
+        if native_body_rx is not None:
+            rx_limits = dict(native_body_rx)
+            if set(rx_limits) != {'slot_count', 'max_payload_bytes',
+                                  'max_slices', 'poll_interval_s'}:
+                raise ValueError('native Body RX requires explicit slot_count/max_payload_bytes/max_slices/poll_interval_s')
+            poll_s = rx_limits.pop('poll_interval_s')
+            if (type(poll_s) not in (int, float) or not math.isfinite(poll_s)
+                    or poll_s <= 0):
+                raise ValueError('native Body RX requires an explicit positive finite poll_interval_s')
         super().__init__(node_name=node_name, group=group, _publishers=publishers)
+        self._native_body_rx = None
+        self._body_rx_closing = threading.Event()
+        self._body_rx_poll_s = poll_s if rx_limits is not None else None
         self._pulls = {}
         self._callbacks = {CONTROL_STATUS_TOPIC: []}
         self._status = None
@@ -51,6 +71,9 @@ class PullTransport(_AortaTransport):
                     options=SubscriberOptions(include_receive_timestamp=True))
                 self._pulls[topic] = sub
                 self.subscriptions.append(sub)
+            if rx_limits is not None:
+                self._native_body_rx = prepare_native_body_pull(
+                    self._pulls[BODY_STATE_TOPIC], **rx_limits)
         except BaseException:
             self.close()
             raise
@@ -120,12 +143,15 @@ class PullTransport(_AortaTransport):
                 state = cached
             else:
                 sample, wall, mono = received
+                native = self._native_body_rx is not None
+                payload = sample if native else sample.payload
                 if arrays:
-                    state = replace(decode_body_state_arrays(sample.payload),
+                    state = replace(decode_body_state_arrays(payload),
                         received_monotonic_ns=mono, received_realtime_ns=wall,
-                        pull_context_receive_stamp_ns=sample.context.receive_stamp_ns)
+                        pull_context_receive_stamp_ns=(sample.receive_stamp_ns
+                            if native else sample.context.receive_stamp_ns))
                 else:
-                    state = decode_body_state_native(sample.payload)
+                    state = decode_body_state_native(payload)
 
             def commit():
                 if received is not self._latest_sample:
@@ -145,22 +171,57 @@ class PullTransport(_AortaTransport):
             received = self._latest_sample
         raise ValueError('BodyState does not belong to the discovered runtime')
 
+    def _probe_native_body(self, deadline, *, nonblocking=False):
+        self._ensure_open()
+        if not nonblocking and time.monotonic() > deadline:
+            raise TimeoutError('waiting for first body state')
+        sample = self._native_body_rx.try_recv()
+        try:
+            self._ensure_open()
+            if not nonblocking and time.monotonic() > deadline:
+                raise TimeoutError('waiting for first body state')
+        except BaseException:
+            sample = None  # A traceback must not retain a rejected borrow.
+            raise
+        return sample
+
     def _receive_state(self, timeout):
-        if type(timeout) in (int, float) and timeout == 0:
+        nonblocking = type(timeout) in (int, float) and timeout == 0
+        if nonblocking:
             deadline = time.monotonic()
         else:
             deadline = _deadline(timeout)
         self._ensure_open()
-        sub = self._pulls[BODY_STATE_TOPIC]
-        sample = sub.try_recv()
-        self._ensure_open()
+        native = self._native_body_rx is not None
+        sub = self._native_body_rx if native else self._pulls[BODY_STATE_TOPIC]
+        if native:
+            sample = self._probe_native_body(deadline, nonblocking=nonblocking)
+        else:
+            sample = sub.try_recv()
+            self._ensure_open()
         if sample is None:
             if self._latest_sample is not None:
                 return self._latest_sample
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError('waiting for first body state')
-            sample = sub.recv(remaining)
+            if native:
+                # No new worker/wake API: caller supplies the probe interval.
+                # The same deadline covers ALL probes and waits; close wakes
+                # the wait, and every probe remains outside the control lock.
+                while sample is None:
+                    self._ensure_open()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError('waiting for first body state')
+                    self._body_rx_closing.wait(min(remaining, self._body_rx_poll_s))
+                    self._ensure_open()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError('waiting for first body state')
+                    sample = self._probe_native_body(deadline)
+            else:
+                sample = sub.recv(remaining)
         wall, mono = time.time_ns(), time.monotonic_ns()
         self._ensure_open()
         if sample is None:
@@ -168,8 +229,21 @@ class PullTransport(_AortaTransport):
         return sample, wall, mono
 
     def _ensure_open(self):
-        if self._closed:
+        if self._closed or self._body_rx_closing.is_set():
             raise ControllerClosedError('Aorta transport is closed')
+
+    def close(self):
+        reader = getattr(self, '_native_body_rx', None)
+        if reader is not None:
+            self._body_rx_closing.set()
+            reader.stop()
+            self._latest_sample = self._latest_state = self._latest_body_state = None
+            from aorta.errors import exception_for_code
+            rc = reader.close()
+            if rc:
+                # Keep this reader/Core/node alive for the outstanding sample.
+                raise exception_for_code(rc, 'native Body pull is not drained')
+        super().close()
 
 
 class _PullRegistration:
@@ -186,13 +260,16 @@ class _PullRegistration:
 class PullStateSource:
     """Read-only native-array feedback and ControlStatus snapshots; no publishers."""
 
-    def __init__(self, *, group='default', node_name=None, _transport=None):
+    def __init__(self, *, group='default', node_name=None, _transport=None,
+                 native_body_rx=None):
         self._group = _nonempty_text(group, 'group')
         if node_name is not None:
             _nonempty_text(node_name, 'node_name')
+        if _transport is not None and native_body_rx is not None:
+            raise ValueError('native_body_rx config belongs to the constructed transport')
         self.transport = _transport if _transport is not None else PullTransport(
             node_name=node_name or 'body-pull-'+uuid.uuid4().hex,
-            group=group, publishers=False)
+            group=group, publishers=False, native_body_rx=native_body_rx)
         self._runtime_binding = _RuntimeBinding()
         self._end_effector_runtime_lock = threading.Lock()
         self._closed = False
@@ -276,9 +353,12 @@ class PullStateSource:
     def close(self):
         with self._end_effector_runtime_lock:
             if self._closed:
-                return
-            self._closed = True
-            handles = _close_ee_handles(self._end_effector_clients)
+                if getattr(self.transport, '_native_body_rx', None) is None:
+                    return
+                handles = []  # Explicit retry drains only; no repeated lifecycle.
+            else:
+                self._closed = True
+                handles = _close_ee_handles(self._end_effector_clients)
         _close_handles(handles)
         self.transport.close()
 

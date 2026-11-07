@@ -5,6 +5,9 @@ import math
 import random
 import struct
 import unittest
+import time
+import uuid
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest import mock
@@ -249,3 +252,193 @@ class NativeBodyStateTest(unittest.TestCase):
         state = native.decode_state(data, view._tab.Pos)
         self.same(_decode_body_state_python(view), state)
 
+
+@unittest.skipIf(native is None, 'installed native state codec required; pkg requires zero skips')
+class NativeBodyPullTest(unittest.TestCase):
+    """Actual Core InlinePull -> native borrow -> original SDK codec/gate.
+
+    Only discovery uses the existing service-reply fixture. No raw sample,
+    slot/POD, Core callback or decoder is replaced by a fake backend.
+    """
+
+    def source(self, frames):
+        from dataclasses import replace
+        from body_fixtures import robot_info_reply
+        from locomotion_aorta import PullStateSource
+        from locomotion_aorta.transport import BODY_STATE_TOPIC
+        source = PullStateSource(group='native-body-'+uuid.uuid4().hex,
+            native_body_rx={'slot_count': 2,
+                'max_payload_bytes': max(map(len, frames)),
+                'max_slices': 3, 'poll_interval_s': .001})
+        self.addCleanup(source.close)
+        reply = replace(robot_info_reply(), runtime_id=11)
+        with mock.patch.object(source.transport, 'get_robot_info', return_value=reply):
+            self.assertIs(source.get_robot_info(.1), reply)
+        pub = source.transport.node.create_publisher(BODY_STATE_TOPIC)
+        return source, pub, source.transport._native_body_rx
+
+    def receive(self, reader):
+        # Bounded real local IPC arrival wait, not a timing assertion.
+        deadline, pause = time.monotonic()+2, threading.Event()
+        while True:
+            sample = reader.try_recv()
+            if sample is not None:
+                return sample
+            remaining = deadline-time.monotonic()
+            if remaining <= 0:
+                self.fail('actual Core sample did not arrive')
+            pause.wait(min(remaining, .001))
+
+    def test_actual_source_keeps_raw_for_lazy_dto_arrays_and_owned_results(self):
+        data, _ = make_state(runtime_id=11)
+        source, pub, reader = self.source([data])
+        pub.publish_bytes(data)
+        arrays = source.wait_state(2)
+        transport = source.transport
+        raw = transport._latest_sample[0]
+        self.assertIsInstance(raw, native.NativeBodyPullSample)
+        dto = transport._wait_body_state(0)
+        self.assertIs(transport._latest_sample[0], raw)
+        self.assertEqual(arrays.state_id, dto.state_id)
+        receipts = (arrays.received_monotonic_ns, arrays.received_realtime_ns,
+                    arrays.pull_context_receive_stamp_ns)
+        self.assertEqual(receipts[2], raw.receive_stamp_ns)
+        self.assertIs(source.wait_state(0), arrays)
+        self.assertEqual(receipts, (arrays.received_monotonic_ns,
+            arrays.received_realtime_ns, arrays.pull_context_receive_stamp_ns))
+        raw = None
+        source.close()
+        self.assertEqual(float(arrays.q[0]), dto.joints[0].q)
+        self.assertEqual(arrays.body_state(), dto)
+
+    def test_busy_preserves_original_queue_and_foreign_candidate_preserves_cache(self):
+        from aorta.errors import BusyError
+        first, _ = make_state(runtime_id=11, error_codes=(1,)*31)
+        foreign, _ = make_state(runtime_id=12, error_codes=(2,)*31)
+        last, _ = make_state(runtime_id=11, error_codes=(3,)*31)
+        source, pub, reader = self.source([first, foreign, last])
+        pub.publish_bytes(first)
+        a = source.wait_state(2)
+        accepted = source.transport._latest_sample
+        pub.publish_bytes(foreign)
+        candidate = self.receive(reader)
+        self.assertIs(source.transport._accept_state(
+            (candidate, time.time_ns(), time.monotonic_ns()), arrays=True), a)
+        self.assertIs(source.transport._latest_sample, accepted)
+        pub.publish_bytes(last)
+        with self.assertRaises(BusyError):
+            reader.try_recv()  # Both real slots held: no dequeue.
+        candidate = None
+        b = self.receive(reader)
+        got = source.transport._accept_state(
+            (b, time.time_ns(), time.monotonic_ns()), arrays=True)
+        self.assertEqual(int(got.error_code[0]), 3)
+        self.assertEqual(int(a.error_code[0]), 1)
+        b = accepted = None
+
+    def test_close_busy_keeps_real_borrow_readable_then_explicit_drain(self):
+        from aorta.errors import BusyError, NotFoundError
+        data, _ = make_state(runtime_id=11)
+        source, pub, reader = self.source([data])
+        pub.publish_bytes(data)
+        arrays = source.wait_state(2)
+        raw = source.transport._latest_sample[0]
+        with self.assertRaises(BusyError):
+            source.close()
+        self.assertFalse(source.transport._closed)
+        self.assertEqual(decode_body_state_native(raw).state_id, arrays.state_id)
+        with self.assertRaises(NotFoundError):
+            reader.try_recv()  # Permanently closed, never a new sample.
+        raw = None
+        source.close()
+        self.assertTrue(source.transport._closed)
+        self.assertEqual(len(arrays.q), 31)  # Independent owning output survived.
+
+    def test_real_over_budget_does_not_replace_old_or_expose_stale_out(self):
+        from aorta.errors import InvalidArgumentError
+        data, _ = make_state(runtime_id=11)
+        source, pub, reader = self.source([data])
+        pub.publish_bytes(data)
+        old = source.wait_state(2)
+        accepted = source.transport._latest_sample
+        pub.publish_bytes(data+b'\x00')  # Whole-wire B is exactly len(data).
+        with self.assertRaises(InvalidArgumentError):
+            self.receive(reader)
+        self.assertIs(source.transport._latest_sample, accepted)
+        self.assertIs(source.wait_state(0), old)
+        pub.publish_bytes(data)
+        fresh = self.receive(reader)
+        self.assertIsInstance(fresh, native.NativeBodyPullSample)
+        self.assertEqual(decode_body_state_native(fresh).runtime_id, 11)
+        fresh = accepted = None
+
+    def test_real_late_borrow_is_released_before_timeout_not_committed(self):
+        data, _ = make_state(runtime_id=11)
+        source, pub, reader = self.source([data])
+        offset = [0.0]
+        real_clock, start = time.monotonic, time.monotonic()
+        original = native.NativeBodyPullReader.try_recv
+
+        def late(actual_reader):
+            sample = original(actual_reader)
+            if sample is not None:
+                offset[0] = 20.0  # After the REAL Core borrow, before SDK return.
+            return sample
+
+        pub.publish_bytes(data)
+        with mock.patch('locomotion_aorta.pull.time.monotonic',
+                        side_effect=lambda: real_clock()-start+offset[0]), \
+             mock.patch.object(native.NativeBodyPullReader, 'try_recv', late):
+            with self.assertRaises(TimeoutError):
+                source.wait_state(2)
+        self.assertEqual(offset[0], 20.0)  # Not a no-data timeout false positive.
+        self.assertIsNone(source.transport._latest_sample)
+        pub.publish_bytes(data)
+        first = self.receive(reader)
+        pub.publish_bytes(data)
+        second = self.receive(reader)  # Both slots available: late token returned.
+        self.assertEqual(decode_body_state_native(first), decode_body_state_native(second))
+        first = second = None
+
+    def test_partial_cold_ctor_frees_real_first_slot_and_preserves_receiver(self):
+        import ctypes
+        from locomotion_aorta.transport import BODY_STATE_TOPIC
+        data, _ = make_state(runtime_id=11)
+        source, pub, _ = self.source([data])
+        binding = source.transport._pulls[BODY_STATE_TOPIC].native_rx_binding(
+            slot_count=2, max_payload_bytes=len(data), max_slices=3)
+        self.addCleanup(binding.close)
+        signature = ctypes.CFUNCTYPE(ctypes.c_int32, ctypes.c_void_p)
+        real_free = signature(binding.free_address)
+        frees = []
+
+        @signature
+        def observe_free(handle):
+            # Test-local observer delegates to the REAL same-Core free; no
+            # fake token/POD, release result or backend is supplied.
+            rc = real_free(handle)
+            frees.append((handle, rc))
+            return rc
+
+        class FailSecond:
+            calls = 0
+            free_address = ctypes.cast(observe_free, ctypes.c_void_p).value
+
+            def __getattr__(self, name):
+                return getattr(binding, name)
+
+            def acquire_slot(self):
+                self.calls += 1
+                if self.calls == 2:
+                    raise RuntimeError('second cold acquisition stopped')
+                return binding.acquire_slot()
+
+        failed = FailSecond()
+        with self.assertRaisesRegex(RuntimeError, 'second cold acquisition stopped'):
+            native.NativeBodyPullReader(failed)
+        self.assertEqual(failed.calls, 2)
+        self.assertEqual(len(frees), 1)
+        self.assertTrue(frees[0][0])
+        self.assertEqual(frees[0][1], 0)
+        pub.publish_bytes(data)
+        self.assertEqual(source.wait_state(2).runtime_id, 11)

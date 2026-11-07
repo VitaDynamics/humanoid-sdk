@@ -1,4 +1,5 @@
 #include "body_state_decoder.h"
+#include "native_body_pull.h"
 
 #include <pybind11/numpy.h>
 
@@ -115,10 +116,9 @@ py::object RuntimeId(const State &state) {
   return py::int_(state.runtime_id);
 }
 
-py::object Decode(py::buffer input, size_t offset, const py::object &state_type,
+py::object Decode(State result, const py::object &state_type,
                   const py::object &joint_type, const py::object &imu_type,
                   const py::object &sample_type) {
-  State result = ReadOwnedState(input, offset);
   py::tuple joints(result.joints.size());
   for (size_t i = 0; i < result.joints.size(); ++i) {
     const auto &j = result.joints[i];
@@ -173,9 +173,9 @@ py::array View(std::vector<T> &data, py::ssize_t columns,
   return result;
 }
 
-py::dict DecodeArrays(py::buffer input, size_t offset) {
+py::dict DecodeArrays(State state) {
   auto arrays = std::make_unique<Arrays>();
-  arrays->state = ReadOwnedState(input, offset);
+  arrays->state = std::move(state);
   const auto joint_count = arrays->state.joints.size();
   arrays->q.reserve(joint_count);
   arrays->dq.reserve(joint_count);
@@ -250,10 +250,25 @@ py::dict DecodeArrays(py::buffer input, size_t offset) {
 
 void BindBodyState(py::module_ &module) {
   auto types = py::module_::import("locomotion_aorta.body_types");
+  py::class_<body_pull::Sample, std::shared_ptr<body_pull::Sample>>(
+      module, "NativeBodyPullSample")
+      .def_property_readonly("receive_stamp_ns", &body_pull::Sample::ReceiveStamp);
+  py::class_<body_pull::Reader>(module, "NativeBodyPullReader")
+      .def(py::init<py::object>(), py::arg("binding"))
+      .def("try_recv", &body_pull::Reader::TryReceive)
+      .def("stop", &body_pull::Reader::Stop)
+      .def("close", &body_pull::Reader::Close);
   module.def(
       "decode_state_arrays",
       [](py::buffer input, size_t offset) {
-        return DecodeArrays(input, offset);
+        return DecodeArrays(ReadOwnedState(input, offset));
+      },
+      py::arg("payload"), py::arg("table_offset") = 0);
+  module.def(
+      "decode_state_arrays",
+      [](const body_pull::Sample& input, size_t offset) {
+        const auto [data, size] = input.Bytes();
+        return DecodeArrays(ReadState(data, size, offset));
       },
       py::arg("payload"), py::arg("table_offset") = 0);
   module.attr("BODY_STATE_SCHEMA_SHA256") = BODY_STATE_SCHEMA_SHA256;
@@ -263,7 +278,17 @@ void BindBodyState(py::module_ &module) {
       [state = types.attr("BodyState"), joint = types.attr("BodyJointState"),
        imu = types.attr("BodyImuState"),
        sample = types.attr("BodyImuSample")](py::buffer input, size_t offset) {
-        return Decode(input, offset, state, joint, imu, sample);
+        return Decode(ReadOwnedState(input, offset), state, joint, imu, sample);
+      },
+      py::arg("payload"), py::arg("table_offset") = 0);
+  module.def(
+      "decode_state",
+      [state = types.attr("BodyState"), joint = types.attr("BodyJointState"),
+       imu = types.attr("BodyImuState"),
+       sample = types.attr("BodyImuSample")](const body_pull::Sample& input,
+                                           size_t offset) {
+        const auto [data, size] = input.Bytes();
+        return Decode(ReadState(data, size, offset), state, joint, imu, sample);
       },
       py::arg("payload"), py::arg("table_offset") = 0);
 }
