@@ -6,6 +6,7 @@ regression source, not measured robot output or proof of transport delivery.
 from dataclasses import replace
 from contextlib import contextmanager
 import io
+import itertools
 import math
 from pathlib import Path
 import runpy
@@ -1232,7 +1233,8 @@ class VendorExamplesTest(unittest.TestCase):
     def test_vendor_wrapper_help_binds_model_without_constructing_clients(self):
         entries = (('agx_gripper.py', '{target,sine}'),
                    ('brainco_revo2.py', '{target,simultaneous,sequential}'),
-                   ('linker_l6.py', '{target}'))
+                   ('linker_l6.py', '{target}'),
+                   ('omnipicker3.py', '{target}'))
         directory = Path(demo.__file__).parent
         for name, patterns in entries:
             with self.subTest(entry=name):
@@ -1257,7 +1259,7 @@ class VendorExamplesTest(unittest.TestCase):
         self.endpoints, self.factories, self.events = {}, [], []
 
     def endpoint(self, side, model):
-        endpoint = Endpoint(self.control, side, hand=model != DeviceModel.AGX)
+        endpoint = Endpoint(self.control, side, hand=model not in (DeviceModel.AGX, DeviceModel.AGILINK_OP3))
         endpoint.wait_info = Mock(wraps=endpoint.wait_info)
         n = len(endpoint.info.axis_names)
         commands = Field.POS
@@ -1271,9 +1273,14 @@ class VendorExamplesTest(unittest.TestCase):
             commands |= Field.VEL_LIMIT | Field.TAU
             states = Field.POS | Field.TAU | Field.ERROR_CODE
             limits |= Field.VEL_LIMIT | Field.TAU
+        elif model == DeviceModel.AGILINK_OP3:
+            commands |= Field.VEL_LIMIT | Field.CURRENT
+            states = Field.POS
+            limits |= Field.VEL_LIMIT | Field.CURRENT
         endpoint.info = replace(endpoint.info, device_model=model,
-            supported_modes=((1 << ControlMode.POSITION) |
-                ((1 << ControlMode.POSITION_TORQUE) if model == DeviceModel.AGX else 0),) * n,
+            supported_modes=((1 << ControlMode.POSITION_TORQUE) if model == DeviceModel.AGILINK_OP3 else
+                ((1 << ControlMode.POSITION) |
+                 ((1 << ControlMode.POSITION_TORQUE) if model == DeviceModel.AGX else 0)),) * n,
             supported_command_fields=(commands,) * n, supported_state_fields=(states,) * n,
             valid_limits=(limits,) * n,
             vel_min=endpoint.info.vel_min if states & Field.VEL else (),
@@ -1281,8 +1288,9 @@ class VendorExamplesTest(unittest.TestCase):
             vel_limit_max=endpoint.info.vel_limit_max if commands & Field.VEL_LIMIT else (),
             tau_min=endpoint.info.tau_min if commands & Field.TAU else (),
             tau_max=endpoint.info.tau_max if commands & Field.TAU else (),
-            current_min=endpoint.info.current_min if states & Field.CURRENT else (),
-            current_max=endpoint.info.current_max if states & Field.CURRENT else ())
+            current_min=(0.,) if model == DeviceModel.AGILINK_OP3 else endpoint.info.current_min if states & Field.CURRENT else (),
+            current_max=(.5,) if model == DeviceModel.AGILINK_OP3 else endpoint.info.current_max if states & Field.CURRENT else (),
+            torque_domain=(0,) if model == DeviceModel.AGILINK_OP3 else endpoint.info.torque_domain)
         endpoint._state = replace(endpoint._state, valid_fields=(states,) * n)
         codec.validate_info(endpoint.info)
         codec.validate_state(endpoint.info, endpoint._state)
@@ -1293,8 +1301,9 @@ class VendorExamplesTest(unittest.TestCase):
         sides = ('left', 'right') if side == 'both' else (side,)
         flags = ['--side', side, '--ee-only', '--confirm-motion', '--timeout', '.2', '--duration', '.04']
         for selected in sides:
-            flags += ['--' + selected + '-unit', 'm' if model == DeviceModel.AGX else 'rad',
-                      '--' + selected + '-pos'] + ['.0625'] * (1 if model == DeviceModel.AGX else 6)
+            opening = model in (DeviceModel.AGX, DeviceModel.AGILINK_OP3)
+            flags += ['--' + selected + '-unit', 'm' if opening else 'rad',
+                      '--' + selected + '-pos'] + ['.0625'] * (1 if opening else 6)
             if model == DeviceModel.AGX:
                 flags += ['--' + selected + '-native-hz', '250']
         if model == DeviceModel.AGX:
@@ -1457,6 +1466,81 @@ class VendorExamplesTest(unittest.TestCase):
         self.assertEqual(1, self.control.calls.count('enter_external'))
         self.assertEqual(1, self.control.calls.count('exit_external'))
         self.assertEqual(0, self.control.command_count)
+
+    def test_op3_mode_two_target_and_explicit_ampere_current_reach_original_run(self):
+        for side, current in itertools.product(('right', 'both'), (None, 0., .125)):
+            with self.subTest(side=side, current=current):
+                self.setup_case()
+                flags = self.motion_flags(DeviceModel.AGILINK_OP3, side=side)
+                if current is not None:
+                    for selected in ('left', 'right') if side == 'both' else ('right',):
+                        flags += ['--' + selected + '-current-a', str(current)]
+                self.invoke(DeviceModel.AGILINK_OP3, flags)
+                self.executed.assert_called_once()
+                self.assertEqual(1, self.control.calls.count('enter_external'))
+                self.assertEqual(1, self.control.calls.count('exit_external'))
+                for endpoint in self.endpoints.values():
+                    self.assertTrue(endpoint.commands)
+                    for command in endpoint.commands:
+                        self.assertEqual((ControlMode.POSITION_TORQUE,), command.target.mode)
+                        self.assertEqual((.0625,), command.target.pos)
+                        self.assertEqual((), command.target.tau)
+                        self.assertFalse(command.target.command_fields[0] & Field.TAU)
+                        self.assertEqual(current is not None, bool(command.target.command_fields[0] & Field.CURRENT))
+                        if current is not None:
+                            self.assertEqual((current,), command.target.current)
+                    endpoint.set_touch.assert_not_called()
+                self.assertEqual(0, self.control.command_count)
+
+    def test_op3_unproven_or_wrong_units_torque_current_and_shape_fail_before_owner(self):
+        for fault in ('unit', 'torque', 'current', 'current_shape', 'unproven_current', 'model', 'axis_shape', 'mock'):
+            with self.subTest(fault=fault):
+                self.setup_case()
+                flags = self.motion_flags(DeviceModel.AGILINK_OP3)
+                if fault == 'unit':
+                    flags[flags.index('--right-unit') + 1] = 'rad'
+                elif fault == 'torque':
+                    flags += ['--right-torque-nm', '0']
+                else:
+                    flags += ['--right-current-a'] + (['.125', '.25'] if fault == 'current_shape' else ['.501' if fault == 'current' else '.125'])
+                def mutate(endpoint):
+                    if fault == 'unproven_current':
+                        endpoint.info = replace(endpoint.info, valid_limits=(Field.POS | Field.VEL_LIMIT,))
+                    elif fault == 'axis_shape':
+                        endpoint.info = replace(endpoint.info, position_domain=(PositionDomain.JOINT_ANGLE,))
+                    elif fault == 'mock':
+                        endpoint.info = replace(endpoint.info, is_mock=(True,))
+                models = {'right': DeviceModel.AGX} if fault == 'model' else None
+                with self.assertRaises(ValueError):
+                    self.invoke(DeviceModel.AGILINK_OP3, flags, models=models, mutate=mutate)
+                self.assert_no_control()
+
+    def test_op3_readonly_and_unsupported_patterns_do_not_take_control(self):
+        for flags in (['--side', 'right'], ['--side', 'right', '--dry-run']):
+            with self.subTest(flags=flags):
+                self.setup_case()
+                self.invoke(DeviceModel.AGILINK_OP3, flags)
+                self.assertEqual(['source'], self.factories)
+                self.executed.assert_not_called()
+                self.assert_no_control()
+        for pattern in ('sine', 'simultaneous', 'sequential'):
+            with self.subTest(pattern=pattern), patch('sys.stderr', new_callable=io.StringIO):
+                client, controller, source = Mock(), Mock(), Mock()
+                with self.assertRaises(SystemExit):
+                    demo.main(['--pattern', pattern], _expected_device_model=DeviceModel.AGILINK_OP3,
+                              _client_factory=client, _controller_factory=controller, _state_source_factory=source)
+                client.assert_not_called(); controller.assert_not_called(); source.assert_not_called()
+
+    def test_op3_nonfinite_current_is_rejected_before_any_connection(self):
+        for value in ('nan', 'inf', '-inf'):
+            with self.subTest(value=value), patch('sys.stderr', new_callable=io.StringIO):
+                client, controller, source = Mock(), Mock(), Mock()
+                with self.assertRaises(SystemExit):
+                    demo.main(['--side', 'right', '--right-current-a', value],
+                              _expected_device_model=DeviceModel.AGILINK_OP3,
+                              _client_factory=client, _controller_factory=controller,
+                              _state_source_factory=source)
+                client.assert_not_called(); controller.assert_not_called(); source.assert_not_called()
 
 
 if __name__=='__main__':

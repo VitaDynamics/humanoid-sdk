@@ -269,8 +269,9 @@ def run_external(controller, command_loop, options, *, body,
 
 
 def _validate_position(info, state):
-    if info.device_model not in (DeviceModel.AGX, DeviceModel.LINKER_L6, DeviceModel.BRAINCO_REVO2):
-        raise ValueError('this demo requires actual AGX/Linker/BrainCo capability; OP3 is not enabled')
+    if info.device_model not in (DeviceModel.AGX, DeviceModel.LINKER_L6,
+                                 DeviceModel.BRAINCO_REVO2, DeviceModel.AGILINK_OP3):
+        raise ValueError('this demo requires actual AGX/Linker/BrainCo/OP3 capability')
     if state is None:
         raise ValueError('end-effector feedback is absent')
     codec.validate_state(info, state)
@@ -361,7 +362,7 @@ def output_ready(state):
             state.output_allowed and state.inhibit_reason == InhibitReason.NONE)
 
 
-def position_target(info, positions, *, unit, vel_limit=None, torque=None):
+def position_target(info, positions, *, unit, vel_limit=None, torque=None, current=None):
     """Use declared SI domains and capability columns; never clip or guess force."""
     codec.validate_info(info)
     expected = PositionDomain.TOTAL_OPENING if unit == 'm' else PositionDomain.JOINT_ANGLE if unit == 'rad' else None
@@ -376,10 +377,12 @@ def position_target(info, positions, *, unit, vel_limit=None, torque=None):
                   not support & (1 << ControlMode.POSITION) else ControlMode.POSITION
                   for support in info.supported_modes)
     fields = (Field.POS | (Field.VEL_LIMIT if vel_limit is not None else 0) |
-              (Field.TAU if torque is not None else 0),) * n
+              (Field.TAU if torque is not None else 0) |
+              (Field.CURRENT if current is not None else 0),) * n
     return codec.prepare_target(info, EndEffectorTarget(modes, fields, pos=tuple(positions),
         vel_limit=None if vel_limit is None else tuple(vel_limit),
-        tau=None if torque is None else tuple(torque)))
+        tau=None if torque is None else tuple(torque),
+        current=None if current is None else tuple(current)))
 
 
 def print_feedback(client, emit=print):
@@ -651,8 +654,9 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
     for client in clients:
         info = _current_info(client, timeout)
         codec.validate_info(info)
-        if info.device_model not in (DeviceModel.AGX, DeviceModel.LINKER_L6, DeviceModel.BRAINCO_REVO2):
-            raise ValueError('this demo requires actual AGX/Linker/BrainCo capability; OP3 is not enabled')
+        if info.device_model not in (DeviceModel.AGX, DeviceModel.LINKER_L6,
+                                     DeviceModel.BRAINCO_REVO2, DeviceModel.AGILINK_OP3):
+            raise ValueError('this demo requires actual AGX/Linker/BrainCo/OP3 capability')
         if info.device_model == DeviceModel.AGX:
             frequency = native_hz.get(client.side)
             if (type(frequency) is not int or not 0 < frequency < 1 << 32
@@ -886,7 +890,7 @@ def _require_vendor_info(info, side, expected_model):
     expected_side = EndEffectorSide.LEFT if side == 'left' else EndEffectorSide.RIGHT
     if info.side != expected_side or info.device_model != expected_model:
         raise ValueError('selected endpoint side/model differs from this vendor example')
-    count, domain = ((1, PositionDomain.TOTAL_OPENING) if expected_model == DeviceModel.AGX
+    count, domain = ((1, PositionDomain.TOTAL_OPENING) if expected_model in (DeviceModel.AGX, DeviceModel.AGILINK_OP3)
                      else (6, PositionDomain.JOINT_ANGLE))
     if len(info.axis_names) != count or info.position_domain != (domain,) * count:
         raise ValueError('selected endpoint axis count/position domain differs from this vendor example')
@@ -899,10 +903,10 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         patterns = ('target', 'simultaneous', 'sequential')
     elif _expected_device_model == DeviceModel.AGX:
         patterns = ('target', 'sine')
-    elif _expected_device_model == DeviceModel.LINKER_L6:
+    elif _expected_device_model in (DeviceModel.LINKER_L6, DeviceModel.AGILINK_OP3):
         patterns = ('target',)
     elif _expected_device_model is not None:
-        raise ValueError('vendor example requires BrainCo Revo2, AGX or Linker L6')
+        raise ValueError('vendor example requires BrainCo Revo2, AGX, Linker L6 or OP3')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--side', choices=('none', 'left', 'right', 'both'), default='both')
     parser.add_argument('--pattern', choices=patterns, default='target')
@@ -932,6 +936,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         parser.add_argument('--'+side+'-unit', choices=('m', 'rad'))
         parser.add_argument('--'+side+'-vel-limit', type=float, nargs='+', help='nonnegative magnitude in m/s or rad/s; zero retains robot default')
         parser.add_argument('--'+side+'-torque-nm', type=float, nargs='+', help='declared torque domain; omit means no intent, explicit zero remains zero')
+        parser.add_argument('--'+side+'-current-a', type=float, nargs='+', help='current in A within actual Info limits; omit means no intent, never inferred torque')
         parser.add_argument('--'+side+'-hz', type=float, default=50.0)
         parser.add_argument('--'+side+'-native-hz', type=int, help='AGX arm-group native send_frequency from the effective configuration')
     args = parser.parse_args(argv)
@@ -971,7 +976,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         parser.error(str(exc))
     for side in ('left', 'right'):
         pos, unit = getattr(args, side+'_pos'), getattr(args, side+'_unit')
-        for name in ('pos', 'vel_limit', 'torque_nm'):
+        for name in ('pos', 'vel_limit', 'torque_nm', 'current_a'):
             values = getattr(args, side+'_'+name)
             if values is not None and (side not in sides or not all(math.isfinite(v) for v in values)):
                 parser.error('targets must be finite and belong to a selected endpoint')
@@ -1014,7 +1019,8 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
                     a+args.low_frac*(b-a) for a,b in zip(info.pos_min,info.pos_max))
             targets[client.side] = position_target(info, positions,
                 unit=getattr(args, client.side+'_unit'), vel_limit=getattr(args, client.side+'_vel_limit'),
-                torque=getattr(args, client.side+'_torque_nm'))
+                torque=getattr(args, client.side+'_torque_nm'),
+                current=getattr(args, client.side+'_current_a'))
         try:
             run(connection, clients, targets, options, emit=emit)
         except KeyboardInterrupt:
