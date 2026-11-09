@@ -24,7 +24,8 @@
   and delivery cadences. It does not refresh sample identities or source times,
   override device stale/validity flags, or permit stale Body feedback. Fault,
   readiness, output permission and ownership checks remain in force.
-- BrainCo defaults to `--display table` at at most 5 Hz. Callback threads store
+- BrainCo defaults to `--display table` at 5 Hz, throttled by `--display-hz`.
+  The positive configured rate has no additional 5 Hz cap. Callback threads store
   observations; only the thread that created the table formats and writes it.
   Incomplete phase/sequence log fields display as unknown instead of raising
   from a callback. `--display log` retains the diagnostic log view.
