@@ -1,21 +1,19 @@
 # Humanoid SDK
 
-**Release blocked:** the Owner selected `0.3.0` for the breaking API migration;
-legacy API aliases and wire downgrade are not provided.
-The dependency manifest is also not publishable while `dependency_release_tag`
-is null: remote dependency fetching and CI stop before SDK installation,
-compilation or tests. This is the known missing matching Release, not a native
-test result. See [Dependency Release convention](#dependency-release-convention).
-Explicit verified local inputs support candidate validation only; they do not
-make the manifest releasable or bypass the remote Release gate.
+**SDK release pending:** the Owner selected `0.3.0` for the breaking API
+migration; legacy API aliases and wire downgrade are not provided. Matching
+inputs are available in the [candidate dependency prerelease](https://github.com/VitaDynamics/humanoid-sdk/releases/tag/deps-aorta-g7649a87ebb03-schema-g043599d3b729).
+This supplies dependencies for validation; it is not a published SDK wheel or
+proof of same-head CI, native ABI, strict realtime or device acceptance.
 
 SDK **0.3.0** is in preparation; packaging and release are pending. This source
 targets the direct-runtime contract. Its dedicated `g043599d3b729` messages
 wheel and all native Body/EE headers come from the same selected-runtime
 generation. The matching Aorta wheels and generated native header use
 `0.0.0+g7649a87ebb03` (ABI 13). These actual CI artifacts are pinned for candidate
-validation; they have not been published in an SDK dependency Release.
-`dependency_release_tag` is therefore null. This does not establish final
+validation and are mirrored unchanged in the pinned candidate dependency
+prerelease. Their source remains g043599d3b729/g7649a87ebb03, not D8.
+This does not establish final
 robot/SDK compatibility, strict realtime or device acceptance; use the pinned
 manifest for separately authorized candidate validation.
 
@@ -49,8 +47,8 @@ dedicated `g043599d3b729` wheel and its SHA-256. Its Requires-Dist names the sam
 actual Aorta version. The default-2026.10.20 wheel from the same Schema run has
 the same filename but different bytes; it must not replace the selected wheel.
 The existing dependency fetcher verifies either an explicitly supplied local
-input set or a published pinned Release. With the current null tag its remote
-mode fails before downloading. There is no replacement release, latest-version
+input set or the exact pinned candidate dependency prerelease. There is no
+replacement release, latest-version
 or network fallback. Do not substitute a product wheel.
 
 
@@ -340,7 +338,8 @@ Use a fresh output directory and a separately authorized validation environment.
 For ARM use `--arch aarch64` and the actual ARM wheels/toolchain, not x86 Core.
 Keep normal pip dependency resolution enabled. The default official workflow
 continues to require a real pinned SDK dependency Release containing the four
-wheels and `aorta.h`; that publication is pending. Do not invent a tag or use
+wheels and `aorta.h` for the selected architecture; the pinned candidate
+prerelease now supplies them. Do not invent a tag or use
 the old rc.4 to bypass this gate. Neither path implies a final SDK release,
 native ABI validation or robot acceptance.
 For a fully offline development environment, obtain MCAP and its dependency
@@ -390,7 +389,13 @@ in **this repository's dependency prerelease**. The historical `v0.1.0-rc.4`
 as `GH_TOKEN`; it does not read the private schema repository or require a
 cross-repository token.
 
-After publishing a schema `humanoid-msgs-<version>` Release:
+The current Owner-authorized candidate prerelease contains exactly five original
+pinned wheels (including both Core architectures) and the matching `aorta.h`.
+All six remote assets were downloaded and checked against their independent
+manifest hashes before publication. They retain CI/G artifact provenance;
+this is not a formal Schema Release or SDK version release.
+
+For a later formal schema `humanoid-msgs-<version>` Release:
 
 1. Download its official `vbot_humanoid_msgs` wheel and `.sha256`; verify the
    wheel against the sidecar and the Release asset digest. Mirror both files
