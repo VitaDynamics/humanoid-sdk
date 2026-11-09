@@ -12,7 +12,11 @@ MANIFEST = Path(__file__).resolve().parents[1] / "compatibility.json"
 def required_text(manifest: dict, key: str) -> str:
     value = manifest.get(key)
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{key} must be a nonempty string; pinned release validation cannot be skipped")
+        raise ValueError(
+            f"{key} must be a nonempty string; pinned release validation cannot be skipped. "
+            "See README#dependency-release-convention for the pending Release; "
+            "verified local inputs require explicit --source-dir and --native-header."
+        )
     return value
 
 

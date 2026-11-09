@@ -1,5 +1,14 @@
 # Humanoid SDK
 
+**Release blocked:** this breaking API candidate must not be published under
+the existing `0.2.1` version; its new version awaits the Owner decision.
+The dependency manifest is also not publishable while `dependency_release_tag`
+is null: remote dependency fetching and CI stop before SDK installation,
+compilation or tests. This is the known missing matching Release, not a native
+test result. See [Dependency Release convention](#dependency-release-convention).
+Explicit verified local inputs support candidate validation only; they do not
+make the manifest releasable or bypass the remote Release gate.
+
 SDK **0.2.1** is in preparation; packaging and release are pending. This source
 targets the direct-runtime contract. Its dedicated `g043599d3b729` messages
 wheel and all native Body/EE headers come from the same selected-runtime
