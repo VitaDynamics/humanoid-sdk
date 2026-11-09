@@ -84,8 +84,12 @@ do not represent physical negative latency. All eight same-host MONOTONIC
 stage boundaries must still be nondecreasing, including publish→decode,
 bytes→callback and callback→copied, whether or not REALTIME columns exist.
 A MONOTONIC ordering violation fails integrity; REALTIME inversions only count.
-The eight original stage boundaries, full windows and ID/content gates remain. Rates use `(count - 1) / (last stamp - first stamp)` per stream;
-counts and durations are retained so losses cannot be hidden by that estimator.
+The eight original stage boundaries, full windows and ID/content gates remain.
+New captures time the actual native `encode_with_header` call, including header
+reservation and serialization; the final connection send guard remains after
+encoding. Missing or failed encoder timing is not replaced by guessed stamps.
+Rates use `(count - 1) / (last stamp - first stamp)` per stream; counts and
+durations are retained so losses cannot be hidden by that estimator.
 Stage bars use **means of the same matched rows**, whose sum is mean RTT.
 Percentiles do not add. SDK publish-call time overlaps transport and is reported
 separately. The two communication stages include Aorta/Zenoh scheduling, copies,

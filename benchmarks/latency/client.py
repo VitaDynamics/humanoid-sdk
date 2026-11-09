@@ -25,6 +25,15 @@ def encode_with_timing(encode, timing, *args, **kwargs):
     return result
 
 
+def _instrument_header_encoder(native, timing):
+    encode = native.encode_with_header
+
+    def timed_encode(*args, **kwargs):
+        return encode_with_timing(encode, timing, *args, **kwargs)
+
+    native.encode_with_header = timed_encode
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
@@ -50,7 +59,7 @@ def main():
     controller_module.BODY_STATE_TOPIC = sdk.BODY_STATE_TOPIC
     controller_module.CONTROL_ACK_TOPIC = sdk.CONTROL_ACK_TOPIC
     controller_module.CONTROL_STATUS_TOPIC = sdk.CONTROL_STATUS_TOPIC
-    decode, encode, publish_bytes = sdk.decode_body_state, native.encode, Publisher.publish_bytes
+    decode, publish_bytes = sdk.decode_body_state, Publisher.publish_bytes
     timing = threading.local()
     rows, errors = [], []
     lock = threading.Lock()
@@ -70,9 +79,6 @@ def main():
         timing.decoded_realtime_ns = time.time_ns()
         return result
 
-    def timed_encode(*argv, **kwargs):
-        return encode_with_timing(encode, timing, *argv, **kwargs)
-
     def timed_publish(publisher, *argv, **kwargs):
         # This is the Python Aorta byte-publish entry, NOT a CAN/TCP send stamp.
         timing.bytes_ns = time.monotonic_ns()
@@ -80,7 +86,7 @@ def main():
         return publish_bytes(publisher, *argv, **kwargs)
 
     sdk.decode_body_state = timed_decode
-    native.encode = timed_encode
+    _instrument_header_encoder(native, timing)
     Publisher.publish_bytes = timed_publish
     transport = sdk.create_aorta_transport(node_name="sdk_ci_python", group="default")
     controller = ExternalController(_transport=transport)
@@ -173,7 +179,7 @@ def main():
                 writer.writerows(rows)
             (args.directory / "client.json").write_text(json.dumps({
                 "sdk_source": sdk.__file__, "native_codec": native.__file__,
-                "encode_boundary": "native.encode including marshal and returned bytes",
+                "encode_boundary": "native.encode_with_header including header reservation, marshal and returned bytes",
                 "errors": errors, "callbacks": len(rows)}, indent=2))
         if cleanup_error is not None and original_error is None:
             raise cleanup_error
