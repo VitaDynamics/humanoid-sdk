@@ -2,6 +2,52 @@
 
 ## Unreleased — unified Body and end-effector clients
 
+### Breaking
+
+- Remove the old public Hand/Gripper client and DTO families without aliases or
+  wire downgrade. The next release version is awaiting the owner's decision;
+  the existing `0.2.1` package version must not be published with these changes.
+- Require the matching native extension for production BodyState as well as
+  EndEffectorState/Touch decoding. Private Python decoders remain test oracles,
+  never runtime fallbacks. The supported distribution already includes native
+  code; source/editable installation requires its build toolchain.
+
+### Changed
+
+- The shared end-effector demo checks Body hold drift whenever Body control is
+  enabled, including AGX. Its position-error limit is `0.1 rad`, previously
+  `0.05 rad` in the strict hand branch; it is an abort threshold, not an arrival
+  tolerance or additional motion allowance. The old internal `strict_hold`
+  argument is retired. Hand feedback logging still has its separate 1 s minimum.
+- The demo's EE position receipt-age ceiling is `1.0 s`, previously the Body
+  `0.2 s` window. It is separate because EE and Body have independent acquisition
+  and delivery cadences. It does not refresh sample identities or source times,
+  override device stale/validity flags, or permit stale Body feedback. Fault,
+  readiness, output permission and ownership checks remain in force.
+- BrainCo defaults to `--display table` at at most 5 Hz. Callback threads store
+  observations; only the thread that created the table formats and writes it.
+  Incomplete phase/sequence log fields display as unknown instead of raising
+  from a callback. `--display log` retains the diagnostic log view.
+
+### Public API migration
+
+| Retired API | Current API and migration |
+| --- | --- |
+| `HandClient`, `GripperClient` | `EndEffectorClient("left" or "right", connection=controller)`; obtain and validate unified Info before commands. |
+| `hand_types`, `gripper_types` | `locomotion_aorta.end_effector_types`; update the individual DTOs below rather than renaming a module import. |
+| `HandCmd`, `HandJointCmd`, `GripperCmd` | `EndEffectorTarget`; use fixed axis order, explicit modes/field masks and Info-declared SI units and limits. |
+| `HandInfo`, `GripperInfo`, old nested hand/gripper Info | `EndEffectorInfo` for axis capabilities, `is_mock` and Info-only `valid_limits`; GetRobotInfo's endpoint capability retains availability/reason, while dynamic readiness and faults remain State. |
+| `HandState`, `HandJointState`, `GripperState`, `GripperSample` | `EndEffectorState`; retain the original sample identity, per-axis validity and measurement times. |
+| `GripperHostTarget` | No equivalent device-feedback field. Retain locally submitted intent and its returned key separately from measured State. |
+| `HandTouch`, `FingerTouchMeta` | `EndEffectorTouch`, with layout/region descriptions from `EndEffectorInfo`; respect per-region stamps and validity. |
+| `HandSide`, `HandType`, `GripperType`, `EndEffectorKind` | Select the client side explicitly; use unified Info's device model, position domains and capabilities. Do not cast old enum integers. |
+| Old Hand/Gripper topic prefixes | Let the side-specific `EndEffectorClient` use the unified Info/State/Touch/command interfaces. Old topics are not a control fallback. |
+| `BODY_PROTOCOL_VERSION` | `BODY_CMD_PROTOCOL_VERSION` and `BODY_STATE_PROTOCOL_VERSION`; the two contracts are checked independently. |
+| String lease identity / lease-duration request | Discover the startup `runtime_id` through GetRobotInfo and use numeric `control_id` on the same connection. Use explicit CANCEL/close; do not expect automatic lease expiry. |
+
+Descriptions remain fixed for a startup runtime. Reconnect and explicitly
+discover a new runtime instead of relabelling old commands or observations.
+
 - Support normal and exceptional `with PullStateSource(...)` cleanup without
   publishing commands; reject context entry after closure.
 - Keep the Body watchdog active while confirming touch disable before the

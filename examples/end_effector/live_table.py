@@ -22,6 +22,7 @@ class LiveTable:
         self.period = 1.0 / refresh_hz
         self.ansi = self.stream.isatty()
         self._lock = threading.Lock()
+        self._render_thread = threading.get_ident()
         self._samples = {}
         self._targets = {}
         self._events = deque(maxlen=3)
@@ -61,6 +62,8 @@ class LiveTable:
     def submitted(self, side, target, key):
         with self._lock:
             self._targets[side] = (target, key)
+        if self.ansi:
+            self.refresh()
 
     def __call__(self, message):
         line = str(message)
@@ -73,16 +76,19 @@ class LiveTable:
                 # Callbacks only store text; they never render or read SDK objects.
                 return
             if line.startswith('BODY stage='):
-                stage = re.search(r'stage=([^ ]+)', line).group(1)
+                match = re.search(r'stage=([^ ]+)', line)
+                stage = match.group(1) if match else '--'
                 force = stage != self._body_stage
                 self._body_stage = stage
-                self._body_sequence = re.search(r'sequence=(\d+)', line).group(1)
+                match = re.search(r'sequence=(\d+)', line)
+                self._body_sequence = match.group(1) if match else '--'
             elif line.startswith('BODY_HOLD '):
                 match = re.search(r'max_abs_q_error_rad=([^ ]+)', line)
                 if match:
                     self._body_error = match.group(1)
             elif line.startswith('EE leg='):
-                leg = re.search(r'leg=([^ ]+)', line).group(1)
+                match = re.search(r'leg=([^ ]+)', line)
+                leg = match.group(1) if match else '--'
                 force = leg != self._leg
                 self._leg = leg
             elif ': ref=' in line or ': Info=' in line or ': Touch=' in line:
@@ -110,6 +116,9 @@ class LiveTable:
         return 'yes' if getattr(state, name) else 'no'
 
     def refresh(self, *, force=False):
+        # Callback threads may update observations, but never format or write.
+        if threading.get_ident() != self._render_thread:
+            return
         now = self.monotonic()
         with self._lock:
             if self._closed or (not force and now < self._next_refresh):

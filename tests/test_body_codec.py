@@ -661,6 +661,18 @@ class BodyCodecTest(unittest.TestCase):
         self.assertEqual(state.runtime_id, BODY_RUNTIME_ID)
         self.assertEqual((state.ts_control_us, state.applied_key_valid, state.association_source_type), (0, False, 0))
 
+    def test_default_state_decoder_propagates_native_failure_without_fallback(self):
+        from unittest.mock import patch
+        from locomotion_aorta import _native_body_codec
+        for failure in (ImportError('native extension unavailable'),
+                        RuntimeError('native BodyState schema mismatch')):
+            with self.subTest(failure=type(failure).__name__), \
+                    patch.object(_native_body_codec, 'decode_body_state_native', side_effect=failure), \
+                    patch.object(codec, '_decode_body_state_python', side_effect=AssertionError('fallback')):
+                with self.assertRaises(type(failure)) as raised:
+                    codec.decode_body_state(make_state()[1])
+                self.assertIs(raised.exception, failure)
+
     def test_state3_missing_runtime_field_is_zero_and_rejected(self):
         # Missing runtime id is a real negative: the scalar decodes to 0 and
         # both decoders reject it; the ordinary positive above uses a nonzero R.

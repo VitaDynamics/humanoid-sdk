@@ -94,7 +94,8 @@ def _text(value: bytes | str | None) -> str:
     return value.decode('utf-8') if isinstance(value, bytes) else value or ''
 
 
-def decode_body_state(view: Any) -> BodyState:
+def _decode_body_state_python(view: Any) -> BodyState:
+    """Private reference for the native decoder's golden tests, not a fallback."""
     # Check the existing BODY revision before interpreting a fixed-stride struct.
     if view.ProtocolVersion() != BODY_STATE_PROTOCOL_VERSION:
         raise ValueError("incompatible BodyState protocol_version; expected BodyState 3")
@@ -114,7 +115,9 @@ def decode_body_state(view: Any) -> BodyState:
                 imu_states=tuple(imus), runtime_id=runtime)
 
 
-_decode_body_state_python = decode_body_state  # Reference for native golden tests.
+def decode_body_state(view: Any) -> BodyState:
+    from ._native_body_codec import decode_body_state_native
+    return decode_body_state_native(view)
 
 
 def _same_body_description(left: BodyInfo, right: BodyInfo) -> bool:

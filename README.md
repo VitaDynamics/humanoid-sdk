@@ -22,7 +22,16 @@ name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
 with **CPython 3.10**, glibc **2.35+** and GLIBCXX **3.4.29+**
 (Ubuntu 22.04 or newer). SDK 0.2.1 ships one distribution containing both the
 client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
-aarch64 only. There is no pure Python or separate backend wheel for 0.2.1.
+aarch64 only. There is no pure Python or separate backend wheel for this release.
+
+Production BodyState, EndEffectorState and EndEffectorTouch decoding all require
+the matching native extension and pinned schema. Missing native code or a schema
+mismatch is an error; it never selects a Python fallback. The private Python
+decoders are golden-test references only. GetRobotInfo and module import remain
+cold paths and do not construct a Body command publisher. Installing from source
+or with `pip install -e .` still requires the documented native build toolchain.
+See the [API migration table](CHANGELOG.md#public-api-migration) before updating
+an existing application.
 
 The Aorta SDK and messages target `0.0.0+g7649a87ebb03` (ABI 13) and FlatBuffers targets
 `25.12.19`. The `vbot-humanoid-msgs` entry in

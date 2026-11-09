@@ -698,8 +698,8 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
         emit(f'{client.side}: trajectory slope limits={speed}; configured zero-speed default is not measured')
         if pattern == 'sine' and math.pi*(sine_max-sine_min)/period > speed[0]:
             raise ValueError('sine peak command slope exceeds the declared velocity limit')
-    strict_hold = any(i.device_model in (DeviceModel.BRAINCO_REVO2, DeviceModel.LINKER_L6) for i in infos.values())
-    if strict_hold and feedback_interval < 1.0:
+    has_hand_endpoint = any(i.device_model in (DeviceModel.BRAINCO_REVO2, DeviceModel.LINKER_L6) for i in infos.values())
+    if has_hand_endpoint and feedback_interval < 1.0:
         raise ValueError('hand feedback interval must be at least 1 second')
     for client in clients:
         client.wait_output_ready(timeout)

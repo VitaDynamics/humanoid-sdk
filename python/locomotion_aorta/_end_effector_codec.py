@@ -120,6 +120,7 @@ def decode_info(view):
 
 
 def _decode_state_python(view):
+    """Private golden reference; production feedback uses the pinned native codec."""
     if view.ProtocolVersion() != EE_STATE_PROTOCOL_VERSION:
         raise ValueError('incompatible EndEffectorState protocol_version')
     axes = tuple(view.Axes(i) for i in range(view.AxesLength()))
@@ -131,6 +132,7 @@ def _decode_state_python(view):
 
 
 def _decode_touch_python(view):
+    """Private golden reference; native failures never fall back here."""
     return _dto(view, EndEffectorTouch, runtime_id=_ref(view),
                 region_stamps=tuple(_dto(view.RegionStamps(i), RegionStamp)
                                     for i in range(view.RegionStampsLength())),
