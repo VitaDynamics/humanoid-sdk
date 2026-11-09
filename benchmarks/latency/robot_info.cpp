@@ -31,7 +31,7 @@ std::vector<uint8_t> MakeInfo(uint64_t runtime) {
     info.body->motor_identities.push_back(std::move(identity));
   }
   for (int side = 1; side <= 2; ++side) {
-    auto entry = std::make_unique<lowlevel::EndEffectorCapabilityT>();
+    auto entry = std::make_unique<lowlevel::ee::EndEffectorCapabilityT>();
     entry->side = static_cast<lowlevel::ee::EndEffectorSide>(side);
     entry->is_mock = true;  // no attached EE Info in this synthetic reply
     entry->ready = false;

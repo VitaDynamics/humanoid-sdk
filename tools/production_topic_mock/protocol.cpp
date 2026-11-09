@@ -151,7 +151,7 @@ std::vector<uint8_t> EncodeInfo(uint64_t runtime,
   }
   const std::vector<uint8_t>* ee_info_bytes[2] = {&left_info, &right_info};
   for (int side = 1; side <= 2; ++side) {
-    auto ee = std::make_unique<lowlevel::EndEffectorCapabilityT>();
+    auto ee = std::make_unique<lowlevel::ee::EndEffectorCapabilityT>();
     ee->side = static_cast<lowlevel::ee::EndEffectorSide>(side);
     const auto& fixture = *ee_info_bytes[side - 1];
     if (fixture.empty()) {
