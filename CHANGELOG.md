@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased — unified Body and end-effector clients
+## 0.3.0 (in preparation) — unified Body and end-effector clients
 
 ### Breaking
 
 - Remove the old public Hand/Gripper client and DTO families without aliases or
-  wire downgrade. The next release version is awaiting the owner's decision;
-  the existing `0.2.1` package version must not be published with these changes.
+  wire downgrade. The Owner selected `0.3.0` for this breaking API migration;
+  it must not be published under the previous `0.2.1` package version.
 - Require the matching native extension for production BodyState as well as
   EndEffectorState/Touch decoding. Private Python decoders remain test oracles,
   never runtime fallbacks. The supported distribution already includes native
@@ -64,7 +64,7 @@ that set `AORTA_GROUP` but leave the SDK `group="default"` must pass the matchin
 group explicitly. Unified end-effector clients and BrainCo capture also reject
 mismatches; the body controller and state sources enforce the same rule.
 
-## 0.2.1 (in preparation)
+### Carried-forward implementation details
 
 - Use BodyCmd/BodyState protocol **3**, with 31 ordered body axes, and control
   request/ACK/status protocol **4**. Older Body/control wire versions are
@@ -103,7 +103,7 @@ or device acceptance. The final SDK release remains pending.
 
 The following records an earlier unpublished candidate, including Body/control
 protocol 2 and the old 0.1.4 dependency. It is historical context, not the
-current compatibility or installation contract; use the 0.2.1 entry and
+current compatibility or installation contract; use the 0.3.0 entry and
 compatibility.json above.
 
 - Use the public 31-slot BodyCmd/BodyState interfaces and EXTERNAL control;
@@ -141,7 +141,7 @@ compatibility.json above.
   numerical outputs: 82/120 values were not bit-identical across versions.
   The Python 1.20.1 test oracle remains exact; no tolerance is introduced.
   The SDK wheel contains the backend, while core import leaves it unloaded.
-  See README for the current support scope and the planned 0.2.1 packaging.
+  See README for the current support scope and the planned 0.3.0 packaging.
 - Add an independent, read-only BodyStateSource with frame-owned snapshots,
   whole BodyState access with one lazy decode per received frame and direct
   CLOCK_REALTIME/MONOTONIC receipt timestamps. It creates no control endpoints

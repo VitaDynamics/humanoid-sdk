@@ -57,7 +57,7 @@ class PolicyPreflightTest(unittest.TestCase):
             args = velocity_mode.parse_args(['--live', '--locomotion-dir', '/unused',
                                              '--log', str(Path(temp)/'velocity.jsonl')])
             with patch.object(velocity_mode, 'parse_args', return_value=args), \
-                 patch.object(velocity_mode, 'version', return_value='0.2.1'), \
+                 patch.object(velocity_mode, 'version', return_value='0.3.0'), \
                  patch.object(velocity_mode, 'VelocityModePolicy', return_value=p), \
                  patch.object(velocity_mode, 'PullTransport', return_value=transport), \
                  patch.object(velocity_mode, 'wait_ready', return_value=transport.observed_status), \

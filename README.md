@@ -1,7 +1,7 @@
 # Humanoid SDK
 
-**Release blocked:** this breaking API candidate must not be published under
-the existing `0.2.1` version; its new version awaits the Owner decision.
+**Release blocked:** the Owner selected `0.3.0` for the breaking API migration;
+legacy API aliases and wire downgrade are not provided.
 The dependency manifest is also not publishable while `dependency_release_tag`
 is null: remote dependency fetching and CI stop before SDK installation,
 compilation or tests. This is the known missing matching Release, not a native
@@ -9,7 +9,7 @@ test result. See [Dependency Release convention](#dependency-release-convention)
 Explicit verified local inputs support candidate validation only; they do not
 make the manifest releasable or bypass the remote Release gate.
 
-SDK **0.2.1** is in preparation; packaging and release are pending. This source
+SDK **0.3.0** is in preparation; packaging and release are pending. This source
 targets the direct-runtime contract. Its dedicated `g043599d3b729` messages
 wheel and all native Body/EE headers come from the same selected-runtime
 generation. The matching Aorta wheels and generated native header use
@@ -29,7 +29,7 @@ Publication timestamp/valid-bit changes alone are normal republishes.
 Python SDK and examples for humanoid locomotion over Aorta. The Python import
 name is `locomotion_aorta`. Run the SDK on a Linux x86_64 or aarch64 computer
 with **CPython 3.10**, glibc **2.35+** and GLIBCXX **3.4.29+**
-(Ubuntu 22.04 or newer). SDK 0.2.1 ships one distribution containing both the
+(Ubuntu 22.04 or newer). SDK 0.3.0 ships one distribution containing both the
 client and the lazy C++ inference backend, as `cp310` wheels for x86_64 and
 aarch64 only. There is no pure Python or separate backend wheel for this release.
 
@@ -63,7 +63,7 @@ for the old-to-new names, optional dependencies and offline entry points.
 These additions await independent package/numerical acceptance; a unit test is
 not robot-motion evidence.
 
-The 0.2.1 Joy input candidate adds `JoyReader`: drain Aorta input snapshots in
+The 0.3.0 Joy input candidate adds `JoyReader`: drain Aorta input snapshots in
 the policy thread and read the latest axes plus accumulated button edge and
 sequence-gap counts. See [the Joy reader contract](examples/velocity_mode/README.md#direction-dependency).
 Joy retains its prior public contract. SDK release publication remains pending;
@@ -168,7 +168,7 @@ bundle root:
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-python -m pip install --no-index --find-links wheelhouse 'locomotion-aorta[state-arrays]==0.2.1'
+python -m pip install --no-index --find-links wheelhouse 'locomotion-aorta[state-arrays]==0.3.0'
 python -m pip check
 python -c 'import aorta, flatbuffers, locomotion_aorta; import lowlevel.BodyCmd, lowlevel.BodyState, locomotion_sdk.ControlStatus'
 ```
@@ -432,7 +432,7 @@ core imports and example `--help` do not load it. There is no Python ONNX
 Runtime fallback. The optional `teleop-demo` extra installs only NumPy from a complete matching demo wheelhouse:
 
 ```bash
-python -m pip install --no-index --find-links demo-wheelhouse 'locomotion-aorta[teleop-demo]==0.2.1'
+python -m pip install --no-index --find-links demo-wheelhouse 'locomotion-aorta[teleop-demo]==0.3.0'
 python -m pip check
 ```
 

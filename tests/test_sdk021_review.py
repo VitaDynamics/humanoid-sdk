@@ -330,7 +330,7 @@ class VelocityReviewTest(unittest.TestCase):
             self.assertFalse(stop.is_set())
             signal.raise_signal(signal.SIGTERM)
             self.assertTrue(stop.is_set())
-        with patch.object(example, 'version', return_value='0.2.1'), \
+        with patch.object(example, 'version', return_value='0.3.0'), \
              patch.object(example, 'parse_args', return_value=args), \
              patch.object(example, 'VelocityModePolicy', return_value=Mock(inventory={}, order=[])), \
              patch.object(example, 'PullTransport', return_value=transport), \

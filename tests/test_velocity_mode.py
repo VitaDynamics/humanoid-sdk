@@ -162,7 +162,7 @@ class LoggingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp)/"run.jsonl"
             args = example.parse_args(["--shadow", "--locomotion-dir", "/unused", "--log", str(path)])
-            with patch.object(example, "version", return_value="0.2.1"), \
+            with patch.object(example, "version", return_value="0.3.0"), \
                  patch.object(example, "parse_args", return_value=args), \
                  patch.object(example, "VelocityModePolicy", return_value=policy), \
                  patch.object(example, "PullTransport", return_value=transport), \
@@ -524,7 +524,7 @@ class DurationTest(unittest.TestCase):
         directions.read.return_value = __import__("test_velocity_mode").joy_sample()
         controller.exit_external.return_value = SimpleNamespace(current_action="PASSIVE",
             phase=SimpleNamespace(value="IDLE"))
-        with patch.object(example, "version", return_value="0.2.1"), \
+        with patch.object(example, "version", return_value="0.3.0"), \
              patch.object(example, "parse_args", return_value=args), \
              patch.object(example, "VelocityModePolicy", return_value=Mock(inventory={}, order=[])), \
              patch.object(example, "PullTransport", return_value=transport), \
