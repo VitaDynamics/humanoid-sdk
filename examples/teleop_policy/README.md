@@ -1,9 +1,9 @@
 # 手柄策略 demo
 
-对应机器人 action 17 的模型/合同，SDK 本地推理并请求 **EXTERNAL**；模型必须显式传入。本分支0.2.1直播输入固定为 Aorta `locomotion/joy`，通过与velocity相同的JoyReader；不提供pygame、ROS2或固定中立输入回退。完整公共31槽配置、策略关节安装状态与关节范围须通过代码检查。
+对应机器人 action 17 的模型/合同，SDK 本地推理并请求 **EXTERNAL**；模型必须显式传入。本分支0.3.0直播输入固定为 Aorta `locomotion/joy`，通过与velocity相同的JoyReader；不提供pygame、ROS2或固定中立输入回退。完整公共31槽配置、策略关节安装状态与关节范围须通过代码检查。
 
 ```bash
-python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[teleop-demo]==0.2.1'
+python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[teleop-demo]==0.3.0'
 python examples/teleop_policy/teleop_policy.py --help
 python examples/teleop_policy/teleop_policy.py --model /path/to/action17.onnx --dry-run --body-state-jsonl /path/to/body-state.jsonl
 ```
@@ -18,7 +18,7 @@ python examples/teleop_policy/teleop_policy.py --model /path/to/action17.onnx --
 
 | 行 | 必需结构与策略读取字段 |
 |---|---|
-| 首行 | `{"body": ...}`；body 含 `slot_count: 31`、31个唯一 `joint_names`、31个 `joints` 能力条目（含 `populated`）。名字集合必须是模型30个关节加占位 `waist_roll_joint`；策略驱动关节必须已安装。 |
+| 首行 | `{"body": ...}`；body 含 `slot_count: 31`、31个唯一 `joint_names`、31个 `joints` 能力条目（含 `is_mock`、`supported_fields`、`valid_limits` 及已公布限位）。名字集合必须是模型30个关节加占位 `waist_roll_joint`；策略驱动关节必须已安装。 |
 | 后续行 | `{"state": ..., "axes": [...]}`；state 含 `state_id`、31个 `joints`（每项 `q`、`dq`、`error_code`）、`attitude_valid` 与 `imu_states`。axes按下面action17轴映射解释。 |
 | HIP样本 | 离线路径传入符号 `'HIP'` 查找 `imu_states[].location`，因此该条目的 location 必须是字符串 `"HIP"`，不是线上枚举数字；需唯一、`status: 1`、state非空，state含长度4的 `quaternion` 与长度3的 `gyroscope`，并有 `attitude_valid: true`。 |
 

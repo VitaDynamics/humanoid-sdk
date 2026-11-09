@@ -3,12 +3,12 @@
 参考机器人 action 13/HUMANOID 的模型与 profile，在 SDK 中本地推理后请求 **EXTERNAL**；不是给机器人发送 action 13。`--shadow` 只读控制面，`--live` 会控制本体。需要完整公共31槽配置、已就绪反馈、匹配模型和部署 locomotion 目录。
 
 ```bash
-python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[velocity-demo]==0.2.1'
+python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[velocity-demo]==0.3.0'
 python examples/velocity_mode/velocity_mode.py --help
 python examples/velocity_mode/velocity_mode.py --shadow --locomotion-dir /path/to/locomotion --log /new/path/velocity-shadow.jsonl --duration 60
 ```
 
-`--log` 使用新路径；`--duration 0`/省略为不限时。0.2.1 使用 public0.1.5 的 Aorta `locomotion/joy` 与 JoyReader，依赖固定的 Aorta2026.10.20/FlatBuffers25.12.19；没有ROS2、pygame或固定中立输入回退。下文保留实际方向依赖与 S0–S6 时钟说明；日志中的推理耗时、实际 session/sequence、applied 键不等于硬件动作完成。
+`--log` 使用新路径；`--duration 0`/省略为不限时。0.3.0 使用 Aorta `locomotion/joy` 与 JoyReader，依赖根目录 `compatibility.json` 中的同批消息/runtime及FlatBuffers；没有ROS2、pygame或固定中立输入回退。下文保留实际方向依赖与 S0–S6 时钟说明；日志中的推理耗时、实际 session/sequence、applied 键不等于硬件动作完成。
 
 ## 环境与安全
 
@@ -25,8 +25,8 @@ python examples/velocity_mode/velocity_mode.py --shadow --locomotion-dir /path/t
 The SDK name changed; robot action 13/HUMANOID, protocol enums and model metadata
 names did not. This program runs a client policy through **EXTERNAL**, not action 13.
 
-Use a compatible SDK 0.2.1 installation with the finalized 0.1.5 message wheel
-and the `velocity-demo` extra. Inference uses its bundled C++ ORT 1.20.1 backend,
+Use a compatible SDK 0.3.0 installation with the exact message/runtime wheels
+in the root `compatibility.json` and the `velocity-demo` extra. Inference uses its bundled C++ ORT 1.20.1 backend,
 loaded only when constructing the model. There is no Python ORT fallback.
 Provide the deployment's exported locomotion directory (model, action profile
 and main configuration), rather than a robot source checkout. The model/profile
@@ -68,11 +68,11 @@ full period before resuming; they do not publish catch-up bursts.
 
 ## Direction dependency
 
-SDK 0.2.1 uses only Aorta `locomotion/joy`, through the SDK's `JoyReader`.
+SDK 0.3.0 uses only Aorta `locomotion/joy`, through the SDK's `JoyReader`.
 There is no direction-source CLI option, ROS input subscription or velocity
 fallback. Neutral, missing or stale input produces zero direction through the
-existing profile. This requires the matching public humanoid **0.1.5** wheel,
-Aorta 2026.10.20 and FlatBuffers 25.12.19. Dependency pins are listed in
+existing profile. This requires the exact matching humanoid/runtime wheels and FlatBuffers
+from the root manifest. Dependency pins are listed in
 compatibility.json. The older 0.1.4 public wheel
 has no Joy binding and cannot supply this entry point. Do not mix an older
 message wheel into the SDK to obtain it.
