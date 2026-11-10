@@ -267,7 +267,8 @@ class NativeBodyPullTest(unittest.TestCase):
         from body_fixtures import robot_info_reply
         from locomotion_aorta import PullStateSource
         from locomotion_aorta.transport import BODY_STATE_TOPIC
-        group = 'native-body-'+uuid.uuid4().hex
+        group = uuid.uuid4().hex
+        self.assertEqual(len(group.encode('utf-8')), 32)
         group_env = mock.patch.dict(os.environ, {'AORTA_GROUP': group})
         group_env.start()
         self.addCleanup(group_env.stop)
