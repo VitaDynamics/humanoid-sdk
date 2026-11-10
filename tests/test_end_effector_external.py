@@ -1531,6 +1531,27 @@ class VendorExamplesTest(unittest.TestCase):
                               _client_factory=client, _controller_factory=controller, _state_source_factory=source)
                 client.assert_not_called(); controller.assert_not_called(); source.assert_not_called()
 
+    def test_op3_readonly_reports_declared_touch_without_rpc_or_control(self):
+        self.setup_case()
+
+        def with_touch(endpoint):
+            declared = decode('info', info_object(side=endpoint.info.side, touch=True))
+            endpoint.info = replace(endpoint.info, touch_available=True,
+                                    touch_regions=declared.touch_regions)
+            endpoint._touch = decode('touch', touch_object(side=endpoint.info.side))
+            codec.validate_info(endpoint.info)
+
+        self.invoke(DeviceModel.AGILINK_OP3, ['--side', 'right', '--dry-run'],
+                    mutate=with_touch)
+        endpoint = self.endpoints['right']
+        self.assertEqual(endpoint.info.runtime_id, endpoint.touch.runtime_id)
+        self.assertEqual(2, len(endpoint.info.touch_regions))
+        self.assertEqual(bytes((0, 0, 255, 127, 0, 128, 255, 255)), endpoint.touch.payload)
+        self.assertIn('Touch=', self.output)
+        self.assertEqual(['source'], self.factories)
+        self.executed.assert_not_called()
+        self.assert_no_control()
+
     def test_op3_nonfinite_current_is_rejected_before_any_connection(self):
         for value in ('nan', 'inf', '-inf'):
             with self.subTest(value=value), patch('sys.stderr', new_callable=io.StringIO):

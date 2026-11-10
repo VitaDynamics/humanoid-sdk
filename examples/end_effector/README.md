@@ -47,6 +47,8 @@ has no intent bit; explicit zero and signed torque remain distinct. Limits and
 units come from the actual descriptor; targets are never clipped. OP3 uses one
 total-opening axis in m and the descriptor's existing mode2 (SDK name
 `POSITION_TORQUE`); the OP3 target selects no TAU and implies no torque capability.
+This public SDK mode is distinct from the robot driver's Pn0x14 mode5 CAN selector;
+the demo consumes actual Info and does not encode vendor CAN frames.
 Optional `--*-current-a` selects current in A independently
 of `--*-torque-nm`. Omitting current leaves the intent bit clear; no device
 current default is inferred from a manual or converted to torque.
@@ -253,7 +255,11 @@ OP3 Touch uses the existing client and the regions declared by actual Info,
 including each region's shape, components, offset and payload size. The current
 codec supports U16_LE words with dimensionless unit `1`; it does not infer force
 or pressure, hard-code a point count, or relabel unknown device timestamps.
-Region clocks and validity remain independent. This stacked demo uses the SDK
+Region clocks and validity remain independent. Default/`--dry-run` reports an
+already available Touch sample without changing device sampling. `--touch on`
+uses the original explicitly confirmed control session and requires actual
+Touch capability plus a new State/Touch confirmation; it is not a read-only
+probe. This stacked demo uses the SDK
 PR18 base's actual API; it does not upgrade its dependency manifest or import
 the private PR2/Schema native-input candidate. Matching generated bindings and
 a compatible robot are still required; no OP3 runtime or HIL result is implied.
