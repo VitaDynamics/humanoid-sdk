@@ -2,6 +2,7 @@
 import dataclasses
 import importlib
 import math
+import os
 import random
 import struct
 import unittest
@@ -266,11 +267,16 @@ class NativeBodyPullTest(unittest.TestCase):
         from body_fixtures import robot_info_reply
         from locomotion_aorta import PullStateSource
         from locomotion_aorta.transport import BODY_STATE_TOPIC
-        source = PullStateSource(group='native-body-'+uuid.uuid4().hex,
+        group = 'native-body-'+uuid.uuid4().hex
+        group_env = mock.patch.dict(os.environ, {'AORTA_GROUP': group})
+        group_env.start()
+        self.addCleanup(group_env.stop)
+        source = PullStateSource(group=group,
             native_body_rx={'slot_count': 2,
                 'max_payload_bytes': max(map(len, frames)),
                 'max_slices': 3, 'poll_interval_s': .001})
         self.addCleanup(source.close)
+        self.assertEqual(source.transport.node.group(), group)
         reply = replace(robot_info_reply(), runtime_id=11)
         with mock.patch.object(source.transport, 'get_robot_info', return_value=reply):
             self.assertIs(source.get_robot_info(.1), reply)

@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 import unittest
 
+import locomotion_aorta
+
 from locomotion_aorta._end_effector_codec import load_bindings, load_touch_bindings
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +22,8 @@ class PublicEeBindingTest(unittest.TestCase):
         from lowlevel.ee.EndEffectorState import EndEffectorState
         self.assertEqual((AxisCommand.SizeOf(), AxisState.SizeOf(), SampleRef.SizeOf()),
                          (28, 28, 32))
+        self.assertEqual(AxisCommand.__module__, 'lowlevel.ee.AxisCommand')
+        self.assertEqual(AxisState.__module__, 'lowlevel.ee.AxisState')
         for name in ('CommandFields', 'Mode', 'Pos', 'Vel', 'VelLimit', 'Tau', 'Current'):
             self.assertTrue(hasattr(AxisCommand, name))
         for name in ('ValidFields', 'Pos', 'Vel', 'Tau', 'Current', 'TemperatureC', 'ErrorCode'):
@@ -29,11 +33,15 @@ class PublicEeBindingTest(unittest.TestCase):
             self.assertFalse(hasattr(AxisState, name))
         for name in ('Dof', 'TsPollRequestUs', 'TsPollResponseUs', 'CmdDequeuedUs'):
             self.assertFalse(hasattr(EndEffectorState, name))
-        for name in ('HandJointCmd', 'HandJointState', 'FingerTouchMeta', 'HandCmd',
+        # The schema wheel also serves legacy robot consumers. SDK retirement
+        # forbids these public SDK exports, not their existence in that wheel.
+        for name in ('HandClient', 'GripperClient', 'EndEffectorKind',
+                     'HandJointCmd', 'HandJointState', 'FingerTouchMeta', 'HandCmd',
                      'HandState', 'HandTouch', 'HandInfo', 'GripperCmd',
                      'GripperState', 'GripperInfo'):
             with self.subTest(retired=name):
-                self.assertIsNone(importlib.util.find_spec('lowlevel.' + name))
+                self.assertFalse(hasattr(locomotion_aorta, name))
+                self.assertNotIn(name, locomotion_aorta.__all__)
 
     def test_distribution_and_all_pinned_bfbs_match(self):
         manifest = json.loads((ROOT / 'compatibility.json').read_text())
