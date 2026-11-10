@@ -259,10 +259,10 @@ Region clocks and validity remain independent. Default/`--dry-run` reports an
 already available Touch sample without changing device sampling. `--touch on`
 uses the original explicitly confirmed control session and requires actual
 Touch capability plus a new State/Touch confirmation; it is not a read-only
-probe. This stacked demo uses the SDK
-PR18 base's actual API; it does not upgrade its dependency manifest or import
-the private PR2/Schema native-input candidate. Matching generated bindings and
-a compatible robot are still required; no OP3 runtime or HIL result is implied.
+probe. This demo uses the merged SDK main API and its pinned dependency
+manifest; it does not change those pins or import a private robot/Schema input
+candidate. Matching generated bindings and a compatible robot are still required;
+no OP3 runtime or HIL result is implied.
 
 L6 target duration only bounds repeated input submission: no interpolation,
 backend speed or arrival is inferred. The default 50 Hz per-side setting is PC
