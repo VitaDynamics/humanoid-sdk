@@ -1,7 +1,6 @@
 """Real public wheel checks; generated messages only, no robot connection."""
 import hashlib
 import importlib
-import importlib.util
 import importlib.metadata
 import json
 from pathlib import Path

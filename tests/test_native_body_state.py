@@ -70,8 +70,7 @@ def state_buffer(seed, *, count=31, missing_joints=False, missing_imus=False,
     return bytes(builder.Output())
 
 
-@unittest.skipIf(native is None, 'installed native state codec required; pkg requires zero skips')
-class NativeBodyStateTest(unittest.TestCase):
+class _NativeStateAssertions:
     def same(self, expected, actual):
         self.assertIs(type(expected), type(actual))
         if dataclasses.is_dataclass(expected):
@@ -85,6 +84,8 @@ class NativeBodyStateTest(unittest.TestCase):
             else: self.assertEqual(struct.pack('<d', expected), struct.pack('<d', actual))
         else: self.assertEqual(expected, actual)
 
+@unittest.skipIf(native is None, 'installed native state codec required; pkg requires zero skips')
+class NativeBodyStateTest(_NativeStateAssertions, unittest.TestCase):
     def compare(self, data, *, offset=0):
         view = module('BodyState').BodyState.GetRootAs(data, offset)
         expected = _decode_body_state_python(view)
@@ -255,7 +256,7 @@ class NativeBodyStateTest(unittest.TestCase):
 
 
 @unittest.skipIf(native is None, 'installed native state codec required; pkg requires zero skips')
-class NativeBodyPullTest(unittest.TestCase):
+class NativeBodyPullTest(_NativeStateAssertions, unittest.TestCase):
     """Actual Core InlinePull -> native borrow -> original SDK codec/gate.
 
     Only discovery uses the existing service-reply fixture. No raw sample,
@@ -316,7 +317,7 @@ class NativeBodyPullTest(unittest.TestCase):
         raw = None
         source.close()
         self.assertEqual(float(arrays.q[0]), dto.joints[0].q)
-        self.assertEqual(arrays.body_state(), dto)
+        self.same(arrays.body_state(), dto)
 
     def test_busy_preserves_original_queue_and_foreign_candidate_preserves_cache(self):
         from aorta.errors import BusyError
@@ -404,8 +405,10 @@ class NativeBodyPullTest(unittest.TestCase):
         first = self.receive(reader)
         pub.publish_bytes(data)
         second = self.receive(reader)  # Both slots available: late token returned.
-        self.assertEqual(decode_body_state_native(first), decode_body_state_native(second))
-        first = second = None
+        try:
+            self.same(decode_body_state_native(first), decode_body_state_native(second))
+        finally:
+            first = second = None
 
     def test_partial_cold_ctor_frees_real_first_slot_and_preserves_receiver(self):
         import ctypes

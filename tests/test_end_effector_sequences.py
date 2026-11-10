@@ -59,7 +59,10 @@ class RobotProducedEndEffectorSequenceTest(unittest.TestCase):
         self.assertTrue(payload)
         decoder, callback = self.node.subscriptions[
             '/sdk/foot_humanoid/end_effector/' + client.side + '/' + kind]
-        callback(decoder(payload), None)
+        view = decoder(payload)
+        with self.node.registration(client.side, 'touch',
+                                    required=kind == 'info' and view.TouchAvailable()):
+            callback(view, None)
         return getattr(client, kind)
 
     def test_actual_robot_static_info_republish_and_runtime_restart_boundaries(self):
