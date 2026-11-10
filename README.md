@@ -2,9 +2,9 @@
 
 **SDK release pending:** the Owner selected `0.3.0` for the breaking API
 migration; legacy API aliases and wire downgrade are not provided. Matching
-final-schema generation has been received, but its dependency prerelease has
-not been published. The manifest leaves `dependency_release_tag` unset;
-Release-based CI remains blocked until the real assets are published and pinned.
+final-schema generation is available in the verified
+[dependency prerelease](https://github.com/VitaDynamics/humanoid-sdk/releases/tag/deps-aorta-g7649a87ebb03-schema-g35ce9eb82d5b).
+The manifest pins its actual tag and input SHA-256 values for Release-based CI.
 Explicit verified local inputs can support separately authorized validation.
 These inputs are not a published SDK wheel or proof of same-head CI, native
 ABI, strict realtime or device acceptance.
@@ -396,10 +396,10 @@ cross-repository token.
 The prior Owner-authorized G043 prerelease contains five pinned wheels
 (including both Core architectures) and the matching `aorta.h`; all six remote
 assets were checked against its independent manifest. It remains unchanged.
-The new selected G35ce message wheel is verified locally, but its publication
-requires separate authorization. The new manifest therefore has no Release tag
-yet. A future dependency prerelease must contain the exact five wheels and
-matching header named by that manifest. These assets retain CI/G provenance;
+The selected G35ce message wheel is now published in
+`deps-aorta-g7649a87ebb03-schema-g35ce9eb82d5b`, with the exact five wheels and
+matching header named by the manifest. All six remote asset digests and sizes
+were verified against the actual input files. These assets retain CI/G provenance;
 such a mirror is not a formal Schema Release or SDK version release.
 
 For a later formal schema `humanoid-msgs-<version>` Release:

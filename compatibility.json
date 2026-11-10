@@ -20,7 +20,7 @@
     "flatbuffers-25.12.19-py2.py3-none-any.whl": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
     "vbot_humanoid_msgs-0.0.0+g35ce9eb82d5b-py3-none-any.whl": "fb59a316e260bb15d173dc980a82c8337af11e2e4beed868f681a68f4fa0bc21"
   },
-  "dependency_release_tag": null,
+  "dependency_release_tag": "deps-aorta-g7649a87ebb03-schema-g35ce9eb82d5b",
   "aorta_abi_version": 13,
   "schema_sha256": {
     "body_cmd": "de52ffa81239439af1edee5d426d206fd8ca6870999eca5ea220bdf18df8abcb",
