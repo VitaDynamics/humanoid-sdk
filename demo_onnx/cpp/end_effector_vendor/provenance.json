@@ -1,6 +1,6 @@
 {
-  "schema_commit": "043599d3b7293ed8dbaa0949735ed68abcfac2fb",
-  "schema_tree": "85a459defe9ad6239ec1b8071f4d9209e99d9e0f",
+  "schema_commit": "35ce9eb82d5b707cebcf5943504b6beb52e52d21",
+  "schema_tree": "b2370d2ccfae8fe754e04ab73f286bcd9c03a42b",
   "source": "Same official selected-runtime artifact as Body; canonical native headers are stored once in body_cmd_vendor.",
   "headers_sha256": {
     "message/schemas/topic/lowlevel/end_effector_cmd_generated.h": "16e6fd73fc042d401d6f2d7262fe0c68d51473ec216609931adb680a165b720a",
@@ -17,8 +17,8 @@
     "message/schemas/system/aorta_base_generated.h": "fde3ee3fad85501632552fe45abdb4793dc0b2995c1ce06db62d7ab2487a3be6"
   },
   "flatbuffers_version": "25.12.19",
-  "wheel_version": "0.0.0+g043599d3b729",
-  "wheel_sha256": "04d01e13e3e9b9979646fb98061954363272f5588a30cb8b1ab3fcb54dfea473",
+  "wheel_version": "0.0.0+g35ce9eb82d5b",
+  "wheel_sha256": "fb59a316e260bb15d173dc980a82c8337af11e2e4beed868f681a68f4fa0bc21",
   "binding_note": "All three actual EE roots and actual Body roots come from the same selected wheel/native archive; runtime/header/compiler/APIABI and full SDK execution remain pending.",
-  "native_provenance_sha256": "e93315ad1404238ec05a38e1733cd4376e480000098941d892f16c6a0c8299e6"
+  "native_provenance_sha256": "fbfa161ca738027708ffa9509fd6524c185584c60423a82740e29a1aa21b5f5c"
 }

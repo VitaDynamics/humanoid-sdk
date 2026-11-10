@@ -2,18 +2,22 @@
 
 **SDK release pending:** the Owner selected `0.3.0` for the breaking API
 migration; legacy API aliases and wire downgrade are not provided. Matching
-inputs are available in the [candidate dependency prerelease](https://github.com/VitaDynamics/humanoid-sdk/releases/tag/deps-aorta-g7649a87ebb03-schema-g043599d3b729).
-This supplies dependencies for validation; it is not a published SDK wheel or
-proof of same-head CI, native ABI, strict realtime or device acceptance.
+final-schema generation has been received, but its dependency prerelease has
+not been published. The manifest leaves `dependency_release_tag` unset;
+Release-based CI remains blocked until the real assets are published and pinned.
+Explicit verified local inputs can support separately authorized validation.
+These inputs are not a published SDK wheel or proof of same-head CI, native
+ABI, strict realtime or device acceptance.
 
 SDK **0.3.0** is in preparation; packaging and release are pending. This source
-targets the direct-runtime contract. Its dedicated `g043599d3b729` messages
+targets the direct-runtime contract. Its dedicated `g35ce9eb82d5b` messages
 wheel and all native Body/EE headers come from the same selected-runtime
-generation. The matching Aorta wheels and generated native header use
-`0.0.0+g7649a87ebb03` (ABI 13). These actual CI artifacts are pinned for candidate
-validation and are mirrored unchanged in the pinned candidate dependency
-prerelease. Their source remains g043599d3b729/g7649a87ebb03, not D8.
-This does not establish final
+generation from merged Schema102 source
+`35ce9eb82d5b707cebcf5943504b6beb52e52d21`. The separately generated matching
+Aorta wheels and native `aorta.h` retain their actual `0.0.0+g7649a87ebb03`
+identity (ABI 13). All 44 schema headers were compared byte for byte with the
+new archive; their contents did not change. The prior G043 inputs and
+dependency prerelease remain immutable. This does not establish final
 robot/SDK compatibility, strict realtime or device acceptance; use the pinned
 manifest for separately authorized candidate validation.
 
@@ -43,13 +47,13 @@ an existing application.
 The Aorta SDK and messages target `0.0.0+g7649a87ebb03` (ABI 13) and FlatBuffers targets
 `25.12.19`. The `vbot-humanoid-msgs` entry in
 [compatibility.json](compatibility.json) and `pyproject.toml` names the actual
-dedicated `g043599d3b729` wheel and its SHA-256. Its Requires-Dist names the same
+dedicated `g35ce9eb82d5b` wheel and its SHA-256. Its Requires-Dist names the same
 actual Aorta version. The default-2026.10.20 wheel from the same Schema run has
 the same filename but different bytes; it must not replace the selected wheel.
 The existing dependency fetcher verifies either an explicitly supplied local
-input set or the exact pinned candidate dependency prerelease. There is no
-replacement release, latest-version
-or network fallback. Do not substitute a product wheel.
+input set or the exact pinned candidate dependency prerelease once published.
+There is no replacement release, latest-version or network fallback. Do not
+substitute a product wheel or the earlier G043 dependency release.
 
 
 EXTERNAL uses 31-slot `BodyCmd` joints vector, `BodyState`, and typed `get_robot_info`.
@@ -338,10 +342,10 @@ Use a fresh output directory and a separately authorized validation environment.
 For ARM use `--arch aarch64` and the actual ARM wheels/toolchain, not x86 Core.
 Keep normal pip dependency resolution enabled. The default official workflow
 continues to require a real pinned SDK dependency Release containing the four
-wheels and `aorta.h` for the selected architecture; the pinned candidate
-prerelease now supplies them. Do not invent a tag or use
-the old rc.4 to bypass this gate. Neither path implies a final SDK release,
-native ABI validation or robot acceptance.
+wheels and `aorta.h` for the selected architecture. Publication and the exact
+tag for these new schema inputs are pending; the prior G043 prerelease cannot
+supply them. Do not invent a tag or use the old rc.4 to bypass this gate.
+Neither path implies a final SDK release, native ABI validation or robot acceptance.
 For a fully offline development environment, obtain MCAP and its dependency
 wheels beforehand and add `--no-index --find-links <test-wheelhouse>` to that
 MCAP installation. Without the HIL test dependencies, capture tests are skipped;
@@ -389,11 +393,14 @@ in **this repository's dependency prerelease**. The historical `v0.1.0-rc.4`
 as `GH_TOKEN`; it does not read the private schema repository or require a
 cross-repository token.
 
-The current Owner-authorized candidate prerelease contains exactly five original
-pinned wheels (including both Core architectures) and the matching `aorta.h`.
-All six remote assets were downloaded and checked against their independent
-manifest hashes before publication. They retain CI/G artifact provenance;
-this is not a formal Schema Release or SDK version release.
+The prior Owner-authorized G043 prerelease contains five pinned wheels
+(including both Core architectures) and the matching `aorta.h`; all six remote
+assets were checked against its independent manifest. It remains unchanged.
+The new selected G35ce message wheel is verified locally, but its publication
+requires separate authorization. The new manifest therefore has no Release tag
+yet. A future dependency prerelease must contain the exact five wheels and
+matching header named by that manifest. These assets retain CI/G provenance;
+such a mirror is not a formal Schema Release or SDK version release.
 
 For a later formal schema `humanoid-msgs-<version>` Release:
 

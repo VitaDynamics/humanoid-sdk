@@ -18,9 +18,9 @@
     "aorta_sdk-0.0.0+g7649a87ebb03-py3-none-linux_aarch64.whl": "afb246f5f4e3384efd6ab0eb41c11a9dae16354cc6dc5eca6a9641d9691660a7",
     "aorta_sdk-0.0.0+g7649a87ebb03-py3-none-linux_x86_64.whl": "bd1c7d8acb8311f35ae65a51e6cf7a0828cdd8bc9b104ece0082f49bef87c2fb",
     "flatbuffers-25.12.19-py2.py3-none-any.whl": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
-    "vbot_humanoid_msgs-0.0.0+g043599d3b729-py3-none-any.whl": "04d01e13e3e9b9979646fb98061954363272f5588a30cb8b1ab3fcb54dfea473"
+    "vbot_humanoid_msgs-0.0.0+g35ce9eb82d5b-py3-none-any.whl": "fb59a316e260bb15d173dc980a82c8337af11e2e4beed868f681a68f4fa0bc21"
   },
-  "dependency_release_tag": "deps-aorta-g7649a87ebb03-schema-g043599d3b729",
+  "dependency_release_tag": null,
   "aorta_abi_version": 13,
   "schema_sha256": {
     "body_cmd": "de52ffa81239439af1edee5d426d206fd8ca6870999eca5ea220bdf18df8abcb",
@@ -39,7 +39,7 @@
     "low_cmd": "b048ce7f06a560a671565deca3480dd68fc6f16ee60d6c65e99b7dbce8857485",
     "robot_info": "5a564e37e3d44acc3b15b929eac79dc1213cea4fd9cc247ef0857f6b05de8277"
   },
-  "humanoid_msgs_version": "0.0.0+g043599d3b729",
+  "humanoid_msgs_version": "0.0.0+g35ce9eb82d5b",
   "control_request_version": 4,
   "body_protocol_version": 3,
   "dependency_release_repository": "VitaDynamics/humanoid-sdk",
@@ -54,14 +54,14 @@
       "aarch64": "14db4d1cddd0c85926a16442b0eeb8f57fe4722f480ce760744b3b675adb3bfd",
       "x86_64": "8783d314c4e362aae84ceb14e02890315eac4214844885ad97b38d2005e13f60"
     },
-    "schema_commit": "043599d3b7293ed8dbaa0949735ed68abcfac2fb",
-    "schema_tree": "85a459defe9ad6239ec1b8071f4d9209e99d9e0f",
-    "schema_run_id": 42330959248,
+    "schema_commit": "35ce9eb82d5b707cebcf5943504b6beb52e52d21",
+    "schema_tree": "b2370d2ccfae8fe754e04ab73f286bcd9c03a42b",
+    "schema_run_id": 42745416538,
     "schema_run_attempt": 1,
-    "schema_selected_artifact_id": 13557681160,
-    "schema_selected_artifact_sha256": "2dacd27363b2373122d31d7903aaaf3dfa0f66597935d6ffbf214f205b8adaf5",
-    "schema_cpp_tar_sha256": "8775b06b99a0edbcd0fa5011bb6e60b848ff73a4364134003846345368d4d7c0",
-    "schema_native_provenance_sha256": "e93315ad1404238ec05a38e1733cd4376e480000098941d892f16c6a0c8299e6",
+    "schema_selected_artifact_id": 13730309055,
+    "schema_selected_artifact_sha256": "91ae891fb48a88dd5bb87927425abe328e470df4296e8de5ce6c515f9e5f7de0",
+    "schema_cpp_tar_sha256": "186afd2a6733c395a95d25f38e660f549f91f4bd502344a5ab4c608da1b0966f",
+    "schema_native_provenance_sha256": "fbfa161ca738027708ffa9509fd6524c185584c60423a82740e29a1aa21b5f5c",
     "requirements_sha256": "a5634b9cbacac6da5ddcf78e586716f0d18d3f665caf2553b5fca2ace1a5d495",
     "all_23_bfbs_sha256": {
       "body_cmd": "de52ffa81239439af1edee5d426d206fd8ca6870999eca5ea220bdf18df8abcb",
