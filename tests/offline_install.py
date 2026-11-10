@@ -60,19 +60,23 @@ class OfflineInstallTest(unittest.TestCase):
                  "import locomotion_sdk.ControlStatus, lowlevel.BodyCmd, lowlevel.BodyState; "
                  "from locomotion_aorta.transport import _load_aorta_bindings; "
                  "_load_aorta_bindings(); "
-                 "from locomotion_aorta._hand_codec import load_bindings; load_bindings(); "
+                 "from locomotion_aorta._end_effector_codec import load_bindings, load_touch_bindings; load_bindings(); load_touch_bindings(); "
                  f"assert metadata.version('vbot-humanoid-msgs') == {manifest['humanoid_msgs_version']!r}; "
                  f"assert aorta.load_library().aorta_abi_version() == {manifest['aorta_abi_version']}; "
                  "print('real bindings and pinned humanoid bindings/native ABI OK')"], check=True,
             )
-            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py"):
+            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py",
+                            "brainco_hand/brainco_hand_external.py", "gripper/gripper_external.py"):
                 self.assertFalse((bundle / "examples" / retired).exists())
             for example in ("body_state_subscriber/body_state_subscriber.py",
                             "external_control/external_control.py",
-                            "brainco_hand/brainco_hand_external.py",
+                            "end_effector/end_effector_external.py",
+                            "end_effector/brainco_revo2.py",
+                            "end_effector/agx_gripper.py",
+                            "end_effector/linker_l6.py",
+                            "end_effector_state_subscriber/end_effector_state_subscriber.py",
                             "brainco_hand/brainco_capture.py",
-                            "teleop_policy/teleop_policy.py",
-                            "gripper/gripper_external.py"):
+                            "teleop_policy/teleop_policy.py"):
                 subprocess.run(
                     [python, "-I", str(bundle / "examples" / example), "--help"],
                     check=True,

@@ -1,12 +1,15 @@
-"""Positive controls and fail-closed report checks; no network or Aorta needed."""
+"""50 Hz synthetic report correctness checks; no timed load, network or Aorta."""
 import csv
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
+import textwrap
 import unittest
+from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).parent / "latency"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmarks/latency"))
 from report import STAGES, analyze, proportional_bar, render
 
 
@@ -17,7 +20,7 @@ class LatencyReportTest(unittest.TestCase):
         self.directory = Path(self.temp.name)
         self.sent, self.client, self.received = [], [], []
         for seq in range(1, 4):
-            begin = seq * 1_000_000_000
+            begin = seq * 20_000_000
             self.sent.append(dict(sequence=seq, publish_ns=begin, return_ns=begin + 50, bytes=4096))
             self.client.append(dict(session=123, sequence=seq, decode_ns=begin + 100,
                 decoded_ns=begin + 200, built_ns=begin + 300, fill_ns=begin + 400,
@@ -31,15 +34,30 @@ class LatencyReportTest(unittest.TestCase):
                 writer = csv.DictWriter(out, fieldnames=rows[0].keys())
                 writer.writeheader()
                 writer.writerows(rows)
-        return analyze(self.directory, 123, 2, 50)
+        return analyze(self.directory, 123, .04, 50)
 
     def test_positive_control_exact_stages(self):
         result = self.analyze()
         self.assertEqual(result["rtt"]["n"], 3)
         self.assertEqual(len(result["stages"]), len(STAGES))
         self.assertAlmostEqual(sum(s["mean_ms"] for s in result["stages"]), result["rtt"]["mean_ms"])
-        self.assertEqual(result["mock_send_hz"], 1)
+        self.assertEqual(result["mock_send_hz"], 50)
         self.assertEqual(result["missing_reply"], 0)
+
+    def test_actual_command_keys_are_distinct_from_selected_state_identity(self):
+        for rows in (self.client, self.received):
+            for row in rows:
+                row['input_state_id'] = row['sequence']
+                row['sequence'] += 10
+                row['session'] = 456  # Actual owner generation, not window id 123.
+        self.assertEqual(self.analyze()['rtt']['n'], 3)
+        self.received[1]['sequence'] += 1
+        with self.assertRaisesRegex(ValueError, 'command key mismatch'):
+            self.analyze()
+        self.received[1]['sequence'] -= 1
+        self.client[1]['sequence'] = self.client[0]['sequence']
+        with self.assertRaisesRegex(ValueError, 'invalid actual command keys'):
+            self.analyze()
 
     def add_realtime(self):
         for rows in (self.sent,self.client,self.received):
@@ -192,9 +210,35 @@ class LatencyReportTest(unittest.TestCase):
 
     def test_full_summary_stays_within_github_size_limit(self):
         result = self.analyze()
-        results = [dict(result, rate_hz=hz) for hz in (50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000)]
-        render(self.directory, {"status": "PASS", "results": results})
+        self.assertEqual(result['rate_hz'], 50)
+        render(self.directory, {"status": "PASS", "results": [result]})
         self.assertLess((self.directory / "summary.md").stat().st_size, 1_000_000)
+
+    def test_ci_accepts_only_complete_50hz_business_report(self):
+        workflow = (Path(__file__).resolve().parents[1]
+                    / '.github/workflows/sdk-latency.yml').read_text()
+        step = workflow.split('name: Measure 50 Hz business-rate latency (60 seconds)', 1)[1]
+        source = step.split("python - <<'PY'\n", 1)[1].split('\n          PY', 1)[0]
+        consumer = compile(textwrap.dedent(source), 'sdk-latency-report-consumer', 'exec')
+        report_dir = self.directory / 'latency-results'
+        report_dir.mkdir()
+        complete = dict(status='PASS', scope='business_50hz', rates=[50], seconds=60,
+                        results=[dict(rate_hz=50, requested_seconds=60)])
+
+        def consume(value):
+            (report_dir / 'results.json').write_text(json.dumps(value))
+            with patch.dict(os.environ, RUNNER_TEMP=str(self.directory)):
+                exec(consumer, {})
+
+        consume(complete)
+        for changes in (dict(status='SMOKE_ONLY'), dict(scope='standalone_stress'),
+                        dict(rates=[]), dict(rates=[50, 50]), dict(seconds=59),
+                        dict(results=[]), dict(results=complete['results'] * 2),
+                        dict(results=[dict(rate_hz=0, requested_seconds=60)]),
+                        dict(results=[dict(rate_hz=50, requested_seconds=59)])):
+            with self.subTest(changes=changes), self.assertRaisesRegex(
+                    RuntimeError, 'incomplete 50 Hz'):
+                consume(dict(complete, **changes))
 
 
 if __name__ == "__main__":

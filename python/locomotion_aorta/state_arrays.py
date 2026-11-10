@@ -37,6 +37,10 @@ class BodyStateArrays:
     applied_session_id: int
     applied_sequence: int
     ts_first_output_us: int
+    runtime_id: int
+    ts_control_us: int
+    applied_key_valid: bool
+    association_source_type: int
     received_monotonic_ns: int = 0
     received_realtime_ns: int = 0
     pull_context_receive_stamp_ns: int = 0
@@ -69,11 +73,13 @@ class BodyStateArrays:
                          self.ts_state_pub_us, self.ts_consumed_us,
                          self.attitude_valid, self.imu_states,
                          self.applied_session_id, self.applied_sequence,
-                         self.ts_first_output_us)
+                         self.ts_first_output_us, self.runtime_id,
+                         self.ts_control_us, self.applied_key_valid,
+                         self.association_source_type)
 
 
 def decode_body_state_arrays(payload):
-    """Decode pinned BODY2 bytes, preserving absent vectors and unknown values."""
+    """Decode pinned BodyState3 bytes, preserving absent vectors and unknown values."""
     from ._native_body_codec import _state_decoder
     from . import _body_cmd_native
     _state_decoder()  # Shared BFBS identity guard; no silent Python fallback.

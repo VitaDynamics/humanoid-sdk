@@ -52,38 +52,20 @@ __all__ = [
     "CONTROL_REQUEST_VERSION",
 ]
 
-from .hand import HAND_TOPIC_PREFIX, HandClient
-from .hand_types import (
-    FingerTouchMeta, HandCmd, HandInfo, HandJointCmd, HandJointState,
-    HandSide, HandState, HandTouch, HandType, InhibitReason,
-)
-
-__all__ += [
-    "HAND_TOPIC_PREFIX", "HandClient", "HandCmd", "HandInfo", "HandJointCmd",
-    "HandJointState", "HandSide", "HandState", "HandTouch", "HandType",
-    "InhibitReason", "FingerTouchMeta",
-]
-
 from .body_types import (
-    BODY_SLOTS, BODY_PROTOCOL_VERSION, BodyJointCmd, BodyCmd, BodyCmdAction,
+    BODY_SLOTS, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION, BodyJointCmd, BodyCmd, BodyCmdAction,
     BodyState, BodyJointState, BodyImuState, BodyImuSample, BodyImuLocation,
     BodySampleStatus, JointError, BodySlotRole, BodyJointCapability,
-    BodyMotorIdentity, BodyInfo, RobotInfo, EndEffectorKind, EndEffectorCapability,
-    GripperInfo, GetRobotInfoResponse, ServiceStatus,
+    BodyMotorIdentity, BodyInfo, RobotInfo, EndEffectorCapability,
+    GetRobotInfoResponse, ServiceStatus,
 )
 __all__ += [
-    "BODY_SLOTS", "BODY_PROTOCOL_VERSION", "BodyJointCmd", "BodyCmd", "BodyCmdAction",
+    "BODY_SLOTS", "BODY_CMD_PROTOCOL_VERSION", "BODY_STATE_PROTOCOL_VERSION", "BodyJointCmd", "BodyCmd", "BodyCmdAction",
     "BodyState", "BodyJointState", "BodyImuState", "BodyImuSample", "BodyImuLocation",
     "BodySampleStatus", "JointError", "BodySlotRole", "BodyJointCapability",
-    "BodyMotorIdentity", "BodyInfo", "RobotInfo", "EndEffectorKind", "EndEffectorCapability",
-    "GripperInfo", "GetRobotInfoResponse", "ServiceStatus",
+    "BodyMotorIdentity", "BodyInfo", "RobotInfo", "EndEffectorCapability",
+    "GetRobotInfoResponse", "ServiceStatus",
 ]
-
-from .gripper import GRIPPER_TOPIC_PREFIX, GripperClient
-from .gripper_types import GripperCmd, GripperState, GripperSample, GripperHostTarget, GripperLimitSource, GripperType
-
-__all__ += ["GRIPPER_TOPIC_PREFIX", "GripperClient", "GripperCmd", "GripperState",
-            "GripperSample", "GripperHostTarget", "GripperLimitSource", "GripperType"]
 
 from .state import BodyStateSource, BodyStateSnapshot
 __all__ += ["BodyStateSource", "BodyStateSnapshot"]
@@ -92,3 +74,15 @@ __all__ += ["PullController", "PullStateSource", "PullTransport", "BodyStateArra
 
 from .joy import JOY_TOPIC, JOY_PULL_DEPTH, JoyReader, JoySnapshot
 __all__ += ["JOY_TOPIC", "JOY_PULL_DEPTH", "JoyReader", "JoySnapshot"]
+
+from .end_effector import EndEffectorClient, TouchSetError
+from .end_effector_types import (
+    CommandKey, SampleRef, EndEffectorInfo, EndEffectorState,
+    EndEffectorTouch, EndEffectorTarget, EndEffectorSubmission,
+    EndEffectorSetTouchRequest, EndEffectorSetTouchResponse,
+)
+__all__ += [
+    "EndEffectorClient", "TouchSetError", "CommandKey", "SampleRef",
+    "EndEffectorInfo", "EndEffectorState", "EndEffectorTouch", "EndEffectorTarget",
+    "EndEffectorSubmission", "EndEffectorSetTouchRequest", "EndEffectorSetTouchResponse",
+]

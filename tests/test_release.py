@@ -22,10 +22,22 @@ class ReleaseTest(unittest.TestCase):
             "humanoid_msgs_version", "python_requires", "platforms", "external_version", "control_request_version",
             "command_slots", "state_slots", "session_mode", "pc_session_profile", "body_protocol_version",
             "wheel_sha256", "dependency_release_tag", "dependency_release_repository",
-            "aorta_abi_version", "schema_sha256",
+            "aorta_abi_version", "schema_sha256", "aorta_native_header_sha256",
+            "native_input_provenance",
         })
         self.assertEqual(manifest["python_requires"], "==3.10.*")
         self.assertEqual(manifest["platforms"], ["manylinux_2_35_x86_64", "manylinux_2_35_aarch64"])
+        self.assertEqual(manifest["body_protocol_version"], 3)
+        self.assertEqual(manifest["control_request_version"], 4)
+        self.assertEqual(set(manifest["schema_sha256"]), {
+            "body_cmd", "body_state", "control_ack", "control_request", "control_status",
+            "end_effector_cmd", "end_effector_info", "end_effector_set_touch",
+            "end_effector_state", "end_effector_touch", "get_robot_info",
+            "humanoid_low_state", "joy", "low_cmd", "robot_info",
+        })
+        version = manifest["humanoid_msgs_version"]
+        self.assertIn(f'"vbot-humanoid-msgs=={version}"', (ROOT / "pyproject.toml").read_text())
+        self.assertIn(f"vbot_humanoid_msgs-{version}-py3-none-any.whl", manifest["wheel_sha256"])
         self.assertEqual(sorted(n.split("-")[0] for n in manifest["wheel_sha256"]),
                          ["aorta_msgs", "aorta_sdk", "aorta_sdk", "flatbuffers", "vbot_humanoid_msgs"])
 
@@ -60,14 +72,17 @@ class ReleaseTest(unittest.TestCase):
                 'body_state_subscriber/body_state_subscriber.py',
                 'brainco_hand/README.md',
                 'brainco_hand/brainco_capture.py',
-                'brainco_hand/brainco_hand_external.py',
+                'end_effector/README.md',
+                'end_effector/end_effector_external.py',
+                'end_effector/brainco_revo2.py',
+                'end_effector/agx_gripper.py',
+                'end_effector/linker_l6.py',
+                'end_effector_state_subscriber/end_effector_state_subscriber.py',
                 'external_control/README.md',
                 'external_control/external_control.py',
                 'fixed_stand_pose/README.md',
                 'fixed_stand_pose/fixed_stand_pose.py',
                 'fixed_stand_pose/fixed_stand_profile.json',
-                'gripper/README.md',
-                'gripper/gripper_external.py',
                 'teleop_policy/README.md',
                 'teleop_policy/action17_contract.json',
                 'teleop_policy/teleop_policy.py',
@@ -111,16 +126,17 @@ class ReleaseTest(unittest.TestCase):
                 self.assertEqual((output / relative).read_bytes(), (ROOT / relative).read_bytes())
                 self.assertEqual(manifest["files"][relative],
                                  hashlib.sha256((ROOT / relative).read_bytes()).hexdigest())
-            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py"):
+            for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py",
+                            "brainco_hand/brainco_hand_external.py", "gripper/gripper_external.py"):
                 self.assertFalse((output / "examples" / retired).exists())
                 self.assertNotIn("examples/" + retired, manifest["files"])
             self.assertEqual(sorted(p.name for p in (output / "wheelhouse").glob("locomotion_aorta-*.whl")),
-                             [f"locomotion_aorta-0.2.1-cp310-cp310-{platform}.whl"
+                             [f"locomotion_aorta-0.3.0-cp310-cp310-{platform}.whl"
                               for platform in sorted(compatibility["platforms"])])
             # A single architecture or a pure/raw wheel must not masquerade as the release pair.
-            arm = root / "dist/locomotion_aorta-0.2.1-cp310-cp310-manylinux_2_35_aarch64.whl"
+            arm = root / "dist/locomotion_aorta-0.3.0-cp310-cp310-manylinux_2_35_aarch64.whl"
             arm.unlink()
-            (root / "dist/locomotion_aorta-0.2.1-py3-none-any.whl").write_bytes(b"retired pure wheel")
+            (root / "dist/locomotion_aorta-0.3.0-py3-none-any.whl").write_bytes(b"retired pure wheel")
             missing = Path(temporary) / "missing-arm"
             with mock.patch.object(package_release, "ROOT", root):
                 with self.assertRaisesRegex(ValueError, "missing audited SDK wheel"):

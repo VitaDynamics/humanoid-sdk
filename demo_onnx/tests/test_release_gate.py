@@ -19,29 +19,31 @@ spec.loader.exec_module(module)
 class ReleaseGateTest(unittest.TestCase):
     def test_generic_linux_wheel_is_not_a_release_asset(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "locomotion_aorta-0.2.1-cp310-cp310-linux_x86_64.whl"
+            path = Path(directory) / "locomotion_aorta-0.3.0-cp310-cp310-linux_x86_64.whl"
             with zipfile.ZipFile(path, "w") as wheel:
-                wheel.writestr("locomotion_aorta-0.2.1.dist-info/WHEEL",
+                wheel.writestr("locomotion_aorta-0.3.0.dist-info/WHEEL",
                                "Wheel-Version: 1.0\nTag: cp310-cp310-linux_x86_64\n")
             with self.assertRaisesRegex(ValueError, "audited cp310"):
                 module.inspect(path)
 
     def test_release_requires_exact_current_public_message_version(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "locomotion_aorta-0.2.1-cp310-cp310-manylinux_2_35_x86_64.whl"
-            info = "locomotion_aorta-0.2.1.dist-info"
+            path = Path(directory) / "locomotion_aorta-0.3.0-cp310-cp310-manylinux_2_35_x86_64.whl"
+            info = "locomotion_aorta-0.3.0.dist-info"
             elf = bytearray(20)
             elf[:6] = b"\x7fELF\x02\x01"
             struct.pack_into("<H", elf, 18, 62)
-            for version in ("0.1.5", "0.1.4"):
+            compatibility = json.loads((Path(__file__).resolve().parents[2] / "compatibility.json").read_text())
+            expected = compatibility["humanoid_msgs_version"]
+            for version in (expected, "0.1.5", "0.1.4", "0.0.0+g80a154209739"):
                 with self.subTest(humanoid_msgs=version):
                     with zipfile.ZipFile(path, "w") as wheel:
                         wheel.writestr(info + "/WHEEL",
                                        "Wheel-Version: 1.0\nTag: cp310-cp310-manylinux_2_35_x86_64\n")
                         wheel.writestr(info + "/METADATA", (
-                            "Name: locomotion-aorta\nVersion: 0.2.1\nRequires-Python: ==3.10.*\n"
-                            "Requires-Dist: aorta-sdk==2026.10.20\n"
-                            "Requires-Dist: aorta-msgs==2026.10.20\n"
+                            "Name: locomotion-aorta\nVersion: 0.3.0\nRequires-Python: ==3.10.*\n"
+                            f"Requires-Dist: aorta-sdk=={compatibility['aorta_version']}\n"
+                            f"Requires-Dist: aorta-msgs=={compatibility['aorta_version']}\n"
                             f"Requires-Dist: vbot-humanoid-msgs=={version}\n"
                             "Requires-Dist: flatbuffers==25.12.19\n"
                             "License-File: LICENSE\nLicense-File: NOTICE\nLicense-File: ORT_LICENSE\nLicense-File: FLATBUFFERS_LICENSE\n"))
@@ -58,7 +60,7 @@ class ReleaseGateTest(unittest.TestCase):
                     with mock.patch.object(module.subprocess, "check_output", side_effect=[
                         "(RPATH) Library rpath: [$ORIGIN/.libs]", ".debug_info .symtab", ".debug_info .symtab"
                     ]) as readelf:
-                        if version == "0.1.5":
+                        if version == expected:
                             self.assertEqual(module.inspect(path)["arch"], "x86_64")
                             self.assertEqual(readelf.call_count, 3)
                         else:

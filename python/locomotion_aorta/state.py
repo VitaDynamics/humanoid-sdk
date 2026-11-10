@@ -4,13 +4,14 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+import struct
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
 
-from ._body_codec import decode_body_state
-from .body_types import BodyState
-from .controller import _deadline, _nonempty_text
+from ._body_codec import decode_body_state, _require_body_joints
+from .body_types import BODY_STATE_PROTOCOL_VERSION, BodyState
+from .controller import _deadline, _RuntimeBinding, _nonempty_text
 from ._state_stream import create_state_stream
 
 
@@ -41,7 +42,7 @@ class BodyStateSnapshot:
 
 
 class BodyStateSource:
-    """One state subscriber, no control publishers, service clients or lease."""
+    """Read-only state subscriber and discovery service; no control publisher."""
 
     def __init__(self, *, group: str = "default", node_name: str | None = None) -> None:
         self._group = _nonempty_text(group, "group")
@@ -50,6 +51,7 @@ class BodyStateSource:
         self._condition = threading.Condition()
         self._latest: BodyStateSnapshot | None = None
         self._closed = False
+        self._runtime_binding = _RuntimeBinding()
         self._stream = create_state_stream(
             node_name=node_name or "body-state-" + uuid.uuid4().hex,
             group=group, callback=self._receive)
@@ -60,17 +62,33 @@ class BodyStateSource:
 
     def snapshot(self, timeout: float = 5.0, *,
                  after: BodyStateSnapshot | None = None) -> BodyStateSnapshot:
-        """Wait for a received object other than after, as HandClient.wait_info does."""
+        """Wait for a received object other than after."""
         deadline = _deadline(timeout)
         with self._condition:
             while True:
                 self._ensure_open()
+                if self._runtime_binding.runtime_id is None:
+                    raise ValueError('get_robot_info must establish a valid runtime first')
                 if self._latest is not None and self._latest is not after:
                     return self._latest
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("timed out waiting for body state")
                 self._condition.wait(remaining)
+
+    def get_robot_info(self, timeout: float = 5.0):
+        with self._condition:
+            self._ensure_open()
+            observed_runtime = self._runtime_binding.runtime_id
+        reply = self._stream.get_robot_info(timeout)
+        with self._condition:
+            self._ensure_open()
+            if (not self._runtime_binding.accept_discovery(reply, observed_runtime)
+                    and self._runtime_binding.poisoned):
+                self._latest = None
+                self._condition.notify_all()
+                raise ValueError('robot runtime changed; create a new source')
+        return reply
 
     def close(self) -> None:
         with self._condition:
@@ -83,12 +101,24 @@ class BodyStateSource:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("body state source is closed")
+        if self._runtime_binding.poisoned:
+            raise ValueError('robot runtime changed; create a new source')
 
     def _receive(self, payload, decoder) -> None:
         # Direct host clock reads at callback entry, with no offset conversion.
         monotonic_ns = time.monotonic_ns()
         realtime_ns = time.time_ns()
+        try:
+            payload = bytes(payload)
+            view = decoder(payload)
+            if view.ProtocolVersion() != BODY_STATE_PROTOCOL_VERSION:
+                return
+            runtime = view.RuntimeId()
+            _require_body_joints(view)
+        except (ValueError, TypeError, AttributeError, IndexError, OverflowError, struct.error):
+            return
         with self._condition:
-            if not self._closed:
+            if (not self._closed and not self._runtime_binding.poisoned and self._runtime_binding.runtime_id is not None
+                    and runtime == self._runtime_binding.runtime_id):
                 self._latest = BodyStateSnapshot(payload, decoder, monotonic_ns, realtime_ns)
                 self._condition.notify_all()

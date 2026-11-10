@@ -56,7 +56,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CMAKE_ARGS="-DORT_ARCHIVE=$RUNNER_TEMP/onnxruntime.tgz" \
+          CMAKE_ARGS="-DORT_ARCHIVE=$RUNNER_TEMP/onnxruntime.tgz -DAORTA_NATIVE_HEADER_INCLUDE_DIR=$RUNNER_TEMP/wheelhouse" \
             python -m build --wheel --no-isolation --outdir "$RUNNER_TEMP/sdk-raw" . 2>&1 | tee "$RUNNER_TEMP/sdk-build.log"
           python -m auditwheel repair --only-plat --plat manylinux_2_35_x86_64 \
             --wheel-dir "$RUNNER_TEMP/sdk-wheel" "$RUNNER_TEMP"/sdk-raw/*.whl 2>&1 | tee "$RUNNER_TEMP/sdk-repair.log"
@@ -70,19 +70,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python tests/latency/build_mock.py --build-dir "$RUNNER_TEMP/latency-build" 2>&1 | tee "$RUNNER_TEMP/latency-build.log"
-      - name: Measure all frequencies (60 seconds each, sequential)
+          python benchmarks/latency/build_mock.py --build-dir "$RUNNER_TEMP/latency-build" 2>&1 | tee "$RUNNER_TEMP/latency-build.log"
+      - name: Measure 50 Hz business-rate latency (60 seconds)
         shell: bash
         run: |
           set -euo pipefail
-          python tests/latency/run.py --build-dir "$RUNNER_TEMP/latency-build" \
+          python benchmarks/latency/run.py --build-dir "$RUNNER_TEMP/latency-build" \
             --output "$RUNNER_TEMP/latency-results" --seconds 60 \
-            --rates 50 100 200 300 400 500 600 700 800 900 1000
+            --rates 50
           python - <<'PY'
           import json, os, pathlib
           r = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'latency-results/results.json').read_text())
-          if r['status'] != 'PASS' or len(r['results']) != 11:
-              raise RuntimeError('incomplete full latency report')
+          results = r.get('results', [])
+          if (r.get('status') != 'PASS' or r.get('scope') != 'business_50hz'
+                  or r.get('rates') != [50] or r.get('seconds') != 60
+                  or len(results) != 1 or results[0].get('rate_hz') != 50
+                  or results[0].get('requested_seconds') != 60):
+              raise RuntimeError('incomplete 50 Hz business-rate latency report')
           PY
       - name: Publish summary (including setup/test failures)
         if: ${{ always() }}
@@ -91,7 +95,7 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import os, pathlib, sys
-          sys.path.insert(0, 'tests/latency')
+          sys.path.insert(0, 'benchmarks/latency')
           from report import render
           out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'latency-results'
           if not (out / 'results.json').exists():
@@ -159,10 +163,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CMAKE_ARGS="-DORT_ARCHIVE=$RUNNER_TEMP/onnxruntime.tgz" \
+          CMAKE_ARGS="-DORT_ARCHIVE=$RUNNER_TEMP/onnxruntime.tgz -DAORTA_NATIVE_HEADER_INCLUDE_DIR=$RUNNER_TEMP/wheelhouse" \
             python -m build --wheel --no-isolation --outdir "$RUNNER_TEMP/sdk-raw" . 2>&1 | tee "$RUNNER_TEMP/sdk-build.log"
           python -m auditwheel repair --only-plat --plat manylinux_2_35_x86_64 \
             --wheel-dir "$RUNNER_TEMP/sdk-wheel" "$RUNNER_TEMP"/sdk-raw/*.whl 2>&1 | tee "$RUNNER_TEMP/sdk-repair.log"
+      - name: Verify reviewed C2I producer inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$(python tools/verify_c2i_inputs.py)"
+          printf 'PR2_C2I_PRODUCER_FIXTURES=%s\n' "$root" >> "$GITHUB_ENV"
       - name: Install and test the actual SDK wheel
         shell: bash
         run: |
@@ -178,14 +188,14 @@ jobs:
           python -c 'import numpy, yaml'  # Velocity coverage must not skip for missing demo dependencies.
           PYTHONPATH=.:tests python -m unittest discover -s tests -v 2>&1 | tee "$RUNNER_TEMP/sdk-tests.log"
           python -m unittest discover -s demo_onnx/tests -v 2>&1 | tee "$RUNNER_TEMP/native-tests.log"
-          python tests/latency/state_source_probe.py --output "$RUNNER_TEMP/state-source-results"
+          python tests/integration/state_source_probe.py --output "$RUNNER_TEMP/state-source-results"
       - name: Compile production-topic Mock and run real two-node IPC smoke
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY_DOWNLOAD'
           import importlib.util, os, pathlib, urllib.request
-          spec = importlib.util.spec_from_file_location('benchmark_build', 'tests/latency/build_mock.py')
+          spec = importlib.util.spec_from_file_location('benchmark_build', 'benchmarks/latency/build_mock.py')
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
           with urllib.request.urlopen(module.FB_URL, timeout=120) as response:

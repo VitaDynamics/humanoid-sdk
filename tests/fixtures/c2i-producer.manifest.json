@@ -1,0 +1,123 @@
+{
+  "format_version": 1,
+  "capture": {
+    "bytes": 6202,
+    "sha256": "2b4c715ccfb1185db0f03d6785c361cc1c8deca66f2d378991340191ef831104"
+  },
+  "files": {
+    "brainco/info.fb": {
+      "bytes": 1920,
+      "sha256": "5a362b60f7de9523003f5615d3304cbe04b2aa5ed5e3145b9d87bd5b8306ab15"
+    },
+    "brainco/robot_info.fb": {
+      "bytes": 5280,
+      "sha256": "340f94ac0da027f0bc335a765b3fca10e2115de97627f61325db910baa429f51"
+    },
+    "brainco/touch.fb": {
+      "bytes": 392,
+      "sha256": "fc6ed0642469b8e48b49270be5520b7d8dc53cfbbf7ae3610210cfc03b3849e4"
+    },
+    "brainco/touch_disabled.fb": {
+      "bytes": 392,
+      "sha256": "e32caa7c720847cab3a242c119d2e38b52eda95412daab82700f913449994d52"
+    },
+    "brainco/touch_new.fb": {
+      "bytes": 392,
+      "sha256": "594db058fc943d023d5f159c49367c9b8c30d9ef1133b47671eb2aa7ea60235b"
+    },
+    "linker/info.fb": {
+      "bytes": 568,
+      "sha256": "241428b34b6feeee09743f16f185a027ab3acf3ffd71c25bc770aed3a68ab49f"
+    },
+    "linker/next_position.fb": {
+      "bytes": 288,
+      "sha256": "732a30554559921234cee024e1b7c6a42e64200a38cf7d94b02b255627efb13d"
+    },
+    "linker/nonzero_fault.fb": {
+      "bytes": 288,
+      "sha256": "44e856e2021afa3b2508ca26d8db54450dbdd9426c376eea0df0b375f1bf8bc3"
+    },
+    "linker/permission_revoked.fb": {
+      "bytes": 288,
+      "sha256": "18c99a33f35ce67057143ba2537413fd9fc308bf286c31d9ee009bc8ade344b8"
+    },
+    "linker/position.fb": {
+      "bytes": 288,
+      "sha256": "612d9b762d862ef12311b52cdecb2cd00fe7f1fa0d977045ed3671b24ffa9745"
+    },
+    "linker/position_stale.fb": {
+      "bytes": 288,
+      "sha256": "3e7c782632c6e854f0156a5c06e67c63e82502e4656a50a1d2c275adbdbab474"
+    },
+    "linker/robot_info.fb": {
+      "bytes": 3928,
+      "sha256": "2631620851e9bc08c25bc90f87c3165f4df5c194758957583b0613e7116009b7"
+    },
+    "linker/temperature.fb": {
+      "bytes": 288,
+      "sha256": "2a6a5779bdf2d938c44fe227574a0f60ae19de3cce8bdfe31ce670f180e09dda"
+    },
+    "linker/temperature_after_fault.fb": {
+      "bytes": 288,
+      "sha256": "12ecca3987d0950c7c281dcbb5e8c99e97abaeaf2a7bcad68d254f70565d5032"
+    },
+    "linker/zero_fault.fb": {
+      "bytes": 288,
+      "sha256": "1bdedd8b35555a941351b3abca84672b4b0d45b9edf5ccdeaa926f261fa4c8af"
+    },
+    "static/left_info.fb": {
+      "bytes": 632,
+      "sha256": "c3d6bcecbb4924fd09856ddc8a6254192b42cd9e0fde8079bff577acd6a99170"
+    },
+    "static/left_info_republished.fb": {
+      "bytes": 640,
+      "sha256": "fad375eaef8251a253802871467d467e9102ea081755a4ee98eac8561c45e853"
+    },
+    "static/left_new_runtime_info.fb": {
+      "bytes": 632,
+      "sha256": "7836b24af873c6b003668ba221e967cfe2b8023b33cbafdc192b042aada0e1af"
+    },
+    "static/left_next_state.fb": {
+      "bytes": 280,
+      "sha256": "a6d9a23e1ce88024c79a93b9c1bea3ef0a6ae9dab7bb9bdc8a718d62b5871733"
+    },
+    "static/left_state.fb": {
+      "bytes": 280,
+      "sha256": "dd3bfd6b5d51010e542ae4a287c1dbfcac63ef1c1f7639dfa095e9cb84f57961"
+    },
+    "static/new_runtime_robot_info.fb": {
+      "bytes": 4528,
+      "sha256": "d05543fb2f6cf30ebebe4db2978ff40a6580b614ef09e0fe5c39b836c680c2e0"
+    },
+    "static/right_info.fb": {
+      "bytes": 656,
+      "sha256": "de12613da6b3f360af9c474b71e0dfba9133dddf669ebf472b58e4a7a4233770"
+    },
+    "static/right_inhibited.fb": {
+      "bytes": 280,
+      "sha256": "c1d484ca849c7f51f994ff39fefbb55997e90f36a2e65722916f30f94a4da566"
+    },
+    "static/right_state.fb": {
+      "bytes": 280,
+      "sha256": "7a01ac8148bb314fd553270186ac4b9e50e1494bfb51de819a8bcbea23cc92f4"
+    },
+    "static/robot_info.fb": {
+      "bytes": 4528,
+      "sha256": "ba13a7a052dcc7216455f4adc3aeded8091df082216582a7764edc39e99ac5d9"
+    }
+  },
+  "producer": {
+    "repository": "VitaDynamics/vita-robot",
+    "target": "//src/application/locomotion/humanoid:end_effector_command_runtime_test",
+    "commit": "9458362e0666ad25cdd4128e21f027242e0d6204",
+    "tree": "c5a3137ddd3b53ba848fbdcce90c7190b91bd5a2",
+    "elf_sha256": "24e6556a85b2977b19a71ce1a31f9c30491d07d3df51b604ae0e820fe39d42cc",
+    "invocation_sha256": "0bffee5e42f494adf00abb0cc895a4546a54e786fda33f457279934a1d616e24"
+  },
+  "schema_sha256": {
+    "end_effector_info": "77dff3e0681e9cfd3c7ff26d9d882eea5cc580da31dbd7c62beb9d863b1f6401",
+    "end_effector_state": "9fa8fccc64698b59806c5961007582fda187ccba916d1d28324828a97beee366",
+    "end_effector_touch": "0078dcd78ec93b81a0d69b64894e137a188459c9933b8058276a80fbfd063acf",
+    "get_robot_info": "324d7a8c31ca14b05f15ff620a3751ef28a62802d17fd321c73d56cd46c2a5a7"
+  }
+}

@@ -3,14 +3,16 @@
 对应机器人 action 14/HUMANOID_TRACKING 的模型合同，在 SDK 内推理并以 **EXTERNAL** 输出31槽命令；不触发机器人内部 action 14。模型由使用者提供，需匹配 metadata；直播需要有效 RobotInfo/反馈与现场确认。
 
 ```bash
-python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[wbc-tracking-demo]==0.2.1'
+python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[wbc-tracking-demo]==0.3.0'
 python examples/wbc_tracking_mode/wbc_tracking_mode.py --help
 python examples/wbc_tracking_mode/wbc_tracking_mode.py --model /path/to/actor_g1.onnx --dry-run --steps 100 --log /new/path/wbc-offline.jsonl
 ```
 
 `--dry-run` 合成反馈，不连接机器人；`--replay-mcap` 使用匹配BFBS的公共 BodyState；`--live --confirm-motion` 才进入控制。`--motion` 为可选命名关节 NPZ，省略时保持平衡站姿参考；`--duration` 限定直播时间。日志 `vita.wbc_tracking.v1` 含推理/观测及实际 session/sequence；没有 `transition_duration` 字段，不把 applied 时间当设备 ACK。
 
-## 0.2.1 已知问题与后续
+## 旧 0.2.1 已知问题记录
+
+以下保留历史局限和当时的退役计划。当前0.3.0候选仍包含此入口；版本更新本身不代表问题已修复或已实施删除。
 
 WBC 当前不会根据驱动关节的 `error_code` 拒绝策略输入。若关节 TIMEOUT/故障后仍有
 有限的缓存 q/dq，且整帧时间持续推进并通过已有新鲜度检查，这些数值仍可能进入策略；
@@ -58,7 +60,8 @@ Profile: `wbc_tracking_asample.json`; log schema: `vita.wbc_tracking.v1`.
 Robot action 14/HUMANOID_TRACKING and `groot_wbc.tracking_contract.v1` metadata
 are unchanged. This SDK program still requests **EXTERNAL**.
 
-Use matching SDK 0.2.1 and finalized 0.1.5 bindings with `wbc-tracking-demo`.
+Use SDK 0.3.0 and the exact bindings in the root `compatibility.json`, with
+`wbc-tracking-demo`. Release availability remains gated by the root README.
 Model construction lazily loads the built-in C++ ORT 1.20.1 Session, with the
 existing `--threads` intra-op setting (default 1) and inter-op=1. There is no
 runtime Python ORT dependency or fallback.

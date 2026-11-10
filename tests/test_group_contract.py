@@ -35,6 +35,12 @@ class Node:
         self.endpoints.append('publisher')
         raise AssertionError('unexpected control publisher')
 
+    def create_owned(self, *args, **kwargs):
+        return S(close=lambda: None)
+
+    def create_client_typed(self, *args, **kwargs):
+        raise AssertionError('node-retained info clients are not allowed')
+
     def close(self):
         self.closed = True
 
@@ -42,8 +48,12 @@ class Node:
 class GroupContractTest(unittest.TestCase):
     def setUp(self):
         Node.instances = []
-        aorta = S(Node=Node, QoS=S(sensor_data=lambda: None, state_update=lambda: None))
-        decoder = S(BodyState=S(GetRootAs=lambda value: value))
+        aorta = S(Node=Node, Client=lambda node, *args, **kwargs: node.create_owned(*args, **kwargs),
+                  TypedClient=lambda node, raw, decoder: raw,
+                  ClientOptions=lambda **kwargs: S(**kwargs),
+                  QoS=S(sensor_data=lambda: None, state_update=lambda: None))
+        body_state = S(GetRootAs=lambda value: value, RuntimeId=lambda: None, Joints=lambda: None)
+        decoder = S(BodyState=body_state)
         p = patch('locomotion_aorta._state_stream.importlib.import_module',
                   side_effect=lambda name: aorta if name=='aorta'else decoder)
         p.start();self.addCleanup(p.stop)
@@ -78,8 +88,9 @@ class GroupContractTest(unittest.TestCase):
     def test_override_mismatch_rejects_before_any_subscriber_or_control_publisher(self):
         with patch.dict(os.environ,{'AORTA_GROUP':'robot-B'},clear=True):
             for kind in ('callback','pull','control'):
-                with self.subTest(kind=kind),self.assertRaises(ValueError)as failure:
-                    self.create(kind,'robot-A')
+                with self.subTest(kind=kind):
+                    with self.assertRaises(ValueError)as failure:
+                        self.create(kind,'robot-A')
                 message=str(failure.exception)
                 self.assertIn("requested='robot-A'",message)
                 self.assertIn("actual='robot-B'",message)

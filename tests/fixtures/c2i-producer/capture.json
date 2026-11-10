@@ -1,0 +1,114 @@
+{
+  "producer": {
+    "repository": "VitaDynamics/vita-robot",
+    "target": "//src/application/locomotion/humanoid:end_effector_command_runtime_test",
+    "commit": "9458362e0666ad25cdd4128e21f027242e0d6204",
+    "tree": "c5a3137ddd3b53ba848fbdcce90c7190b91bd5a2",
+    "elf_sha256": "24e6556a85b2977b19a71ce1a31f9c30491d07d3df51b604ae0e820fe39d42cc",
+    "invocation_sha256": "0bffee5e42f494adf00abb0cc895a4546a54e786fda33f457279934a1d616e24"
+  },
+  "schema_sha256": {
+    "end_effector_info": "77dff3e0681e9cfd3c7ff26d9d882eea5cc580da31dbd7c62beb9d863b1f6401",
+    "end_effector_state": "9fa8fccc64698b59806c5961007582fda187ccba916d1d28324828a97beee366",
+    "end_effector_touch": "0078dcd78ec93b81a0d69b64894e137a188459c9933b8058276a80fbfd063acf",
+    "get_robot_info": "324d7a8c31ca14b05f15ff620a3751ef28a62802d17fd321c73d56cd46c2a5a7"
+  },
+  "schema_evidence": {
+    "bfbs": {
+      "end_effector_info": {
+        "path": "/mnt/cache/fangda.zhu/migration/work/SDK-C2I-35CE-CAPTURE-20261110/bazel-user/c6ea4f1105586fb10842e372eb600390/execroot/_main/bazel-out/x86_64-opt/bin/external/aorta_schemas_internal~/message/schemas/topic/lowlevel/end_effector_info.bfbs",
+        "bytes": 11584,
+        "sha256": "77dff3e0681e9cfd3c7ff26d9d882eea5cc580da31dbd7c62beb9d863b1f6401",
+        "linked_elf_exact_byte_offsets": [
+          36224992,
+          49189752,
+          81553491
+        ]
+      },
+      "end_effector_state": {
+        "path": "/mnt/cache/fangda.zhu/migration/work/SDK-C2I-35CE-CAPTURE-20261110/bazel-user/c6ea4f1105586fb10842e372eb600390/execroot/_main/bazel-out/x86_64-opt/bin/external/aorta_schemas_internal~/message/schemas/topic/lowlevel/end_effector_state.bfbs",
+        "bytes": 8896,
+        "sha256": "9fa8fccc64698b59806c5961007582fda187ccba916d1d28324828a97beee366",
+        "linked_elf_exact_byte_offsets": [
+          36216064,
+          49201354,
+          76856856
+        ]
+      },
+      "end_effector_touch": {
+        "path": "/mnt/cache/fangda.zhu/migration/work/SDK-C2I-35CE-CAPTURE-20261110/bazel-user/c6ea4f1105586fb10842e372eb600390/execroot/_main/bazel-out/x86_64-opt/bin/external/aorta_schemas_internal~/message/schemas/topic/lowlevel/end_effector_touch.bfbs",
+        "bytes": 8136,
+        "sha256": "0078dcd78ec93b81a0d69b64894e137a188459c9933b8058276a80fbfd063acf",
+        "linked_elf_exact_byte_offsets": [
+          36287424,
+          76865770
+        ]
+      },
+      "get_robot_info": {
+        "path": "/mnt/cache/fangda.zhu/migration/work/SDK-C2I-35CE-CAPTURE-20261110/bazel-user/c6ea4f1105586fb10842e372eb600390/execroot/_main/bazel-out/x86_64-opt/bin/external/aorta_schemas_internal~/message/schemas/service/humanoid_locomotion/get_robot_info.bfbs",
+        "bytes": 15048,
+        "sha256": "324d7a8c31ca14b05f15ff620a3751ef28a62802d17fd321c73d56cd46c2a5a7",
+        "linked_elf_exact_byte_offsets": [
+          36200992,
+          49210268,
+          81572991
+        ]
+      }
+    },
+    "elf": {
+      "path": "/mnt/cache/fangda.zhu/migration/work/SDK-C2I-35CE-CAPTURE-20261110/bazel-user/c6ea4f1105586fb10842e372eb600390/execroot/_main/bazel-out/x86_64-opt/bin/src/application/locomotion/humanoid/end_effector_command_runtime_test",
+      "bytes": 202952648,
+      "sha256": "24e6556a85b2977b19a71ce1a31f9c30491d07d3df51b604ae0e820fe39d42cc"
+    },
+    "invocation": {
+      "path": "/mnt/cache/fangda.zhu/migration/work/SDK-C2I-35CE-CAPTURE-20261110/evidence/native-invocation.json",
+      "bytes": 1743,
+      "sha256": "0bffee5e42f494adf00abb0cc895a4546a54e786fda33f457279934a1d616e24"
+    },
+    "boundary": "Linked exact BFBS bytes match the four SDK pins. Runtime schema registration/selection for each export was not independently instrumented; actual three producer scenarios and four service-call roundtrips passed."
+  },
+  "source_capture": {
+    "path": "/mnt/cache/fangda.zhu/migration/work/SDK-C2I-35CE-CAPTURE-20261110/bazel-user/c6ea4f1105586fb10842e372eb600390/execroot/_main/bazel-out/x86_64-opt/testlogs/src/application/locomotion/humanoid/end_effector_command_runtime_test/test.outputs/outputs.zip",
+    "bytes": 12728,
+    "sha256": "8f432b89096f533ddc43132988169194fc6d552c291c2d098d9a6bec34e38f98"
+  },
+  "source_identity": {
+    "path": "src/application/locomotion/humanoid/test/end_effector_command_runtime_test.cpp",
+    "blob": "c3cf16980dcd52f09357ef92b6a297cfa2c575ea",
+    "bytes": 221841,
+    "sha256": "8c4ea94106b0a9f7136529e0eae1dae1597ee0f9eaeaea3ba26cfa55a2ffbb08",
+    "schema_commit": "35ce9eb82d5b707cebcf5943504b6beb52e52d21",
+    "module_sha256": "b935bfd2352bebaff58733a20c0d93bf0ff4dc7cb7afcbb171961e780ce4fdb7",
+    "lock_sha256": "c108662b2a25e65122cb3b5883829d6b9c55a53273df246ea8c2279057bef14a"
+  },
+  "evidence_status": {
+    "raw_capture_status": "CAPTURED_25_FULL_ORIGINAL_PRODUCER_TARGET_PASS",
+    "producer_target_status": "PASSED",
+    "native_rc": 0,
+    "producer_case_counts": {
+      "TOTAL": 70,
+      "PASSED": 70,
+      "FAILED": 0,
+      "SKIPPED": 0
+    },
+    "export_cases": {
+      "ExportsStaticTypedSequenceForSdk": true,
+      "ExportsBoundedLinkerTypedSequenceForSdk": true,
+      "NativeTouchCacheClearExportsSameIdDisableAndNewPoll": true
+    },
+    "service_replies_in_25": [
+      "static/robot_info.fb",
+      "static/new_runtime_robot_info.fb",
+      "linker/robot_info.fb",
+      "brainco/robot_info.fb"
+    ],
+    "xml": {
+      "path": "/mnt/cache/fangda.zhu/migration/work/SDK-C2I-35CE-CAPTURE-20261110/bazel-user/c6ea4f1105586fb10842e372eb600390/execroot/_main/bazel-out/x86_64-opt/testlogs/src/application/locomotion/humanoid/end_effector_command_runtime_test/test.xml",
+      "bytes": 21439,
+      "sha256": "42eef415eb151d1ff5b7e9f247ab865be5d0d6a31d0dc82aca712399d55f03df"
+    },
+    "native_completed_at": "2026-11-10T22:47:44.187908+08:00",
+    "note": "Actual production projector/serializer/service over original synthetic/native test inputs; not physical device/HIL, SDK consumer/ABI/strict or full122 acceptance."
+  },
+  "capture_metadata_origin": "Assembled from actual invocation/ELF/XML/undeclared outputs after execution; 25 FB bytes copied without rewriting. Ancillary original linker/sequence.txt retained outside the consumer25 directory."
+}

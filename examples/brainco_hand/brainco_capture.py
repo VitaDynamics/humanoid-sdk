@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only BrainCo capture or offline MCAP export; no control requests."""
+"""Read-only new EE capture (historical executable filename) or offline MCAP export; no control requests."""
 import argparse
 import json
 from pathlib import Path

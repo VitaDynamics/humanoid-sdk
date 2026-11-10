@@ -6,6 +6,8 @@ import subprocess
 import sys
 import unittest
 
+import locomotion_aorta
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BLOCK_OPTIONAL = '''
@@ -30,8 +32,10 @@ else:
 
 class OptionalPolicyDependenciesTest(unittest.TestCase):
     def run_without(self, missing, *args):
+        # Preserve the SDK under test, including its installed native extension.
+        sdk_root = Path(locomotion_aorta.__file__).resolve().parent.parent
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1',
-                   PYTHONPATH=os.pathsep.join(str(ROOT/p) for p in ('python', 'tests', '.')))
+                   PYTHONPATH=os.pathsep.join(map(str, (sdk_root, ROOT/'tests', ROOT))))
         return subprocess.run([sys.executable, '-c', BLOCK_OPTIONAL, json.dumps(missing), *args],
                               cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
 
