@@ -402,7 +402,7 @@ class ExamplesSmokeTest(unittest.TestCase):
             external_control._body_target_slots(missing)
         unavailable = list(info.joints)
         unavailable[0] = replace(unavailable[0], supported_fields=0)
-        with self.assertRaisesRegex(ValueError, 'position capability or limit unavailable'):
+        with self.assertRaisesRegex(ValueError, 'position capability unavailable'):
             external_control._body_target_slots(replace(info, joints=tuple(unavailable)))
         bad_zero = list(info.joints)
         bad_zero[0] = replace(bad_zero[0], q_min=1.0, q_max=2.0)
@@ -414,6 +414,14 @@ class ExamplesSmokeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'no target slots'):
             external_control._validate_body_state(body_array_frame(state), body_info=info,
                                                   require_stationary=True, target_slots=())
+
+    def test_body_joint_order_does_not_require_position_limits(self):
+        info = example_robot_info_reply().info.body
+        joint = replace(info.joints[0], valid_limits=info.joints[0].valid_limits & ~1,
+                        q_min=math.nan, q_max=math.nan)
+        info = replace(info, joints=(joint,) + info.joints[1:])
+        self.assertEqual(body_joint_order(info, required_names=(info.joint_names[0],)),
+                         info.joint_names)
 
     def test_external_example_runs_full_body_round_trip_and_enters_passive(self):
         clock = FakeClock()

@@ -1,4 +1,3 @@
-import math
 import operator
 import os
 import threading
@@ -62,6 +61,8 @@ class ControllerClosedError(ExternalControlError):
 
 _T = TypeVar("_T")
 _MAX_UINT64 = (1 << 64) - 1
+# Round-to-nearest float32 overflows at this midpoint above its largest value.
+_FLOAT32_OVERFLOW_THRESHOLD = float.fromhex('0x1.ffffffp+127')
 
 
 @dataclass(frozen=True, slots=True)
@@ -945,15 +946,10 @@ def _validate_body_targets(command: BodyCmd, body_info: BodyInfo | None,
         cap = body_info.joints[i]
         if cap.supported_fields & required_fields != required_fields:
             raise InvalidCommandError(f'BodyCmd target capability unavailable: {i}')
-        if required_fields & _BODY_FIELD_Q and not cap.valid_limits & _BODY_FIELD_Q:
-            raise InvalidCommandError(f'BodyCmd target q limit unavailable: {i}')
-        # A missing non-Q range is unknown; native admission remains authoritative.
+        # Robot EXTERNAL owns device ranges; only field declaration is checked here.
         for bit, name in enumerate(fields):
             value = getattr(joint, name)
             field_bit = 1 << bit
-            if cap.valid_limits & field_bit:
-                if not getattr(cap, name + '_min') <= value <= getattr(cap, name + '_max'):
-                    raise InvalidCommandError(f'BodyCmd target {name} outside limit: {i}')
             if not required_fields & field_bit and value != 0.0:
                 raise InvalidCommandError(f'BodyCmd undeclared field is not neutral: {i}.{name}')
 
@@ -982,5 +978,5 @@ def _validate_command(command: BodyCmd) -> None:
             value = getattr(motor, field)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise InvalidCommandError(f"joints[{index}].{field} must be numeric")
-            if not math.isfinite(value):
-                raise InvalidCommandError(f"joints[{index}].{field} must be finite")
+            if not -_FLOAT32_OVERFLOW_THRESHOLD < value < _FLOAT32_OVERFLOW_THRESHOLD:
+                raise InvalidCommandError(f"joints[{index}].{field} must be finite float32")
