@@ -1,23 +1,17 @@
-# 本体 EXTERNAL 轨迹 demo
-
-仅吊装：从当前测得姿态过渡到零姿态，再回到保留肘部间隙的返回目标；会控制公共31槽中已安装的30关节。它不是普通站立/行走按钮，现有速度/增益/稳定性检查沿用代码。需配置和Info一致、反馈静止且有效、现场授权与急停。
+# 本体 EXTERNAL 示例
 
 ```bash
 python examples/external_control/external_control.py --help
 ```
 
-完成现场确认后才执行：
+此例程会请求 EXTERNAL 并移动本体，运行需要 --confirm-motion 和另行现场授权。先读取真实 BodyInfo／状态；使用公共 31 槽，踝命令和反馈为 PR，不是 A/B 电机角。目标／增益以当前脚本和配置为准，不复制旧 42 槽归零命令。
 
-```bash
-python examples/external_control/external_control.py --group default --timeout 5 --confirm-motion
-```
+控制进入为发现→PREPARE→COMMIT→实际拥有的 RUNNING。SDK 检查结构、有限 float32、目标／字段、MOCK、能力和身份；设备范围留给服务器，普通 q/tau/kp/kd 裁剪、dq 越界拒绝。不会因为去掉 SDK 设备范围检查就绕过服务器安全门。
 
-先输出preflight/轨迹时长和肘部返回目标，再请求EXTERNAL；丢失所有权、拒绝、反馈异常会中断。原CLI只有group/timeout/confirm-motion，不新增速度或轨迹参数。正常/异常收尾按原finally CANCEL并核PASSIVE；没有新增JSONL参数。
+## 公共前提
 
-本轮同步的现场命令默认值：公共槽 29 的 `DEMO_KP=50`，槽 18/25/29/30 的 `FIXED_STAND_KD=2`；其他值保留。统一末端示例使用的 `FixedStandPose` 另从其 JSON profile 读取左右肘 `kp=150、kd=1`，两组默认值不要混用。这些是示例参数，未修改设备标定或硬件限制。
+使用匹配 bundle 的 CPython 3.10 venv；依赖以根 `compatibility.json` 为准。PC 在创建 Node 前设置私有 `ZENOH_SESSION_CONFIG_URI`，并让 `AORTA_GROUP` 与 `--group` 一致。S100 本机方式先 source `/app/script/env.sh` 再激活 venv。
 
-## 环境与安全
+完整协议、单位、控制时序与图示见[SDK 手册](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh)；新版页面以正式发布回读为准。
 
-以下命令从 SDK 仓库或离线发布包根目录运行。使用已安装当前兼容 wheel 的独立 CPython 3.10 venv；依赖版本以根目录 `compatibility.json` 为准。机器人上的 SDK 主机先 source `/app/script/env.sh`，再激活 venv；PC 使用部署方提供的 peer 配置。设置 `ZENOH_SESSION_CONFIG_URI` 和与机器人一致的 `--group`，不复制认证内容。安装与 `--help` 不代表已获得运动许可。
-
-现场运动须单独授权并确认吊装/支撑、活动空间、夹点与可用急停；由现场人员操作。`--confirm-motion` 仅为程序确认参数。异常先停测试，由现场人员使用物理急停，不自动重试、清错或重启。运动例程正常退出走 CANCEL→PASSIVE；PASSIVE 可能使负载下落，客户端崩溃不能保证释放控制权。只读与离线模式不进入 EXTERNAL，不需要或发送 CANCEL。
+运动须单独授权并确认当前现场条件。ACK accepted 不是 RUNNING，publish 返回不是到位。正常退出 CANCEL→PASSIVE 可能使负载下落；异常、超时或退出不完整时不自动重试。

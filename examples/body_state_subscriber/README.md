@@ -1,16 +1,13 @@
-# 一次 BodyState 只读订阅
-
-读取公共31槽状态，不请求EXTERNAL、不发BodyCmd，与任何运动动作号无关。需要部署方授权连接、匹配peer/group且机器人持续发布BodyState；不要求进入运动状态。没有额外demo依赖。
+# 本体状态只读例程
 
 ```bash
-python examples/body_state_subscriber/body_state_subscriber.py --help
-python examples/body_state_subscriber/body_state_subscriber.py --group default --timeout 5
+python examples/body_state_subscriber/body_state_subscriber.py --group "$AORTA_GROUP" --timeout 5
 ```
 
-输出一帧 `state_id/ts_state_real_us`，逐关节打印 `error_code/q/dq`，随后关闭状态源。`--timeout`默认为5秒，超时要如实报告，不代表机器人没有故障。只读无需CANCEL；终端停止不会为别的控制方释放租约，物理急停仍由现场人员负责。
+先通过 GetRobotInfo 绑定 runtime，再读取一帧公开 31 槽 BodyState。不创建控制 publisher，不申请租约、不发运动或 CANCEL。核对 runtime、状态身份／时间、有限数值与错误状态；一帧返回不代表长期稳定或新硬件采样。独立快照 API 为 BodyStateSource.get_robot_info → snapshot → BodyStateSnapshot.body_state；PullStateSource 使用 wait_state。
 
-## 环境与安全
+## 公共前提
 
-以下命令从 SDK 仓库或离线发布包根目录运行。使用已安装当前兼容 wheel 的独立 CPython 3.10 venv；依赖版本以根目录 `compatibility.json` 为准。机器人上的 SDK 主机先 source `/app/script/env.sh`，再激活 venv；PC 使用部署方提供的 peer 配置。设置 `ZENOH_SESSION_CONFIG_URI` 和与机器人一致的 `--group`，不复制认证内容。安装与 `--help` 不代表已获得运动许可。
+使用匹配 bundle 的 CPython 3.10 venv；依赖以根 `compatibility.json` 为准。PC 在创建 Node 前设置私有 `ZENOH_SESSION_CONFIG_URI`，并让 `AORTA_GROUP` 与 `--group` 一致。S100 本机方式先 source `/app/script/env.sh` 再激活 venv。
 
-现场运动须单独授权并确认吊装/支撑、活动空间、夹点与可用急停；由现场人员操作。`--confirm-motion` 仅为程序确认参数。异常先停测试，由现场人员使用物理急停，不自动重试、清错或重启。运动例程正常退出走 CANCEL→PASSIVE；PASSIVE 可能使负载下落，客户端崩溃不能保证释放控制权。只读与离线模式不进入 EXTERNAL，不需要或发送 CANCEL。
+完整协议、单位、控制时序与图示见[SDK 手册](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh)；新版页面以正式发布回读为准。

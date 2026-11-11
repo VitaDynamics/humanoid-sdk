@@ -1,18 +1,17 @@
 # FIXED_STAND 姿态辅助模块
 
-这是供统一末端 demo调用的 `FixedStandPose`，**没有独立CLI，也不会自己连接/进入EXTERNAL**。`fixed_stand_profile.json` 保存已有机器人零姿态增益/过渡合同，不修改设备或动作号；不能用它替代机器人现有FIXED_STAND动作。
-
-本轮现场参数将左右肘关节的 profile 增益设为 `kp=150、kd=1`，按实际 BodyInfo 的关节名映射。文件保留的内部索引 17/21 不是公共槽号；原来源元数据用于追溯基线，150 是本轮现场覆盖值。这是 SDK 示例的命令默认值，不会修改机器人上的配置文件；使用前仍须核对实际关节与现场支撑条件。
+`fixed_stand_pose.py` 是末端例程复用的本体姿态与前置检查辅助模块，不是独立可执行的通用归零工具。调用方从当前 BodyInfo／BodyState 和已确认配置构造完整 31 槽保持目标；MOCK 和不支持字段不伪装可控。
 
 ```bash
-python -c 'from examples.fixed_stand_pose.fixed_stand_pose import FixedStandPose; print(FixedStandPose.__name__)'
 python examples/end_effector/end_effector_external.py --help
 ```
 
-使用方必须传实际BodyInfo，核公共31个唯一名字、populated关节有效q范围且零姿态在范围内。`measured/check/duration/position/command` 辅助测量姿态与零姿态之间的既有插值；不新增范围或标定。它没有独立日志/退出命令；实际运动入口、日志、急停与CANCEL→PASSIVE由统一末端 demo管理。
+--ee-only 会省略 Body 输出；其他调用方式是否保持或改变本体由实际调用链决定。仅导入模块不产生运动，运行控制例程仍需独立授权。
 
-## 环境与安全
+## 公共前提
 
-以下命令从 SDK 仓库或离线发布包根目录运行。使用已安装当前兼容 wheel 的独立 CPython 3.10 venv；依赖版本以根目录 `compatibility.json` 为准。机器人上的 SDK 主机先 source `/app/script/env.sh`，再激活 venv；PC 使用部署方提供的 peer 配置。设置 `ZENOH_SESSION_CONFIG_URI` 和与机器人一致的 `--group`，不复制认证内容。安装与 `--help` 不代表已获得运动许可。
+使用匹配 bundle 的 CPython 3.10 venv；依赖以根 `compatibility.json` 为准。PC 在创建 Node 前设置私有 `ZENOH_SESSION_CONFIG_URI`，并让 `AORTA_GROUP` 与 `--group` 一致。S100 本机方式先 source `/app/script/env.sh` 再激活 venv。
 
-现场运动须单独授权并确认吊装/支撑、活动空间、夹点与可用急停；由现场人员操作。`--confirm-motion` 仅为程序确认参数。异常先停测试，由现场人员使用物理急停，不自动重试、清错或重启。运动例程正常退出走 CANCEL→PASSIVE；PASSIVE 可能使负载下落，客户端崩溃不能保证释放控制权。只读与离线模式不进入 EXTERNAL，不需要或发送 CANCEL。
+完整协议、单位、控制时序与图示见[SDK 手册](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh)；新版页面以正式发布回读为准。
+
+运动须单独授权并确认当前现场条件。ACK accepted 不是 RUNNING，publish 返回不是到位。正常退出 CANCEL→PASSIVE 可能使负载下落；异常、超时或退出不完整时不自动重试。
