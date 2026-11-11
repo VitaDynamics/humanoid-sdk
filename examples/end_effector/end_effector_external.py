@@ -23,6 +23,7 @@ from locomotion_aorta.end_effector_types import (
 )
 
 BODY_HOLD_POSITION_TOLERANCE_RAD = 0.1
+BODY_MEASURED_LIMIT_TOLERANCE_RAD = math.radians(3.0)
 EE_POSITION_FRESHNESS_WINDOW_S = 1.0
 
 def _load_sibling_module(name, relative_path):
@@ -120,10 +121,16 @@ def run_external(controller, command_loop, options, *, body,
             plan = module.FixedStandPose(info)  # Reject all bad/missing zero limits before PREPARE.
         initial = body._wait_for_stationary_body_state(
             controller, body_info=info, timeout=timeout, sleep=sleep, monotonic=monotonic,
-            target_slots=hold_slots)
-        pose = tuple(float(q) if i in hold_slots else 0.0 for i, q in enumerate(initial.q))
-        if plan is not None:
-            plan.measured(initial)
+            target_slots=hold_slots, position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
+        if plan is None:
+            pose = tuple(min(max(float(q), info.joints[i].q_min), info.joints[i].q_max)
+                         if i in hold_slots else 0.0 for i, q in enumerate(initial.q))
+            for i in hold_slots:
+                if pose[i] != float(initial.q[i]):
+                    emit(f'body hold target clamped: {info.joint_names[i]} '
+                         f'measured={float(initial.q[i]):.6f} target={pose[i]:.6f} rad')
+        else:
+            pose = plan.measured(initial, position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
         hold = body._position_command(pose)
         if body_gains == 'zero':
             hold = replace(hold, joints=tuple(replace(j, kp=0.0, kd=0.0, dq=0.0, tau=0.0)
@@ -150,8 +157,13 @@ def run_external(controller, command_loop, options, *, body,
             # Use the latest real sample after the owned RUNNING transition,
             # never the model pose or a pre-entry commanded pose.
             initial = controller.wait_state(timeout)
-            body._validate_body_state(initial, body_info=info, require_stationary=False, target_slots=hold_slots)
-            pose = plan.measured(initial)
+            body._validate_body_state(initial, body_info=info, require_stationary=False, target_slots=hold_slots,
+                                      position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
+            pose = plan.measured(initial, position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
+            for i in hold_slots:
+                if pose[i] != float(initial.q[i]):
+                    emit(f'body zero start clamped: {info.joint_names[i]} '
+                         f'measured={float(initial.q[i]):.6f} target={pose[i]:.6f} rad')
         last_id = initial.state_id if initial is not None else None
         last_change = monotonic()
         next_publish = monotonic()
@@ -177,7 +189,9 @@ def run_external(controller, command_loop, options, *, body,
                     next_publish = monotonic() + body.PERIOD_S
                 return None
             state = controller.wait_state(timeout)
-            body._validate_body_state(state, body_info=info, require_stationary=False, target_slots=hold_slots)
+            body._validate_body_state(
+                state, body_info=info, require_stationary=False, target_slots=hold_slots,
+                position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
             now = monotonic()
             last_id, last_change, stale = _body_sample_progress(
                 state.state_id, last_id, last_change, now, body.LOWSTATE_WINDOW_S)
@@ -207,7 +221,7 @@ def run_external(controller, command_loop, options, *, body,
                 command = replace(hold, input_state_id=state.state_id,
                                   input_state_ts_real_us=state.ts_state_real_us)
             else:
-                plan.measured(state)
+                plan.measured(state, position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
                 q = pose if target is None else target(now) if callable(target) else target
                 command = plan.command(q, state)
             published = controller.publish(command, target_names=hold_names,

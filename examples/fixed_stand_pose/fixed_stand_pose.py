@@ -34,13 +34,22 @@ class FixedStandPose:
         if problems:
             raise ValueError('; '.join(problems))
 
-    def measured(self, state):
+    def measured(self, state, *, position_limit_tolerance_rad=0.0):
+        if not math.isfinite(position_limit_tolerance_rad) or position_limit_tolerance_rad < 0:
+            raise ValueError('position limit tolerance must be finite and nonnegative')
         values = []
         positions = state.q
         if len(positions) != len(self.info.joints):
             raise ValueError('BodyState differs from Info roster')
         for name, cap, q in zip(self.info.joint_names, self.info.joints, positions):
-            values.append(float(q) if name in self.targets else 0.0)
+            if name not in self.targets:
+                values.append(0.0)
+                continue
+            q = float(q)
+            if (not math.isfinite(q) or
+                    not cap.q_min - position_limit_tolerance_rad <= q <= cap.q_max + position_limit_tolerance_rad):
+                raise ValueError(f'{name}: measured q={q} outside tolerated position limit')
+            values.append(min(max(q, cap.q_min), cap.q_max))
         self.check(values)
         return tuple(values)
 
