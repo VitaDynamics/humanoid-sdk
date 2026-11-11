@@ -31,6 +31,16 @@ state ID; an output-permission error retains the complete triggering State.
 These are example defaults validated in the supported hum-42 scenario, not
 new hardware limits or general robot safety certification.
 
+With Body control enabled, measured joint positions may lie up to 3 degrees
+outside the nominal BodyInfo range. The measured-hold target and the measured
+start of a zero-pose trajectory are clamped to the nominal range before any
+Body command is published; a small correction toward that boundary may occur.
+Positions farther outside the range, nonfinite feedback, invalid attitude and
+joint faults still abort. This measured-state tolerance also applies while
+streaming. Command targets retain the nominal bounds, and the separate 0.1 rad
+hold-error guard, feedback freshness and CANCEL behavior remain unchanged.
+The shared validation helpers default to zero tolerance for other examples.
+
 AGX motion additionally requires each selected side's `--left-native-hz` or
 `--right-native-hz`, taken from that arm group's effective deployed
 `send_frequency` after overrides, and `--native-config` naming that effective

@@ -1,6 +1,8 @@
 """Synthetic T034 exercise; no robot, model, lease transport or CAN hardware."""
 from dataclasses import replace
+import math
 import signal
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -136,6 +138,113 @@ class ZeroPoseTest(unittest.TestCase):
             with self.assertRaises(ValueError if missing else RuntimeError):
                 self.run_zero(c, clock, lambda f: self.fail('must not enter'))
             self.assertNotIn('enter_external', c.calls)
+
+    def test_measured_hold_clamps_small_neck_limit_error_without_invalid_commands(self):
+        for upper in (False, True):
+            with self.subTest(upper=upper):
+                info = body_info()
+                caps = list(info.joints)
+                caps[29] = replace(caps[29], q_min=-.523599, q_max=.523599)
+                info = replace(info, joints=tuple(caps))
+                c, clock = self.controller(info=info, follow_commands=False)
+                boundary = caps[29].q_max if upper else caps[29].q_min
+                c.measured_q[29] = boundary + (.000706 if upper else -.000706)
+                events = []
+                run_external(c, lambda frame: (frame(), frame()),
+                    gripper_demo._MotionOptions(body_pose='measured', timeout=1),
+                    body=body, sleep=clock.sleep, monotonic=clock.monotonic, emit=events.append)
+                commands = self.commands(c)
+                self.assertTrue(commands)
+                self.assertTrue(all(cmd.joints[29].q == boundary for cmd in commands))
+                for cmd in commands:
+                    FixedStandPose(info).check(tuple(j.q for j in cmd.joints))
+                self.assertTrue(any('body hold target clamped: neck_pitch_joint' in e for e in events))
+                self.assertEqual(c.calls.count('exit_external'), 1)
+
+    def test_zero_trajectory_clamps_latest_post_entry_start_to_nominal_limit(self):
+        info = body_info()
+        caps = list(info.joints)
+        caps[29] = replace(caps[29], q_min=-.523599, q_max=.523599)
+        info = replace(info, joints=tuple(caps))
+        c, clock = self.controller(info=info)
+        enter = c.enter_external
+
+        def enter_with_neck_offset(timeout):
+            status = enter(timeout)
+            c.measured_q[29] = .524305
+            return status
+
+        c.enter_external = enter_with_neck_offset
+        events = []
+        self.run_zero(c, clock, lambda frame: frame(), events)
+        commands = self.commands(c)
+        self.assertEqual(commands[0].joints[29].q, caps[29].q_max)
+        self.assertTrue(all(j.q == 0 for j in commands[-1].joints))
+        for cmd in commands:
+            FixedStandPose(info).check(tuple(j.q for j in cmd.joints))
+        self.assertTrue(any('body zero start clamped: neck_pitch_joint' in e for e in events))
+        self.assertEqual(c.calls.count('enter_external'), 1)
+        self.assertEqual(c.calls.count('exit_external'), 1)
+
+    def test_more_than_three_degrees_is_rejected_before_control_in_both_modes(self):
+        for pose in ('measured', 'zero'):
+            for sign in (-1, 1):
+                with self.subTest(pose=pose, sign=sign):
+                    info = body_info()
+                    caps = list(info.joints)
+                    caps[29] = replace(caps[29], q_min=-.5, q_max=.5)
+                    info = replace(info, joints=tuple(caps))
+                    c, clock = self.controller(info=info)
+                    c.measured_q[29] = sign * (.5 + math.radians(3) + 1e-6)
+                    with self.assertRaisesRegex(RuntimeError, r'motor\[29\].*outside BodyInfo'):
+                        run_external(c, lambda frame: self.fail('must not enter motion'),
+                            gripper_demo._MotionOptions(body_pose=pose, timeout=1), body=body,
+                            sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
+                    self.assertNotIn('enter_external', c.calls)
+                    self.assertFalse(self.commands(c))
+
+    def test_tolerance_helpers_default_to_strict_and_commands_remain_strict(self):
+        info = body_info()
+        caps = list(info.joints)
+        caps[29] = replace(caps[29], q_min=-.5, q_max=.5)
+        info = replace(info, joints=tuple(caps))
+        positions = [0.] * 31
+        positions[29] = .501
+        state = SimpleNamespace(attitude_valid=True, q=positions, dq=(0.,)*31,
+                                error_code=(0,)*31)
+        with self.assertRaises(RuntimeError):
+            body._validate_body_state(state, body_info=info, require_stationary=False)
+        body._validate_body_state(state, body_info=info, require_stationary=False,
+                                  position_limit_tolerance_rad=math.radians(3))
+        plan = FixedStandPose(info)
+        with self.assertRaises(ValueError):
+            plan.measured(state)
+        self.assertEqual(plan.measured(state, position_limit_tolerance_rad=math.radians(3))[29], .5)
+        with self.assertRaises(ValueError):
+            plan.check(positions)
+
+    def test_invalid_tolerance_and_invalid_measured_values_are_rejected(self):
+        info = body_info()
+        state = SimpleNamespace(attitude_valid=True, q=(0.,)*31, dq=(0.,)*31,
+                                error_code=(0,)*31)
+        plan = FixedStandPose(info)
+        for tolerance in (-.01, float('nan'), float('inf')):
+            with self.subTest(tolerance=tolerance):
+                with self.assertRaises(ValueError):
+                    body._validate_body_state(state, body_info=info, require_stationary=False,
+                                              position_limit_tolerance_rad=tolerance)
+                with self.assertRaises(ValueError):
+                    plan.measured(state, position_limit_tolerance_rad=tolerance)
+        for invalid in (float('nan'), float('inf'), float('-inf')):
+            with self.subTest(measured=invalid):
+                positions = [0.] * 31
+                positions[29] = invalid
+                state.q = positions
+                with self.assertRaises(RuntimeError):
+                    body._validate_body_state(state, body_info=info, require_stationary=False,
+                                              position_limit_tolerance_rad=math.radians(3))
+                with self.assertRaises(ValueError):
+                    plan.measured(state, position_limit_tolerance_rad=math.radians(3))
 
     def test_latest_measured_start_zero_endpoint_placeholders_and_cancel(self):
         c, clock = self.controller()

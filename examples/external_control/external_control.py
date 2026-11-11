@@ -214,6 +214,7 @@ def _wait_for_stationary_body_state(
     sleep: Callable[[float], None],
     monotonic: Callable[[], float],
     target_slots=None,
+    position_limit_tolerance_rad: float = 0.0,
 ) -> BodyStateArrays:
     if target_slots is None:
         target_slots = _body_target_slots(body_info)
@@ -228,7 +229,9 @@ def _wait_for_stationary_body_state(
     while monotonic() < deadline:
         remaining = deadline - monotonic()
         latest = controller.wait_state(max(remaining, 0.001))
-        _validate_body_state(latest, body_info=body_info, require_stationary=False, target_slots=target_slots)
+        _validate_body_state(
+            latest, body_info=body_info, require_stationary=False, target_slots=target_slots,
+            position_limit_tolerance_rad=position_limit_tolerance_rad)
         now = monotonic()
         if latest.state_id != last_state_id:
             last_state_id = latest.state_id
@@ -250,8 +253,11 @@ def _wait_for_stationary_body_state(
 
 
 def _validate_body_state(
-    state: BodyStateArrays, *, body_info, require_stationary: bool, target_slots=None
+    state: BodyStateArrays, *, body_info, require_stationary: bool, target_slots=None,
+    position_limit_tolerance_rad: float = 0.0,
 ) -> None:
+    if not math.isfinite(position_limit_tolerance_rad) or position_limit_tolerance_rad < 0:
+        raise ValueError('position limit tolerance must be finite and nonnegative')
     if target_slots is None:
         target_slots = _body_target_slots(body_info)
     if not target_slots:
@@ -268,7 +274,7 @@ def _validate_body_state(
         if not math.isfinite(position) or not math.isfinite(velocity):
             raise RuntimeError(f"body state motor[{index}] q/dq is not finite")
         cap = body_info.joints[index]
-        if not cap.q_min <= position <= cap.q_max:
+        if not cap.q_min - position_limit_tolerance_rad <= position <= cap.q_max + position_limit_tolerance_rad:
             raise RuntimeError(f"body state motor[{index}] q is outside BodyInfo limit")
         if require_stationary and abs(velocity) > STATIONARY_DQ_RAD_S:
             raise RuntimeError(f"body state motor[{index}] is moving at {velocity:.3f} rad/s")
