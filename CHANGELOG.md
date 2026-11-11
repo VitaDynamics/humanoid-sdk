@@ -21,6 +21,13 @@
   known position range. Declared targets/fields, MOCK, capabilities and control
   identity remain checked; RobotInfo still exposes its limits for diagnostics
   and application-specific motion planning. No per-call exemption flag is needed.
+  A returned command key confirms local validation/submission, not robot
+  acceptance. Monitor the matching runtime/control/generation's ControlStatus
+  reject_count, last_reject_code and last_accepted_cmd_id, and use BodyState for
+  measured feedback; these are not per-command acknowledgements. Robot-side
+  clipping need not increase reject_count. Current ordinary Body EXTERNAL clips
+  q/tau/kp/kd but rejects out-of-range dq; this SDK change does not implement
+  five-field clamp-only behavior on the robot.
 - The shared end-effector demo checks Body hold drift whenever Body control is
   enabled, including AGX. Its position-error limit is `0.1 rad`, previously
   `0.05 rad` in the strict hand branch; it is an abort threshold, not an arrival
