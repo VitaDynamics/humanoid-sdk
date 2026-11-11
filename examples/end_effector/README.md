@@ -41,8 +41,13 @@ assumed. Read-only use and the BrainCo/Linker paths do not require them.
 Motion requires `--confirm-motion` plus separate current on-site authorization.
 Use full-axis targets in actual Info order with `--left-pos`/`--right-pos` and
 explicit `--left-unit`/`--right-unit` (`m` total opening or `rad` joint angle).
-`--*-vel-limit` is a nonnegative magnitude, not signed velocity. Zero preserves
-the robot default and does not claim that default was measured. Omitted torque
+`--*-vel-limit` is a magnitude, not signed velocity. For OP3, omitting it leaves
+VEL_LIMIT unselected so the native endpoint retains its existing/configured
+rate. An explicitly selected OP3 limit must remain strictly positive after
+float32 encoding: zero, negative zero and a positive value that encodes to zero
+are rejected before control ownership. No default rate is guessed from a manual.
+Other devices retain their existing nonnegative/zero-default behavior where
+supported; that default is not a measured speed. Omitted torque
 has no intent bit; explicit zero and signed torque remain distinct. Limits and
 units come from the actual descriptor; targets are never clipped. OP3 uses one
 total-opening axis in m and the descriptor's existing mode2 (SDK name

@@ -1371,7 +1371,8 @@ class VendorExamplesTest(unittest.TestCase):
                                         for command in endpoint.commands))
 
     def test_vendor_default_and_dry_run_keep_readonly_diagnostics(self):
-        for model in (DeviceModel.BRAINCO_REVO2, DeviceModel.AGX, DeviceModel.LINKER_L6):
+        for model in (DeviceModel.BRAINCO_REVO2, DeviceModel.AGX, DeviceModel.LINKER_L6,
+                      DeviceModel.AGILINK_OP3):
             for option in ([], ['--dry-run']):
                 with self.subTest(model=model, option=option):
                     self.setup_case()
@@ -1379,7 +1380,8 @@ class VendorExamplesTest(unittest.TestCase):
                         endpoint.info = replace(endpoint.info, valid_limits=(0,) * len(endpoint.info.axis_names))
                         endpoint._state = replace(endpoint._state, ready=False, output_allowed=False,
                             inhibit_reason=InhibitReason.NOT_READY)
-                    self.invoke(model, ['--side', 'right'] + option, mutate=unavailable)
+                    self.invoke(model, ['--side', 'right'] + option,
+                                mutate=None if model == DeviceModel.AGILINK_OP3 else unavailable)
                     self.assertEqual(['source'], self.factories)
                     self.executed.assert_not_called()
                     if model == DeviceModel.BRAINCO_REVO2:
@@ -1468,10 +1470,14 @@ class VendorExamplesTest(unittest.TestCase):
         self.assertEqual(0, self.control.command_count)
 
     def test_op3_mode_two_target_and_explicit_ampere_current_reach_original_run(self):
-        for side, current in itertools.product(('right', 'both'), (None, 0., .125)):
-            with self.subTest(side=side, current=current):
+        for side, current, velocity in itertools.product(('right', 'both'), (None, 0., .125),
+                                                        (None, .005)):
+            with self.subTest(side=side, current=current, velocity=velocity):
                 self.setup_case()
                 flags = self.motion_flags(DeviceModel.AGILINK_OP3, side=side)
+                if velocity is not None:
+                    for selected in ('left', 'right') if side == 'both' else ('right',):
+                        flags += ['--' + selected + '-vel-limit', str(velocity)]
                 if current is not None:
                     for selected in ('left', 'right') if side == 'both' else ('right',):
                         flags += ['--' + selected + '-current-a', str(current)]
@@ -1486,11 +1492,25 @@ class VendorExamplesTest(unittest.TestCase):
                         self.assertEqual((.0625,), command.target.pos)
                         self.assertEqual((), command.target.tau)
                         self.assertFalse(command.target.command_fields[0] & Field.TAU)
+                        self.assertEqual(velocity is not None,
+                                         bool(command.target.command_fields[0] & Field.VEL_LIMIT))
+                        if velocity is not None:
+                            self.assertEqual((velocity,), command.target.vel_limit)
                         self.assertEqual(current is not None, bool(command.target.command_fields[0] & Field.CURRENT))
                         if current is not None:
                             self.assertEqual((current,), command.target.current)
                     endpoint.set_touch.assert_not_called()
                 self.assertEqual(0, self.control.command_count)
+
+    def test_op3_nonpositive_encoded_velocity_fails_before_owner(self):
+        for value in ('0', '-0.0', '1e-50'):
+            with self.subTest(value=value):
+                self.setup_case()
+                flags = self.motion_flags(DeviceModel.AGILINK_OP3) + ['--right-vel-limit', value]
+                with self.assertRaisesRegex(ValueError, 'OP3.*positive.*float32'):
+                    self.invoke(DeviceModel.AGILINK_OP3, flags)
+                self.executed.assert_called_once()  # Real run preflight, before ownership.
+                self.assert_no_control()
 
     def test_op3_unproven_or_wrong_units_torque_current_and_shape_fail_before_owner(self):
         for fault in ('unit', 'torque', 'current', 'current_shape', 'unproven_current', 'model', 'axis_shape', 'mock'):
@@ -1515,14 +1535,7 @@ class VendorExamplesTest(unittest.TestCase):
                     self.invoke(DeviceModel.AGILINK_OP3, flags, models=models, mutate=mutate)
                 self.assert_no_control()
 
-    def test_op3_readonly_and_unsupported_patterns_do_not_take_control(self):
-        for flags in (['--side', 'right'], ['--side', 'right', '--dry-run']):
-            with self.subTest(flags=flags):
-                self.setup_case()
-                self.invoke(DeviceModel.AGILINK_OP3, flags)
-                self.assertEqual(['source'], self.factories)
-                self.executed.assert_not_called()
-                self.assert_no_control()
+    def test_op3_unsupported_patterns_fail_before_any_connection(self):
         for pattern in ('sine', 'simultaneous', 'sequential'):
             with self.subTest(pattern=pattern), patch('sys.stderr', new_callable=io.StringIO):
                 client, controller, source = Mock(), Mock(), Mock()

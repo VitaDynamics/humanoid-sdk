@@ -369,7 +369,8 @@ def position_target(info, positions, *, unit, vel_limit=None, torque=None, curre
     if expected is None or any(domain != expected for domain in info.position_domain):
         raise ValueError('explicit position unit differs from actual capability domain')
     n = len(info.axis_names)
-    if vel_limit is None and any(mask & Field.VEL_LIMIT for mask in info.supported_command_fields):
+    if (vel_limit is None and info.device_model != DeviceModel.AGILINK_OP3 and
+            any(mask & Field.VEL_LIMIT for mask in info.supported_command_fields)):
         # Keep the old angular demo's documented20deg/s default as float32.
         speed = 0.0 if unit == 'm' else _float32(math.radians(20.0))
         vel_limit = (speed,) * n
@@ -672,6 +673,11 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
             raise ValueError('selected endpoint has no touch capability')
         infos[client.side] = info
         prepared[client.side] = codec.prepare_target(info, targets[client.side])
+        if info.device_model == DeviceModel.AGILINK_OP3 and any(
+                mask & Field.VEL_LIMIT and _float32(value) <= 0
+                for mask, value in zip(prepared[client.side].command_fields,
+                                       prepared[client.side].vel_limit)):
+            raise ValueError('OP3 selected velocity limit must stay positive after float32 encoding')
         returns[client.side] = codec.prepare_target(info, replace(targets[client.side], pos=state.pos))
         if pattern == 'sine' and (info.device_model != DeviceModel.AGX or len(info.axis_names) != 1
                                  or info.position_domain != (PositionDomain.TOTAL_OPENING,)):
@@ -699,7 +705,12 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
         if (pattern != 'target' or info.device_model == DeviceModel.AGX) and (len(speed) != len(info.axis_names) or any(v <= 0 for v in speed)):
             raise ValueError('a proven positive speed limit is required for a trajectory')
         limits[client.side] = (lows, highs, speed)
-        emit(f'{client.side}: trajectory slope limits={speed}; configured zero-speed default is not measured')
+        if info.device_model == DeviceModel.AGILINK_OP3:
+            selected = any(mask & Field.VEL_LIMIT for mask in prepared[client.side].command_fields)
+            intent = prepared[client.side].vel_limit if selected else 'omitted (native retained/configured rate)'
+            emit(f'{client.side}: OP3 requested velocity limit={intent}; not measured')
+        else:
+            emit(f'{client.side}: trajectory slope limits={speed}; configured zero-speed default is not measured')
         if pattern == 'sine' and math.pi*(sine_max-sine_min)/period > speed[0]:
             raise ValueError('sine peak command slope exceeds the declared velocity limit')
     has_hand_endpoint = any(i.device_model in (DeviceModel.BRAINCO_REVO2, DeviceModel.LINKER_L6) for i in infos.values())
