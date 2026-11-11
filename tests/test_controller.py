@@ -1674,6 +1674,94 @@ class ExternalControllerTest(unittest.TestCase):
                 self.assertEqual(harness.controller._next_external_sequence, 1)
                 self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in harness.transport.published))
 
+    def _q_limited_harness(self):
+        reply = robot_info_reply()
+        body = reply.info.body
+        joints = list(body.joints)
+        for i in (0, 1, 4):
+            joints[i] = replace(joints[i], is_mock=False, supported_fields=31, valid_limits=0x19,
+                                q_min=-.43625, q_max=.43625, kp_min=0., kp_max=10.,
+                                kd_min=0., kd_max=2.)
+        body = replace(body, joints=tuple(joints))
+        harness = ControllerHarness(info_reply=replace(reply, info=replace(reply.info, body=body)))
+        self.addCleanup(harness.controller.close)
+        harness.accept_enter()
+        harness.controller.enter_external(.1)
+        return harness, body
+
+    def test_declared_q_limit_exemption_publishes_unclipped_position_target(self):
+        harness, body = self._q_limited_harness()
+        targets = (body.joint_names[0], body.joint_names[1], body.joint_names[4])
+        exempt = (body.joint_names[4], body.joint_names[0])
+        values = [BodyJointCmd() for _ in range(31)]
+        values[0] = BodyJointCmd(q=-1.8, kp=5., kd=.5)
+        values[1] = BodyJointCmd(q=.43625, kp=5., kd=.5)
+        values[4] = BodyJointCmd(q=1.8, kp=5., kd=.5)
+        sent = harness.controller.publish(BodyCmd(tuple(values)), target_names=targets,
+                                          required_fields=0x19, q_limit_exempt_names=exempt)
+        self.assertEqual((sent.joints[0].q, sent.joints[1].q, sent.joints[4].q), (-1.8, .43625, 1.8))
+        self.assertEqual(sent.sequence, 1)
+        self.assertEqual(sum(topic == BODY_CMD_TOPIC for topic, _ in harness.transport.published), 1)
+        # The exemption is per call: the next command without it is checked again.
+        with self.assertRaisesRegex(InvalidCommandError, 'target q outside limit'):
+            harness.controller.publish(BodyCmd(tuple(values)), target_names=targets, required_fields=0x19)
+        self.assertEqual(harness.controller._next_external_sequence, 2)
+
+    def test_q_limit_exemption_keeps_every_other_check(self):
+        expected = {
+            'not_declared_target': 'not a declared BodyCmd target',
+            'duplicate': 'tuple of unique names', 'list': 'tuple of unique names',
+            'empty_name': 'tuple of unique names', 'non_string': 'tuple of unique names',
+            'without_q_field': 'requires the declared position field',
+            'non_exempt_q': 'target q outside limit: 1$', 'kp_range': 'target kp outside limit: 0',
+            'non_finite_q': 'joints\\[0\\].q must be finite',
+            'q_limit_unavailable': 'target q limit unavailable: 0',
+            'mock_target': 'targets unavailable',
+        }
+        for failure, message in expected.items():
+            with self.subTest(failure=failure):
+                harness, body = self._q_limited_harness()
+                names = body.joint_names
+                targets = (names[0], names[1])
+                exempt = (names[0],)
+                values = [BodyJointCmd() for _ in range(31)]
+                values[0] = BodyJointCmd(q=1.8, kp=5., kd=.5)
+                values[1] = BodyJointCmd(q=0., kp=5., kd=.5)
+                required = 0x19
+                if failure == 'not_declared_target':
+                    exempt = (names[4],)
+                elif failure == 'duplicate':
+                    exempt = (names[0], names[0])
+                elif failure == 'list':
+                    exempt = [names[0]]
+                elif failure == 'empty_name':
+                    exempt = ('',)
+                elif failure == 'non_string':
+                    exempt = (0,)
+                elif failure == 'without_q_field':
+                    values[0] = BodyJointCmd(kd=.5)
+                    values[1] = BodyJointCmd(kd=.5)
+                    required = 0x10
+                elif failure == 'non_exempt_q':
+                    values[1] = BodyJointCmd(q=1.8, kp=5., kd=.5)
+                elif failure == 'kp_range':
+                    values[0] = BodyJointCmd(q=1.8, kp=11., kd=.5)
+                elif failure == 'non_finite_q':
+                    values[0] = BodyJointCmd(q=math.inf, kp=5., kd=.5)
+                elif failure == 'q_limit_unavailable':
+                    joints = list(body.joints)
+                    joints[0] = replace(joints[0], valid_limits=0x18)
+                    harness.controller._body_info = replace(body, joints=tuple(joints))
+                elif failure == 'mock_target':
+                    joints = list(body.joints)
+                    joints[0] = replace(joints[0], is_mock=True)
+                    harness.controller._body_info = replace(body, joints=tuple(joints))
+                with self.assertRaisesRegex(InvalidCommandError, message):
+                    harness.controller.publish(BodyCmd(tuple(values)), target_names=targets,
+                                               required_fields=required, q_limit_exempt_names=exempt)
+                self.assertEqual(harness.controller._next_external_sequence, 1)
+                self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in harness.transport.published))
+
     def test_exit_waits_until_status_no_longer_reports_external(self) -> None:
         harness = ControllerHarness()
         self.addCleanup(harness.controller.close)

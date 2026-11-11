@@ -30,6 +30,19 @@
   Incomplete phase/sequence log fields display as unknown instead of raising
   from a callback. `--display log` retains the diagnostic log view.
 
+### Added
+
+- `ExternalController.publish(..., q_limit_exempt_names=(...))` lets a caller
+  explicitly name declared Body targets whose PD position target may lie outside
+  the RobotInfo q range, for policies trained without target clipping. Only the
+  q range check is skipped for those names; finiteness, roster, MOCK,
+  capability, declared-field, q-limit availability and dq/tau/kp/kd range checks
+  still apply, and the exemption covers a single call. The default `()` keeps
+  the previous behaviour. The robot keeps such targets only when its EXTERNAL
+  configuration explicitly opts in (within its configured margin); otherwise
+  it clamps q to the mechanical range. The flag is not sent on the wire and
+  does not change RobotInfo.
+
 ### Public API migration
 
 | Retired API | Current API and migration |

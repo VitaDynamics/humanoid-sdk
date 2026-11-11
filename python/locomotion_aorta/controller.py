@@ -351,14 +351,26 @@ class ExternalController:
             self._best_effort_cancel(request_id=request_id)
             raise
 
-    def publish(self, command: BodyCmd, *, target_names=None, required_fields=None) -> BodyCmd:
+    def publish(self, command: BodyCmd, *, target_names=None, required_fields=None,
+                q_limit_exempt_names=()) -> BodyCmd:
+        """Publish one EXTERNAL BodyCmd for the explicitly declared targets.
+
+        ``q_limit_exempt_names`` opts named targets out of the client-side
+        RobotInfo q-range check, for policies whose PD position targets
+        intentionally leave the mechanical range. Every other check still
+        applies to them. The robot keeps such targets only when its EXTERNAL
+        configuration explicitly opts in; otherwise it clamps q to the
+        mechanical range.
+        """
         if not self._capture_publish_timing:
-            return self._publish(command, target_names=target_names, required_fields=required_fields)
+            return self._publish(command, target_names=target_names, required_fields=required_fields,
+                                 q_limit_exempt_names=q_limit_exempt_names)
         trace = {'clock': 'monotonic_ns', 'outcome': 'raised'}
         begin = time.perf_counter_ns()
         self._publish_trace.last = trace
         try:
-            result = self._publish(command, trace, target_names=target_names, required_fields=required_fields)
+            result = self._publish(command, trace, target_names=target_names, required_fields=required_fields,
+                                   q_limit_exempt_names=q_limit_exempt_names)
             trace['outcome'] = 'returned'
             return result
         except BaseException as error:
@@ -373,7 +385,8 @@ class ExternalController:
         trace = getattr(self._publish_trace, 'last', None)
         return dict(trace) if trace is not None else None
 
-    def _publish(self, command: BodyCmd, trace=None, *, target_names=None, required_fields=None) -> BodyCmd:
+    def _publish(self, command: BodyCmd, trace=None, *, target_names=None, required_fields=None,
+                 q_limit_exempt_names=()) -> BodyCmd:
         waiting = time.perf_counter_ns() if trace is not None else 0
         with self._condition:
             if trace is not None:
@@ -397,7 +410,8 @@ class ExternalController:
             self._ensure_open()
             body_info = self._body_info
             runtime_id = self._runtime_binding.runtime_id
-            _validate_body_targets(command, body_info, target_names, required_fields)
+            _validate_body_targets(command, body_info, target_names, required_fields,
+                                   q_limit_exempt_names)
             context = self._reserve_command_locked(
                 for_body=True, expected_runtime_id=command_runtime_id,
                 expected_control=current, expected_body_info=body_info,
@@ -915,7 +929,7 @@ def _status_is_newer(
 
 
 def _validate_body_targets(command: BodyCmd, body_info: BodyInfo | None,
-                           target_names, required_fields) -> None:
+                           target_names, required_fields, q_limit_exempt_names=()) -> None:
     if (body_info is None or body_info.slot_count != BODY_SLOTS
             or len(body_info.joint_names) != BODY_SLOTS or len(body_info.joints) != BODY_SLOTS
             or len(set(body_info.joint_names)) != BODY_SLOTS
@@ -929,10 +943,19 @@ def _validate_body_targets(command: BodyCmd, body_info: BodyInfo | None,
         raise InvalidCommandError('BodyCmd required fields must be explicitly declared')
     if required_fields & _BODY_FIELD_KP and not required_fields & _BODY_FIELD_Q:
         raise InvalidCommandError('position gain requires the declared position field')
+    if (not isinstance(q_limit_exempt_names, tuple)
+            or any(not isinstance(name, str) or not name for name in q_limit_exempt_names)
+            or len(set(q_limit_exempt_names)) != len(q_limit_exempt_names)):
+        raise InvalidCommandError('BodyCmd q-limit exemptions must be a tuple of unique names')
+    if q_limit_exempt_names and not required_fields & _BODY_FIELD_Q:
+        raise InvalidCommandError('q-limit exemption requires the declared position field')
+    if any(name not in target_names for name in q_limit_exempt_names):
+        raise InvalidCommandError('q-limit exemption is not a declared BodyCmd target')
     roster = {name: i for i, name in enumerate(body_info.joint_names)}
     if any(name not in roster for name in target_names):
         raise InvalidCommandError('BodyCmd target is not in the confirmed roster')
     slots = frozenset(roster[name] for name in target_names)
+    q_exempt_slots = frozenset(roster[name] for name in q_limit_exempt_names)
     unavailable = [body_info.joint_names[i] for i in slots if body_info.joints[i].is_mock]
     if unavailable:
         raise InvalidCommandError('BodyCmd targets unavailable: ' + ', '.join(unavailable))
@@ -951,7 +974,7 @@ def _validate_body_targets(command: BodyCmd, body_info: BodyInfo | None,
         for bit, name in enumerate(fields):
             value = getattr(joint, name)
             field_bit = 1 << bit
-            if cap.valid_limits & field_bit:
+            if cap.valid_limits & field_bit and not (field_bit == _BODY_FIELD_Q and i in q_exempt_slots):
                 if not getattr(cap, name + '_min') <= value <= getattr(cap, name + '_max'):
                     raise InvalidCommandError(f'BodyCmd target {name} outside limit: {i}')
             if not required_fields & field_bit and value != 0.0:
