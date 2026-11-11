@@ -41,11 +41,22 @@ assumed. Read-only use and the BrainCo/Linker paths do not require them.
 Motion requires `--confirm-motion` plus separate current on-site authorization.
 Use full-axis targets in actual Info order with `--left-pos`/`--right-pos` and
 explicit `--left-unit`/`--right-unit` (`m` total opening or `rad` joint angle).
-`--*-vel-limit` is a nonnegative magnitude, not signed velocity. Zero preserves
-the robot default and does not claim that default was measured. Omitted torque
+`--*-vel-limit` is a magnitude, not signed velocity. For OP3, omitting it leaves
+VEL_LIMIT unselected so the native endpoint retains its existing/configured
+rate. An explicitly selected OP3 limit must remain strictly positive after
+float32 encoding: zero, negative zero and a positive value that encodes to zero
+are rejected before control ownership. No default rate is guessed from a manual.
+Other devices retain their existing nonnegative/zero-default behavior where
+supported; that default is not a measured speed. Omitted torque
 has no intent bit; explicit zero and signed torque remain distinct. Limits and
-units come from the actual descriptor; targets are never clipped. OP3 remains
-unsupported.
+units come from the actual descriptor; targets are never clipped. OP3 uses one
+total-opening axis in m and the descriptor's existing mode2 (SDK name
+`POSITION_TORQUE`); the OP3 target selects no TAU and implies no torque capability.
+This public SDK mode is distinct from the robot driver's Pn0x14 mode5 CAN selector;
+the demo consumes actual Info and does not encode vendor CAN frames.
+Optional `--*-current-a` selects current in A independently
+of `--*-torque-nm`. Omitting current leaves the intent bit clear; no device
+current default is inferred from a manual or converted to torque.
 
 `--pattern sine` requires two actual one-axis AGX endpoints and validates the
 peak command slope. Angular `simultaneous`/`sequential` patterns require six-axis
@@ -174,7 +185,7 @@ neither entry silently changes into robot-local TELEOP. This Python addition
 requires the corresponding robot action binding and regenerated static-Ref
 bindings; final candidate packaging, combined execution and HIL are pending.
 
-## Three vendor file entries
+## Vendor file entries
 
 Run these files from the SDK checkout or its core bundle using the matched
 installed SDK. Each is a thin call to the same `main`, `EndEffectorClient` and
@@ -188,6 +199,7 @@ The generic entry above retains `--side none`; vendor entries reject it.
 | `brainco_revo2.py` | BRAINCO_REVO2, six JOINT_ANGLE axes; rad and supported rad/s speed limits | target, simultaneous, sequential |
 | `agx_gripper.py` | AGX, one TOTAL_OPENING axis; total opening in m, speed limit m/s | target, sine (both actual AGX sides) |
 | `linker_l6.py` | LINKER_L6, six JOINT_ANGLE axes; rad, POS-only | target only |
+| `omnipicker3.py` | AGILINK_OP3, one TOTAL_OPENING axis; m, supported m/s limit and independent current A; no TAU | target only |
 
 Axis names/order, per-axis valid limits and their sources come from actual Info;
 there is no universal six-finger ordering or CAN-ID assumption. BrainCo has
@@ -205,6 +217,7 @@ one actual side without taking control. `GROUP` is the deployment group;
 python examples/end_effector/brainco_revo2.py --group "${GROUP:?}" --side right --dry-run
 python examples/end_effector/agx_gripper.py --group "${GROUP:?}" --side right --dry-run
 python examples/end_effector/linker_l6.py --group "${GROUP:?}" --side right --dry-run
+python examples/end_effector/omnipicker3.py --group "${GROUP:?}" --side right --dry-run
 ```
 
 Default invocation is also read-only. Check printed Info/State and valid bits;
@@ -235,7 +248,26 @@ python examples/end_effector/agx_gripper.py --group "${GROUP:?}" --side right --
 python examples/end_effector/linker_l6.py --group "${GROUP:?}" --side right --ee-only \
   --pattern target --right-unit rad --right-pos "${Q1_RAD:?}" "${Q2_RAD:?}" "${Q3_RAD:?}" \
   "${Q4_RAD:?}" "${Q5_RAD:?}" "${Q6_RAD:?}" --duration "${STREAM_S:?}" --confirm-motion
+
+# OP3: actual Info supplies opening/current limits; no guessed device defaults.
+python examples/end_effector/omnipicker3.py --group "${GROUP:?}" --side right --ee-only \
+  --pattern target --right-unit m --right-pos "${OPENING_M:?}" \
+  --right-vel-limit "${OPENING_RATE_M_S:?}" --right-current-a "${CURRENT_A:?}" \
+  --duration "${STREAM_S:?}" --confirm-motion
 ```
+
+OP3 Touch uses the existing client and the regions declared by actual Info,
+including each region's shape, components, offset and payload size. The current
+codec supports U16_LE words with dimensionless unit `1`; it does not infer force
+or pressure, hard-code a point count, or relabel unknown device timestamps.
+Region clocks and validity remain independent. Default/`--dry-run` reports an
+already available Touch sample without changing device sampling. `--touch on`
+uses the original explicitly confirmed control session and requires actual
+Touch capability plus a new State/Touch confirmation; it is not a read-only
+probe. This demo uses the merged SDK main API and its pinned dependency
+manifest; it does not change those pins or import a private robot/Schema input
+candidate. Matching generated bindings and a compatible robot are still required;
+no OP3 runtime or HIL result is implied.
 
 L6 target duration only bounds repeated input submission: no interpolation,
 backend speed or arrival is inferred. The default 50 Hz per-side setting is PC
