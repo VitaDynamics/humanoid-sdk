@@ -54,13 +54,9 @@ def body_joint_order(body_info=None, *, required_names=()):
         if unavailable:
             raise ValueError('policy joints are unavailable: ' + ', '.join(unavailable))
         missing = [name for name in required_names
-                   if (body_info.joints[names.index(name)].supported_fields & 0x19) != 0x19
-                   or not body_info.joints[names.index(name)].valid_limits & 1
-                   or not math.isfinite(body_info.joints[names.index(name)].q_min)
-                   or not math.isfinite(body_info.joints[names.index(name)].q_max)
-                   or body_info.joints[names.index(name)].q_min > body_info.joints[names.index(name)].q_max]
+                   if (body_info.joints[names.index(name)].supported_fields & 0x19) != 0x19]
         if missing:
-            raise ValueError('policy joint position capability or limit unavailable: ' + ', '.join(missing))
+            raise ValueError('policy joint position capability unavailable: ' + ', '.join(missing))
     return names
 
 

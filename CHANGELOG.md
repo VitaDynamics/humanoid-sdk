@@ -14,6 +14,13 @@
 
 ### Changed
 
+- BodyCmd publishing delegates q/dq/tau/kp/kd device-range handling to robot
+  EXTERNAL instead of rejecting targets against RobotInfo bounds. Values must
+  still be numeric and encode to finite float32; invalid values are rejected
+  before command-key allocation. Policy joint discovery no longer requires a
+  known position range. Declared targets/fields, MOCK, capabilities and control
+  identity remain checked; RobotInfo still exposes its limits for diagnostics
+  and application-specific motion planning. No per-call exemption flag is needed.
 - The shared end-effector demo checks Body hold drift whenever Body control is
   enabled, including AGX. Its position-error limit is `0.1 rad`, previously
   `0.05 rad` in the strict hand branch; it is an abort threshold, not an arrival
