@@ -129,11 +129,24 @@ jobs:
           printf '\n[下载完整报告 ZIP（含 report.html、CSV、JSON）](%s)\n' "$REPORT_URL" >> "$GITHUB_STEP_SUMMARY"
 
   native-wheel:
-    name: SDK native wheel tests
-    runs-on: ubuntu-22.04
+    name: ${{ matrix.check }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            check: SDK native wheel tests
+            artifact: sdk-native
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            check: SDK native wheel tests (aarch64)
+            artifact: sdk-native-aarch64
     timeout-minutes: 20
     env:
       PYTHONDONTWRITEBYTECODE: "1"
+      SDK_ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -147,7 +160,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python tools/fetch_dependencies.py --output "$RUNNER_TEMP/wheelhouse"
+          python -c 'import os, platform; assert platform.machine() == os.environ["SDK_ARCH"]'
+          python tools/fetch_dependencies.py --arch "$SDK_ARCH" --output "$RUNNER_TEMP/wheelhouse"
       - name: Install build and test dependencies
         shell: bash
         run: |
@@ -165,7 +179,7 @@ jobs:
           set -euo pipefail
           CMAKE_ARGS="-DORT_ARCHIVE=$RUNNER_TEMP/onnxruntime.tgz -DAORTA_NATIVE_HEADER_INCLUDE_DIR=$RUNNER_TEMP/wheelhouse" \
             python -m build --wheel --no-isolation --outdir "$RUNNER_TEMP/sdk-raw" . 2>&1 | tee "$RUNNER_TEMP/sdk-build.log"
-          python -m auditwheel repair --only-plat --plat manylinux_2_35_x86_64 \
+          python -m auditwheel repair --only-plat --plat "manylinux_2_35_$SDK_ARCH" \
             --wheel-dir "$RUNNER_TEMP/sdk-wheel" "$RUNNER_TEMP"/sdk-raw/*.whl 2>&1 | tee "$RUNNER_TEMP/sdk-repair.log"
       - name: Verify reviewed C2I producer inputs
         shell: bash
@@ -209,7 +223,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sdk-native-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ matrix.artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/sdk-raw/
             ${{ runner.temp }}/sdk-wheel/

@@ -1,11 +1,16 @@
 # Changelog
 
-## 0.3.0 (in preparation) — unified Body and end-effector clients
+## 1.0.0rc1 — unified Body and end-effector release candidate
+
+The Owner selected 1.0.0 RC for this delivery, replacing the unpublished 0.3.0
+candidate version. The Python version is `1.0.0rc1`; the release tag is
+`v1.0.0-rc.1`. This is a prerelease, not the final 1.0.0 release. Body v3,
+Control v4, unified EE protocol versions and pinned dependency bytes are unchanged.
 
 ### Breaking
 
 - Remove the old public Hand/Gripper client and DTO families without aliases or
-  wire downgrade. The Owner selected `0.3.0` for this breaking API migration;
+  wire downgrade. The Owner selected `1.0.0rc1` for this breaking API migration;
   it must not be published under the previous `0.2.1` package version.
 - Require the matching native extension for production BodyState as well as
   EndEffectorState/Touch decoding. Private Python decoders remain test oracles,
@@ -110,7 +115,7 @@ or device acceptance. The final SDK release remains pending.
 
 The following records an earlier unpublished candidate, including Body/control
 protocol 2 and the old 0.1.4 dependency. It is historical context, not the
-current compatibility or installation contract; use the 0.3.0 entry and
+current compatibility or installation contract; use the 1.0.0rc1 entry and
 compatibility.json above.
 
 - Use the public 31-slot BodyCmd/BodyState interfaces and EXTERNAL control;
