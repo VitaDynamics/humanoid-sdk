@@ -6,11 +6,11 @@
 - [SDK 手册稳定入口](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh)
 - [Releases 与实际交付包](https://github.com/VitaDynamics/humanoid-sdk/releases)
 
-本次当前接口手册及归档正在更新；新页是否上线以实际发布回读为准，不提供未发布页面链接。客户不需要机器人主仓库、Bazel 或私有 schema 源码。
+当前接口手册及历史归档已发布到上方 SDK 手册稳定入口，包含本体控制与末端交互图示。客户不需要机器人主仓库、Bazel 或私有 schema 源码。
 
 ## 当前版本
 
-源码版本 **0.3.0**，不是 1.0 发布公告。安装必须有匹配机器人版本的实际 SDK wheel 和完整 bundle，不能把依赖预发布当 SDK 正式版，也不能由源码版本推断产物已可下载。
+本次候选版本为 **1.0.0 RC1**：Python 包版本 `1.0.0rc1`，发行标签 `v1.0.0-rc.1`，不等同于 1.0.0 正式版。实际发布状态和下载文件以上方 Releases 页面为准。安装必须有匹配机器人版本的同版本 SDK wheel 和完整 bundle，不能把依赖预发布或源码版本当作已交付安装包。
 
 | 项目 | 支持范围 |
 | --- | --- |
@@ -23,12 +23,12 @@
 
 ## 安装与只读检查
 
-以下从已交付、确含 0.3.0 SDK wheel 的完整 bundle 根目录运行。SDK 默认在用户 PC；只有明确在 S100 本机运行时，先 source `/app/script/env.sh`，再激活 venv。使用新环境，保留旧安装。
+以下仅从已交付、确含 `1.0.0rc1` SDK wheel 的完整 bundle 根目录运行。SDK 默认在用户 PC；只有明确在 S100 本机运行时，先 source `/app/script/env.sh`，再激活 venv。使用新环境，保留旧安装。
 
 ```bash
 python3.10 -m venv venv
 source venv/bin/activate
-python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta==0.3.0'
+python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta==1.0.0rc1'
 python -m pip check
 python examples/body_state_subscriber/body_state_subscriber.py --help
 ```

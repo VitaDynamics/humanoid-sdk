@@ -29,6 +29,10 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(manifest["platforms"], ["manylinux_2_35_x86_64", "manylinux_2_35_aarch64"])
         self.assertEqual(manifest["body_protocol_version"], 3)
         self.assertEqual(manifest["control_request_version"], 4)
+        self.assertIn(f'version = "{manifest["sdk_version"]}"',
+                      (ROOT / "pyproject.toml").read_text())
+        self.assertIn(f'__version__ = "{manifest["sdk_version"]}"',
+                      (ROOT / "python/locomotion_aorta/_onnx/__init__.py").read_text())
         self.assertEqual(set(manifest["schema_sha256"]), {
             "body_cmd", "body_state", "control_ack", "control_request", "control_status",
             "end_effector_cmd", "end_effector_info", "end_effector_set_touch",
@@ -131,12 +135,12 @@ class ReleaseTest(unittest.TestCase):
                 self.assertFalse((output / "examples" / retired).exists())
                 self.assertNotIn("examples/" + retired, manifest["files"])
             self.assertEqual(sorted(p.name for p in (output / "wheelhouse").glob("locomotion_aorta-*.whl")),
-                             [f"locomotion_aorta-0.3.0-cp310-cp310-{platform}.whl"
+                             [f"locomotion_aorta-{compatibility['sdk_version']}-cp310-cp310-{platform}.whl"
                               for platform in sorted(compatibility["platforms"])])
             # A single architecture or a pure/raw wheel must not masquerade as the release pair.
-            arm = root / "dist/locomotion_aorta-0.3.0-cp310-cp310-manylinux_2_35_aarch64.whl"
+            arm = root / "dist" / f"locomotion_aorta-{compatibility['sdk_version']}-cp310-cp310-manylinux_2_35_aarch64.whl"
             arm.unlink()
-            (root / "dist/locomotion_aorta-0.3.0-py3-none-any.whl").write_bytes(b"retired pure wheel")
+            (root / "dist" / f"locomotion_aorta-{compatibility['sdk_version']}-py3-none-any.whl").write_bytes(b"retired pure wheel")
             missing = Path(temporary) / "missing-arm"
             with mock.patch.object(package_release, "ROOT", root):
                 with self.assertRaisesRegex(ValueError, "missing audited SDK wheel"):

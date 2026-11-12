@@ -1,6 +1,6 @@
 # Native 编解码与 ONNX 后端维护
 
-0.3.0 的唯一 distribution 是 locomotion-aorta，内含 Body/EE native 编解码及按需加载的 Microsoft ORT 1.20.1 CPU 推理后端。导入 SDK 不加载模型；没有独立 backend 包或 Python ORT 降级。
+1.0.0rc1 的唯一 distribution 是 locomotion-aorta，内含 Body/EE native 编解码及按需加载的 Microsoft ORT 1.20.1 CPU 推理后端。导入 SDK 不加载模型；没有独立 backend 包或 Python ORT 降级。
 
 ## 构建和审计
 
