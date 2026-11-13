@@ -105,6 +105,32 @@ class Publisher:
 
 @unittest.skipIf(native is None, 'installed native codec required; pkg must run this suite without skips')
 class NativeBodyCmdTest(unittest.TestCase):
+    def test_motor_theta_v4_preserves_all_fields_in_native_and_python_encoders(self):
+        from locomotion_aorta import BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION
+        from lowlevel.BodyCmd import BodyCmd as WireBodyCmd
+        self.assertEqual(BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION, 4)
+        self.assertEqual(native.BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION, 4)
+        for version in (3, 4):
+            command = dataclasses.replace(make_command(), protocol_version=version)
+            wire = WireBodyCmd.GetRootAs(self.assertBytes(command))
+            self.assertEqual(wire.ProtocolVersion(), version)
+            self.assertEqual((wire.RuntimeId(), wire.ControlId(), wire.SessionId(),
+                              wire.Sequence(), wire.InputStateId()), (11, 13, 42, 7, 123))
+            for i, joint in enumerate(command.joints):
+                decoded = wire.Joints(i)
+                self.assertEqual((decoded.Q(), decoded.Dq(), decoded.Tau(), decoded.Kp(), decoded.Kd()),
+                                 (joint.q, joint.dq, joint.tau, joint.kp, joint.kd))
+
+    def test_motor_theta_v4_is_external_only(self):
+        from locomotion_aorta import BodyCmdAction
+        for action in (BodyCmdAction.HUMANOID_TRACKING, BodyCmdAction.UNKNOWN):
+            command = dataclasses.replace(make_command(), protocol_version=4, action=action)
+            with self.subTest(action=action):
+                with self.assertRaises(ValueError):
+                    native.encode(command, 0, None, 0)
+                with self.assertRaises(ValueError):
+                    oracle(command)
+
     def assertBytes(self, command, stamp=123, node='codec', sequence=0):
         expected = oracle(command, stamp, node, sequence)
         actual, trace = native.encode(command, stamp, node, sequence, True)

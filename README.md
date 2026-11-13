@@ -15,7 +15,7 @@
 | 项目 | 支持范围 |
 | --- | --- |
 | Python / 主机 | CPython 3.10.x；Linux x86_64 或 aarch64；发布基线 manylinux_2_35 |
-| Body | BodyCmd3 / BodyState3；31 槽；公开踝坐标 PR |
+| Body | 默认 BodyCmd3（踝 PR）；显式 BodyCmd4（踝电机 AB）；BodyState3 / BodyInfo 始终为 PR；31 槽 |
 | Control | 请求、ACK、状态协议 4 |
 | EndEffector | Info1 / Cmd2 / State2 / Touch1；SetTouch2 |
 | 依赖 | 固定组合见 `compatibility.json`；不跨代混装 |
@@ -61,3 +61,8 @@ python examples/body_state_subscriber/body_state_subscriber.py --group "$AORTA_G
 参考手册在独立文档仓维护，本仓只保留真实入口和开发说明。历史说明已标记 ARCHIVE，保存在 `docs/archive/`，不作为当前合同。SDK 结构／有限数值／身份和能力校验仍保留；本体设备范围由服务器 EXTERNAL 执行，普通 q/tau/kp/kd 裁剪、dq 越界拒绝。
 
 本地检查入口为 `make check`；native 安装测试、生成绑定测试和设备验收分别记录。ONNX 构建与审计见 `demo_onnx/README.md`。`AGENTS.md` 为 agent 规则唯一正文，`CLAUDE.md` 保持相对软链接。不要在安装步骤启动运动示例。
+
+原生踝策略可显式构造 `BodyCmd(..., protocol_version=BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION)`。
+v4 的踝槽 4/5/10/11 中 q、dq、tau、kp、kd 均属于电机 A/B 坐标，SDK 不做 PR/AB 转换。
+须配套支持该合同的固件和 `ankle_command_space: motor_theta`、`ankle_virtual_pd_intent: false`；
+普通 PR 示例继续使用默认 v3。状态和发现中的 PR 限位不能当作 AB 命令限位。

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ._body_codec import create_body_cmd, decode_body_state, decode_robot_info_response
-from .body_types import BodyCmd, GetRobotInfoResponse
+from .body_types import BodyCmd, BodyCmdAction, GetRobotInfoResponse
 from .types import (
     ControlAck,
     ControlOperation,
@@ -363,10 +363,12 @@ def _fill_body_cmd(
     bindings: _AortaBindings, command: BodyCmd, builder: Any, header: int,
 ) -> int:
     module = bindings.body_cmd_module
-    if (command.protocol_version != 3 or type(command.runtime_id) is not int
+    if (type(command.protocol_version) is not int or command.protocol_version not in (3, 4)
+            or (command.protocol_version == 4 and command.action != BodyCmdAction.EXTERNAL)
+            or type(command.runtime_id) is not int
             or not 0 < command.runtime_id < 2**64
             or type(command.control_id) is not int or not 0 < command.control_id < 2**64):
-        raise ValueError('BodyCmd3 requires a nonzero runtime and control ID')
+        raise ValueError('BodyCmd requires version 3 or EXTERNAL version 4 and nonzero runtime/control IDs')
     joints = create_body_cmd(builder, command.joints)
     previous = builder.forceDefaults
     try:
