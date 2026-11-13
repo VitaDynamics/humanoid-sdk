@@ -29,7 +29,8 @@ from .types import (
 from ._body_codec import _same_body_description
 
 from .body_types import (
-    BODY_SLOTS, BODY_CMD_PROTOCOL_VERSION, BODY_STATE_PROTOCOL_VERSION, BodyState, BodyCmd, BodyJointCmd, BodyCmdAction,
+    BODY_SLOTS, BODY_CMD_PROTOCOL_VERSION, BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION,
+    BODY_STATE_PROTOCOL_VERSION, BodyState, BodyCmd, BodyJointCmd, BodyCmdAction,
     BodyInfo, GetRobotInfoResponse, ServiceStatus,
     _BODY_FIELD_ALL, _BODY_FIELD_KP, _BODY_FIELD_Q,
 )
@@ -405,7 +406,6 @@ class ExternalController:
                 expected_discovery_runtime=runtime_id)
         external_command = replace(
             command,
-            protocol_version=BODY_CMD_PROTOCOL_VERSION,
             action=BodyCmdAction.EXTERNAL,
             root_quat=(1.0, 0.0, 0.0, 0.0),
             runtime_id=context.runtime_id,
@@ -961,6 +961,9 @@ def _validate_command(command: BodyCmd) -> None:
         raise InvalidCommandError("joints must be a 31-slot tuple")
     if command.action != BodyCmdAction.EXTERNAL:
         raise InvalidCommandError("ExternalController requires EXTERNAL action")
+    if (type(command.protocol_version) is not int or command.protocol_version not in
+            (BODY_CMD_PROTOCOL_VERSION, BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION)):
+        raise InvalidCommandError("EXTERNAL BodyCmd requires protocol version 3 (PR) or 4 (motor AB)")
     for name in ('input_state_id', 'input_state_ts_real_us', 'ts_client_created_us'):
         value = getattr(command, name)
         if name == 'ts_client_created_us':

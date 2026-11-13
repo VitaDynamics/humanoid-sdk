@@ -16,6 +16,7 @@ from aorta.services.common.ServiceStatus import ServiceStatus
 
 BODY_SLOTS = 31
 BODY_CMD_PROTOCOL_VERSION = 3
+BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION = 4
 BODY_STATE_PROTOCOL_VERSION = 3
 
 _BODY_FIELD_Q = 1 << 0
@@ -36,6 +37,12 @@ class BodyJointCmd:
 
 @dataclass(frozen=True, slots=True)
 class BodyCmd:
+    """EXTERNAL: v3 uses virtual ankle PR; explicit v4 uses native motor AB.
+
+    Selecting v4 declares the coordinates of the supplied targets and gains;
+    it does not convert them. The robot's EXTERNAL configuration must match.
+    BodyState and BodyInfo remain in virtual PR coordinates for both modes.
+    """
     joints: tuple[BodyJointCmd, ...]
     action: int = BodyCmdAction.EXTERNAL
     protocol_version: int = BODY_CMD_PROTOCOL_VERSION
