@@ -50,6 +50,14 @@ def _bind_runtime(connection, timeout):
     return reply
 
 
+def _next_deadline(deadline, period, now):
+    """Advance the scheduled tick; after an overrun wait a full period."""
+    if now < deadline:
+        raise RuntimeError('source monotonic clock moved backwards')
+    planned = deadline + period
+    return planned if planned > now else now + period
+
+
 @contextmanager
 def stop_signals():
     """Same signal policy as the hand demo: interrupt once and allow CANCEL."""
@@ -189,7 +197,7 @@ def run_external(controller, command_loop, options, *, body,
                 raise RuntimeError(f'body EXTERNAL ownership/phase/reject_count changed: {status!r}')
             if not body_enabled:
                 if monotonic() >= next_publish:
-                    next_publish = monotonic() + body.PERIOD_S
+                    next_publish = _next_deadline(next_publish, body.PERIOD_S, monotonic())
                 return None
             if recorder is None:
                 state = controller.wait_state(timeout)
@@ -241,7 +249,7 @@ def run_external(controller, command_loop, options, *, body,
                 emit(f'BODY stage={stage} session_id={published.session_id} sequence={published.sequence} input_state={state.state_id} '
                      f'q_cmd={tuple(j.q for j in command.joints)!r} '
                      f'control={status!r} applied={state.applied_session_id}/{state.applied_sequence}@{state.ts_first_output_us}')
-            next_publish = max(next_publish + body.PERIOD_S, monotonic() + body.PERIOD_S)
+            next_publish = _next_deadline(next_publish, body.PERIOD_S, monotonic())
             return state
 
         # Read the existing Body deadline; the EE loop must not restart it on
@@ -890,7 +898,11 @@ def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sl
                     emit(f'EE leg={leg} side={side} submitted={command.key} observations={command.input_observations}; admission/arrival not inferred')
                     if now >= deadline and (side not in cursor or cursor[side] == _float32(selected[side].pos[0])):
                         final_sent.add(side)
-                    next_due[side] = monotonic() + 1.0/rates[side]  # Never catch-up burst.
+                    finished = monotonic()
+                    if finished < last_now:
+                        raise RuntimeError('source monotonic clock moved backwards')
+                    last_now = finished
+                    next_due[side] = _next_deadline(next_due[side], 1.0/rates[side], finished)
             if now >= next_print:
                 for client in clients:
                     print_feedback(client, emit)

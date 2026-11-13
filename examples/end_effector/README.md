@@ -25,6 +25,8 @@ python examples/end_effector/omnipicker3.py --dry-run --ee-only --side left --gr
 - AGX 另外要求实际有效配置的 native send_frequency、对应 --left-native-hz／--right-native-hz 及 --native-config；不按客户端 hz 猜它。
 - wait_output_ready 只表示本机 Cmd 资源；机器人 ready、output_allowed 和有效新 State 分别检查。终端表格刷新率不改变发送率。
 
+本体与各末端按各自的计划时钟推进发送期限：50 Hz 的周期为 20 ms，正常处理耗时不会再额外叠加一个周期。若本轮已经越过下一期限，则放弃过期节拍并等待一个完整周期，不追发积压命令。操作系统调度、过载和同步日志仍可能造成偏离；实际频率以记录为准。
+
 触觉按 Info/区域有效位处理。无能力时例程 --touch off 明确 no-op、不发 RPC、不声称 ACK；--touch on 拒绝，keep 不改现状。Stop、Hold、CANCEL、撤权和释放物体不是一个动作。
 
 OP3 回复无事务号，有界同 key 读重试不能严格分辨迟到回复。软件命令键和 publish 成功不证明某轮设备执行或持物。该例程不是自动总线扫描或原始 CAN 工具。
