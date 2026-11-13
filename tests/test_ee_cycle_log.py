@@ -32,7 +32,8 @@ class EndEffectorCycleLogTest(unittest.TestCase):
     def run_case(self, recorder, **kwargs):
         targets = {client.side: demo.position_target(client.info, (.055,), unit='m',
                     vel_limit=(.04,), current=(0.,)) for client in self.clients}
-        options = demo._MotionOptions(timeout=.2, duration=.12, body_enabled=False,
+        body_enabled=kwargs.pop('body_enabled',False)
+        options = demo._MotionOptions(timeout=.4 if body_enabled else .2, duration=.12, body_enabled=body_enabled,
             rates={'left': 25., 'right': 50.}, recorder=recorder, **kwargs)
         demo.run(self.control, self.clients, targets, options, sleep=self.clock.sleep,
                  monotonic=self.clock.monotonic, emit=lambda *_: None)
@@ -180,6 +181,71 @@ class EndEffectorCycleLogTest(unittest.TestCase):
         self.assertEqual(6, len(row['position_state']['pos']))
         self.assertEqual([Field.POS | Field.VEL | Field.CURRENT]*6, row['position_state']['valid_fields'])
         self.assertEqual([Field.POS | Field.VEL_LIMIT]*6, row['submitted_target']['command_fields'])
+
+    def test_body_and_both_endpoints_have_separate_cycles_and_one_shared_allocator(self):
+        self.clock.sleep(1.)
+        original = self.control.wait_state
+        def stamped_state(timeout):
+            state = original(timeout)
+            state.received_monotonic_ns = int(self.clock.monotonic()*1e9)-1_000_000
+            state.received_realtime_ns = 123_000_000
+            return state
+        self.control.wait_state = stamped_state
+        with self.recorder() as recorder:
+            self.run_case(recorder, body_enabled=True)
+        rows = self.rows()
+        body_cycles = [r for r in rows if r['record_type']=='body_cycle']
+        reads = {r['cycle']:r for r in rows if r['record_type']=='body_state_read'}
+        ee_cycles = [r for r in rows if r['record_type']=='cycle']
+        self.assertTrue(body_cycles and reads and ee_cycles)
+        for row in body_cycles:
+            read = reads[row['input_read_cycle']]
+            self.assertEqual(row['input_state_id'],read['state_id'])
+            self.assertEqual(row['state_id'],read['state_id'])
+            self.assertEqual(row['S2'],read['S2'])
+            self.assertEqual(123_000_000,row['S1'])
+            self.assertGreaterEqual(row['feedback_age_ns'],1_000_000)
+            self.assertEqual(row['publish_started_monotonic_ns']+row['publish_call_ns']-row['state_received_monotonic_ns'],
+                             row['receipt_to_publish_return_ns'])
+            self.assertEqual(31,len(row['measured_q']))
+            self.assertEqual(31,len(row['target_q']))
+        publications=body_cycles+ee_cycles
+        self.assertEqual(set(range(1,len(publications)+1)),{r['sequence'] for r in publications})
+        self.assertEqual({17},{r['session_id'] for r in publications})
+        summaries=[r for r in rows if r['record_type']=='body_summary']
+        self.assertEqual(len(body_cycles),summaries[0]['publications']['returned'])
+        self.assertIsInstance(summaries[0]['publications']['receipt_to_publish_return_ms']['p99'],float)
+        self.assertEqual(len(reads),summaries[0]['reads']['returned'])
+        self.assertEqual(1,self.control.calls.count('enter_external'))
+        self.assertEqual(1,self.control.calls.count('exit_external'))
+
+    def test_body_read_timeout_is_logged_and_cancels_before_any_ee_command(self):
+        original=self.control.wait_state
+        def fail_after_entry(timeout):
+            if 'enter_external' in self.control.calls:
+                self.clock.sleep(.003)
+                raise TimeoutError('synthetic body read timeout')
+            return original(timeout)
+        self.control.wait_state=fail_after_entry
+        with self.assertRaisesRegex(TimeoutError,'synthetic body read timeout'):
+            with self.recorder() as recorder:
+                self.run_case(recorder,body_enabled=True)
+        read=next(r for r in self.rows() if r['record_type']=='body_state_read')
+        self.assertEqual('raised',read['read_result'])
+        self.assertAlmostEqual(3_000_000,read['state_read_call_ns'],delta=1)
+        self.assertTrue(all(not c.commands for c in self.clients))
+        self.assertEqual(1,self.control.calls.count('exit_external'))
+
+    def test_body_publish_failure_preserves_primary_error_and_cancels_once(self):
+        self.control.publish=Mock(side_effect=RuntimeError('synthetic body publish failure'))
+        with self.assertRaisesRegex(RuntimeError,'synthetic body publish failure'):
+            with self.recorder() as recorder:
+                self.run_case(recorder,body_enabled=True)
+        row=next(r for r in self.rows() if r['record_type']=='body_cycle')
+        self.assertEqual('raised',row['publish_result'])
+        self.assertEqual('NOT_MEASURED',row['sequence'])
+        self.assertTrue(all(not c.commands for c in self.clients))
+        self.assertEqual(1,self.control.calls.count('exit_external'))
 
     def test_log_requires_motion_and_a_selected_endpoint(self):
         for flags in (['--dry-run'], ['--side', 'none', '--confirm-motion']):
