@@ -99,6 +99,7 @@ def run_external(controller, command_loop, options, *, body,
                  sleep=time.sleep, monotonic=time.monotonic, emit=print):
     timeout, body_gains = options.timeout, options.body_gains
     body_pose, body_enabled = options.body_pose, options.body_enabled
+    recorder = getattr(options, 'recorder', None)
     if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError('timeout must be finite and positive')
     if body_gains not in ('hold', 'zero'):
@@ -132,6 +133,8 @@ def run_external(controller, command_loop, options, *, body,
         else:
             pose = plan.measured(initial, position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
         hold = body._position_command(pose)
+        if recorder is not None:
+            recorder.describe_body(info)
         if body_gains == 'zero':
             hold = replace(hold, joints=tuple(replace(j, kp=0.0, kd=0.0, dq=0.0, tau=0.0)
                                               for j in hold.joints))
@@ -188,7 +191,11 @@ def run_external(controller, command_loop, options, *, body,
                 if monotonic() >= next_publish:
                     next_publish = monotonic() + body.PERIOD_S
                 return None
-            state = controller.wait_state(timeout)
+            if recorder is None:
+                state = controller.wait_state(timeout)
+                read = None
+            else:
+                state, read = recorder.read_body(controller, timeout, phase=stage)
             body._validate_body_state(
                 state, body_info=info, require_stationary=False, target_slots=hold_slots,
                 position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
@@ -224,8 +231,12 @@ def run_external(controller, command_loop, options, *, body,
                 plan.measured(state, position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
                 q = pose if target is None else target(now) if callable(target) else target
                 command = plan.command(q, state)
-            published = controller.publish(command, target_names=hold_names,
-                required_fields=_BODY_FIELD_Q | _BODY_FIELD_KP | _BODY_FIELD_KD)
+            required_fields = _BODY_FIELD_Q | _BODY_FIELD_KP | _BODY_FIELD_KD
+            if recorder is None:
+                published = controller.publish(command, target_names=hold_names, required_fields=required_fields)
+            else:
+                published = recorder.publish_body(controller, command, state, read,
+                    phase=stage, target_names=hold_names, required_fields=required_fields)
             if plan is not None:
                 emit(f'BODY stage={stage} session_id={published.session_id} sequence={published.sequence} input_state={state.state_id} '
                      f'q_cmd={tuple(j.q for j in command.joints)!r} '
@@ -967,7 +978,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     parser.add_argument('--display', choices=('table', 'log'),
                         default='table' if _expected_device_model == DeviceModel.BRAINCO_REVO2 else 'log')
     parser.add_argument('--display-hz', type=float, default=5.0, help='table refresh only; does not change command rates')
-    parser.add_argument('--log', type=Path, help='new JSONL path; per-endpoint software timing (requires NumPy)')
+    parser.add_argument('--log', type=Path, help='new JSONL path; BodyState/BodyCmd and endpoint timing (requires NumPy)')
     parser.add_argument('--ee-only', action='store_true', help='no implicit Body command or Body preflight')
     parser.add_argument('--body-gains', choices=('hold', 'zero'), default='hold')
     parser.add_argument('--body-pose', choices=('measured', 'zero'), default='measured')
