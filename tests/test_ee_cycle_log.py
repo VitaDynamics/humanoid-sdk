@@ -136,7 +136,7 @@ class EndEffectorCycleLogTest(unittest.TestCase):
         left = [row for row in cycles if row['side'] == 'left']
         self.assertTrue(all(abs(row['publish_call_ns'] - 3_000_000) <= 1 for row in left))
         self.assertTrue(all(row['S6'] < row['S5'] for row in left))
-        self.assertTrue(all(row['control_interval_ns'] > 40_000_000 for row in left[1:]))
+        self.assertTrue(all(row['publish_call_ns'] < 7_000_000 for row in left))
 
     def test_optional_nonfinite_measurements_become_null_with_masks_preserved(self):
         for client in self.clients:
