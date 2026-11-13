@@ -1234,7 +1234,7 @@ class VendorExamplesTest(unittest.TestCase):
         entries = (('agx_gripper.py', '{target,sine}'),
                    ('brainco_revo2.py', '{target,simultaneous,sequential}'),
                    ('linker_l6.py', '{target}'),
-                   ('omnipicker3.py', '{target}'))
+                   ('omnipicker3.py', '{target,sine,simultaneous,sequential}'))
         directory = Path(demo.__file__).parent
         for name, patterns in entries:
             with self.subTest(entry=name):
@@ -1536,13 +1536,99 @@ class VendorExamplesTest(unittest.TestCase):
                 self.assert_no_control()
 
     def test_op3_unsupported_patterns_fail_before_any_connection(self):
-        for pattern in ('sine', 'simultaneous', 'sequential'):
+        for pattern in ('unknown', 'triangle'):
             with self.subTest(pattern=pattern), patch('sys.stderr', new_callable=io.StringIO):
                 client, controller, source = Mock(), Mock(), Mock()
                 with self.assertRaises(SystemExit):
                     demo.main(['--pattern', pattern], _expected_device_model=DeviceModel.AGILINK_OP3,
                               _client_factory=client, _controller_factory=controller, _state_source_factory=source)
                 client.assert_not_called(); controller.assert_not_called(); source.assert_not_called()
+
+    def op3_pattern_flags(self, pattern):
+        flags = self.motion_flags(DeviceModel.AGILINK_OP3, side='both')
+        flags += ['--pattern', pattern, '--period-s', '1', '--duration', '1',
+                  '--sine-min-m', '.01', '--sine-max-m', '.08']
+        for side in ('left', 'right'):
+            flags += ['--'+side+'-vel-limit', '.25', '--'+side+'-current-a', '.125']
+        return flags
+
+    def test_op3_sine_both_sides_share_phase_and_return_to_original_measurement(self):
+        self.setup_case()
+        self.invoke(DeviceModel.AGILINK_OP3, self.op3_pattern_flags('sine'))
+        left, right = (self.endpoints[side] for side in ('left', 'right'))
+        self.assertEqual(left.times, right.times)
+        self.assertEqual([c.target.pos for c in left.commands], [c.target.pos for c in right.commands])
+        positions = [c.target.pos[0] for c in left.commands]
+        self.assertLess(min(positions), .0101)
+        self.assertGreater(max(positions), .0799)
+        self.assertAlmostEqual(positions[-1], .03125)
+        self.assertTrue(all(.01 <= pos <= .08 for pos in positions))
+        for endpoint in (left, right):
+            for sent in endpoint.commands:
+                self.assertEqual((ControlMode.POSITION_TORQUE,), sent.target.mode)
+                self.assertEqual((.125,), sent.target.current)
+                self.assertEqual((.25,), sent.target.vel_limit)
+                self.assertEqual((Field.POS | Field.VEL_LIMIT | Field.CURRENT,), sent.target.command_fields)
+        self.assertEqual(1, self.control.calls.count('enter_external'))
+        self.assertEqual(1, self.control.calls.count('exit_external'))
+
+    def test_op3_fraction_patterns_use_each_side_info_range(self):
+        bounds = {'left': (-.005, .112), 'right': (-.004, .100)}
+        for pattern in ('simultaneous', 'sequential'):
+            with self.subTest(pattern=pattern):
+                self.setup_case()
+                def limits(endpoint):
+                    low, high = bounds[endpoint.side]
+                    endpoint.info = replace(endpoint.info, pos_min=(low,), pos_max=(high,))
+                self.invoke(DeviceModel.AGILINK_OP3, self.op3_pattern_flags(pattern), mutate=limits)
+                for side, endpoint in self.endpoints.items():
+                    low, high = bounds[side]
+                    positions = [c.target.pos[0] for c in endpoint.commands]
+                    self.assertAlmostEqual(min(positions), low + .25*(high-low))
+                    self.assertAlmostEqual(max(positions), low + .75*(high-low))
+                    self.assertAlmostEqual(positions[-1], low + .25*(high-low))
+                if pattern == 'sequential':
+                    left, right = (self.endpoints[s] for s in ('left', 'right'))
+                    self.assertEqual(left.times, right.times)
+                    entered_low = False
+                    for lcmd, rcmd in zip(left.commands, right.commands):
+                        raised = [cmd.target.pos[0] > lo + .25*(hi-lo) + 1e-7
+                                  for cmd, (lo, hi) in zip((lcmd, rcmd), bounds.values())]
+                        entered_low |= not any(raised)
+                        if entered_low:
+                            self.assertLessEqual(sum(raised), 1)
+                self.assertEqual(1, self.control.calls.count('exit_external'))
+
+    def test_op3_trajectory_velocity_and_bounds_are_checked_before_ownership(self):
+        for fault in ('missing_speed', 'too_fast', 'out_of_range'):
+            with self.subTest(fault=fault):
+                self.setup_case()
+                flags = self.op3_pattern_flags('sine')
+                if fault == 'missing_speed':
+                    index = flags.index('--right-vel-limit')
+                    del flags[index:index+2]
+                elif fault == 'too_fast':
+                    flags += ['--period-s', '.1']
+                else:
+                    flags += ['--sine-max-m', '.126']
+                with self.assertRaises(ValueError):
+                    self.invoke(DeviceModel.AGILINK_OP3, flags)
+                self.assert_no_control()
+
+    def test_op3_loop_repeats_in_one_session_and_cancels_once_on_interrupt(self):
+        self.setup_case()
+        def interrupt(endpoint):
+            def after_publish(_sent):
+                if len(endpoint.commands) > 450:
+                    raise KeyboardInterrupt('synthetic operator interruption')
+            endpoint.after_publish = after_publish
+        self.invoke(DeviceModel.AGILINK_OP3,
+                    self.op3_pattern_flags('simultaneous') + ['--loop'], mutate=interrupt)
+        positions = [sent.target.pos[0] for sent in self.endpoints['left'].commands]
+        upward_crossings = sum(a <= .0625 < b for a, b in zip(positions, positions[1:]))
+        self.assertGreaterEqual(upward_crossings, 2)
+        self.assertEqual(1, self.control.calls.count('enter_external'))
+        self.assertEqual(1, self.control.calls.count('exit_external'))
 
     def test_op3_readonly_reports_declared_touch_without_rpc_or_control(self):
         self.setup_case()
