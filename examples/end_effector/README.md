@@ -29,6 +29,35 @@ python examples/end_effector/omnipicker3.py --dry-run --ee-only --side left --gr
 
 OP3 回复无事务号，有界同 key 读重试不能严格分辨迟到回复。软件命令键和 publish 成功不证明某轮设备执行或持物。该例程不是自动总线扫描或原始 CAN 工具。
 
+## OP3 往复模式
+
+OP3 支持 `target`、`sine`、`simultaneous` 和 `sequential`。这些模式在同一个 EXTERNAL 会话内运行，仍使用原始位置反馈作为命令输入，不自动开启触觉。
+
+- `sine` 要求 `--side both`：双手同相正弦，`--sine-min-m`／`--sine-max-m` 为总开口范围，`--period-s` 为周期。先从实测起点插值到中点，结束后返回原始起点；`--duration` 是正弦阶段时长。
+- `simultaneous`：所有选中端点从各自 Info 范围的 `--low-frac` 同时到 `--high-frac` 再返回；`sequential` 每次只改变一个端点的一轴。两者可用 `--loop` 持续往复，不以 `--duration` 截止。
+- OP3 往复必须显式提供每侧正速度限制；转换成 float32 后也必须大于 0。正弦峰值斜率 `π × (max-min) / period` 不得超过该限制。轨迹斜率限制不代表物理跟踪性能。
+
+例如 10–100 mm、10 秒周期，以下是需要现场运动授权的双夹爪示例；`--ee-only` 不保持本体：
+
+```bash
+python examples/end_effector/omnipicker3.py \
+  --group "$AORTA_GROUP" --side both --pattern sine \
+  --sine-min-m 0.010 --sine-max-m 0.100 --period-s 10 --duration 60 \
+  --left-unit m --left-vel-limit 0.04 --left-current-a 3.5 \
+  --right-unit m --right-vel-limit 0.04 --right-current-a 3.5 \
+  --ee-only --touch keep --confirm-motion
+```
+
+## 逐周期 JSONL
+
+给运动命令增加 `--log /absolute/new-run.jsonl` 可启用记录。该路径必须不存在；默认不写日志，`--dry-run` 不接受此选项。复用本体例程的 `policy_support.CycleLog`，记录、flush 和汇总需要 NumPy（`state-arrays` extra）。省略 `--ee-only` 的本体数组反馈读取同样需要 NumPy。
+
+每次单侧实际发布尝试写一条 `cycle`，保留左右独立频率：阶段、请求频率、实际命令键和输入 SampleRef、目标和字段掩码、原始位置 State、最新状态及有效位、本地原始位置接收时间和年龄、相邻同侧发布间隔、publish 调用耗时及返回／异常。Info 的轴顺序、单位域、量程和 runtime/layout 身份在 `end_effector_info` 记录中保存。无效或未选择的非有限数值写为 `null`，必须结合有效位解读。
+
+`S0` 原样采用该位置 State 的发布时间戳；`S5/S6` 是本机 CLOCK_REALTIME 调用边界。发布间隔、调用耗时和反馈年龄使用本机 CLOCK_MONOTONIC。`S1–S4`、底层 publish 分段、固件执行和物理到位时间未观测，写为 `NOT_MEASURED`；不跨时钟域直接相减推断链路延迟。
+
+退出时的 `end_effector_summary` 按左右侧输出尝试／返回次数、实测尝试频率，以及发布间隔、调用耗时、反馈年龄的 p50/p95/p99/max。每周期另有 `logging_overhead`，最终 `logging_summary` 汇总 JSON 序列化／写入／flush 开销。正常或故障退出先由原控制流程尝试 CANCEL，再汇总和关闭日志。同步写日志会影响实际节奏；不补发追赶，统计包含这项影响。长时间记录会占用磁盘及用于精确分位数的内存；保留对应 bundle manifest 和机器人版本信息以供比对。
+
 ## 公共前提
 
 使用匹配 bundle 的 CPython 3.10 venv；依赖以根 `compatibility.json` 为准。PC 在创建 Node 前设置私有 `ZENOH_SESSION_CONFIG_URI`，并让 `AORTA_GROUP` 与 `--group` 一致。S100 本机方式先 source `/app/script/env.sh` 再激活 venv。

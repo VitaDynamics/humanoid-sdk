@@ -348,14 +348,14 @@ def _motion_feedback(client, info, moving, monotonic):
                 f'limit_ms={EE_POSITION_FRESHNESS_WINDOW_S * 1000:.0f} '
                 f'published_us={position.ts_state_pub_us} '
                 f'ingested_us={position.ts_ingested_us}')
-    return latest, position
+    return latest, position, received_at
 
 
 def wait_position(client, info, timeout, *, sleep, monotonic):
     deadline = monotonic() + timeout
     codec.validate_info(info)
     while True:
-        _, position = _motion_feedback(client, info, False, monotonic)
+        _, position, _ = _motion_feedback(client, info, False, monotonic)
         if position is not None:
             return position
         remaining = deadline - monotonic()
@@ -476,13 +476,15 @@ class _EndpointGuard:
         self.client, self.info = client, info
         self.timeout, self.monotonic = timeout, monotonic
         self.latest = client.motion_feedback()[0]
+        self.position_received_at = None
         codec.validate_info(info)
 
     def feedback(self, moving):
-        state, position = _motion_feedback(self.client, self.info, moving, self.monotonic)
+        state, position, received_at = _motion_feedback(self.client, self.info, moving, self.monotonic)
         if state is None or position is None:
             raise ValueError('end-effector measured position is unavailable')
         self.latest = state
+        self.position_received_at = received_at
         return position
 
     def publish(self, target, state):
@@ -554,6 +556,7 @@ class _MotionOptions:
     low_frac: float = .25
     high_frac: float = .75
     loop: bool = False
+    recorder: object = None
 
     def __post_init__(self):
         _validate_motion_parameters(pattern=self.pattern, loop=self.loop, period=self.period,
@@ -624,7 +627,7 @@ def _validate_motion_parameters(*, pattern, loop, period, sine_min, sine_max,
     if pattern not in ('target', 'sine', 'simultaneous', 'sequential'):
         raise ValueError('unknown motion pattern')
     if loop and pattern not in ('simultaneous', 'sequential'):
-        raise ValueError('loop applies only to angular fraction patterns')
+        raise ValueError('loop applies only to fraction patterns')
     if (not math.isfinite(period) or period <= 0 or not math.isfinite(sine_min)
             or not math.isfinite(sine_max) or sine_min >= sine_max
             or not math.isfinite(low_frac) or not math.isfinite(high_frac)
@@ -655,7 +658,7 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
         raise ValueError('one finite positive command rate per endpoint required')
     _validate_rates(rates.values())
     if pattern == 'sine' and tuple(c.side for c in clients) != ('left', 'right'):
-        raise ValueError('sine requires left and right AGX endpoints')
+        raise ValueError('sine requires left and right opening endpoints')
     if pattern != 'target' and not clients:
         raise ValueError('pattern requires end effectors')
     if not clients and not body_enabled:
@@ -693,13 +696,20 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
                                        prepared[client.side].vel_limit)):
             raise ValueError('OP3 selected velocity limit must stay positive after float32 encoding')
         returns[client.side] = codec.prepare_target(info, replace(targets[client.side], pos=state.pos))
-        if pattern == 'sine' and (info.device_model != DeviceModel.AGX or len(info.axis_names) != 1
-                                 or info.position_domain != (PositionDomain.TOTAL_OPENING,)):
-            raise ValueError('sine requires actual one-axis AGX total-opening capability')
+        if pattern == 'sine' and (info.device_model not in (DeviceModel.AGX, DeviceModel.AGILINK_OP3)
+                                 or len(info.axis_names) != 1
+                                 or info.position_domain != (PositionDomain.TOTAL_OPENING,)
+                                 or not all(mask & Field.VEL_LIMIT for mask in info.valid_limits)):
+            raise ValueError('sine requires a one-axis opening endpoint with a proven speed limit')
         if pattern in ('simultaneous', 'sequential') and (
-                info.device_model not in (DeviceModel.BRAINCO_REVO2, DeviceModel.LINKER_L6)
-                or len(info.axis_names) != 6 or any(d != PositionDomain.JOINT_ANGLE for d in info.position_domain)):
-            raise ValueError('fraction patterns require actual six-axis angular hand capability')
+                not ((info.device_model in (DeviceModel.BRAINCO_REVO2, DeviceModel.LINKER_L6)
+                      and len(info.axis_names) == 6
+                      and all(d == PositionDomain.JOINT_ANGLE for d in info.position_domain))
+                     or (info.device_model == DeviceModel.AGILINK_OP3
+                         and len(info.axis_names) == 1
+                         and info.position_domain == (PositionDomain.TOTAL_OPENING,)
+                         and all(mask & Field.VEL_LIMIT for mask in info.valid_limits)))):
+            raise ValueError('fraction patterns require a six-axis hand or one-axis OP3 with a proven speed limit')
         lows = (sine_min,) if pattern == 'sine' else tuple(a+low_frac*(b-a) for a,b in zip(info.pos_min,info.pos_max))
         highs = (sine_max,) if pattern == 'sine' else tuple(a+high_frac*(b-a) for a,b in zip(info.pos_min,info.pos_max))
         if pattern != 'target':
@@ -716,6 +726,10 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
                           for value, maximum in zip(
                               prepared[client.side].vel_limit or (0.0,)*len(info.axis_names),
                               info.vel_limit_max))
+        elif info.device_model == DeviceModel.AGILINK_OP3 and pattern != 'target':
+            if not all(mask & Field.VEL_LIMIT for mask in prepared[client.side].command_fields):
+                raise ValueError('OP3 trajectories require an explicit positive velocity limit')
+            speed = tuple(_float32(value) for value in prepared[client.side].vel_limit)
         if (pattern != 'target' or info.device_model == DeviceModel.AGX) and (len(speed) != len(info.axis_names) or any(v <= 0 for v in speed)):
             raise ValueError('a proven positive speed limit is required for a trajectory')
         limits[client.side] = (lows, highs, speed)
@@ -848,7 +862,8 @@ def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sl
                         value = _agx_source_step(cursor[side], desired, limits[side][2][0],
                                                  now - cursor_time[side], native_hz[side])
                         target = codec.prepare_target(infos[side], replace(target, pos=(value,)))
-                    command = guard.publish(target, states[side])
+                    command = (guard.publish(target, states[side]) if options.recorder is None else
+                        options.recorder.publish(guard, target, states[side], phase=leg, rate=rates[side]))
                     display_target = getattr(emit, 'submitted', None)
                     if display_target is not None:
                         display_target(side, target, command.key)
@@ -892,6 +907,8 @@ def run(controller, clients, targets, options, *, sleep=time.sleep, monotonic=ti
     emit(f'EE position freshness window={EE_POSITION_FRESHNESS_WINDOW_S:.3f}s')
     prepared_motion = _prepare_motion(
         controller, clients, targets, options, sleep=sleep, monotonic=monotonic, emit=emit)
+    if options.recorder is not None:
+        options.recorder.describe(prepared_motion[0])
     touch_worker = ThreadPoolExecutor(max_workers=1) if options.touch != 'keep' else None
 
     def command_loop(frame):
@@ -928,7 +945,9 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         patterns = ('target', 'simultaneous', 'sequential')
     elif _expected_device_model == DeviceModel.AGX:
         patterns = ('target', 'sine')
-    elif _expected_device_model in (DeviceModel.LINKER_L6, DeviceModel.AGILINK_OP3):
+    elif _expected_device_model == DeviceModel.AGILINK_OP3:
+        patterns = ('target', 'sine', 'simultaneous', 'sequential')
+    elif _expected_device_model == DeviceModel.LINKER_L6:
         patterns = ('target',)
     elif _expected_device_model is not None:
         raise ValueError('vendor example requires BrainCo Revo2, AGX, Linker L6 or OP3')
@@ -948,6 +967,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     parser.add_argument('--display', choices=('table', 'log'),
                         default='table' if _expected_device_model == DeviceModel.BRAINCO_REVO2 else 'log')
     parser.add_argument('--display-hz', type=float, default=5.0, help='table refresh only; does not change command rates')
+    parser.add_argument('--log', type=Path, help='new JSONL path; per-endpoint software timing (requires NumPy)')
     parser.add_argument('--ee-only', action='store_true', help='no implicit Body command or Body preflight')
     parser.add_argument('--body-gains', choices=('hold', 'zero'), default='hold')
     parser.add_argument('--body-pose', choices=('measured', 'zero'), default='measured')
@@ -976,7 +996,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     if args.pattern == 'sine' and args.side != 'both':
         parser.error('sine requires --side both')
     if args.loop and args.pattern not in ('simultaneous', 'sequential'):
-        parser.error('--loop requires an angular fraction pattern')
+        parser.error('--loop requires a fraction pattern')
     if args.dry_run and args.confirm_motion:
         parser.error('--dry-run and --confirm-motion are mutually exclusive')
     if args.ee_only and not sides:
@@ -987,6 +1007,8 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         parser.error('--body-pose zero requires --body-gains hold')
     if args.touch != 'keep' and (readonly or not sides):
         parser.error('--touch on/off requires a selected endpoint and --confirm-motion')
+    if args.log is not None and (readonly or not sides):
+        parser.error('--log requires a selected endpoint and --confirm-motion')
     try:
         options = _MotionOptions(timeout=args.timeout, duration=args.duration,
             rates={side: getattr(args, side+'_hz') for side in sides},
@@ -1014,6 +1036,14 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     controller_factory = PullController if _controller_factory is None else _controller_factory
     state_factory = PullStateSource if _state_source_factory is None else _state_source_factory
     with ExitStack() as stack:
+        if args.log is not None:
+            support = _load_sibling_module('ee_policy_support', 'policy_support.py')
+            logging = _load_sibling_module('ee_cycle_log', 'end_effector/cycle_log.py')
+            recorder = stack.enter_context(logging.CycleRecorder(args.log, dict(
+                group=args.group, sides=sides, pattern=args.pattern,
+                requested_hz=options.rates, body_enabled=options.body_enabled,
+                body_pose=options.body_pose, touch=options.touch), support=support))
+            options = replace(options, recorder=recorder)
         connection = stack.enter_context((state_factory if readonly else controller_factory)(group=args.group))
         reply = _bind_runtime(connection, args.timeout)
         from locomotion_aorta._policy_state import format_robot_info
