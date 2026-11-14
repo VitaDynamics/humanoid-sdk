@@ -142,7 +142,11 @@ class CycleRecorder:
             if error is None:
                 raise
         finally:
-            self.log.stream.close()
+            try:
+                self.log.stream.close()
+            except BaseException:
+                if error is None:
+                    raise
         return False
 
     def publish(self, guard, target, state, *, phase, rate):

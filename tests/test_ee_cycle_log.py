@@ -1,5 +1,6 @@
 """Software timing and safe-exit evidence, using synthetic endpoint feedback."""
 from dataclasses import asdict, replace
+import errno
 import io
 import json
 from pathlib import Path
@@ -116,6 +117,31 @@ class EndEffectorCycleLogTest(unittest.TestCase):
                 self.run_case(recorder)
         self.assertTrue(recorder.log.stream.closed)
         self.assertEqual(1, self.control.calls.count('exit_external'))
+
+    @unittest.skipUnless(Path('/dev/full').exists(), 'requires /dev/full')
+    def test_buffered_stream_close_failure_preserves_primary_publisher_fault(self):
+        primary = RuntimeError('primary publication failure')
+        with self.assertRaises(RuntimeError) as raised:
+            with self.recorder() as recorder:
+                def fail_publish(*args, **kwargs):
+                    recorder.log.stream.close()
+                    recorder.log.stream = open('/dev/full', 'w', encoding='utf-8')
+                    raise primary
+                self.clients[0].publish = fail_publish
+                self.run_case(recorder)
+        self.assertIs(primary, raised.exception)
+        self.assertTrue(recorder.log.stream.closed)
+        self.assertEqual(1, self.control.calls.count('exit_external'))
+
+    @unittest.skipUnless(Path('/dev/full').exists(), 'requires /dev/full')
+    def test_buffered_stream_failure_is_raised_without_a_primary_fault(self):
+        with self.assertRaises(OSError) as raised:
+            with self.recorder() as recorder:
+                recorder.log.stream.close()
+                recorder.log.stream = open('/dev/full', 'w', encoding='utf-8')
+                recorder.log.stream.write('buffered data')
+        self.assertEqual(errno.ENOSPC, raised.exception.errno)
+        self.assertTrue(recorder.log.stream.closed)
 
     def test_call_duration_excludes_jsonl_recording_and_uses_monotonic_clock(self):
         original = self.clients[0].publish
