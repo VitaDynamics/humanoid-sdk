@@ -9,7 +9,7 @@ from dataclasses import replace
 from .controller import (ExternalController, ExternalControlTimeoutError,
                          ControllerClosedError, _close_handles, _deadline, _RuntimeBinding, _nonempty_text,
                          _uint64_nonzero, _valid_generation)
-from .controller import _retire_ee_handles, _close_ee_handles, _detach_ee_handles
+from .controller import _retire_ee_handles, _close_ee_handles, _detach_ee_handles, _NO_TRACE_SPAN
 from .body_types import BODY_STATE_PROTOCOL_VERSION
 from .types import ControlStatus, PROTOCOL_VERSION
 from .transport import _AortaTransport, BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC
@@ -299,7 +299,7 @@ class PullStateSource:
     """Read-only native-array feedback and ControlStatus snapshots; no publishers."""
 
     def __init__(self, *, group='default', node_name=None, _transport=None,
-                 native_body_rx=None, trace_output=None, trace_compression="zstd"):
+                 native_body_rx=None, trace_output=None, trace_compression="zstd", trace_stages=()):
         self._group = _nonempty_text(group, 'group')
         if node_name is not None:
             _nonempty_text(node_name, 'node_name')
@@ -314,7 +314,7 @@ class PullStateSource:
         try:
             if trace_output is not None:
                 from .trace._sdk import SdkTrace
-                self._trace = SdkTrace(trace_output, compression=trace_compression)
+                self._trace = SdkTrace(trace_output, compression=trace_compression, stages=trace_stages)
         except BaseException:
             self.transport.close()
             raise
@@ -340,6 +340,11 @@ class PullStateSource:
     @property
     def trace_health(self):
         return None if self._trace is None else self._trace.health()
+
+    def trace_span(self, name, *, iteration_id=0, inference_id=0):
+        if self._trace is None:
+            return _NO_TRACE_SPAN
+        return self._trace.span(name, iteration_id=iteration_id, inference_id=inference_id)
 
     def wait_state(self, timeout=5.0):
         if self._trace is not None:
@@ -436,7 +441,7 @@ class PullController(ExternalController):
     """Original session protocol with pull status pumping on the caller thread."""
 
     def __init__(self, *, group='default', node_name=None, client_id=None, _transport=None,
-                 trace_output=None, trace_compression="zstd"):
+                 trace_output=None, trace_compression="zstd", trace_stages=()):
         _nonempty_text(group, 'group')
         node_name = node_name or 'locomotion-pull-'+uuid.uuid4().hex
         _nonempty_text(node_name, 'node_name')
@@ -448,7 +453,8 @@ class PullController(ExternalController):
             raise ValueError('Pull transport already has a connection')
         super().__init__(group=group, node_name=node_name, client_id=client_id,
                          _transport=transport, _subscribe_body_state=False,
-                         trace_output=trace_output, trace_compression=trace_compression)
+                         trace_output=trace_output, trace_compression=trace_compression,
+                         trace_stages=trace_stages)
         if isinstance(transport, PullTransport):
             transport._candidate_gate = self._commit_pull_candidate
 

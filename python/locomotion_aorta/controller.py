@@ -4,8 +4,11 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any, TypeVar
+
+_NO_TRACE_SPAN = nullcontext()
 
 from .transport import (
     CONTROL_ACK_TOPIC,
@@ -162,6 +165,7 @@ class ExternalController:
         _subscribe_body_state: bool = True,
         trace_output=None,
         trace_compression: str = "zstd",
+        trace_stages: tuple[str, ...] = (),
     ) -> None:
         self.group = _nonempty_text(group, "group")
         self.node_name = _nonempty_text(
@@ -201,7 +205,7 @@ class ExternalController:
         try:
             if trace_output is not None:
                 from .trace._sdk import SdkTrace
-                self._trace = SdkTrace(trace_output, compression=trace_compression)
+                self._trace = SdkTrace(trace_output, compression=trace_compression, stages=trace_stages)
             if _subscribe_body_state:
                 self._subscriptions.append(
                     self.transport.subscribe(BODY_STATE_TOPIC, self._on_body_state)
@@ -235,6 +239,12 @@ class ExternalController:
     def trace_health(self):
         """Local recording health, including after close; None when disabled."""
         return None if self._trace is None else self._trace.health()
+
+    def trace_span(self, name, *, iteration_id=0, inference_id=0):
+        """Measure a registered user stage in the connection's recording."""
+        if self._trace is None:
+            return _NO_TRACE_SPAN
+        return self._trace.span(name, iteration_id=iteration_id, inference_id=inference_id)
 
     def wait_body_state(self, timeout: float) -> BodyState:
         if self._trace is not None:

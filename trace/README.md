@@ -23,8 +23,28 @@ print(controller.trace_health)
 `trace_output` and `trace_compression="raw"|"zstd"` options. Omitting the path
 starts no trace resources and does not import the trace backend. Existing
 Body/end-effector CLI entries forward their `--trace=fbs --trace-output=...`
-options to the connection constructor. Custom user spans still use the separate
-public `Session` API; they are not required for ordinary SDK instrumentation.
+options to the connection constructor. Custom user spans use the same file
+without another recorder. Register names once and measure the actual model call:
+
+```python
+with PullController(trace_output="run.ftrace", trace_stages=("actor",)) as controller:
+    with controller.trace_span("actor", iteration_id=1) as span:
+        action = model.infer(observation)
+```
+
+This records monotonic start, elapsed microseconds, a distinct inference ID,
+iteration ID and success/failure. The model exception remains unchanged.
+Observation preparation and publication are outside this particular span.
+Endpoint quantization uses a conservative +1 us margin; this is not a measured
+performance guarantee. An asynchronous GPU/NPU call measures submission unless
+its original completion wait is inside the span. Trace adds no synchronization.
+When disabled, `trace_span` is a no-op and reads no trace clock.
+
+Unknown stage names, excessive nesting and exhausted producer channels mark
+incomplete capture without stopping computation. A nested SDK call carries the
+active span identity. Publishing after leaving the span does not automatically
+attribute a command to that inference; asynchronous consumption linkage is
+separate work.
 
 The SDK records publish entry before validation/control-lock waiting,
 reservation completion with the actual allocated key, and publication return

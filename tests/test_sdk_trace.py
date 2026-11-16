@@ -386,6 +386,35 @@ class SdkTraceTests(unittest.TestCase):
         cancels = [m for _, m in h.transport.published if getattr(m, 'operation', None) == ControlOperation.CANCEL]
         self.assertEqual(len(cancels), 1)
 
+    def test_user_model_span_measures_only_selected_call_and_preserves_exception(self):
+        t = FakeTransport()
+        primary = RuntimeError('model inference failed')
+        with ExternalController(_transport=t, trace_output=self.path,
+                                trace_stages=('actor',)) as controller:
+            with patch('locomotion_aorta.trace._sdk.monotonic_us', side_effect=(100, 180)):
+                with controller.trace_span('actor', iteration_id=7) as first:
+                    pass  # Deterministic CPU model boundary, not a performance measurement.
+            with patch('locomotion_aorta.trace._sdk.monotonic_us', side_effect=(200, 250)):
+                with self.assertRaises(RuntimeError) as caught:
+                    with controller.trace_span('actor', iteration_id=8):
+                        raise primary
+            self.assertIs(caught.exception, primary)
+        rows, _ = self.records()
+        spans = [r for r in rows if r['kind'] == Kind.USER_SPAN]
+        self.assertEqual([r['duration_us'] for r in spans], [81, 51])
+        self.assertEqual([r['outcome'] for r in spans], [Outcome.OK, Outcome.FAILED])
+        self.assertEqual([r['iteration_id'] for r in spans], [7, 8])
+        self.assertEqual(spans[0]['inference_id'], first.inference_id)
+        self.assertNotEqual(spans[0]['inference_id'], spans[1]['inference_id'])
+
+    def test_disabled_user_span_reads_no_clock_and_starts_no_recording(self):
+        with ExternalController(_transport=FakeTransport()) as controller:
+            with patch('locomotion_aorta.trace._sdk.monotonic_us', side_effect=AssertionError('clock')):
+                with controller.trace_span('actor'):
+                    result = 42
+            self.assertEqual(result, 42)
+        self.assertFalse(self.path.exists())
+
 
 if __name__ == '__main__':
     unittest.main()

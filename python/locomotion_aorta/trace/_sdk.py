@@ -4,8 +4,11 @@ from dataclasses import asdict
 import json
 import math
 import threading
+from contextlib import nullcontext
 
 from .session import Kind, Outcome, Session, monotonic_us
+
+_NO_SPAN = nullcontext()
 
 STAGES = ('body_read', 'body_publish', 'endpoint_feedback', 'endpoint_publish',
           'control_enter', 'control_exit', 'touch_received', 'key_reserved',
@@ -41,13 +44,14 @@ class SdkTrace:
     Thread registration never waits; exhaustion is reported as incomplete capture.
     A retained Thread object prevents recycled Python/OS IDs from reusing a ring.
     """
-    def __init__(self, path, *, compression='zstd', threads=8):
+    def __init__(self, path, *, compression='zstd', threads=8, stages=()):
+        self.user_stages = tuple(stages)
         self.body_indices = {}
         self._registration = threading.Lock()
         self._local = threading.local()
         self._threads = []
         self.session = Session(path, producers=tuple('thread_' + str(i) for i in range(threads)),
-            stages=STAGES, compression=compression,
+            stages=STAGES + self.user_stages, compression=compression,
             streams=({'id': 1, 'name': 'body'}, {'id': 2, 'name': 'left'}, {'id': 3, 'name': 'right'}),
             metadata={
                 'capture_scope': 'SDK method entry, reservation, return and accepted feedback',
@@ -136,6 +140,22 @@ class SdkTrace:
             return function(*args, **kwargs)
         return channel.call(operation, function, args, kwargs)
 
+    def span(self, name, *, iteration_id=0, inference_id=0):
+        channel = self._channel()
+        if channel is None:
+            return _NO_SPAN
+        if (name not in self.user_stages or len(channel._spans) >= 8 or
+                type(iteration_id) is not int or not 0 <= iteration_id < 2**64 or
+                type(inference_id) is not int or not 0 <= inference_id < 2**64):
+            channel._invalid()
+            return _NO_SPAN
+        sequence = channel.producer.next_id()
+        if sequence >= 2**56:
+            channel._invalid()
+            return _NO_SPAN
+        identity = ((channel.producer.index + 1) << 56) | sequence
+        return _UserSpan(channel, name, iteration_id, inference_id or identity, identity)
+
     def reserved(self, context, side=0):
         channel = self._channel()
         if channel is not None:
@@ -168,7 +188,7 @@ class SdkTrace:
         try:
             if not self.session._closed:
                 for channel in self._channels:
-                    if channel._attempts:
+                    if channel._attempts or channel._spans:
                         channel._invalid()
             self.session.close()
         except Exception:
@@ -181,8 +201,9 @@ class SdkTrace:
 class _Capture:
     def __init__(self, owner, producer):
         self.owner, self.producer = owner, producer
-        self.stages = {name: owner.session.stage(name) for name in STAGES}
+        self.stages = {name: owner.session.stage(name) for name in STAGES + owner.user_stages}
         self._attempts = []
+        self._spans = []
         self._lock = threading.Lock()
         self._values = array('d', [0.]) * 256
         self._validity = array('B', [0]) * 256
@@ -232,6 +253,10 @@ class _Capture:
         try:
             self._nv = self._ni = self._nt = 0
             ids = [0] * 12
+            if self._spans:
+                current = self._spans[-1]
+                ids[:4] = [current.iteration_id, current.inference_id,
+                           current.identity, current.parent]
             ids[4] = attempt
             if snapshot is not None:
                 subject = snapshot(subject, ids)
@@ -476,4 +501,29 @@ class _Capture:
         part = sample.payload[offset:offset+216]
         for start in range(0, len(part), 8):
             self._integer(int.from_bytes(part[start:start+8], 'little'))
+
+
+class _UserSpan:
+    def __init__(self, capture, name, iteration_id, inference_id, identity):
+        self.capture, self.name = capture, name
+        self.iteration_id, self.inference_id, self.identity = iteration_id, inference_id, identity
+        self.parent = capture._spans[-1].identity if capture._spans else 0
+        self.start = None
+
+    def __enter__(self):
+        self.start = self.capture._stamp()
+        self.capture._spans.append(self)
+        return self
+
+    def __exit__(self, error_type, _error, _traceback):
+        end = self.capture._stamp()
+        try:
+            if self.start is not None and end is not None and end >= self.start:
+                self.capture._record(Kind.USER_SPAN, self.name, self.start,
+                    Outcome.FAILED if error_type else Outcome.OK, duration=end-self.start+1)
+            else:
+                self.capture._invalid()
+        finally:
+            self.capture._spans.pop()
+        return False
 
