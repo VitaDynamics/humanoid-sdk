@@ -58,7 +58,11 @@ Borrowing connections never close this recorder, including constructor failure.
 Register stages on the recorder, not again on the connection. First registration
 uses a nonblocking guard; each thread then has its own fixed SPSC queue. Model
 execution does not hold a capture lock. The single native writer owns all file
-writes; Python capture still incurs GIL and scheduling overhead. The writer's
+writes; entering from Python and reading Python DTO fields still incurs GIL
+and scheduling overhead. Clocks, IDs, bounded call/span stacks, field snapshots
+and queue submission now run in C++. BodyState native arrays are read directly
+through checked buffers without Python per-axis iteration or lazy joints.
+Snapshots are owned POD copies; the writer retains no Python references. The writer's
 close/completion wait is not part of a normal model or publish call.
 
 Unknown stage names, excessive nesting and exhausted producer channels mark
@@ -79,8 +83,8 @@ One connection has one native writer and eight preallocated producer channels,
 bound lazily to actual calling/callback threads. The nonblocking binding and
 capture guards drop observation on contention/reentry/exhaustion and mark the
 file incomplete. Channels are never recycled onto another Thread object.
-The count/capacity and Python snapshot overhead still require measurement;
-this is not strict real-time acceptance.
+The count/capacity and complete target control-loop overhead still require
+measurement; host capture microbenchmarks are not strict real-time acceptance.
 
 Discovery/Info is cold metadata, split into bounded UTF-8 packets at the
 `discovery` stage. Integer columns are `[byte_offset, total_bytes, words...]`;
@@ -140,3 +144,21 @@ FBS integrity ledger; incomplete input returns exit code 2 and keeps all issues.
 Counts are observed spans, not a claim of total inference calls when records
 were lost. Failed calls are separate from successful-call timing. The offline
 summary does not run in the control, Planner or writer thread.
+
+Native capture requires its matching extension (`CAPTURE_API_VERSION=1`), checked
+before file creation. No receive/encoding/publication algorithm or wire layout
+was changed by this optimization. Low-level codec/transport sub-stage timestamps
+remain a separate pending integration; current snapshots describe the original
+SDK call/accepted-feedback boundaries. C++ reading Python DTOs keeps the GIL;
+there is no blanket `gil_scoped_release` around object access. Tiny queue submits
+do not repeatedly release/reacquire the GIL. The guard is not held across the original SDK call or user model. Python
+property getters invoked during snapshot extraction can reenter; nested capture
+is rejected nonblockingly and counted, while the original SDK operation retains
+its behavior.
+
+`benchmarks/trace_capture.py` compares the same synthetic capture inputs using
+baseline and candidate packages. It runs separately from unit tests, writes
+individual elapsed-us samples and the full loss ledger, and fails if a capture
+is incomplete. It creates no Aorta node or control publisher. Use distinct
+`--output` directories; do not infer target deadlines by subtracting independent
+p99 values or by accepting dropped records.

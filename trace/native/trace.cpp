@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -296,6 +297,63 @@ void RunWriter(std::shared_ptr<State> s, std::string metadata) noexcept {
   s->completion.notify_all();
 }
 
+template <class Fill>
+bool SubmitRecord(State &s, uint32_t producer, Fill &&fill) {
+  if (producer >= s.producers.size())
+    throw py::value_error("unknown producer");
+  auto &p = *s.producers[producer];
+  s.active_submissions.fetch_add(1, std::memory_order_seq_cst);
+  struct InFlight {
+    State *s;
+    ~InFlight() {
+      s->active_submissions.fetch_sub(1, std::memory_order_seq_cst);
+    }
+  } in_flight{&s};
+  // Closing establishes the end of the accounting window. A racing call
+  // either belongs to that window or returns without modifying its ledger.
+  if (s.closing.load(std::memory_order_seq_cst))
+    return false;
+  p.attempted.Add();
+  const pid_t tid = static_cast<pid_t>(syscall(SYS_gettid));
+  pid_t owner = 0;
+  p.owner.compare_exchange_strong(owner, tid, std::memory_order_relaxed);
+  if (p.owner.load(std::memory_order_relaxed) != tid) {
+    p.wrong_thread.Add();
+    p.dropped.Add();
+    return false;
+  }
+  if (p.next_sequence == UINT64_MAX) {
+    p.attempted.valid.store(false);
+    p.dropped.Add();
+    return false;
+  }
+  const uint64_t sequence = p.next_sequence++;
+  if (s.failed.load(std::memory_order_acquire)) {
+    p.dropped.Add();
+    return false;
+  }
+  const uint64_t head = p.head.load(std::memory_order_relaxed);
+  const uint64_t tail = p.tail.load(std::memory_order_acquire);
+  if (head - tail >= p.capacity) {
+    p.dropped.Add();
+    return false;
+  }
+  Record &r = p.slots[head % p.capacity];
+  try {
+    fill(r);
+  } catch (...) {
+    p.dropped.Add();
+    throw;
+  }
+  r.sequence = sequence;
+  p.enqueued.Add();
+  p.head.store(head + 1, std::memory_order_release);
+  const uint64_t size = head - tail + 1;
+  if (size > p.peak.load(std::memory_order_relaxed))
+    p.peak.store(size, std::memory_order_relaxed);
+  return true;
+}
+
 class Session {
  public:
   Session(const std::string& path, size_t producers, size_t capacity, bool compress,
@@ -331,50 +389,17 @@ class Session {
               const std::array<uint64_t, kIds>& ids, py::object values,
               py::object integers, py::object times_us, py::object validity,
               bool time_valid) {
-    if (producer >= s_->producers.size()) throw py::value_error("unknown producer");
     if (!kind || kind > 21 || outcome > 11) throw py::value_error("unknown trace kind/outcome");
-    auto& p = *s_->producers[producer];
-    s_->active_submissions.fetch_add(1, std::memory_order_seq_cst);
-    struct InFlight {
-      State* s;
-      ~InFlight() { s->active_submissions.fetch_sub(1, std::memory_order_seq_cst); }
-    } in_flight{s_.get()};
-    // Closing establishes the end of the accounting window. A racing call
-    // either belongs to that window or returns without modifying its ledger.
-    if (s_->closing.load(std::memory_order_seq_cst)) return false;
-    p.attempted.Add();
-    const pid_t tid = static_cast<pid_t>(syscall(SYS_gettid));
-    pid_t owner = 0;
-    p.owner.compare_exchange_strong(owner, tid, std::memory_order_relaxed);
-    if (p.owner.load(std::memory_order_relaxed) != tid) {
-      p.wrong_thread.Add(); p.dropped.Add(); return false;
-    }
-    if (p.next_sequence == UINT64_MAX) {
-      p.attempted.valid.store(false); p.dropped.Add(); return false;
-    }
-    const uint64_t sequence = p.next_sequence++;
-    if (s_->failed.load(std::memory_order_acquire)) {
-      p.dropped.Add(); return false;
-    }
-    const uint64_t head = p.head.load(std::memory_order_relaxed);
-    const uint64_t tail = p.tail.load(std::memory_order_acquire);
-    if (head - tail >= p.capacity) { p.dropped.Add(); return false; }
-    Record& r = p.slots[head % p.capacity];
-    r.sequence = sequence; r.kind = kind; r.timestamp_us = timestamp_us;
-    r.time_valid = time_valid; r.duration_us = duration_us; r.duration_valid = duration_valid;
-    r.stream = stream; r.stage = stage; r.clock = clock; r.epoch = epoch;
-    r.outcome = outcome; r.ids = ids;
-    try {
+    return SubmitRecord(*s_, producer, [&](Record& r) {
+      r.kind = kind; r.timestamp_us = timestamp_us;
+      r.time_valid = time_valid; r.duration_us = duration_us; r.duration_valid = duration_valid;
+      r.stream = stream; r.stage = stage; r.clock = clock; r.epoch = epoch;
+      r.outcome = outcome; r.ids = ids;
       r.n_values = CopyValues(values, r.values);
       r.n_integers = CopyBuffer(integers, r.integers);
       r.n_times = CopyBuffer(times_us, r.times_us);
       r.n_validity = CopyBuffer(validity, r.validity);
-    } catch (...) { p.dropped.Add(); throw; }
-    p.enqueued.Add();
-    p.head.store(head + 1, std::memory_order_release);
-    const uint64_t size = head - tail + 1;
-    if (size > p.peak.load(std::memory_order_relaxed)) p.peak.store(size, std::memory_order_relaxed);
-    return true;
+    });
   }
 
   bool Close(uint64_t timeout_us) {
@@ -388,6 +413,7 @@ class Session {
     else worker_.detach();  // Worker owns State/FD/queues until it really exits.
     return done;
   }
+  std::shared_ptr<State> SharedState() const { return s_; }
   std::string HealthJson() const { return Health(*s_, "recorder_health"); }
   void NoteInvalid(uint32_t producer) {
     if (producer < s_->producers.size() && !s_->closing.load())
@@ -436,6 +462,8 @@ class Session {
   std::shared_ptr<State> s_;
   std::thread worker_;
 };
+
+#include "sdk_capture.h"
 
 py::dict DecodeChunk(py::bytes input) {
   std::string bytes = input;
@@ -507,6 +535,7 @@ py::dict DecodeChunk(py::bytes input) {
 PYBIND11_MODULE(_trace_native, m) {
   m.attr("FORMAT_MAJOR") = 1; m.attr("FORMAT_MINOR") = 3;
   m.attr("SLOT_BYTES") = sizeof(Record);
+  m.attr("CAPTURE_API_VERSION") = 1;
   m.def("monotonic_us", &NowUs);
   m.def("decode_chunk", &DecodeChunk);
   py::class_<Session>(m, "Session")
@@ -518,4 +547,5 @@ PYBIND11_MODULE(_trace_native, m) {
     .def("close", &Session::Close, py::call_guard<py::gil_scoped_release>())
     .def("health_json", &Session::HealthJson)
     .def("status", &Session::Status);
+  BindSdkCapture(m);
 }

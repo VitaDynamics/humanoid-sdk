@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -150,7 +151,7 @@ class SdkTraceTests(unittest.TestCase):
     def test_recording_failure_does_not_fail_publish_or_add_cancel(self):
         h, node = self.harness()
         endpoint = self.endpoint(h, node)
-        with patch.object(h.controller._trace.session._writer.__class__, 'submit', side_effect=OSError('disk')):
+        with patch.object(type(h.controller._trace._channels[0].native), 'end', side_effect=OSError('capture boundary')):
             sent = endpoint.publish(target(), input_observations=(endpoint.state.sample_ref,))
         self.assertEqual(sent.key.sequence, 1)
         self.assertEqual(len(node.commands), 1)
@@ -184,6 +185,13 @@ class SdkTraceTests(unittest.TestCase):
             h.controller.enter_external(.1)
             h.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=25)
             self.assertIsNone(h.controller.trace_health)
+        self.assertFalse(self.path.exists())
+
+    def test_native_capture_version_mismatch_fails_before_file_creation(self):
+        from locomotion_aorta.trace import _trace_native
+        with patch.object(_trace_native, 'CAPTURE_API_VERSION', 0):
+            with self.assertRaisesRegex(RuntimeError, 'matching native capture'):
+                Trace(self.path)
         self.assertFalse(self.path.exists())
 
     def test_trace_initialization_failure_closes_transport_before_control(self):
@@ -234,11 +242,12 @@ class SdkTraceTests(unittest.TestCase):
     def test_publish_entry_is_recorded_before_waiting_for_controller_lock(self):
         h, _ = self.harness()
         observed = threading.Event()
-        original = h.controller._trace._channels[1].producer.emit
+        native = type(h.controller._trace._channels[1].native)
+        original = native.begin
         errors = []
-        def mark(*args, **kwargs):
-            result = original(*args, **kwargs)
-            if args[0] == Kind.BODY_COMMAND and kwargs['outcome'] == Outcome.UNKNOWN:
+        def mark(capture, kind, stage, stream):
+            result = original(capture, kind, stage, stream)
+            if kind == Kind.BODY_COMMAND:
                 observed.set()
             return result
         def publish():
@@ -246,7 +255,7 @@ class SdkTraceTests(unittest.TestCase):
                 h.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=25)
             except BaseException as error:
                 errors.append(error)
-        with patch.object(h.controller._trace._channels[1].producer, 'emit', side_effect=mark):
+        with patch.object(native, 'begin', new=mark):
             with h.controller._condition:
                 worker = threading.Thread(target=publish)
                 worker.start()
@@ -333,18 +342,25 @@ class SdkTraceTests(unittest.TestCase):
 
     def test_capture_reentry_drops_observation_without_mutating_outer_publish(self):
         h, _ = self.harness()
-        channel = h.controller._trace._channels[0]
-        original = channel._body_command
+        original = h.controller._publish_observed
         reentered = False
         nested = []
-        def snapshot(command, ids, required, names):
-            nonlocal reentered
-            if not reentered:
-                reentered = True
-                nested.append(h.controller.publish(make_command(0, q=.2),
-                    target_names=_BODY_TEST_TARGETS, required_fields=25))
-            return original(command, ids, required, names)
-        with patch.object(channel, '_body_command', side_effect=snapshot):
+        # A real Python getter reenters during the native snapshot. No test-only
+        # production snapshot hook or shared scratch is used.
+        class ReturnedCommand:
+            def __init__(self, command):
+                self.command = command
+            def __getattr__(self, name):
+                nonlocal reentered
+                if name == 'joints' and not reentered:
+                    reentered = True
+                    nested.append(h.controller.publish(make_command(0, q=.2),
+                        target_names=_BODY_TEST_TARGETS, required_fields=25))
+                return getattr(self.command, name)
+        def returned(*args, **kwargs):
+            command = original(*args, **kwargs)
+            return command if reentered else ReturnedCommand(command)
+        with patch.object(h.controller, '_publish_observed', side_effect=returned):
             outer = h.controller.publish(make_command(0, q=.1), target_names=_BODY_TEST_TARGETS, required_fields=25)
         self.assertEqual((outer.sequence, nested[0].sequence), (1, 2))
         self.assertAlmostEqual(outer.joints[0].q, .1)
@@ -391,17 +407,22 @@ class SdkTraceTests(unittest.TestCase):
         primary = RuntimeError('model inference failed')
         with ExternalController(_transport=t, trace_output=self.path,
                                 trace_stages=('actor',)) as controller:
-            with patch('locomotion_aorta.trace._sdk.monotonic_us', side_effect=(100, 180)):
-                with controller.trace_span('actor', iteration_id=7) as first:
-                    pass  # Deterministic CPU model boundary, not a performance measurement.
-            with patch('locomotion_aorta.trace._sdk.monotonic_us', side_effect=(200, 250)):
-                with self.assertRaises(RuntimeError) as caught:
-                    with controller.trace_span('actor', iteration_id=8):
-                        raise primary
+            before = time.monotonic_ns() // 1000
+            with controller.trace_span('actor', iteration_id=7) as first:
+                body_begin = time.monotonic_ns() // 1000
+                body_end = time.monotonic_ns() // 1000
+            after = time.monotonic_ns() // 1000
+            with self.assertRaises(RuntimeError) as caught:
+                with controller.trace_span('actor', iteration_id=8):
+                    raise primary
             self.assertIs(caught.exception, primary)
         rows, _ = self.records()
         spans = [r for r in rows if r['kind'] == Kind.USER_SPAN]
-        self.assertEqual([r['duration_us'] for r in spans], [81, 51])
+        self.assertLessEqual(before, spans[0]['timestamp_us'])
+        self.assertLessEqual(spans[0]['timestamp_us'], body_begin)
+        self.assertGreaterEqual(spans[0]['timestamp_us'] + spans[0]['duration_us'], body_end)
+        self.assertLessEqual(spans[0]['timestamp_us'] + spans[0]['duration_us'], after + 1)
+        self.assertTrue(all(r['duration_us'] >= 1 for r in spans))
         self.assertEqual([r['outcome'] for r in spans], [Outcome.OK, Outcome.FAILED])
         self.assertEqual([r['iteration_id'] for r in spans], [7, 8])
         self.assertEqual(spans[0]['inference_id'], first.inference_id)
@@ -474,29 +495,91 @@ class SdkTraceTests(unittest.TestCase):
     def test_offline_span_summary_separates_stages_failures_and_incomplete_capture(self):
         from locomotion_aorta.trace.summary import summarize_spans
         with Trace(self.path, stages=('planner', 'actor')) as trace:
-            with patch('locomotion_aorta.trace._sdk.monotonic_us', side_effect=(100, 110, 200, 230, 300, 305)):
+            with trace.span('planner'):
+                pass
+            with trace.span('actor'):
+                pass
+            with self.assertRaisesRegex(RuntimeError, 'failure'):
                 with trace.span('planner'):
-                    pass
-                with trace.span('actor'):
-                    pass
-                with self.assertRaisesRegex(RuntimeError, 'failure'):
-                    with trace.span('planner'):
-                        raise RuntimeError('failure')
+                    raise RuntimeError('failure')
         result = summarize_spans(self.path)
         self.assertTrue(result['capture_complete'])
         groups = {(r['stage'], r['outcome']): r for r in result['stages']}
-        self.assertEqual(groups['planner', 'OK']['p99_us'], 11)
-        self.assertEqual(groups['planner', 'FAILED']['p99_us'], 6)
-        self.assertEqual(groups['actor', 'OK']['p99_us'], 31)
+        rows, _ = self.records()
+        spans = [r for r in rows if r['kind'] == Kind.USER_SPAN]
+        self.assertEqual(groups['planner', 'OK']['p99_us'], spans[0]['duration_us'])
+        self.assertEqual(groups['actor', 'OK']['p99_us'], spans[1]['duration_us'])
+        self.assertEqual(groups['planner', 'FAILED']['p99_us'], spans[2]['duration_us'])
         self.assertTrue(all(r['observed_spans'] == 1 for r in groups.values()))
         self.path.write_bytes(self.path.read_bytes()[:-10])
         incomplete = summarize_spans(self.path)
         self.assertFalse(incomplete['capture_complete'])
         self.assertIn('missing_run_end', incomplete['issues'])
 
+    def test_native_array_capture_avoids_lazy_joint_materialization_and_owns_snapshot(self):
+        import numpy as np
+        from locomotion_aorta.state_arrays import BodyStateArrays, decode_body_state_arrays
+        from test_body_codec import make_state
+        state = decode_body_state_arrays(make_state()[0])
+        values = np.nan_to_num(state.q.copy())  # Explicit synthetic finite capture input.
+        class BufferOnly(np.ndarray):
+            def __iter__(self):
+                raise AssertionError('Python array iteration')
+            def __getitem__(self, _):
+                raise AssertionError('Python scalar indexing')
+        state = replace(state, q=values.view(BufferOnly), dq=state.dq.view(BufferOnly),
+                        tau_est=state.tau_est.view(BufferOnly), error_code=state.error_code.view(BufferOnly),
+                        joint_stamps_us=state.joint_stamps_us.view(BufferOnly))
+        with Trace(self.path) as trace:
+            with patch.object(BodyStateArrays, 'joints', property(lambda _: (_ for _ in ()).throw(
+                    AssertionError('lazy joints materialized')))):
+                trace.received('body', state)
+                values[0] = .75
+                trace.received('body', state)
+        rows, _ = self.records()
+        body = [r for r in rows if r['kind'] == Kind.BODY_FEEDBACK]
+        self.assertEqual([r['values'][0] for r in body], [.125, .75])
+        self.assertEqual([r['state_id'] for r in body], [91, 91])
+        self.assertEqual(body[0]['values'][-1], 0xfffffff9)
+        self.assertEqual(body[0]['times_us'][8:11], [0, 1000, 2000])
+        self.assertEqual(len(body[0]['validity']), 225)
+
+    def test_native_span_context_propagates_to_actual_body_publish(self):
+        trace = Trace(self.path, stages=('planner', 'actor'))
+        self.addCleanup(trace.close)
+        h = ControllerHarness(runtime_id=100, trace_recorder=trace)
+        self.addCleanup(h.controller.close)
+        h.accept_enter()
+        h.controller.enter_external(.2)
+        with trace.span('planner', iteration_id=7) as outer:
+            with trace.span('actor', iteration_id=8) as inner:
+                sent = h.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS, required_fields=25)
+        h.controller.close()
+        trace.close()
+        rows, _ = self.records()
+        command = next(r for r in rows if r['kind'] == Kind.BODY_COMMAND and r['outcome'] == Outcome.OK)
+        self.assertEqual(command['command_sequence'], sent.sequence)
+        self.assertEqual(command['inference_id'], inner.inference_id)
+        self.assertEqual(command['parent_span_id'], outer.identity)
+        self.assertEqual(command['iteration_id'], 8)
+
+    def test_native_span_wrong_thread_exit_is_rejected_without_reusing_channel(self):
+        with Trace(self.path, stages=('actor',)) as trace:
+            span = trace.span('actor')
+            span.__enter__()
+            worker = threading.Thread(target=lambda: span.__exit__(None, None, None))
+            worker.start()
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+            span.__exit__(None, None, None)  # Only its real producer can finish it.
+        rows, integrity = self.records(complete=False)
+        self.assertEqual(sum(r['kind'] == Kind.USER_SPAN for r in rows), 1)
+        self.assertGreater(sum(p['wrong_thread_events'] for p in integrity.run_end['producers']), 0)
+
     def test_disabled_user_span_reads_no_clock_and_starts_no_recording(self):
         with ExternalController(_transport=FakeTransport()) as controller:
-            with patch('locomotion_aorta.trace._sdk.monotonic_us', side_effect=AssertionError('clock')):
+            from locomotion_aorta.trace import _trace_native
+            with patch.object(_trace_native.SdkCapture, 'begin_span', side_effect=AssertionError('capture')):
                 with controller.trace_span('actor'):
                     result = 42
             self.assertEqual(result, 42)
