@@ -4,8 +4,9 @@ This draft adds a native recording container and the public
 `locomotion_aorta.trace` API. It does not change robot wire messages or grant
 control ownership. Production SDK controller/receive hooks, full model causal
 association, MCAP analysis, HTML reports, installed-wheel/ARM validation and
-performance acceptance are still pending. Existing SDK example logging is not
-retired by this foundation commit.
+performance acceptance are still pending. The shared end-effector demo now
+offers `--trace=fbs --trace-output=NEW.ftrace`; see its README for exact scope.
+The policy demos' legacy logging has not yet been retired.
 
 Register producer and stage handles before control. One producer belongs to one
 actual OS thread. All timestamps and durations submitted to trace are integer

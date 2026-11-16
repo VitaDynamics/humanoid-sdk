@@ -36,3 +36,46 @@ OP3 回复无事务号，有界同 key 读重试不能严格分辨迟到回复�
 完整协议、单位、控制时序与图示见[SDK 手册](https://vitadynamics.feishu.cn/wiki/OG6KwVrf8i0fNdk2oGTc3nDKnFh)；新版页面以正式发布回读为准。
 
 运动须单独授权并确认当前现场条件。ACK accepted 不是 RUNNING，publish 返回不是到位。正常退出 CANCEL→PASSIVE 可能使负载下落；异常、超时或退出不完整时不自动重试。
+
+## Trace 记录（开发中）
+
+本 PR 的通用入口和上述四个厂商入口支持同一组 Trace 参数。需要包含
+`locomotion_aorta.trace` 及其匹配 native 模块的候选 wheel；不代表 RC1
+既有安装包已经包含此功能。
+
+```bash
+# 只读示例：不申请控制权，不发送目标或触觉开关。
+python examples/end_effector/brainco_revo2.py --dry-run --side left \
+  --trace=fbs --trace-output=./readonly.ftrace
+```
+
+在原来已获授权的运动命令后增加相同两个参数，即可记录原控制流程。
+默认 `--trace=off` 不创建 Trace 会话、队列或文件；文件必须是新的 `.ftrace`，
+不会覆盖已有内容。`--trace-compression=raw` 可关闭压缩，默认使用 Zstd。
+无需使用者自己为本体、左末端、右末端各写一个 `with`。
+
+一个文件、一个 native writer 记录现有本体读取、保持目标、左右末端目标，
+以及实际返回的命令键和所选 SampleRef；不额外读取反馈或创建订阅。
+`--ee-only` 仍不发送本体命令。触觉开关继续由原 RPC/State/Touch 流程确认；
+Trace 保存确认时的原始区域时间、有效位与负载，不增加连续触觉订阅。
+
+记录的是应用调用入口/返回及已有反馈快照，包含重复或无效样本，不表示
+机器人已接纳、CAN 已发送或设备已经执行。内部键分配、取件/解码时间、
+连续触觉、MCAP/HTML 分析和整条链路仍未接完。时间均为微秒；原来源时钟
+保持区分，不把 Core context stamp 当网络到达，也不直接计算跨时钟延迟。
+局部调用区间包含起始 Trace 标记的采集开销，不能冒充纯 SDK 执行耗时。
+native、Python 准备快照的总开销和 ARM 安装验证需分别实测。
+
+录制故障不新增 CANCEL、不覆盖原运动异常。原 CANCEL 完成后才关闭采集；
+队列满或丢记录会反映在健康账本中。读取到文件末尾后再检查完整性：
+
+```python
+from locomotion_aorta.trace.reader import Reader
+
+reader = Reader('readonly.ftrace')
+for event in reader:
+    print(event['kind'], event['timestamp_us'], event['state_id'])
+print(reader.integrity.complete, reader.integrity.issues)
+```
+
+`complete` 只说明采集文件的完整性，不表示控制成功或物理设备测试通过。

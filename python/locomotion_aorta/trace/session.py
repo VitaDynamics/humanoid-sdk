@@ -139,6 +139,11 @@ class Producer:
         self._next_id += 1
         return result
 
+    def note_invalid(self):
+        """Account for a snapshot that could not be captured, outside the ring."""
+        self.invalid_events += 1
+        self._session._writer.note_invalid(self.index)
+
     def emit(self, kind, *, timestamp_us=None, duration_us=None, stream=0,
              stage=0, clock=0, epoch=1, outcome=Outcome.UNKNOWN, ids=EMPTY_IDS,
              values=None, integers=None, times_us=None, validity=None):
@@ -155,8 +160,7 @@ class Producer:
                 values, integers, times_us, validity, True)
         except Exception:
             # Optional observation must not replace a publication/control error.
-            self.invalid_events += 1
-            self._session._writer.note_invalid(self.index)
+            self.note_invalid()
             return False
 
     def mark(self, stage, *, ids=EMPTY_IDS, outcome=Outcome.OK):
