@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import test_examples as body_fixture
 
 from locomotion_aorta import BODY_CMD_TOPIC
 from locomotion_aorta.trace import Kind, Outcome
@@ -240,6 +241,116 @@ class DemoTraceTests(unittest.TestCase):
         self.assertEqual([r['values'][0] for r in rows], [0., 0.])
         self.assertEqual([r['validity'][0] for r in rows], [0, 1])
         self.assertEqual([r['integers'][10] for r in rows], [0, fixture.Field.POS])
+
+    def test_full_body_demo_preserves_trajectory_scope_and_uses_one_discovery(self):
+        controller = self.case.controller()
+        output = []
+        with patch.object(controller, 'get_robot_info', wraps=controller.get_robot_info) as discovery:
+            body_fixture.external_control.run(controller, timeout=1.,
+                sleep=self.case.clock.sleep, monotonic=self.case.clock.monotonic,
+                emit=output.append, trace_output=self.path, trace_compression='raw')
+        discovery.assert_called_once_with(1.)
+        rows = self.records()
+        commands = [message for topic, message in controller.transport.published if topic == BODY_CMD_TOPIC]
+        recorded = [r for r in rows if r['kind'] == Kind.BODY_COMMAND and r['outcome'] == Outcome.OK]
+        self.assertEqual([(r['session_id'], r['command_sequence']) for r in recorded],
+                         [(c.session_id, c.sequence) for c in commands])
+        self.assertTrue(commands)
+        self.assertAlmostEqual(commands[-1].joints[0].q, .1)
+        self.assertEqual(commands[-1].joints[14].q, 0.)
+        self.assertEqual(commands[-1].joints[18].q, 0.)
+        self.assertEqual(commands[-1].joints[25].q, 0.)
+        target_mask = sum(1 << i for i in range(31) if i != 14)
+        self.assertTrue(all(r['integers'][2:] == [0x19, 1, target_mask, 1] for r in recorded))
+        self.assertEqual(controller.calls.count('enter_external'), 1)
+        self.assertEqual(controller.calls.count('exit_external'), 1)
+        self.assertEqual(sum(line.startswith('Body Info:') for line in output), 1)
+        self.assertEqual(output[-1], 'CANCEL confirmed PASSIVE')
+        self.assertTrue(all(b-a >= .02-1e-9
+                            for a, b in zip(controller.command_times, controller.command_times[1:])))
+        self.assertFalse(any(r['kind'] == Kind.EFFECTOR_COMMAND for r in rows))
+
+    def test_body_cli_uses_real_trace_path_and_requires_existing_motion_confirmation(self):
+        controller = self.case.controller()
+        original = body_fixture.external_control.run
+
+        @contextmanager
+        def connection(**_):
+            yield controller
+
+        def clocked(*args, **kwargs):
+            return original(*args, sleep=self.case.clock.sleep, monotonic=self.case.clock.monotonic,
+                            emit=self.case.events.append, **kwargs)
+
+        with patch.object(body_fixture.external_control, 'PullController', side_effect=connection), \
+             patch.object(body_fixture.external_control, 'run', side_effect=clocked), \
+             patch('sys.argv', ['external_control.py', '--confirm-motion', '--trace=fbs',
+                               '--trace-output', str(self.path), '--trace-compression', 'raw']):
+            body_fixture.external_control.main()
+        self.assertTrue(any(r['kind'] == Kind.BODY_COMMAND and r['outcome'] == Outcome.OK
+                            for r in self.records()))
+        self.assertEqual(controller.calls.count('exit_external'), 1)
+        with redirect_stderr(io.StringIO()), \
+             patch.object(body_fixture.external_control, 'PullController') as factory, \
+             patch('sys.argv', ['external_control.py', '--trace=fbs',
+                               '--trace-output', str(Path(self.temp.name) / 'not-created.ftrace')]), \
+             self.assertRaises(SystemExit) as caught:
+            body_fixture.external_control.main()
+        self.assertEqual(caught.exception.code, 2)
+        factory.assert_not_called()
+        self.assertFalse((Path(self.temp.name) / 'not-created.ftrace').exists())
+
+    def test_body_stale_preflight_still_blocks_entry_and_preserves_cached_ids(self):
+        controller = self.case.controller(advance_lowstate=False)
+        with self.assertRaisesRegex(RuntimeError, 'stale during the preflight'):
+            body_fixture.external_control.run(controller, timeout=1.,
+                sleep=self.case.clock.sleep, monotonic=self.case.clock.monotonic,
+                emit=self.case.events.append, trace_output=self.path, trace_compression='raw')
+        rows = self.records()
+        self.assertNotIn('enter_external', controller.calls)
+        self.assertFalse(any(topic == BODY_CMD_TOPIC for topic, _ in controller.transport.published))
+        reads = [r for r in rows if r['kind'] == Kind.BODY_READ and r['outcome'] == Outcome.OK]
+        self.assertGreater(len(reads), 1)
+        self.assertEqual(len({r['state_id'] for r in reads}), 1)
+        self.assertTrue(any(r['kind'] == Kind.ERROR and r['outcome'] == Outcome.FAILED for r in rows))
+
+    def test_all_vendor_motion_entries_reach_native_trace_without_body_commands(self):
+        for model in (fixture.DeviceModel.BRAINCO_REVO2, fixture.DeviceModel.AGX,
+                      fixture.DeviceModel.LINKER_L6, fixture.DeviceModel.AGILINK_OP3):
+            with self.subTest(model=model):
+                self.path = Path(self.temp.name) / (str(int(model)) + '.ftrace')
+                case = fixture.VendorExamplesTest('test_vendor_models_reach_shared_main_and_original_run')
+                case.setup_case()
+                self.addCleanup(case.doCleanups)
+                case.invoke(model, case.motion_flags(model) + [
+                    '--trace=fbs', '--trace-output', str(self.path), '--trace-compression', 'raw'])
+                rows = self.records()
+                commands = case.endpoints['right'].commands
+                emitted = [r for r in rows if r['kind'] == Kind.EFFECTOR_COMMAND and r['outcome'] == Outcome.OK]
+                self.assertEqual([r['command_sequence'] for r in emitted], [c.key.sequence for c in commands])
+                self.assertTrue(commands)
+                self.assertEqual(case.control.command_count, 0)
+                self.assertFalse(any(r['kind'] == Kind.BODY_COMMAND for r in rows))
+                self.assertEqual(case.control.calls.count('enter_external'), 1)
+                self.assertEqual(case.control.calls.count('exit_external'), 1)
+
+    def test_masked_nonfinite_info_is_recorded_as_unknown_without_new_admission_gate(self):
+        controller = self.case.controller()
+        reply = replace(body_fixture.example_robot_info_reply(), runtime_id=100)
+        joint = replace(reply.info.body.joints[14], q_min=float('nan'), q_max=float('nan'))
+        info = replace(reply.info.body, joints=reply.info.body.joints[:14] + (joint,) + reply.info.body.joints[15:])
+        controller.transport.get_robot_info = lambda timeout: replace(reply, info=replace(reply.info, body=info))
+        body_fixture.external_control.run(controller, timeout=1.,
+            sleep=self.case.clock.sleep, monotonic=self.case.clock.monotonic,
+            emit=self.case.events.append, trace_output=self.path, trace_compression='raw')
+        reader = Reader(self.path)
+        list(reader)
+        self.assertTrue(reader.integrity.complete, reader.integrity.issues)
+        header = reader.integrity.run_header
+        self.assertIsNone(header['robot_info']['body']['joints'][14]['q_min'])
+        self.assertEqual(header['info_nonfinite_fields']['.body.joints.14.q_min'], 'nan')
+        self.assertEqual(header['robot_info']['body']['joints'][14]['valid_limits'], 0)
+        self.assertEqual(controller.calls.count('exit_external'), 1)
 
 
 if __name__ == '__main__':

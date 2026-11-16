@@ -54,6 +54,13 @@ python examples/end_effector/brainco_revo2.py --dry-run --side left \
 不会覆盖已有内容。`--trace-compression=raw` 可关闭压缩，默认使用 Zstd。
 无需使用者自己为本体、左末端、右末端各写一个 `with`。
 
+`brainco_revo2.py`、`agx_gripper.py`、`linker_l6.py`、`omnipicker3.py`
+均调用这个公共入口，直接接受上述参数，不维护另一套厂商专用 Trace 实现。
+AGX 与 OP3 的实际入口也有启用 Trace 的运动回归，检查返回键、零本体发布
+以及原 CANCEL。它们是合成 I/O 的例程测试，不代表真机运动已通过。
+独立本体归零／返回例程 `examples/external_control/external_control.py`
+也支持相同参数，见其 README。
+
 一个文件、一个 native writer 记录现有本体读取、保持目标、左右末端目标，
 以及实际返回的命令键和所选 SampleRef；不额外读取反馈或创建订阅。
 `--ee-only` 仍不发送本体命令。触觉开关继续由原 RPC/State/Touch 流程确认；

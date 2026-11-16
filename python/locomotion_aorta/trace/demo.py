@@ -21,6 +21,23 @@ EE_COMMAND_BITS = (1, 2, 4, 8, 16)
 EE_STATE_BITS = (1, 2, 8, 16, 32, 128)
 
 
+def _info_metadata(info):
+    """Cold-only JSON representation; masked unknown limits may contain NaN."""
+    nonfinite = {}
+
+    def convert(value, path=''):
+        if isinstance(value, float) and not math.isfinite(value):
+            nonfinite[path] = repr(value)
+            return None
+        if isinstance(value, dict):
+            return {key: convert(item, path + '.' + key) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [convert(item, path + '.' + str(i)) for i, item in enumerate(value)]
+        return value
+
+    return convert(asdict(info)), nonfinite
+
+
 class DemoTrace:
     """One run/file/writer; all hooks here run on the existing control thread.
 
@@ -28,6 +45,9 @@ class DemoTrace:
     getter reentry cannot overwrite a packet. No lock is held across SDK calls.
     """
     def __init__(self, path, robot_reply, *, compression='zstd', capacity=512):
+        info, nonfinite_info = _info_metadata(robot_reply.info)
+        self._body_indices = {} if robot_reply.info.body is None else {
+            name: index for index, name in enumerate(robot_reply.info.body.joint_names)}
         self.session = Session(path, producers=('control',), stages=STAGES,
             compression=compression, capacity=capacity,
             streams=({'id': 1, 'name': 'body'}, {'id': 2, 'name': 'left'},
@@ -35,7 +55,8 @@ class DemoTrace:
             metadata={
                 'capture_scope': 'demo application calls; no extra reads or subscribers',
                 'robot_runtime_id': robot_reply.runtime_id,
-                'robot_info': asdict(robot_reply.info),  # Startup only.
+                'robot_info': info,
+                'info_nonfinite_fields': nonfinite_info,
                 'column_order': 'field-major, in the original fixed axis order',
                 'validity_order': 'one byte per value, followed by one byte per point time',
                 'layouts': {
@@ -51,7 +72,9 @@ class DemoTrace:
                         'snapshot_role', 'axis_field_masks_follow'],
                     'body_state_integers': ['axis_count', 'applied_key_valid',
                         'association_source_type'],
-                    'body_command_integers': ['axis_count', 'protocol_version'],
+                    'body_command_integers': ['axis_count', 'protocol_version',
+                        'required_fields', 'required_fields_known',
+                        'target_slot_mask', 'target_scope_known'],
                     'control_integers': ['client_id', 'generation', 'status_seq',
                         'reject_count', 'ingress_drop_count', 'timeout_hold'],
                     'sample_link_integers': ['source_runtime_id', 'stream', 'side', 'validity'],
@@ -174,11 +197,19 @@ class DemoTrace:
                      snapshot=after, subject=result)
         return result
 
-    def _body_command(self, command, ids):
+    def _body_command(self, command, ids, required_fields, target_names):
         ids[6:11] = [command.runtime_id or 0, command.control_id,
                     command.session_id, command.sequence, command.input_state_id]
         self._integer(len(command.joints))
         self._integer(command.protocol_version)
+        self._integer(0 if required_fields is None else required_fields)
+        self._integer(int(required_fields is not None))
+        slots = 0
+        if target_names is not None:
+            for name in target_names:
+                slots |= 1 << self._body_indices[name]
+        self._integer(slots)
+        self._integer(int(target_names is not None))
         for field in BODY_COMMAND_COLUMNS:
             for joint in command.joints:
                 self._value(getattr(joint, field))
@@ -226,7 +257,8 @@ class DemoTrace:
         for field, bit in zip(EE_COMMAND_COLUMNS, EE_COMMAND_BITS):
             column = getattr(target, field)
             for i, mask in enumerate(target.command_fields):
-                self._value(None if column is None else column[i], bool(mask & bit))
+                selected = bool(mask & bit)
+                self._value(column[i] if selected and column is not None else None, selected)
         for value in target.mode:
             self._integer(value)
         for value in target.command_fields:
@@ -268,9 +300,11 @@ class DemoTrace:
                           stream=1, after=self._body_state)
 
     def publish_body(self, controller, command, **kwargs):
+        def snapshot(value, ids):
+            return self._body_command(value, ids, kwargs.get('required_fields'), kwargs.get('target_names'))
         return self._call(Kind.BODY_COMMAND, 'body_publish',
             lambda: controller.publish(command, **kwargs), stream=1,
-            before=self._body_command, after=self._body_command, subject=command)
+            before=snapshot, after=snapshot, subject=command)
 
     def publish_endpoint(self, client, target, observations):
         result = self._call(Kind.EFFECTOR_COMMAND, 'endpoint_publish',
