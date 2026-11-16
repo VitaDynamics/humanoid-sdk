@@ -1,0 +1,66 @@
+// SDK-local recording format; this is not a robot wire message.
+namespace vita.trace;
+
+enum RecordKind : ushort {
+  UNKNOWN = 0, RUN_HEADER, STREAM_INFO, BODY_READ, BODY_COMMAND, BODY_FEEDBACK,
+  EFFECTOR_COMMAND, EFFECTOR_FEEDBACK, STAGE_EVENT, CYCLE_OUTCOME,
+  CONTROL_STATUS, INPUT_EVENT, GRIP_DECISION, MARKER_DEFINITION,
+  MODEL_DEFINITION, USER_SPAN, USER_MARK, TRACE_LINK, INFERENCE_LIFECYCLE,
+  RECORDER_HEALTH, ERROR, RUN_END
+}
+
+enum Outcome : ubyte {
+  UNKNOWN = 0, OK, REJECTED, FAILED, CANCELLED, SHADOW, SKIPPED_DUPLICATE_STATE,
+  SKIPPED_STALE_STATE, SKIPPED_OVERRUN, NOT_AVAILABLE, AMBIGUOUS, INVALID
+}
+
+table Event {
+  kind:RecordKind;
+  producer:uint;
+  sequence:ulong;
+  stream:uint;
+  stage:uint;
+  clock:uint;
+  epoch:ulong;
+  time_offset_us:uint;
+  time_extended_us:ulong;
+  time_extended:bool;
+  time_valid:bool;
+  duration_us:uint;
+  duration_extended_us:ulong;
+  duration_extended:bool;
+  duration_valid:bool;
+  outcome:Outcome;
+  iteration_id:ulong;
+  inference_id:ulong;
+  span_id:ulong;
+  parent_span_id:ulong;
+  attempt_id:ulong;
+  group_id:ulong;
+  runtime_id:ulong;
+  control_id:ulong;
+  session_id:ulong;
+  command_sequence:ulong;
+  state_id:ulong;
+  reference_id:ulong;
+  // Layouts and validity are declared by StreamInfo/MarkerDefinition.
+  integers:[ulong];
+  values:[double];
+  time_offsets_us:[uint];
+  time_extended_indices:[ushort];
+  time_extended_values_us:[ulong];
+  validity:[ubyte];
+}
+
+table Chunk {
+  major:ushort = 1;
+  minor:ushort = 3;
+  sequence:ulong;
+  base_us:ulong;
+  events:[Event];
+  // Cold metadata only. Never used as a per-cycle object/JSON escape hatch.
+  metadata:string;
+}
+
+root_type Chunk;
+file_identifier "VTR1";

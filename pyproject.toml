@@ -23,6 +23,7 @@ license-files = [
 ]
 
 [project.optional-dependencies]
+trace = ["zstandard==0.25.0"]
 state-arrays = ["numpy==1.26.4"]
 hil = ["mcap==1.3.1", "numpy==1.26.4"]
 teleop-demo = [
