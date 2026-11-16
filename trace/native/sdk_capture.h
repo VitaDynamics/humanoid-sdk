@@ -4,15 +4,126 @@
 // boundary.
 #pragma once
 
-class SdkCapture {
+class SdkCapture : public std::enable_shared_from_this<SdkCapture> {
 public:
-  SdkCapture(Session &session, uint32_t producer)
-      : state_(session.SharedState()), producer_(producer) {
+  SdkCapture(Session &session, uint32_t producer,
+             std::array<uint32_t, locomotion_trace::StageCount> stages,
+             std::array<uint64_t, 2> cookie)
+      : state_(session.SharedState()), producer_(producer),
+        native_stages_(stages), cookie_(cookie) {
     if (producer >= state_->producers.size())
       throw py::value_error("unknown producer");
     if (!busy_.is_lock_free())
       throw py::value_error("capture guard atomics are not lock-free");
   }
+  py::capsule SinkCapsule() {
+    sink_.owner = this;
+    sink_.command = [](void *p, const Record &wanted, const Record &wire,
+                       uint64_t begin, uint64_t end) noexcept {
+      static_cast<SdkCapture *>(p)->NativeCommand(wanted, wire, begin, end);
+    };
+    sink_.decoded = [](void *p, const Record &data,
+                       locomotion_trace::Stage stage, uint64_t group) noexcept {
+      return static_cast<SdkCapture *>(p)->NativeDecoded(data, stage, group);
+    };
+    sink_.inference = [](void *p, uint64_t begin, uint64_t end,
+                         bool failed) noexcept {
+      static_cast<SdkCapture *>(p)->NativeInference(begin, end, failed);
+    };
+    auto keep =
+        std::make_unique<std::shared_ptr<SdkCapture>>(shared_from_this());
+    py::capsule capsule(&sink_, locomotion_trace::kCapsule,
+                        [](PyObject *value) {
+                          delete static_cast<std::shared_ptr<SdkCapture> *>(
+                              PyCapsule_GetContext(value));
+                        });
+    if (PyCapsule_SetContext(capsule.ptr(), keep.get()))
+      throw py::error_already_set();
+    keep.release();
+    return capsule;
+  }
+  void NativeCommand(const Record &wanted, const Record &wire, uint64_t begin,
+                     uint64_t end) noexcept {
+    Guard guard(*this);
+    if (!guard)
+      return;
+    try {
+      if (call_depth_ && calls_[call_depth_ - 1].kind == wanted.kind) {
+        auto &call = calls_[call_depth_ - 1];
+        call.command = wanted;
+        call.has_command = true;
+      }
+      auto r = wire;
+      r.kind = 8;
+      r.stage = native_stages_[wanted.kind == 4 ? locomotion_trace::BodyEncode
+                                                : locomotion_trace::EEEncode];
+      r.timestamp_us = begin;
+      r.duration_valid = end >= begin;
+      r.duration_us = end >= begin ? end - begin + 1 : 0;
+      r.outcome = 1;
+      Context(r);
+      Emit(r);
+    } catch (...) {
+      Invalid();
+    }
+  }
+  locomotion_trace::Reference NativeDecoded(const Record &data,
+                                            locomotion_trace::Stage stage,
+                                            uint64_t group) noexcept {
+    Guard guard(*this);
+    if (!guard)
+      return {};
+    try {
+      if (stage >= locomotion_trace::StageCount ||
+          data.n_times < (stage == locomotion_trace::TouchDecode ? 1 : 2)) {
+        Invalid();
+        return {};
+      }
+      auto r = data;
+      r.stage = native_stages_[stage];
+      r.timestamp_us = NowUs();
+      r.outcome = 0;
+      const auto id = group ? group : Identity();
+      if (!id)
+        return {};
+      Context(r);
+      r.ids[5] = r.ids[4];
+      r.ids[4] = id;
+      Emit(r);
+      const uint64_t kind =
+          stage == locomotion_trace::TouchDecode ? 11 : data.kind;
+      const uint64_t publication = stage == locomotion_trace::TouchDecode
+                                       ? data.times_us[data.n_times - 1]
+                                       : data.times_us[1];
+      return {{cookie_[0], cookie_[1]},
+              id,
+              kind,
+              data.ids[6],
+              data.ids[10],
+              publication};
+    } catch (...) {
+      Invalid();
+      return {};
+    }
+  }
+  void NativeInference(uint64_t begin, uint64_t end, bool failed) noexcept {
+    Guard guard(*this);
+    if (!guard)
+      return;
+    try {
+      auto r = Event(8, native_stages_[locomotion_trace::Inference], 0,
+                     failed ? 3 : 1);
+      r.timestamp_us = begin;
+      r.duration_valid = end >= begin;
+      r.duration_us = end >= begin ? end - begin + 1 : 0;
+      if (!r.ids[1])
+        r.ids[1] = Identity();
+      Emit(r);
+    } catch (...) {
+      Invalid();
+    }
+  }
+
   bool Active() const { return busy_.load() || call_depth_ || span_depth_; }
   void Invalid() {
     if (!state_->closing.load())
@@ -32,8 +143,10 @@ public:
     auto r = Event(kind, stage, stream, 0);
     r.ids[4] = id;
     auto &f = calls_[call_depth_++];
-    f = {id,    r.timestamp_us, kind,
-         stage, stream,         {r.ids[0], r.ids[1], r.ids[2], r.ids[3]}};
+    static_cast<Frame &>(f) = {
+        id,    r.timestamp_us, kind,
+        stage, stream,         {r.ids[0], r.ids[1], r.ids[2], r.ids[3]}};
+    f.has_command = false;
     Emit(r);
     return id;
   }
@@ -48,7 +161,9 @@ public:
       Invalid();
       return;
     }
-    const Frame f = calls_[--call_depth_];
+    // Keep owned POD while reading return-key scalar getters. The guard counts
+    // nested capture as loss without preventing the original nested operation.
+    const CallFrame f = calls_[--call_depth_];
     auto r = Event(f.kind, f.stage, f.stream, failed ? 3 : 1);
     for (size_t i = 0; i < 4; ++i)
       r.ids[i] = f.span[i];
@@ -60,7 +175,28 @@ public:
       Invalid();
     try {
       if (!failed) {
-        if (f.kind == 4)
+        if ((f.kind == 4 || f.kind == 6) && f.has_command) {
+          const auto key = f.kind == 6 ? subject.attr("key") : subject;
+          if (U(subject, "runtime_id") != f.command.ids[6] ||
+              U(subject, "control_id") != f.command.ids[7] ||
+              U(key, "session_id") != f.command.ids[8] ||
+              U(key, "sequence") != f.command.ids[9]) {
+            Invalid();
+            return;
+          }
+          const auto point = r.timestamp_us, elapsed = r.duration_us;
+          const auto ids = r.ids;
+          r = f.command;
+          r.timestamp_us = point;
+          r.duration_us = elapsed;
+          r.duration_valid = true;
+          r.outcome = 1;
+          r.stage = f.stage;
+          for (size_t i = 0; i < 5; ++i)
+            r.ids[i] = ids[i];
+          if (f.kind == 4)
+            BodyScope(r, required, targets, indices);
+        } else if (f.kind == 4)
           BodyCommand(r, subject, required, targets, indices);
         else if (f.kind == 3)
           BodyState(r, subject);
@@ -142,12 +278,12 @@ public:
       Invalid();
     }
   }
-  void BodyFeedback(py::object subject, uint32_t stage) {
+  void BodyFeedback(py::object subject, uint32_t stage, bool accepted) {
     Guard guard(*this);
     if (!guard)
       return;
     try {
-      auto r = Event(5, stage, 1, 1);
+      auto r = Event(5, stage, 1, accepted ? 1 : 2);
       BodyState(r, subject);
       Emit(r);
     } catch (const std::exception &) {
@@ -155,12 +291,18 @@ public:
     }
   }
   void EndpointFeedback(py::object subject, uint32_t role, py::object received,
-                        uint32_t stage) {
+                        uint32_t stage, bool accepted) {
     Guard guard(*this);
     if (!guard)
       return;
     try {
-      auto r = Event(7, stage, 1 + U(subject, "side"), 0);
+      auto r = Event(7, stage, 1 + U(subject, "side"), accepted ? 1 : 2);
+      if (Link(r, subject, 7)) {
+        Integer(r, role);
+        Time(r, received.is_none() ? 0 : SecondsUs(received));
+        Emit(r);
+        return;
+      }
       r.ids[6] = U(subject, "runtime_id");
       r.ids[10] = U(subject, "state_id");
       auto fields = subject.attr("valid_fields").cast<py::sequence>();
@@ -187,11 +329,20 @@ public:
       Invalid();
     }
   }
-  void Touch(py::object subject, uint32_t stage) {
+  void Touch(py::object subject, uint32_t stage, bool accepted) {
     Guard guard(*this);
     if (!guard)
       return;
     try {
+      auto linked = Event(11, stage, 1 + U(subject, "side"), accepted ? 1 : 2);
+      if (Link(linked, subject, 11)) {
+        Integer(linked, U(subject, "layout_id"));
+        Integer(linked, U(subject, "side"));
+        Integer(linked, U(subject, "publish_time_valid"));
+        Time(linked, U(subject, "ts_state_pub_us"));
+        Emit(linked);
+        return;
+      }
       const auto runtime = U(subject, "runtime_id"),
                  sample = U(subject, "touch_state_id");
       const auto side = U(subject, "side"), layout = U(subject, "layout_id");
@@ -265,6 +416,10 @@ private:
     uint32_t stage{}, stream{};
     std::array<uint64_t, 4> span{};
   };
+  struct CallFrame : Frame {
+    bool has_command{false};
+    Record command{};
+  };
   struct Guard {
     explicit Guard(SdkCapture &capture) : c(capture) {
       if (c.state_->closing.load())
@@ -296,6 +451,34 @@ private:
       return 0;
     }
     return ((uint64_t(producer_) + 1) << 56) | next_id_++;
+  }
+  void Context(Record &r) const {
+    if (span_depth_)
+      for (size_t i = 0; i < 4; ++i)
+        r.ids[i] = spans_[span_depth_ - 1].span[i];
+    r.ids[4] = call_depth_ ? calls_[call_depth_ - 1].id : 0;
+  }
+  bool Link(Record &r, py::handle subject, uint64_t kind) {
+    if (!py::hasattr(subject, "_trace_ref"))
+      return false;
+    auto value = subject.attr("_trace_ref");
+    if (!py::isinstance<py::tuple>(value) || py::len(value) != 7)
+      return false;
+    auto ref = value.cast<py::tuple>();
+    if (ref[0].cast<uint64_t>() != cookie_[0] ||
+        ref[1].cast<uint64_t>() != cookie_[1] ||
+        ref[3].cast<uint64_t>() != kind)
+      return false;
+    const auto runtime = U(subject, "runtime_id"),
+               sample = U(subject, kind == 11 ? "touch_state_id" : "state_id");
+    if (runtime != ref[4].cast<uint64_t>() ||
+        sample != ref[5].cast<uint64_t>() ||
+        U(subject, "ts_state_pub_us") != ref[6].cast<uint64_t>())
+      return false;
+    r.ids[6] = runtime;
+    r.ids[10] = sample;
+    r.ids[11] = ref[2].cast<uint64_t>();
+    return true;
   }
   Record Event(uint16_t kind, uint32_t stage, uint32_t stream,
                uint8_t outcome) {
@@ -377,18 +560,8 @@ private:
     r.ids[8] = U(key, "session_id");
     r.ids[9] = U(key, "sequence");
   }
-  static void BodyCommand(Record &r, py::handle command, py::object required,
-                          py::object targets, py::dict indices) {
-    r.ids[6] = U(command, "runtime_id");
-    r.ids[7] = U(command, "control_id");
-    r.ids[8] = U(command, "session_id");
-    r.ids[9] = U(command, "sequence");
-    r.ids[10] = U(command, "input_state_id");
-    const auto joints = command.attr("joints");
-    if (py::len(joints) != 31)
-      throw py::value_error("Body trace requires 31 slots");
-    Integer(r, 31);
-    Integer(r, U(command, "protocol_version"));
+  static void BodyScope(Record &r, py::object required, py::object targets,
+                        py::dict indices) {
     Integer(r, required.is_none() ? 0 : required.cast<uint64_t>());
     Integer(r, !required.is_none());
     uint64_t slots = 0;
@@ -401,6 +574,20 @@ private:
       }
     Integer(r, slots);
     Integer(r, !targets.is_none());
+  }
+  static void BodyCommand(Record &r, py::handle command, py::object required,
+                          py::object targets, py::dict indices) {
+    r.ids[6] = U(command, "runtime_id");
+    r.ids[7] = U(command, "control_id");
+    r.ids[8] = U(command, "session_id");
+    r.ids[9] = U(command, "sequence");
+    r.ids[10] = U(command, "input_state_id");
+    const auto joints = command.attr("joints");
+    if (py::len(joints) != 31)
+      throw py::value_error("Body trace requires 31 slots");
+    Integer(r, 31);
+    Integer(r, U(command, "protocol_version"));
+    BodyScope(r, required, targets, indices);
     for (const char *field : {"q", "dq", "tau", "kp", "kd"})
       for (auto joint : joints)
         Number(r, joint.attr(field));
@@ -462,7 +649,15 @@ private:
     }
     return true;
   }
-  static void BodyState(Record &r, py::handle subject) {
+  void BodyState(Record &r, py::handle subject) {
+    if (Link(r, subject, 5)) {
+      r.ids[8] = U(subject, "applied_session_id");
+      r.ids[9] = U(subject, "applied_sequence");
+      for (const char *f : {"received_monotonic_ns", "received_realtime_ns",
+                            "pull_context_receive_stamp_ns"})
+        Time(r, OptionalU(subject, f) / 1000);
+      return;
+    }
     r.ids[6] = U(subject, "runtime_id");
     r.ids[8] = U(subject, "applied_session_id");
     r.ids[9] = U(subject, "applied_sequence");
@@ -534,15 +729,22 @@ private:
   }
   std::shared_ptr<State> state_;
   const uint32_t producer_;
+  const std::array<uint32_t, locomotion_trace::StageCount> native_stages_;
+  const std::array<uint64_t, 2> cookie_;
+  locomotion_trace::Sink sink_{};
   std::atomic<bool> busy_{false};
   uint64_t next_id_{1};
-  std::array<Frame, 8> calls_{}, spans_{};
+  std::array<CallFrame, 8> calls_{};
+  std::array<Frame, 8> spans_{};
   size_t call_depth_{0}, span_depth_{0};
 };
 
 void BindSdkCapture(py::module_ &m) {
-  py::class_<SdkCapture>(m, "SdkCapture")
-      .def(py::init<Session &, uint32_t>())
+  py::class_<SdkCapture, std::shared_ptr<SdkCapture>>(m, "SdkCapture")
+      .def(py::init<Session &, uint32_t,
+                    std::array<uint32_t, locomotion_trace::StageCount>,
+                    std::array<uint64_t, 2>>())
+      .def("sink", &SdkCapture::SinkCapsule)
       .def_property_readonly("active", &SdkCapture::Active)
       .def("begin", &SdkCapture::Begin)
       .def("end", &SdkCapture::End)

@@ -2,6 +2,7 @@
 import hashlib
 import time
 from functools import lru_cache
+from ._trace_context import current_sink
 
 
 @lru_cache(maxsize=1)
@@ -20,7 +21,8 @@ def _state_decoder():
 def decode_body_state_native(view):
     payload, offset = ((view._tab.Bytes, view._tab.Pos) if hasattr(view, "_tab")
                        else (view, 0))
-    return _state_decoder()(payload, offset)
+    sink = current_sink()
+    return _state_decoder()(payload, offset, sink) if sink is not None else _state_decoder()(payload, offset)
 
 
 def prepare_native_body_pull(subscriber, *, slot_count, max_payload_bytes,
@@ -104,7 +106,11 @@ class NativeBodyPublisher:
         measured = trace is not None
         begin = time.perf_counter_ns() if measured else 0
         try:
-            rc, payload, native_trace = self.native.encode_with_header(command, self._header, measured)
+            sink = current_sink()
+            if sink is None:
+                rc, payload, native_trace = self.native.encode_with_header(command, self._header, measured)
+            else:
+                rc, payload, native_trace = self.native.encode_with_header(command, self._header, measured, sink)
             if rc:
                 # This lane returns codes; last_error may belong to an older call.
                 raise exception_for_code(rc, 'native header reservation failed')
@@ -144,7 +150,8 @@ class NativeEEPublisher:
 
     def encode(self, command):
         from aorta.errors import exception_for_code
-        rc, payload, _ = self._header.encode(command)
+        sink = current_sink()
+        rc, payload, _ = self._header.encode(command, False, sink) if sink is not None else self._header.encode(command)
         if rc:
             raise exception_for_code(rc, 'native EE header reservation failed')
         return payload

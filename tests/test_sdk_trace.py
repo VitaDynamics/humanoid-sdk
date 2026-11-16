@@ -30,6 +30,11 @@ class SdkTraceTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / 'run.ftrace'
 
+    def controller_stage(self, rows, name):
+        reader = Reader(self.path)
+        list(reader)
+        return reader.integrity.run_header['stages'].index(name) + 1
+
     def harness(self):
         h = ControllerHarness(runtime_id=100, trace_output=self.path)
         self.addCleanup(h.controller.close)
@@ -281,7 +286,13 @@ class SdkTraceTests(unittest.TestCase):
         node.emit('left', 'state', wire)
         h.controller.close()
         rows, _ = self.records()
-        states = [r for r in rows if r['kind'] == Kind.EFFECTOR_FEEDBACK and r['state_id'] in (2, 3)]
+        decoded_stage = self.controller_stage(rows, 'endpoint_decode')
+        states = [r for r in rows if r['kind'] == Kind.EFFECTOR_FEEDBACK
+                  and r['state_id'] in (2, 3) and r['stage'] == decoded_stage]
+        accepted = [r for r in rows if r['kind'] == Kind.EFFECTOR_FEEDBACK
+                    and r['state_id'] in (2, 3) and r['reference_id']]
+        self.assertEqual([r['reference_id'] for r in accepted], [r['attempt_id'] for r in states])
+        self.assertTrue(all(r['values'] == [] for r in accepted))
         self.assertEqual([r['validity'][0] for r in states], [0, 1])
         self.assertEqual([r['values'][0] for r in states], [0., 0.])
         self.assertEqual([r['integers'][10] for r in states], [0, Field.POS])

@@ -15,9 +15,11 @@
 
 #include <aorta.h>
 
+#include "../../trace/native/codec_bridge.h"
 #include "body_cmd_vendor/message/schemas/topic/lowlevel/body_cmd_generated.h"
 #include "body_state_decoder.h"
 #include "end_effector_decoder.h"
+namespace lt = locomotion_trace;
 #include "body_cmd_vendor/message/schemas/topic/lowlevel/end_effector_cmd_generated.h"
 
 namespace py = pybind11;
@@ -29,8 +31,10 @@ int64_t Ns(Stamp from, Stamp to) {
       .count();
 }
 
-float Float(py::handle value) {
+float Float(py::handle value, double *observed = nullptr) {
   const double number = py::cast<double>(value);
+  if (observed)
+    *observed = number;
   const float result = static_cast<float>(number);
   if (std::isfinite(number) && std::isinf(result))
     throw std::overflow_error("float too large to pack with f format");
@@ -159,8 +163,10 @@ static_assert(offsetof(aorta_native_header_t, publish_stamp_ns) == 8);
 
 py::tuple Encode(py::object command, uint64_t stamp, py::object node,
                  uint64_t header_sequence, bool measure,
-                 const std::string* prepared_node = nullptr,
-                 size_t body_capacity = 0) {
+                 const std::string *prepared_node = nullptr,
+                 size_t body_capacity = 0, lt::Sink *sink = nullptr) {
+  const auto trace_begin = sink ? lt::NowUs() : 0;
+  std::array<std::array<double, 5>, 31> requested;
   const auto begin = measure ? Clock::now() : Stamp{};
   py::object joints = command.attr("joints");
   if (!py::isinstance<py::tuple>(joints) || py::len(joints) != 31)
@@ -171,7 +177,8 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
     std::array<float, 5> row;
     const char *names[] = {"q", "dq", "tau", "kp", "kd"};
     for (size_t i = 0; i < row.size(); ++i)
-      row[i] = Float(joint.attr(names[i]));
+      row[i] = Float(joint.attr(names[i]),
+                     sink ? &requested[joint_index][i] : nullptr);
     values[joint_index++] = lowlevel::BodyJointCmd(row[0], row[1], row[2],
                                                   row[3], row[4]);
   }
@@ -216,6 +223,29 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
                                          &allocation);
   WriteBody(builder, values, protocol, fields, action, quat, runtime, control,
             stamp, publisher_node, header_sequence);
+  if (sink) {
+    lt::Record wanted{}, wire{};
+    wanted.kind = wire.kind = 4;
+    wanted.stream = wire.stream = 1;
+    wanted.ids[6] = wire.ids[6] = runtime;
+    wanted.ids[7] = wire.ids[7] = control;
+    wanted.ids[8] = wire.ids[8] = fields[0];
+    wanted.ids[9] = wire.ids[9] = fields[1];
+    wanted.ids[10] = wire.ids[10] = fields[2];
+    for (auto *r : {&wanted, &wire}) {
+      lt::Integer(*r, 31);
+      lt::Integer(*r, protocol);
+      lt::Time(*r, fields[4]);
+      lt::Time(*r, fields[5]);
+      lt::Time(*r, fields[3]);
+    }
+    for (size_t field = 0; field < 5; ++field)
+      for (size_t i = 0; i < 31; ++i) {
+        lt::Value(wanted, requested[i][field]);
+        lt::Value(wire, static_cast<float>(requested[i][field]));
+      }
+    sink->command(sink->owner, wanted, wire, trace_begin, lt::NowUs());
+  }
   if (measure) finish = Clock::now();
   const auto acquired = measure ? Clock::now() : Stamp{};
   py::bytes bytes(reinterpret_cast<const char *>(builder.GetBufferPointer()),
@@ -231,7 +261,9 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
   return py::make_tuple(bytes, timing);
 }
 
-py::tuple EncodeWithHeader(py::object command, HeaderContext& context, bool measure) {
+py::tuple EncodeWithHeader(py::object command, HeaderContext &context,
+                           bool measure, py::object trace_sink) {
+  auto *sink = lt::GetSink(trace_sink);
   aorta_native_header_t header{};  // Per-call storage also isolates getter reentry.
   const auto began = measure ? Clock::now() : Stamp{};
   const auto rc = context.Reserve(&header);
@@ -241,7 +273,7 @@ py::tuple EncodeWithHeader(py::object command, HeaderContext& context, bool meas
     throw py::type_error("native header timestamp cannot be encoded as uint64");
   auto encoded = Encode(command, static_cast<uint64_t>(header.publish_stamp_ns),
                         py::none(), header.sequence, measure, &context.Node(),
-                        context.BodyCapacityBytes());
+                        context.BodyCapacityBytes(), sink);
   if (measure) {
     auto timing = encoded[1].cast<py::dict>();
     timing["header_reserve_ns"] = Ns(began, reserved);
@@ -332,7 +364,14 @@ class EECommandContext {
   aorta_result_t Close() { return header_.Close(); }
   size_t CapacityBytes() const { return capacity_; }
 
-  py::tuple EncodeCommand(py::object command, bool measure) {
+  py::tuple EncodeCommand(py::object command, bool measure,
+                          py::object trace_sink) {
+    auto *sink = lt::GetSink(trace_sink);
+    const auto trace_begin = sink ? lt::NowUs() : 0;
+    const bool capture = sink && n_ <= 15;
+    std::optional<std::array<lt::Record, 2>> captured;
+    if (capture)
+      captured.emplace();
     aorta_native_header_t header{};
     const auto began = measure ? Clock::now() : Stamp{};
     const auto rc = header_.Reserve(&header);
@@ -368,12 +407,44 @@ class EECommandContext {
     const auto observations = command.attr("input_observations").cast<py::tuple>();
     if (observations.size() != sources_.size())
       throw py::value_error("EE observations differ from startup K");
+    if (capture) {
+      auto &wanted = (*captured)[0];
+      auto &wire = (*captured)[1];
+      wanted.kind = wire.kind = 6;
+      wanted.stream = wire.stream = 1 + side_;
+      wanted.ids[6] = wire.ids[6] = runtime_;
+      wanted.ids[7] = wire.ids[7] = control;
+      wanted.ids[8] = wire.ids[8] = command_key.session_id();
+      wanted.ids[9] = wire.ids[9] = command_key.sequence();
+      for (auto *r : {&wanted, &wire}) {
+        lt::Integer(*r, n_);
+        for (auto v : mode)
+          lt::Integer(*r, v.cast<uint64_t>());
+        for (auto v : fields)
+          lt::Integer(*r, v.cast<uint64_t>());
+        lt::Time(*r, created);
+        lt::Time(*r, sent);
+        r->n_values = 5 * n_;
+      }
+    }
     BodyAllocator allocation(capacity_, "EndEffectorCmd");
     flatbuffers::FlatBufferBuilder builder(capacity_, &allocation);
     WriteEE(builder, n_, sources_.size(), [&](size_t index) {
       std::array<float, 5> row{};
       for (size_t i = 0; i < row.size(); ++i) {
-        if (py::len(columns[i])) row[i] = Float(columns[i][py::int_(index)]);
+        double original = 0;
+        if (py::len(columns[i]))
+          row[i] =
+              Float(columns[i][py::int_(index)], capture ? &original : nullptr);
+        if (capture) {
+          auto &wanted = (*captured)[0];
+          auto &wire = (*captured)[1];
+          const bool active = fields[index].cast<uint32_t>() & (1u << i);
+          wanted.values[i * n_ + index] = active ? original : 0;
+          wire.values[i * n_ + index] = row[i];
+          wanted.validity[i * n_ + index] = wire.validity[i * n_ + index] =
+              active && std::isfinite(original);
+        }
         if (!std::isfinite(row[i])) throw py::value_error("EE command must be finite float32");
       }
       return lowlevel::ee::AxisCommand(fields[index].cast<uint32_t>(),
@@ -393,6 +464,9 @@ class EECommandContext {
                                     EEId(sample.attr("source_time_us")), validity);
     }, runtime_, layout_, side_, control, command_key, created, sent,
        static_cast<uint64_t>(header.publish_stamp_ns), header_.Node(), header.sequence);
+    if (capture)
+      sink->command(sink->owner, (*captured)[0], (*captured)[1], trace_begin,
+                    lt::NowUs());
     py::bytes payload(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
     if (!measure) return py::make_tuple(rc, payload, py::none());
     py::dict trace;
@@ -416,6 +490,7 @@ class EECommandContext {
 }  // namespace
 
 PYBIND11_MODULE(_body_cmd_native, module) {
+  module.attr("TRACE_CODEC_API_VERSION") = 1;
   BindBodyState(module);
   BindEndEffectorFeedback(module);
   module.attr("BODY_SCHEMA_SHA256") = BODY_CMD_SCHEMA_SHA256;
@@ -423,21 +498,27 @@ PYBIND11_MODULE(_body_cmd_native, module) {
   module.attr("EE_CMD_SCHEMA_SHA256") = EE_CMD_SCHEMA_SHA256;
   module.attr("EE_CMD_PROTOCOL_VERSION") = 2;
   py::class_<EECommandContext>(module, "EECommandContext")
-      .def(py::init<py::object, uint64_t, uint32_t, uint8_t, size_t, py::tuple>())
+      .def(py::init<py::object, uint64_t, uint32_t, uint8_t, size_t,
+                    py::tuple>())
       .def_property_readonly("capacity_bytes", &EECommandContext::CapacityBytes)
       .def("encode", &EECommandContext::EncodeCommand, py::arg("command"),
-           py::arg("measure") = false)
+           py::arg("measure") = false, py::arg("trace_sink") = py::none())
       .def("close", &EECommandContext::Close);
   py::class_<HeaderContext>(module, "HeaderContext")
       .def(py::init<py::object>())
       .def_property_readonly("body_capacity_bytes", &HeaderContext::BodyCapacityBytes)
       .def("close", &HeaderContext::Close);
   module.def("encode_with_header", &EncodeWithHeader, py::arg("command"),
-             py::arg("context"), py::arg("measure") = false);
-  module.def("encode", [](py::object command, uint64_t stamp, py::object node,
-                           uint64_t sequence, bool measure) {
-    return Encode(command, stamp, node, sequence, measure);
-  }, py::arg("command"), py::arg("publish_stamp_ns"),
-             py::arg("publisher_node"), py::arg("header_sequence"),
-             py::arg("measure") = false);
+             py::arg("context"), py::arg("measure") = false,
+             py::arg("trace_sink") = py::none());
+  module.def(
+      "encode",
+      [](py::object command, uint64_t stamp, py::object node, uint64_t sequence,
+         bool measure, py::object trace_sink) {
+        return Encode(command, stamp, node, sequence, measure, nullptr, 0,
+                      lt::GetSink(trace_sink));
+      },
+      py::arg("command"), py::arg("publish_stamp_ns"),
+      py::arg("publisher_node"), py::arg("header_sequence"),
+      py::arg("measure") = false, py::arg("trace_sink") = py::none());
 }

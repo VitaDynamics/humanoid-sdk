@@ -14,6 +14,7 @@ from .body_types import BODY_STATE_PROTOCOL_VERSION
 from .types import ControlStatus, PROTOCOL_VERSION
 from .transport import _AortaTransport, BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC
 from .state_arrays import decode_body_state_arrays
+from ._trace_context import copy_reference
 from ._native_body_codec import decode_body_state_native, prepare_native_body_pull
 
 
@@ -152,10 +153,11 @@ class PullTransport(_AortaTransport):
                     native = self._native_body_rx is not None
                     payload = sample if native else sample.payload
                     if arrays:
-                        state = replace(decode_body_state_arrays(payload),
+                        decoded = decode_body_state_arrays(payload)
+                        state = copy_reference(decoded, replace(decoded,
                             received_monotonic_ns=mono, received_realtime_ns=wall,
                             pull_context_receive_stamp_ns=(sample.receive_stamp_ns
-                                if native else sample.context.receive_stamp_ns))
+                                if native else sample.context.receive_stamp_ns)))
                     else:
                         state = decode_body_state_native(payload)
 
@@ -176,6 +178,8 @@ class PullTransport(_AortaTransport):
 
                 if self._accept_candidate(state, commit):
                     return state
+                if self._trace_recorder is not None:
+                    self._trace_recorder.rejected("body", state)
                 # Keep the true accepted raw and both original representations.
                 if self._latest_sample is None or received is self._latest_sample:
                     raise ValueError('BodyState does not belong to the discovered runtime')
@@ -319,6 +323,8 @@ class PullStateSource:
             if trace_output is not None:
                 from .trace import Trace
                 self._trace = Trace(trace_output, compression=trace_compression, stages=trace_stages)
+            if self._trace is not None and hasattr(self.transport, "_set_trace"):
+                self.transport._set_trace(self._trace)
         except BaseException:
             self.transport.close()
             raise

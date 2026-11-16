@@ -335,8 +335,13 @@ class EndEffectorClient:
         with self._condition:
             if self._closed or self._fatal is not None:
                 return
+        value = None
+        admitted = False
+        trace = self.connection._trace
         try:
-            value = getattr(codec, 'decode_' + kind)(view)
+            decode = getattr(codec, 'decode_' + kind)
+            value = (trace.decode(decode, view, _stage='endpoint_decode' if kind == 'state' else 'touch_decode')
+                     if trace is not None and kind != 'info' else decode(view))
             if kind == 'info':
                 codec.validate_info(value)
                 if value.side != self._side:
@@ -390,12 +395,16 @@ class EndEffectorClient:
             if retired is not None:
                 _close_handles(retired)
                 return
+            admitted = True
         except (ValueError, TypeError, AttributeError, IndexError, OverflowError, struct.error) as error:
             with self._condition:
                 if not self._closed:
                     self._errors[kind] = error
                     self._condition.notify_all()
             return
+        finally:
+            if value is not None and not admitted and trace is not None and kind != "info":
+                trace.rejected(kind, value)
         if self.connection._trace is not None:
             self.connection._trace.received(kind, value)
         self._deliver(kind, value, callback)

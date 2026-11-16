@@ -154,7 +154,9 @@ def _feedback_decoder(kind):
 def _decode_feedback_native(kind, view):
     payload, offset = ((view._tab.Bytes, view._tab.Pos) if hasattr(view, '_tab')
                        else (view, 0))
-    return _feedback_decoder(kind)(payload, offset)
+    from ._trace_context import current_sink
+    sink = current_sink()
+    return _feedback_decoder(kind)(payload, offset, sink) if sink is not None else _feedback_decoder(kind)(payload, offset)
 
 
 def decode_state(view):

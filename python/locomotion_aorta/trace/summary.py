@@ -10,22 +10,34 @@ from .session import Kind, Outcome
 def summarize_spans(path):
     reader = Reader(path)
     groups = {}
-    for row in reader:
-        if row['kind'] != Kind.USER_SPAN:
-            continue
-        names = reader.integrity.run_header['stages']
-        # Stage zero denotes unknown; do not label it as a registered model.
-        name = names[row['stage'] - 1] if row['stage'] else '<unknown>'
-        key = (name, row['outcome'])
+    parents = {}
+    native = []
+
+    def observe(name, outcome, duration, producer):
+        key = (name, outcome)
         if key not in groups:
             groups[key] = {'durations': [], 'producers': set(), 'observed': 0, 'invalid_duration': 0}
         group = groups[key]
         group['observed'] += 1
-        group['producers'].add(row['producer'])
-        if row['duration_us'] is not None:
-            group['durations'].append(row['duration_us'])
+        group['producers'].add(producer)
+        if duration is not None:
+            group['durations'].append(duration)
         else:
             group['invalid_duration'] += 1
+
+    for row in reader:
+        names = reader.integrity.run_header['stages']
+        name = names[row['stage'] - 1] if row['stage'] else '<unknown>'
+        if row['kind'] == Kind.USER_SPAN:
+            parents[row['producer'], row['span_id']] = name
+            observe(name, row['outcome'], row['duration_us'], row['producer'])
+        elif row['kind'] == Kind.STAGE_EVENT and name == 'native_inference':
+            native.append((row['producer'], row['span_id'], row['outcome'], row['duration_us']))
+    # Exact producer/span linkage, never nearest-time matching. A parent may be
+    # persisted later; missing parents remain explicitly unattributed.
+    for producer, span, outcome, duration in native:
+        name = parents.get((producer, span), '<unattributed>') + '/native_run'
+        observe(name, outcome, duration, producer)
     result = []
     for (stage, outcome), group in sorted(groups.items()):
         values = sorted(group['durations'])

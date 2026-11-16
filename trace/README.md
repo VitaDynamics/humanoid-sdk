@@ -60,8 +60,20 @@ uses a nonblocking guard; each thread then has its own fixed SPSC queue. Model
 execution does not hold a capture lock. The single native writer owns all file
 writes; entering from Python and reading Python DTO fields still incurs GIL
 and scheduling overhead. Clocks, IDs, bounded call/span stacks, field snapshots
-and queue submission now run in C++. BodyState native arrays are read directly
-through checked buffers without Python per-axis iteration or lazy joints.
+and queue submission run in C++. Native Body/EE encoders reuse the values they
+already read: `body_encode` / `endpoint_encode` capture the actual float32
+encoding separately from the caller's original values at publish return.
+Successful encoding is not successful submission, CAN transmission or motion.
+
+Body/EE/Touch native decoders capture the owned native data once, before DTO
+construction. An UNKNOWN decode event is not a verdict that the SDK accepted
+it. Later accepted/rejected callbacks and cached reads carry an exact
+`reference_id` to that recording's decode event, keeping sample identity,
+publication identity and local receipt clocks separate. They do not walk the
+joint columns or Touch payload again. A private, non-dataclass provenance slot
+does not change constructors, equality, `asdict` or the wire contract. A copied
+or foreign-recording DTO without matching provenance uses normal snapshot
+capture; no nearest-time match or permanent second payload cache is used.
 Snapshots are owned POD copies; the writer retains no Python references. The writer's
 close/completion wait is not part of a normal model or publish call.
 
@@ -95,7 +107,7 @@ column layouts, original clock meanings and field-mask semantics are in the
 run header. Attempt IDs are local to a producer, not global command identities.
 
 All trace times are integer microseconds. Publication return is not physical
-TX or execution. Receive take/decode sub-stages, full model causal association,
+TX or execution. Network receive/take sub-stages, full model causal association,
 WTT migration, MCAP/HTML and installed current-source/ARM/performance acceptance
 remain pending. Legacy policy JSONL retirement is still validation-gated.
 
@@ -145,16 +157,26 @@ Counts are observed spans, not a claim of total inference calls when records
 were lost. Failed calls are separate from successful-call timing. The offline
 summary does not run in the control, Planner or writer thread.
 
-Native capture requires its matching extension (`CAPTURE_API_VERSION=1`), checked
-before file creation. No receive/encoding/publication algorithm or wire layout
-was changed by this optimization. Low-level codec/transport sub-stage timestamps
-remain a separate pending integration; current snapshots describe the original
-SDK call/accepted-feedback boundaries. C++ reading Python DTOs keeps the GIL;
+Native capture requires matching extensions (`CAPTURE_API_VERSION=2` and
+`TRACE_CODEC_API_VERSION=1`); mismatches fail at Trace/connection construction.
+The encoder, decoder, control admission and publication gates retain their
+original algorithms and wire layouts. C++ reading Python DTOs keeps the GIL;
 there is no blanket `gil_scoped_release` around object access. Tiny queue submits
 do not repeatedly release/reacquire the GIL. The guard is not held across the original SDK call or user model. Python
 property getters invoked during snapshot extraction can reenter; nested capture
 is rejected nonblockingly and counted, while the original SDK operation retains
 its behavior.
+
+For SDK-owned native ONNX sessions, `native_inference` measures the actual
+`Ort::Session::Run` call while the GIL is already released. It ends before GIL
+reacquisition and Python result conversion, and carries the active span ID.
+The offline summary reports `actor/native_run` alongside the outer `actor`
+span (or the registered name). Their difference includes input preparation,
+copying, scheduling and result conversion; it is **not** a measurement of GIL
+wait alone. Calls without a matching parent are explicitly unattributed.
+Failures keep the original ORT exception and a failed timing record. Other
+Python model backends, including WTT's multi-input Planner, retain their outer
+span only; Trace does not wrap or replace their inference implementation.
 
 `benchmarks/trace_capture.py` compares the same synthetic capture inputs using
 baseline and candidate packages. It runs separately from unit tests, writes

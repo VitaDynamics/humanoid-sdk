@@ -1,4 +1,6 @@
+#include "../../trace/native/codec_bridge.h"
 #include <onnxruntime_cxx_api.h>
+namespace lt = locomotion_trace;
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -61,6 +63,8 @@ public:
   Session(const std::string &path, int intra_threads, int inter_threads)
       : env_(ORT_LOGGING_LEVEL_WARNING, "sdk_demo_onnx"),
         intra_threads_(intra_threads), inter_threads_(inter_threads) {
+    trace_lookup_ = py::module_::import("locomotion_aorta._trace_context")
+                        .attr("current_sink");
     try {
       Ort::SessionOptions options;
       options.SetIntraOpNumThreads(intra_threads);
@@ -107,6 +111,8 @@ public:
   py::array_t<float> Run(const std::string &input_name,
                          const std::string &output_name,
                          const py::array &values) {
+    py::object trace_owner = trace_lookup_();
+    auto *trace = lt::GetSink(trace_owner);
     const TensorInfo &input = Find(inputs_, input_name, "input");
     const TensorInfo &output = Find(outputs_, output_name, "output");
     if (input.element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
@@ -143,8 +149,18 @@ public:
       const char *in = input_name.c_str();
       const char *out = output_name.c_str();
       py::gil_scoped_release release;
-      result =
-          session_->Run(Ort::RunOptions{nullptr}, &in, &tensor, 1, &out, 1);
+      const auto began = trace ? lt::NowUs() : 0;
+      try {
+        result =
+            session_->Run(Ort::RunOptions{nullptr}, &in, &tensor, 1, &out, 1);
+      } catch (...) {
+        if (trace)
+          trace->inference(trace->owner, began, lt::NowUs(), true);
+        throw;
+      }
+      // Record before reacquiring the GIL and before Python output conversion.
+      if (trace)
+        trace->inference(trace->owner, began, lt::NowUs(), false);
     } catch (const Ort::Exception &error) {
       throw std::runtime_error("ONNX run '" + input_name + "' -> '" +
                                output_name + "': " + error.what());
@@ -169,6 +185,7 @@ public:
   int inter_threads() const { return inter_threads_; }
 
 private:
+  py::object trace_lookup_;
   static const TensorInfo &Find(const std::vector<TensorInfo> &tensors,
                                 const std::string &name,
                                 const char *direction) {

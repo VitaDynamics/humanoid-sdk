@@ -115,6 +115,7 @@ class _AortaTransport:
         self._capture_publish_timing = os.environ.get("LOCOMOTION_AORTA_PUBLISH_TIMING") == "1"
         self._publish_trace = threading.local()
         self._body_publisher = None
+        self._trace_recorder = None
         try:
             from ._group import require_node_group
             require_node_group(self.node, group)
@@ -131,6 +132,18 @@ class _AortaTransport:
         except BaseException:
             self.node.close()
             raise
+
+    def _set_trace(self, recorder):
+        if recorder is not None:
+            from . import _body_cmd_native
+            if getattr(_body_cmd_native, 'TRACE_CODEC_API_VERSION', None) != 1:
+                raise RuntimeError('Trace requires matching native codec hooks')
+        self._trace_recorder = recorder
+
+    def _convert_body_trace(self, view):
+        if self._trace_recorder is not None:
+            return self._trace_recorder.decode(decode_body_state, view)
+        return decode_body_state(view)
 
     def subscribe(
         self, topic: str, callback: Callable[[Any], None]
@@ -246,7 +259,7 @@ class _AortaTransport:
         if topic == BODY_STATE_TOPIC:
             return (
                 self._bindings.body_state_decoder,
-                decode_body_state,
+                self._convert_body_trace,
                 self._bindings.aorta.QoS.sensor_data(),
             )
         if topic == CONTROL_ACK_TOPIC:

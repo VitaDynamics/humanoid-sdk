@@ -25,6 +25,7 @@
 #include <zlib.h>
 #include <zstd.h>
 
+#include "codec_bridge.h"
 #include "trace_generated.h"
 
 namespace py = pybind11;
@@ -51,18 +52,7 @@ struct Counter {
 };
 
 // All storage is owned by the ring. No Python references survive Submit().
-struct Record {
-  uint64_t sequence{}, timestamp_us{}, duration_us{}, epoch{1};
-  std::array<uint64_t, kIds> ids{};
-  std::array<double, kValues> values{};
-  std::array<uint64_t, kTimes> times_us{};
-  std::array<uint64_t, kIntegers> integers{};
-  std::array<uint8_t, kValidity> validity{};
-  uint32_t stream{}, stage{}, clock{};
-  uint16_t kind{}, n_values{}, n_times{}, n_integers{}, n_validity{};
-  uint8_t outcome{};
-  bool time_valid{true}, duration_valid{};
-};
+using Record = locomotion_trace::Record;
 static_assert(std::is_trivially_copyable_v<Record>);
 
 struct Producer {
@@ -535,7 +525,7 @@ py::dict DecodeChunk(py::bytes input) {
 PYBIND11_MODULE(_trace_native, m) {
   m.attr("FORMAT_MAJOR") = 1; m.attr("FORMAT_MINOR") = 3;
   m.attr("SLOT_BYTES") = sizeof(Record);
-  m.attr("CAPTURE_API_VERSION") = 1;
+  m.attr("CAPTURE_API_VERSION") = 2;
   m.def("monotonic_us", &NowUs);
   m.def("decode_chunk", &DecodeChunk);
   py::class_<Session>(m, "Session")

@@ -211,6 +211,8 @@ class ExternalController:
             if trace_output is not None:
                 from .trace import Trace
                 self._trace = Trace(trace_output, compression=trace_compression, stages=trace_stages)
+            if self._trace is not None and hasattr(self.transport, "_set_trace"):
+                self.transport._set_trace(self._trace)
             if _subscribe_body_state:
                 self._subscriptions.append(
                     self.transport.subscribe(BODY_STATE_TOPIC, self._on_body_state)
@@ -757,8 +759,11 @@ class ExternalController:
                 self._latest_body_state = lowstate
                 accepted = True
                 self._condition.notify_all()
-        if accepted and self._trace is not None:
-            self._trace.received("body", lowstate)
+        if self._trace is not None:
+            if accepted:
+                self._trace.received("body", lowstate)
+            else:
+                self._trace.rejected("body", lowstate)
 
     def _on_ack(self, ack: Any) -> None:
         if (
