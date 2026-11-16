@@ -140,7 +140,7 @@ class NativeTraceHooks(unittest.TestCase):
 
     def test_real_ort_run_is_separate_and_linked_to_outer_model_span(self):
         import numpy as np
-        from test_session import write_model
+        from demo_onnx.tests.test_session import write_model
         from locomotion_aorta._onnx import Session
         from locomotion_aorta.trace.summary import summarize_spans
         model=Path(self.temp.name)/'model.onnx';write_model(model)
@@ -197,7 +197,7 @@ class NativeTraceHooks(unittest.TestCase):
 
     def test_real_ort_failure_keeps_error_and_failed_inner_span(self):
         import numpy as np
-        from test_session import write_model
+        from demo_onnx.tests.test_session import write_model
         from locomotion_aorta._onnx import Session
         model = Path(self.temp.name) / 'missing-input.onnx'
         write_model(model, two_inputs=True)
