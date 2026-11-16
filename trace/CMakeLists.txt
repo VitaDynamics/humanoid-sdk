@@ -2,9 +2,10 @@ cmake_minimum_required(VERSION 3.20)
 # May also be built independently for host trace validation without ORT/Aorta.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   project(locomotion_trace LANGUAGES CXX)
-  find_package(Python 3.10 EXACT COMPONENTS Interpreter Development.Module REQUIRED)
-  find_package(pybind11 CONFIG REQUIRED)
 endif()
+# Imported targets created in demo_onnx are not visible to this sibling.
+find_package(Python 3.10 EXACT COMPONENTS Interpreter Development.Module REQUIRED)
+find_package(pybind11 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
 find_library(TRACE_ZSTD_LIBRARY NAMES zstd REQUIRED)
