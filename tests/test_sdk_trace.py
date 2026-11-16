@@ -13,7 +13,7 @@ from locomotion_aorta import (BodyCmd, BodyJointCmd, BodyState, ExternalControll
     PullController, PullStateSource, InvalidCommandError, ControlOperation)
 from locomotion_aorta.end_effector import EndEffectorClient
 from locomotion_aorta.end_effector_types import SampleStream
-from locomotion_aorta.trace import Kind, Outcome
+from locomotion_aorta.trace import Kind, Outcome, Trace
 from locomotion_aorta.trace.reader import Reader
 from test_controller import ControllerHarness, make_command, _BODY_TEST_TARGETS
 from test_end_effector_client import Node, confirm_info
@@ -177,7 +177,7 @@ class SdkTraceTests(unittest.TestCase):
                 self.assertEqual(t.published, [])
 
     def test_disabled_controller_does_not_load_trace_or_change_public_calls(self):
-        with patch('locomotion_aorta.trace._sdk.SdkTrace', side_effect=AssertionError('trace created')):
+        with patch('locomotion_aorta.trace.Trace', side_effect=AssertionError('trace created')):
             h = ControllerHarness(runtime_id=100)
             self.addCleanup(h.controller.close)
             h.accept_enter()
@@ -406,6 +406,93 @@ class SdkTraceTests(unittest.TestCase):
         self.assertEqual([r['iteration_id'] for r in spans], [7, 8])
         self.assertEqual(spans[0]['inference_id'], first.inference_id)
         self.assertNotEqual(spans[0]['inference_id'], spans[1]['inference_id'])
+
+    def test_run_owned_trace_covers_worker_before_and_after_connection_close(self):
+        entered, finish = threading.Event(), threading.Event()
+        errors = []
+        with Trace(self.path, stages=('planner',)) as trace:
+            def planner():
+                try:
+                    with trace.span('planner'):
+                        entered.set()
+                        if not finish.wait(2):
+                            raise TimeoutError('test barrier')
+                except BaseException as error:
+                    errors.append(error)
+            worker = threading.Thread(target=planner)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                with ExternalController(_transport=FakeTransport(), trace_recorder=trace) as controller:
+                    with controller.trace_span('planner'):
+                        pass
+                self.assertFalse(trace.session._closed)
+            finally:
+                finish.set()
+                worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(errors, [])
+        rows, _ = self.records()
+        spans = [r for r in rows if r['kind'] == Kind.USER_SPAN]
+        self.assertEqual(len(spans), 2)
+        self.assertEqual(len({r['producer'] for r in spans}), 2)
+        self.assertEqual(len({r['inference_id'] for r in spans}), 2)
+
+    def test_borrowed_recorder_survives_subscription_failure_and_readonly_close(self):
+        with Trace(self.path, stages=('after_close',)) as trace:
+            t = FakeTransport()
+            with patch.object(t, 'subscribe', side_effect=RuntimeError('subscribe')):
+                with self.assertRaisesRegex(RuntimeError, 'subscribe'):
+                    ExternalController(_transport=t, trace_recorder=trace)
+            self.assertFalse(trace.session._closed)
+            with PullStateSource(_transport=FakeTransport(), trace_recorder=trace):
+                pass
+            with PullController(_transport=FakeTransport(), trace_recorder=trace):
+                pass
+            with trace.span('after_close'):
+                pass
+        rows, _ = self.records()
+        self.assertEqual(sum(r['kind'] == Kind.USER_SPAN for r in rows), 1)
+
+    def test_borrowed_recorder_rejects_conflicting_or_closed_options_before_transport(self):
+        trace = Trace(self.path)
+        with patch('locomotion_aorta.controller.create_aorta_transport',
+                   side_effect=AssertionError('transport constructed')):
+            with self.assertRaises(ValueError):
+                ExternalController(trace_output=self.path, trace_recorder=trace)
+            with self.assertRaises(ValueError):
+                ExternalController(trace_stages=('actor',), trace_recorder=trace)
+            trace.close()
+            with self.assertRaises(ValueError):
+                ExternalController(trace_recorder=trace)
+        with patch('locomotion_aorta.pull.PullTransport',
+                   side_effect=AssertionError('transport constructed')):
+            for factory in (PullController, PullStateSource):
+                with self.assertRaises(ValueError):
+                    factory(trace_recorder=trace)
+
+    def test_offline_span_summary_separates_stages_failures_and_incomplete_capture(self):
+        from locomotion_aorta.trace.summary import summarize_spans
+        with Trace(self.path, stages=('planner', 'actor')) as trace:
+            with patch('locomotion_aorta.trace._sdk.monotonic_us', side_effect=(100, 110, 200, 230, 300, 305)):
+                with trace.span('planner'):
+                    pass
+                with trace.span('actor'):
+                    pass
+                with self.assertRaisesRegex(RuntimeError, 'failure'):
+                    with trace.span('planner'):
+                        raise RuntimeError('failure')
+        result = summarize_spans(self.path)
+        self.assertTrue(result['capture_complete'])
+        groups = {(r['stage'], r['outcome']): r for r in result['stages']}
+        self.assertEqual(groups['planner', 'OK']['p99_us'], 11)
+        self.assertEqual(groups['planner', 'FAILED']['p99_us'], 6)
+        self.assertEqual(groups['actor', 'OK']['p99_us'], 31)
+        self.assertTrue(all(r['observed_spans'] == 1 for r in groups.values()))
+        self.path.write_bytes(self.path.read_bytes()[:-10])
+        incomplete = summarize_spans(self.path)
+        self.assertFalse(incomplete['capture_complete'])
+        self.assertIn('missing_run_end', incomplete['issues'])
 
     def test_disabled_user_span_reads_no_clock_and_starts_no_recording(self):
         with ExternalController(_transport=FakeTransport()) as controller:

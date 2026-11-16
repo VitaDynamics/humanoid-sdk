@@ -166,7 +166,11 @@ class ExternalController:
         trace_output=None,
         trace_compression: str = "zstd",
         trace_stages: tuple[str, ...] = (),
+        trace_recorder=None,
     ) -> None:
+        if trace_recorder is not None:
+            from .trace._sdk import _validate_options
+            _validate_options(trace_output, trace_recorder, trace_stages)
         self.group = _nonempty_text(group, "group")
         self.node_name = _nonempty_text(
             node_name or f"locomotion-aorta-{uuid.uuid4()}", "node_name"
@@ -201,11 +205,12 @@ class ExternalController:
         self._closed = False
         self._subscriptions: list[Any] = []
 
-        self._trace = None
+        self._trace = trace_recorder
+        self._owns_trace = trace_recorder is None
         try:
             if trace_output is not None:
-                from .trace._sdk import SdkTrace
-                self._trace = SdkTrace(trace_output, compression=trace_compression, stages=trace_stages)
+                from .trace import Trace
+                self._trace = Trace(trace_output, compression=trace_compression, stages=trace_stages)
             if _subscribe_body_state:
                 self._subscriptions.append(
                     self.transport.subscribe(BODY_STATE_TOPIC, self._on_body_state)
@@ -217,7 +222,7 @@ class ExternalController:
                 self.transport.subscribe(CONTROL_STATUS_TOPIC, self._on_status)
             )
         except BaseException:
-            if self._trace is not None:
+            if self._trace is not None and self._owns_trace:
                 self._trace.close()
             for subscription in self._subscriptions:
                 try:
@@ -727,7 +732,7 @@ class ExternalController:
         except BaseException:
             pass
 
-        if self._trace is not None:
+        if self._trace is not None and self._owns_trace:
             self._trace.close()
 
     def __enter__(self) -> "ExternalController":

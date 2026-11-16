@@ -38,11 +38,14 @@ def _info_metadata(info):
     return convert(asdict(info)), nonfinite
 
 
-class SdkTrace:
-    """Connection-owned writer with a fixed number of preallocated thread channels.
+class Trace:
+    """Run-owned writer with a fixed number of preallocated thread channels.
 
     Thread registration never waits; exhaustion is reported as incomplete capture.
     A retained Thread object prevents recycled Python/OS IDs from reusing a ring.
+    Pass this recorder as ``trace_recorder`` to a connection to capture its SDK
+    calls automatically. Close connections and join model workers before exiting
+    this context. A borrowing connection never closes the recorder.
     """
     def __init__(self, path, *, compression='zstd', threads=8, stages=()):
         self.user_stages = tuple(stages)
@@ -196,6 +199,23 @@ class SdkTrace:
 
     def health(self):
         return self.session.health()
+
+    def __enter__(self):
+        if self.session._closed:
+            raise RuntimeError('trace recorder is closed')
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+
+def _validate_options(output, recorder, stages):
+    # Called before transport construction: invalid options create no resources.
+    if recorder is not None:
+        if output is not None or stages:
+            raise ValueError('trace_recorder owns its output and stage registration')
+        if not isinstance(recorder, Trace) or recorder.session._closed:
+            raise ValueError('trace_recorder must be an open Trace')
 
 
 class _Capture:

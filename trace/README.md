@@ -40,6 +40,27 @@ performance guarantee. An asynchronous GPU/NPU call measures submission unless
 its original completion wait is inside the span. Trace adds no synchronization.
 When disabled, `trace_span` is a no-op and reads no trace clock.
 
+For a run with model workers that outlive the SDK connection, create the same
+recorder at the outer run boundary and lend it to the connection:
+
+```python
+from locomotion_aorta.trace import Trace
+
+with Trace("run.ftrace", stages=("planner_infer", "planner_map")) as trace:
+    with PullController(trace_recorder=trace) as controller:
+        # SDK calls record automatically, just as with trace_output.
+        with trace.span("planner_infer"):
+            prediction = planner.run(inputs)
+    # Join model workers here, before leaving the Trace context.
+```
+
+Borrowing connections never close this recorder, including constructor failure.
+Register stages on the recorder, not again on the connection. First registration
+uses a nonblocking guard; each thread then has its own fixed SPSC queue. Model
+execution does not hold a capture lock. The single native writer owns all file
+writes; Python capture still incurs GIL and scheduling overhead. The writer's
+close/completion wait is not part of a normal model or publish call.
+
 Unknown stage names, excessive nesting and exhausted producer channels mark
 incomplete capture without stopping computation. A nested SDK call carries the
 active span identity. Publishing after leaving the span does not automatically
@@ -106,3 +127,16 @@ cmake --build build-trace --parallel 2
 
 Queue capacity 512 and the 1-second flush default remain candidates. Capture
 overhead, real-time performance and device end-to-end latency are not measured.
+
+Offline model timing (after closing the run):
+
+```bash
+python -m locomotion_aorta.trace.summary run.ftrace
+```
+
+This reports observed spans separately by registered stage and outcome, with
+producer IDs and nearest-rank p50/p95/p99 in microseconds. It reads the actual
+FBS integrity ledger; incomplete input returns exit code 2 and keeps all issues.
+Counts are observed spans, not a claim of total inference calls when records
+were lost. Failed calls are separate from successful-call timing. The offline
+summary does not run in the control, Planner or writer thread.

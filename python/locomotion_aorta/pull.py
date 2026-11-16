@@ -299,7 +299,10 @@ class PullStateSource:
     """Read-only native-array feedback and ControlStatus snapshots; no publishers."""
 
     def __init__(self, *, group='default', node_name=None, _transport=None,
-                 native_body_rx=None, trace_output=None, trace_compression="zstd", trace_stages=()):
+                 native_body_rx=None, trace_output=None, trace_compression="zstd", trace_stages=(), trace_recorder=None):
+        if trace_recorder is not None:
+            from .trace._sdk import _validate_options
+            _validate_options(trace_output, trace_recorder, trace_stages)
         self._group = _nonempty_text(group, 'group')
         if node_name is not None:
             _nonempty_text(node_name, 'node_name')
@@ -310,11 +313,12 @@ class PullStateSource:
             group=group, publishers=False, native_body_rx=native_body_rx)
         if isinstance(self.transport, PullTransport) and self.transport._candidate_gate is not None:
             raise ValueError('Pull transport already has a connection')
-        self._trace = None
+        self._trace = trace_recorder
+        self._owns_trace = trace_recorder is None
         try:
             if trace_output is not None:
-                from .trace._sdk import SdkTrace
-                self._trace = SdkTrace(trace_output, compression=trace_compression, stages=trace_stages)
+                from .trace import Trace
+                self._trace = Trace(trace_output, compression=trace_compression, stages=trace_stages)
         except BaseException:
             self.transport.close()
             raise
@@ -425,7 +429,7 @@ class PullStateSource:
         try:
             self.transport.close()
         finally:
-            if self._trace is not None:
+            if self._trace is not None and self._owns_trace:
                 self._trace.close()
 
     def __enter__(self):
@@ -441,7 +445,10 @@ class PullController(ExternalController):
     """Original session protocol with pull status pumping on the caller thread."""
 
     def __init__(self, *, group='default', node_name=None, client_id=None, _transport=None,
-                 trace_output=None, trace_compression="zstd", trace_stages=()):
+                 trace_output=None, trace_compression="zstd", trace_stages=(), trace_recorder=None):
+        if trace_recorder is not None:
+            from .trace._sdk import _validate_options
+            _validate_options(trace_output, trace_recorder, trace_stages)
         _nonempty_text(group, 'group')
         node_name = node_name or 'locomotion-pull-'+uuid.uuid4().hex
         _nonempty_text(node_name, 'node_name')
@@ -454,7 +461,7 @@ class PullController(ExternalController):
         super().__init__(group=group, node_name=node_name, client_id=client_id,
                          _transport=transport, _subscribe_body_state=False,
                          trace_output=trace_output, trace_compression=trace_compression,
-                         trace_stages=trace_stages)
+                         trace_stages=trace_stages, trace_recorder=trace_recorder)
         if isinstance(transport, PullTransport):
             transport._candidate_gate = self._commit_pull_candidate
 
