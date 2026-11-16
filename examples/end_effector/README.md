@@ -56,24 +56,32 @@ python examples/end_effector/brainco_revo2.py --dry-run --side left \
 
 `brainco_revo2.py`、`agx_gripper.py`、`linker_l6.py`、`omnipicker3.py`
 均调用这个公共入口，直接接受上述参数，不维护另一套厂商专用 Trace 实现。
-AGX 与 OP3 的实际入口也有启用 Trace 的运动回归，检查返回键、零本体发布
-以及原 CANCEL。它们是合成 I/O 的例程测试，不代表真机运动已通过。
 独立本体归零／返回例程 `examples/external_control/external_control.py`
-也支持相同参数，见其 README。
+也支持相同参数。所有 demo 只向 controller 构造函数传入录制选项；原来的
+`controller.publish(...)`、`client.publish(...)` 和 `wait_state(...)` 不需要包装。
 
-一个文件、一个 native writer 记录现有本体读取、保持目标、左右末端目标，
-以及实际返回的命令键和所选 SampleRef；不额外读取反馈或创建订阅。
-`--ee-only` 仍不发送本体命令。触觉开关继续由原 RPC/State/Touch 流程确认；
-Trace 保存确认时的原始区域时间、有效位与负载，不增加连续触觉订阅。
+自己编写程序时同样只需开启一次：
 
-记录的是应用调用入口/返回及已有反馈快照，包含重复或无效样本，不表示
-机器人已接纳、CAN 已发送或设备已经执行。内部键分配、取件/解码时间、
-连续触觉、MCAP/HTML 分析和整条链路仍未接完。时间均为微秒；原来源时钟
-保持区分，不把 Core context stamp 当网络到达，也不直接计算跨时钟延迟。
-局部调用区间包含起始 Trace 标记的采集开销，不能冒充纯 SDK 执行耗时。
-native、Python 准备快照的总开销和 ARM 安装验证需分别实测。
+```python
+with PullController(trace_output="trial.ftrace") as controller:
+    # 保留原发现、能力校验、握手和授权运动流程。
+    # EndEffectorClient(connection=controller) 自动共用这个 recorder。
+    ...
+print(controller.trace_health)
+```
 
-录制故障不新增 CANCEL、不覆盖原运动异常。原 CANCEL 完成后才关闭采集；
+SDK 在原 publish 入口、真实键分配完成、返回／失败处记录，已有的 Body、
+末端 State/Touch 接收回调也直接采集。`--ee-only` 仍不发送本体命令。
+Touch 只记录原客户端已订阅且已接纳的样本，不因录制创建新订阅或打开触觉。
+原 RPC 成功不当作新的 State/Touch 样本或物理触觉成功。
+
+一个连接对应一个文件、一个 native writer。调用线程和既有反馈线程使用
+预分配的独立通道；通道不足或采集竞争会报告不完整，不阻塞控制线程。
+文件记录的是 SDK 调用与原反馈语义，不能冒充 CAN 发送或设备执行证明。
+时间均为微秒，原来源时钟保留区分；不把 Core context stamp 当网络到达。
+取件/解码细分、模型/WTT、MCAP/HTML 和性能验收仍未完成。
+
+录制故障不新增 CANCEL、不覆盖原运动异常。随 controller 的原退出／关闭流程有界排空采集；
 队列满或丢记录会反映在健康账本中。读取到文件末尾后再检查完整性：
 
 ```python

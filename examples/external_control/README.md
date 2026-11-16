@@ -19,14 +19,15 @@ python examples/external_control/external_control.py --help
 默认 `--trace=off`；`--trace-compression=raw` 可关闭默认的 Zstd 压缩。
 需要含 Trace native 模块的本 PR 候选 wheel，不代表既有 RC1 包已包含新功能。
 
-本体例程复用原来那次 GetRobotInfo 回复，仍只展示一次 Info。一个文件记录
+本体例程只把 Trace 配置传入 PullController，其余仍调用原 SDK 接口。
+SDK 记录原来那次 GetRobotInfo 回复，Info 仍只展示一次。一个文件记录
 原静止预检、运动中状态读取、原完整归零／返回轨迹、实际本体命令键、
 输入样本，以及 EXTERNAL 入场和原 CANCEL 结果。目标关节集合和所需字段
 单独记录，不把未选槽位的 padding 当作运动目标。不会额外发现设备、读取
 状态或创建控制线程；轨迹、限速、限位／MOCK／新鲜度门和退出路径保持。
 
-这些是应用调用与已有反馈的记录，不是物理发送或到位证明。内部采点、
-连续触觉、模型／WTT、MCAP/HTML 和性能验收仍分别待接入；不要将文件完整性
+这些是应用调用与已有反馈的记录，不是物理发送或到位证明。取件／解码细分、
+模型／WTT、MCAP/HTML 和性能验收仍分别待接入；不要将文件完整性
 当作设备测试通过。读取方式见末端 demo 的 Trace 说明。
 
 ## 公共前提

@@ -5,7 +5,6 @@ import json
 import math
 import time
 from collections.abc import Callable, Sequence
-from contextlib import ExitStack
 from pathlib import Path
 
 from locomotion_aorta import (
@@ -66,24 +65,8 @@ def run(
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
     emit: Callable[[str], None] = print,
-    trace=None,
-    trace_output: Path | None = None,
-    trace_compression: str = 'zstd',
 ) -> None:
-    if trace is not None and trace_output is not None:
-        raise ValueError('use one trace session for the run')
-    response = controller.get_robot_info(timeout)
-    info = _body_info_from_response(response, emit_info=emit)
-    with ExitStack() as stack:
-        if trace_output is not None:
-            from locomotion_aorta.trace.demo import DemoTrace
-            trace = stack.enter_context(DemoTrace(trace_output, response,
-                                                 compression=trace_compression))
-        _run_body(controller, info, timeout=timeout, sleep=sleep,
-                  monotonic=monotonic, emit=emit, trace=trace)
-
-
-def _run_body(controller, info, *, timeout, sleep, monotonic, emit, trace):
+    info = require_body_info(controller, timeout, emit_info=emit)
     target_slots = _body_target_slots(info, require_zero=True)
     target_names = tuple(info.joint_names[i] for i in target_slots)
     start_state = _wait_for_stationary_body_state(
@@ -93,7 +76,6 @@ def _run_body(controller, info, *, timeout, sleep, monotonic, emit, trace):
         sleep=sleep,
         monotonic=monotonic,
         target_slots=target_slots,
-        trace=trace,
     )
     positions = start_state.q
     start_q = tuple(float(q) if i in target_slots else 0.0 for i, q in enumerate(positions))
@@ -118,8 +100,7 @@ def _run_body(controller, info, *, timeout, sleep, monotonic, emit, trace):
 
     entered = False
     try:
-        entered_status = (controller.enter_external(timeout) if trace is None else
-                          trace.enter(controller, timeout))
+        entered_status = controller.enter_external(timeout)
         entered = True
 
         last_state_id = start_state.state_id
@@ -142,8 +123,7 @@ def _run_body(controller, info, *, timeout, sleep, monotonic, emit, trace):
                     "robot reject_count changed during the trajectory"
                 )
 
-            state = (controller.wait_state(timeout) if trace is None else
-                     trace.read_body(controller, timeout))
+            state = controller.wait_state(timeout)
             _validate_body_state(state, body_info=info, require_stationary=False, target_slots=target_slots)
             now = monotonic()
             last_state_id, last_state_change, stale = _body_sample_progress(
@@ -151,11 +131,7 @@ def _run_body(controller, info, *, timeout, sleep, monotonic, emit, trace):
             if stale:
                 raise RuntimeError("body state became stale during the trajectory")
 
-            command = _position_command(q, state)
-            if trace is None:
-                controller.publish(command, target_names=target_names, required_fields=0x19)
-            else:
-                trace.publish_body(controller, command, target_names=target_names, required_fields=0x19)
+            controller.publish(_position_command(q, state), target_names=target_names, required_fields=0x19)
             next_publish = max(next_publish + PERIOD_S, monotonic() + PERIOD_S)
             return state
 
@@ -185,8 +161,7 @@ def _run_body(controller, info, *, timeout, sleep, monotonic, emit, trace):
         emit("return endpoint settled")
     finally:
         if entered:
-            exit_status = (controller.exit_external(timeout) if trace is None else
-                           trace.exit(controller, timeout))
+            exit_status = controller.exit_external(timeout)
             if exit_status.current_action != "PASSIVE":
                 raise RuntimeError(
                     "CANCEL cleared EXTERNAL but expected PASSIVE, got "
@@ -197,10 +172,6 @@ def _run_body(controller, info, *, timeout, sleep, monotonic, emit, trace):
 
 def require_body_info(controller: PullController, timeout: float, *, emit_info=None):
     response = controller.get_robot_info(timeout)
-    return _body_info_from_response(response, emit_info=emit_info)
-
-
-def _body_info_from_response(response, *, emit_info=None):
     if response.status not in (ServiceStatus.SUCCESS, ServiceStatus.PARTIAL_SUCCESS):
         raise RuntimeError(f"get_robot_info failed: status={response.status} {response.error_message}")
     info = response.info
@@ -244,7 +215,6 @@ def _wait_for_stationary_body_state(
     monotonic: Callable[[], float],
     target_slots=None,
     position_limit_tolerance_rad: float = 0.0,
-    trace=None,
 ) -> BodyStateArrays:
     if target_slots is None:
         target_slots = _body_target_slots(body_info)
@@ -258,8 +228,7 @@ def _wait_for_stationary_body_state(
 
     while monotonic() < deadline:
         remaining = deadline - monotonic()
-        latest = (controller.wait_state(max(remaining, 0.001)) if trace is None else
-                  trace.read_body(controller, max(remaining, 0.001)))
+        latest = controller.wait_state(max(remaining, 0.001))
         _validate_body_state(
             latest, body_info=body_info, require_stationary=False, target_slots=target_slots,
             position_limit_tolerance_rad=position_limit_tolerance_rad)
@@ -412,12 +381,10 @@ def main() -> None:
     if not args.confirm_motion:
         parser.error("--confirm-motion is required")
 
-    with PullController(group=args.group) as controller:
-        if args.trace == 'off':
-            run(controller, timeout=args.timeout)
-        else:
-            run(controller, timeout=args.timeout, trace_output=args.trace_output,
-                trace_compression=args.trace_compression)
+    trace_options = {} if args.trace == 'off' else dict(
+        trace_output=args.trace_output, trace_compression=args.trace_compression)
+    with PullController(group=args.group, **trace_options) as controller:
+        run(controller, timeout=args.timeout)
 
 
 if __name__ == "__main__":

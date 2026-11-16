@@ -1,18 +1,15 @@
-"""Trace the existing demo calls without owning control or reading more feedback.
-
-These are application call boundaries. They do not claim transport receipt,
-internal key-reservation time, physical TX, or hardware execution.
-"""
+"""Private observation of SDK calls. No user-side publisher or controller wrapper."""
 from array import array
 from dataclasses import asdict
+import json
 import math
 import threading
 
 from .session import Kind, Outcome, Session, monotonic_us
 
-
 STAGES = ('body_read', 'body_publish', 'endpoint_feedback', 'endpoint_publish',
-          'control_enter', 'control_exit', 'touch_confirmation')
+          'control_enter', 'control_exit', 'touch_received', 'key_reserved',
+          'discovery', 'touch_request', 'body_callback')
 BODY_COMMAND_COLUMNS = ('q', 'dq', 'tau', 'kp', 'kd')
 BODY_STATE_COLUMNS = ('q', 'dq', 'tau_est', 'error_code')
 EE_COMMAND_COLUMNS = ('pos', 'vel', 'vel_limit', 'tau', 'current')
@@ -38,25 +35,26 @@ def _info_metadata(info):
     return convert(asdict(info)), nonfinite
 
 
-class DemoTrace:
-    """One run/file/writer; all hooks here run on the existing control thread.
+class SdkTrace:
+    """Connection-owned writer with a fixed number of preallocated thread channels.
 
-    Buffer preparation has a nonblocking observation-only lock so synchronous
-    getter reentry cannot overwrite a packet. No lock is held across SDK calls.
+    Thread registration never waits; exhaustion is reported as incomplete capture.
+    A retained Thread object prevents recycled Python/OS IDs from reusing a ring.
     """
-    def __init__(self, path, robot_reply, *, compression='zstd', capacity=512):
-        info, nonfinite_info = _info_metadata(robot_reply.info)
-        self._body_indices = {} if robot_reply.info.body is None else {
-            name: index for index, name in enumerate(robot_reply.info.body.joint_names)}
-        self.session = Session(path, producers=('control',), stages=STAGES,
-            compression=compression, capacity=capacity,
-            streams=({'id': 1, 'name': 'body'}, {'id': 2, 'name': 'left'},
-                     {'id': 3, 'name': 'right'}),
+    def __init__(self, path, *, compression='zstd', threads=8):
+        self.body_indices = {}
+        self._registration = threading.Lock()
+        self._local = threading.local()
+        self._threads = []
+        self.session = Session(path, producers=tuple('thread_' + str(i) for i in range(threads)),
+            stages=STAGES, compression=compression,
+            streams=({'id': 1, 'name': 'body'}, {'id': 2, 'name': 'left'}, {'id': 3, 'name': 'right'}),
             metadata={
-                'capture_scope': 'demo application calls; no extra reads or subscribers',
-                'robot_runtime_id': robot_reply.runtime_id,
-                'robot_info': info,
-                'info_nonfinite_fields': nonfinite_info,
+                'capture_scope': 'SDK method entry, reservation, return and accepted feedback',
+                'thread_capacity': threads,
+                'attempt_identity': ['producer', 'attempt_id'],
+                'discovery_layout': ['byte_offset', 'total_bytes', 'little_endian_words'],
+                'touch_request_semantics': 'RPC entry/return; not a new feedback sample',
                 'column_order': 'field-major, in the original fixed axis order',
                 'validity_order': 'one byte per value, followed by one byte per point time',
                 'layouts': {
@@ -81,8 +79,9 @@ class DemoTrace:
                     'touch_payload_integers': ['layout_id', 'side', 'byte_offset',
                         'total_bytes', 'little_endian_uint64_words_follow'],
                     'touch_region_integers': ['layout_id', 'side', 'region_index',
-                        'sample_seq', 'status_flags', 'direction_flags', 'validity'],
-                    'touch_region_times': ['request', 'hardware_acquired', 'source', 'ingested'],
+                        'sample_seq', 'status_flags', 'direction_flags', 'validity',
+                        'publish_time_valid'],
+                    'touch_region_times': ['request', 'hardware_acquired', 'source', 'ingested', 'publish'],
                     'body_command_times': ['client_created', 'client_send', 'input_state_source'],
                     'body_state_times': ['state_source', 'state_publish', 'consumed',
                         'control_capture', 'first_output', 'client_receipt_monotonic',
@@ -102,14 +101,88 @@ class DemoTrace:
                 },
                 'stream_ids': {'body': 1, 'left': 2, 'right': 3},
                 'limitations': ['application return is not physical output',
-                    'no internal key-reservation or take/decode timestamps',
+                    'receive take/decode timestamps remain pending',
                     'repeated cached sample IDs remain repeated',
                     'feedback records are observations, not validity/arrival verdicts',
-                    'touch payload is captured at confirmation, not a continuous subscription',
+                    'Touch captures existing accepted callbacks; no extra subscription',
                     'capture overhead and installed ARM wheel not measured'],
             })
-        self.producer = self.session.producer('control')
-        self.stages = {name: self.session.stage(name) for name in STAGES}
+        self._channels = tuple(_Capture(self, self.session.producer('thread_' + str(i)))
+                               for i in range(threads))
+
+    def _channel(self):
+        if self.session._closed:
+            return None
+        current = getattr(self._local, 'channel', None)
+        if current is not None:
+            return current
+        if not self._registration.acquire(False):
+            self._channels[0]._invalid()
+            return None
+        try:
+            if len(self._threads) == len(self._channels):
+                self._channels[0]._invalid()
+                return None
+            channel = self._channels[len(self._threads)]
+            self._threads.append(threading.current_thread())
+            self._local.channel = channel
+            return channel
+        finally:
+            self._registration.release()
+
+    def call(self, operation, function, *args, **kwargs):
+        channel = self._channel()
+        if channel is None:
+            return function(*args, **kwargs)
+        return channel.call(operation, function, args, kwargs)
+
+    def reserved(self, context, side=0):
+        channel = self._channel()
+        if channel is not None:
+            channel._record(Kind.STAGE_EVENT, 'key_reserved', channel._stamp(), Outcome.OK,
+                stream=1 + int(side), attempt=channel._attempts[-1] if channel._attempts else 0,
+                snapshot=channel._reservation, subject=context)
+
+    def received(self, kind, value):
+        channel = self._channel()
+        if channel is None:
+            return
+        if kind == 'state':
+            channel.endpoint_feedback(value, None, None, None)
+        elif kind == 'touch':
+            channel.touch_received(value)
+        elif kind == 'body':
+            channel._record(Kind.BODY_FEEDBACK, 'body_callback', channel._stamp(), Outcome.OK,
+                            stream=1, snapshot=channel._body_state, subject=value)
+        elif kind == 'info':
+            channel.info(value, 'endpoint_info')
+
+    def discovery(self, reply):
+        if reply.info is not None and reply.info.body is not None:
+            self.body_indices = {name: i for i, name in enumerate(reply.info.body.joint_names)}
+        channel = self._channel()
+        if channel is not None:
+            channel.info(reply, 'robot_info_reply')
+
+    def close(self):
+        try:
+            if not self.session._closed:
+                for channel in self._channels:
+                    if channel._attempts:
+                        channel._invalid()
+            self.session.close()
+        except Exception:
+            self._channels[0]._invalid()
+
+    def health(self):
+        return self.session.health()
+
+
+class _Capture:
+    def __init__(self, owner, producer):
+        self.owner, self.producer = owner, producer
+        self.stages = {name: owner.session.stage(name) for name in STAGES}
+        self._attempts = []
         self._lock = threading.Lock()
         self._values = array('d', [0.]) * 256
         self._validity = array('B', [0]) * 256
@@ -182,6 +255,7 @@ class DemoTrace:
         start = self._stamp()
         self._record(kind, stage, start, Outcome.UNKNOWN, attempt=attempt,
                      stream=stream, snapshot=before, subject=subject)
+        self._attempts.append(attempt)
         try:
             result = call()
         except BaseException:
@@ -189,6 +263,8 @@ class DemoTrace:
             self._record(kind, stage, end, Outcome.FAILED, attempt=attempt, stream=stream,
                          duration=end-start+1 if start is not None and end is not None and end >= start else None)
             raise
+        finally:
+            self._attempts.pop()
         end = self._stamp()
         if start is not None and end is not None and end < start:
             self._invalid()
@@ -207,7 +283,7 @@ class DemoTrace:
         slots = 0
         if target_names is not None:
             for name in target_names:
-                slots |= 1 << self._body_indices[name]
+                slots |= 1 << self.owner.body_indices[name]
         self._integer(slots)
         self._integer(int(target_names is not None))
         for field in BODY_COMMAND_COLUMNS:
@@ -295,28 +371,63 @@ class DemoTrace:
                      'ingress_drop_count', 'timeout_hold'):
             self._integer(int(getattr(status, name)))
 
-    def read_body(self, controller, timeout):
-        return self._call(Kind.BODY_READ, 'body_read', lambda: controller.wait_state(timeout),
-                          stream=1, after=self._body_state)
-
-    def publish_body(self, controller, command, **kwargs):
-        def snapshot(value, ids):
-            return self._body_command(value, ids, kwargs.get('required_fields'), kwargs.get('target_names'))
-        return self._call(Kind.BODY_COMMAND, 'body_publish',
-            lambda: controller.publish(command, **kwargs), stream=1,
-            before=snapshot, after=snapshot, subject=command)
-
-    def publish_endpoint(self, client, target, observations):
-        result = self._call(Kind.EFFECTOR_COMMAND, 'endpoint_publish',
-            lambda: client.publish(target, input_observations=observations),
-            stream=2 if client.side == 'left' else 3,
-            before=self._endpoint_target, after=self._endpoint_command, subject=target)
-        # Selected references come from the actual returned submission, never latest.
-        for ref in result.input_observations:
-            self._record(Kind.TRACE_LINK, 'endpoint_publish', self._stamp(), Outcome.OK,
-                stream=2 if client.side == 'left' else 3,
-                snapshot=self._sample_link, subject=(result, ref))
+    def call(self, operation, function, args, kwargs):
+        if len(self._attempts) >= 8:
+            self._invalid()
+            return function(*args, **kwargs)
+        before = after = subject = None
+        stream = 0
+        if operation == 'body_publish':
+            kind, stream, subject = Kind.BODY_COMMAND, 1, args[0]
+            def snapshot(value, ids):
+                self._body_command(value, ids, kwargs.get('required_fields'), kwargs.get('target_names'))
+            # Entry must not evaluate user DTO getters before SDK validation.
+            # Capture the validated returned command; rejection keeps entry/failure.
+            after = snapshot
+        elif operation == 'endpoint_publish':
+            kind, subject = Kind.EFFECTOR_COMMAND, args[0]
+            stream = 2 if function.__self__.side == 'left' else 3
+            after = self._endpoint_command
+        elif operation == 'body_read':
+            kind, stream, after = Kind.BODY_READ, 1, self._body_state
+        elif operation == 'touch_request':
+            kind = Kind.INPUT_EVENT
+            stream = 2 if function.__self__.side == 'left' else 3
+        else:
+            kind, after = Kind.CONTROL_STATUS, self._status
+        result = self._call(kind, operation, lambda: function(*args, **kwargs),
+                            stream=stream, before=before, after=after, subject=subject)
+        if operation == 'endpoint_publish':
+            for ref in result.input_observations:
+                self._record(Kind.TRACE_LINK, operation, self._stamp(), Outcome.OK,
+                             stream=stream, snapshot=self._sample_link, subject=(result, ref))
         return result
+
+    def _reservation(self, context, ids):
+        ids[6:10] = [context.runtime_id, context.control_id, context.session_id, context.sequence]
+
+    def info(self, value, label):
+        # Discovery/Info is cold and bounded; never serialize a per-cycle DTO.
+        try:
+            data, nonfinite = _info_metadata(value)
+            raw = json.dumps({'type': label, 'value': data, 'nonfinite': nonfinite},
+                             allow_nan=False, ensure_ascii=True).encode()
+            if len(raw) > 256 * 1024:
+                raise ValueError('Info trace exceeds cold metadata bound')
+            identity = self.producer.next_id()
+            for offset in range(0, len(raw), 216):
+                self._record(Kind.STREAM_INFO, 'discovery', self._stamp(), Outcome.OK,
+                             attempt=identity, snapshot=self._info_part, subject=(raw, offset))
+        except Exception:
+            self._invalid()
+
+    def _info_part(self, data, ids):
+        raw, offset = data
+        self._integer(offset)
+        self._integer(len(raw))
+        part = raw[offset:offset+216]
+        for i in range(0, len(part), 8):
+            self._integer(int.from_bytes(part[i:i+8], 'little'))
 
     def _sample_link(self, data, ids):
         command, ref = data
@@ -335,24 +446,14 @@ class DemoTrace:
                     snapshot=self._endpoint_state,
                     subject=(state, received if role == 1 else None, role))
 
-    def enter(self, controller, timeout):
-        return self._call(Kind.CONTROL_STATUS, 'control_enter',
-                          lambda: controller.enter_external(timeout), after=self._status)
-
-    def exit(self, controller, timeout):
-        return self._call(Kind.CONTROL_STATUS, 'control_exit',
-                          lambda: controller.exit_external(timeout), after=self._status)
-
-    def touch_confirmation(self, state, sample):
-        self._record(Kind.EFFECTOR_FEEDBACK, 'touch_confirmation', self._stamp(), Outcome.OK,
-            stream=1 + int(state.side), snapshot=self._endpoint_state, subject=(state, None, 0))
+    def touch_received(self, sample):
         if sample is not None:
             for index, region in enumerate(sample.region_stamps):
-                self._record(Kind.STREAM_INFO, 'touch_confirmation', self._stamp(), Outcome.UNKNOWN,
+                self._record(Kind.STREAM_INFO, 'touch_received', self._stamp(), Outcome.UNKNOWN,
                     stream=1 + int(sample.side), snapshot=self._touch_region,
                     subject=(sample, index, region))
             for offset in range(0, len(sample.payload), 216):
-                self._record(Kind.INPUT_EVENT, 'touch_confirmation', self._stamp(), Outcome.UNKNOWN,
+                self._record(Kind.INPUT_EVENT, 'touch_received', self._stamp(), Outcome.UNKNOWN,
                     stream=1 + int(sample.side), snapshot=self._touch_payload,
                     subject=(sample, offset))
 
@@ -360,10 +461,11 @@ class DemoTrace:
         sample, index, region = data
         ids[6], ids[10] = sample.runtime_id, sample.touch_state_id
         for value in (sample.layout_id, sample.side, index, region.sample_seq,
-                      region.status_flags, region.direction_flags, region.validity):
+                      region.status_flags, region.direction_flags, region.validity,
+                      int(sample.publish_time_valid)):
             self._integer(value)
         for value in (region.ts_request_us, region.ts_acquired_hw_us,
-                      region.ts_source_us, region.ts_ingested_us):
+                      region.ts_source_us, region.ts_ingested_us, sample.ts_state_pub_us):
             self._time(value)
 
     def _touch_payload(self, data, ids):
@@ -375,17 +477,3 @@ class DemoTrace:
         for start in range(0, len(part), 8):
             self._integer(int.from_bytes(part[start:start+8], 'little'))
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, error_type, _error, _traceback):
-        if error_type is not None:
-            self._record(Kind.ERROR, 'control_exit', self._stamp(), Outcome.FAILED)
-        try:
-            self.session.close()
-        except Exception:
-            # Optional recording cleanup cannot replace an in-flight control fault.
-            self._invalid()
-
-    def health(self):
-        return self.session.health()

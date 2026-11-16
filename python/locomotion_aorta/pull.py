@@ -299,7 +299,7 @@ class PullStateSource:
     """Read-only native-array feedback and ControlStatus snapshots; no publishers."""
 
     def __init__(self, *, group='default', node_name=None, _transport=None,
-                 native_body_rx=None):
+                 native_body_rx=None, trace_output=None, trace_compression="zstd"):
         self._group = _nonempty_text(group, 'group')
         if node_name is not None:
             _nonempty_text(node_name, 'node_name')
@@ -308,13 +308,21 @@ class PullStateSource:
         self.transport = _transport if _transport is not None else PullTransport(
             node_name=node_name or 'body-pull-'+uuid.uuid4().hex,
             group=group, publishers=False, native_body_rx=native_body_rx)
+        if isinstance(self.transport, PullTransport) and self.transport._candidate_gate is not None:
+            raise ValueError('Pull transport already has a connection')
+        self._trace = None
+        try:
+            if trace_output is not None:
+                from .trace._sdk import SdkTrace
+                self._trace = SdkTrace(trace_output, compression=trace_compression)
+        except BaseException:
+            self.transport.close()
+            raise
         self._runtime_binding = _RuntimeBinding()
         self._end_effector_runtime_lock = threading.Lock()
         self._closed = False
         self._end_effector_clients = set()
         if isinstance(self.transport, PullTransport):
-            if self.transport._candidate_gate is not None:
-                raise ValueError('Pull transport already has a connection')
             self.transport._candidate_gate = self._commit_pull_candidate
 
     def _commit_pull_candidate(self, candidate, commit):
@@ -329,7 +337,16 @@ class PullStateSource:
     def group(self):
         return self._group
 
+    @property
+    def trace_health(self):
+        return None if self._trace is None else self._trace.health()
+
     def wait_state(self, timeout=5.0):
+        if self._trace is not None:
+            return self._trace.call('body_read', self._wait_state_observed, timeout)
+        return self._wait_state_observed(timeout)
+
+    def _wait_state_observed(self, timeout):
         state = self.transport.wait_state(timeout)
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
@@ -353,6 +370,8 @@ class PullStateSource:
         _close_handles(handles)
         if self._runtime_binding.poisoned:
             raise ValueError('robot runtime changed; create a new connection')
+        if self._trace is not None:
+            self._trace.discovery(reply)
         return reply
 
     def _ensure_runtime_locked(self):
@@ -398,7 +417,11 @@ class PullStateSource:
                 self._closed = True
                 handles = _close_ee_handles(self._end_effector_clients)
         _close_handles(handles)
-        self.transport.close()
+        try:
+            self.transport.close()
+        finally:
+            if self._trace is not None:
+                self._trace.close()
 
     def __enter__(self):
         with self._end_effector_runtime_lock:
@@ -412,7 +435,8 @@ class PullStateSource:
 class PullController(ExternalController):
     """Original session protocol with pull status pumping on the caller thread."""
 
-    def __init__(self, *, group='default', node_name=None, client_id=None, _transport=None):
+    def __init__(self, *, group='default', node_name=None, client_id=None, _transport=None,
+                 trace_output=None, trace_compression="zstd"):
         _nonempty_text(group, 'group')
         node_name = node_name or 'locomotion-pull-'+uuid.uuid4().hex
         _nonempty_text(node_name, 'node_name')
@@ -423,7 +447,8 @@ class PullController(ExternalController):
         if isinstance(transport, PullTransport) and transport._candidate_gate is not None:
             raise ValueError('Pull transport already has a connection')
         super().__init__(group=group, node_name=node_name, client_id=client_id,
-                         _transport=transport, _subscribe_body_state=False)
+                         _transport=transport, _subscribe_body_state=False,
+                         trace_output=trace_output, trace_compression=trace_compression)
         if isinstance(transport, PullTransport):
             transport._candidate_gate = self._commit_pull_candidate
 
@@ -437,6 +462,11 @@ class PullController(ExternalController):
             return True
 
     def wait_state(self, timeout=5.0):
+        if self._trace is not None:
+            return self._trace.call('body_read', self._wait_state_observed, timeout)
+        return self._wait_state_observed(timeout)
+
+    def _wait_state_observed(self, timeout):
         with self._condition:
             self._ensure_open()
         return self._read_pull_state('wait_state', timeout)
@@ -451,6 +481,11 @@ class PullController(ExternalController):
             return state
 
     def wait_body_state(self, timeout=5.0):
+        if self._trace is not None:
+            return self._trace.call('body_read', self._wait_body_state_observed, timeout)
+        return self._wait_body_state_observed(timeout)
+
+    def _wait_body_state_observed(self, timeout):
         with self._condition:
             self._ensure_open()
         try:

@@ -96,7 +96,7 @@ def _observe_zero_dwell(frame, target, *, body, body_info, monotonic, emit):
 
 @stop_signals()
 def run_external(controller, command_loop, options, *, body,
-                 sleep=time.sleep, monotonic=time.monotonic, emit=print, trace=None):
+                 sleep=time.sleep, monotonic=time.monotonic, emit=print):
     timeout, body_gains = options.timeout, options.body_gains
     body_pose, body_enabled = options.body_pose, options.body_enabled
     if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
@@ -151,14 +151,12 @@ def run_external(controller, command_loop, options, *, body,
                 traces.append(controller.transport.subscribe(
                     topic, lambda message, topic=topic: emit(f'{topic}: {message!r}')))
         attempted = True
-        entered = (controller.enter_external(timeout) if trace is None else
-                   trace.enter(controller, timeout))
+        entered = controller.enter_external(timeout)
         active = True
         if plan is not None:
             # Use the latest real sample after the owned RUNNING transition,
             # never the model pose or a pre-entry commanded pose.
-            initial = (controller.wait_state(timeout) if trace is None else
-                       trace.read_body(controller, timeout))
+            initial = controller.wait_state(timeout)
             body._validate_body_state(initial, body_info=info, require_stationary=False, target_slots=hold_slots,
                                       position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
             pose = plan.measured(initial, position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
@@ -190,8 +188,7 @@ def run_external(controller, command_loop, options, *, body,
                 if monotonic() >= next_publish:
                     next_publish = monotonic() + body.PERIOD_S
                 return None
-            state = (controller.wait_state(timeout) if trace is None else
-                     trace.read_body(controller, timeout))
+            state = controller.wait_state(timeout)
             body._validate_body_state(
                 state, body_info=info, require_stationary=False, target_slots=hold_slots,
                 position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
@@ -227,12 +224,8 @@ def run_external(controller, command_loop, options, *, body,
                 plan.measured(state, position_limit_tolerance_rad=BODY_MEASURED_LIMIT_TOLERANCE_RAD)
                 q = pose if target is None else target(now) if callable(target) else target
                 command = plan.command(q, state)
-            if trace is None:
-                published = controller.publish(command, target_names=hold_names,
-                    required_fields=_BODY_FIELD_Q | _BODY_FIELD_KP | _BODY_FIELD_KD)
-            else:
-                published = trace.publish_body(controller, command, target_names=hold_names,
-                    required_fields=_BODY_FIELD_Q | _BODY_FIELD_KP | _BODY_FIELD_KD)
+            published = controller.publish(command, target_names=hold_names,
+                required_fields=_BODY_FIELD_Q | _BODY_FIELD_KP | _BODY_FIELD_KD)
             if plan is not None:
                 emit(f'BODY stage={stage} session_id={published.session_id} sequence={published.sequence} input_state={state.state_id} '
                      f'q_cmd={tuple(j.q for j in command.joints)!r} '
@@ -277,8 +270,7 @@ def run_external(controller, command_loop, options, *, body,
                     for signum in (signal.SIGINT, signal.SIGTERM):
                         signal.signal(signum, signal.SIG_IGN)
                     try:
-                        status = (controller.exit_external(timeout) if trace is None else
-                                  trace.exit(controller, timeout))
+                        status = controller.exit_external(timeout)
                         if status.current_action != 'PASSIVE':
                             raise RuntimeError(f'CANCEL returned {status.current_action}, expected PASSIVE')
                     except BaseException as error:
@@ -335,10 +327,8 @@ def validate_status(info, state, *, require_output=False):
         raise RuntimeError(_output_permission_error(state))
 
 
-def _motion_feedback(client, info, moving, monotonic, trace=None):
+def _motion_feedback(client, info, moving, monotonic):
     latest, position, fault, received_at = client.motion_feedback()
-    if trace is not None:
-        trace.endpoint_feedback(latest, position, fault, received_at)
     if latest is not None:
         validate_status(info, latest, require_output=moving)
     if fault is not None:
@@ -425,12 +415,10 @@ def print_feedback(client, emit=print):
          f'error_code={state.error_code} sample_status={state.sample_status}')
 
 
-def observe(clients, *, timeout, emit=print, trace=None):
+def observe(clients, *, timeout, emit=print):
     for client in clients:
         info = client.wait_info(timeout)
         state = client.wait_state(timeout)
-        if trace is not None:
-            trace.endpoint_feedback(state, None, None, None)
         if state.runtime_id != info.runtime_id:
             raise ValueError('State belongs to another descriptor')
         emit(f'{client.side}: Info={info}; read-only, no lease/cmd/set_touch')
@@ -484,23 +472,20 @@ def set_touch_and_observe(client, enabled, timeout, *, monotonic=time.monotonic,
 
 
 class _EndpointGuard:
-    def __init__(self, client, info, timeout, monotonic, trace=None):
+    def __init__(self, client, info, timeout, monotonic):
         self.client, self.info = client, info
         self.timeout, self.monotonic = timeout, monotonic
-        self.trace = trace
         self.latest = client.motion_feedback()[0]
         codec.validate_info(info)
 
     def feedback(self, moving):
-        state, position = _motion_feedback(self.client, self.info, moving, self.monotonic, self.trace)
+        state, position = _motion_feedback(self.client, self.info, moving, self.monotonic)
         if state is None or position is None:
             raise ValueError('end-effector measured position is unavailable')
         self.latest = state
         return position
 
     def publish(self, target, state):
-        if self.trace is not None:
-            return self.trace.publish_endpoint(self.client, target, (state.sample_ref,))
         return self.client.publish(target, input_observations=(state.sample_ref,))
 
 
@@ -750,10 +735,10 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
     return infos, prepared, returns, limits, rates, native_hz
 
 
-def _prepare_stream(frame, clients, infos, options, touch_worker, *, sleep, monotonic, emit, trace=None):
+def _prepare_stream(frame, clients, infos, options, touch_worker, *, sleep, monotonic, emit):
     """Wait for ready outputs and touch RPCs before choosing trajectory starts."""
     timeout, touch = options.timeout, options.touch
-    guards = {c.side: _EndpointGuard(c, infos[c.side], timeout, monotonic, trace) for c in clients}
+    guards = {c.side: _EndpointGuard(c, infos[c.side], timeout, monotonic) for c in clients}
 
     def change_touch(enabled, *, check_position):
         for client in clients:
@@ -770,8 +755,6 @@ def _prepare_stream(frame, clients, infos, options, touch_worker, *, sleep, mono
                         guard.feedback(True)
                 sleep(max(0.0, frame.next_deadline()-monotonic()))
             state, sample = result.result()
-            if trace is not None:
-                trace.touch_confirmation(state, sample)
             emit(f'{client.side}: touch_enabled={state.touch_enabled} confirmed '
                  f'touch_state={state.sample_ref} '
                  f'touch_sample={None if sample is None else sample.sample_ref}')
@@ -804,12 +787,12 @@ def _motion_tick(frame, guards, monotonic, last_now):
     return now, {side: guard.feedback(True) for side, guard in guards.items()}
 
 
-def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sleep, monotonic, emit, trace=None):
+def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sleep, monotonic, emit):
     """Drive the existing single owner using independently paced endpoints."""
     infos, prepared, returns, limits, rates, native_hz = prepared_motion
     timeout, feedback_interval = options.timeout, options.feedback_interval
     guards, initial_state = _prepare_stream(
-        frame, clients, infos, options, touch_worker, sleep=sleep, monotonic=monotonic, emit=emit, trace=trace)
+        frame, clients, infos, options, touch_worker, sleep=sleep, monotonic=monotonic, emit=emit)
     # Preparation and RPC may outlive the preflight measurement. Keep the
     # saved return target, but enter interpolation from current guarded data.
     initial_position = {side: state.pos for side, state in initial_state.items()}
@@ -904,7 +887,7 @@ def _stream_motion(frame, clients, prepared_motion, options, touch_worker, *, sl
             emit(f'{side}: fresh feedback observed movement; command admission/output/arrival remain unconfirmed')
 
 
-def run(controller, clients, targets, options, *, sleep=time.sleep, monotonic=time.monotonic, emit=print, trace=None):
+def run(controller, clients, targets, options, *, sleep=time.sleep, monotonic=time.monotonic, emit=print):
     """Independent member deadlines; targets are intent, never arrival evidence."""
     emit(f'EE position freshness window={EE_POSITION_FRESHNESS_WINDOW_S:.3f}s')
     prepared_motion = _prepare_motion(
@@ -913,11 +896,11 @@ def run(controller, clients, targets, options, *, sleep=time.sleep, monotonic=ti
 
     def command_loop(frame):
         _stream_motion(frame, clients, prepared_motion, options, touch_worker,
-                       sleep=sleep, monotonic=monotonic, emit=emit, trace=trace)
+                       sleep=sleep, monotonic=monotonic, emit=emit)
 
     try:
         run_external(controller, command_loop, options, body=body,
-                     sleep=sleep, monotonic=monotonic, emit=emit, trace=trace)
+                     sleep=sleep, monotonic=monotonic, emit=emit)
     finally:
         # run_external attempts CANCEL before waiting for a failed/inflight RPC.
         # The worker only performs one bounded RPC and observes samples; no motion
@@ -970,8 +953,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     parser.add_argument('--body-pose', choices=('measured', 'zero'), default='measured')
     parser.add_argument('--return-to-start', action='store_true')
     parser.add_argument('--touch', choices=('keep', 'on', 'off'), default='keep')
-    parser.add_argument('--trace', choices=('off', 'fbs'), default='off',
-                        help='optional single-writer trace; does not authorize motion')
+    parser.add_argument('--trace', choices=('off', 'fbs'), default='off')
     parser.add_argument('--trace-output', type=Path, help='new .ftrace file; requires --trace=fbs')
     parser.add_argument('--trace-compression', choices=('raw', 'zstd'), default='zstd')
     parser.add_argument('--dry-run', action='store_true', help='read-only; no lease, target or touch switch')
@@ -1038,14 +1020,12 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     client_factory = EndEffectorClient if _client_factory is None else _client_factory
     controller_factory = PullController if _controller_factory is None else _controller_factory
     state_factory = PullStateSource if _state_source_factory is None else _state_source_factory
+    trace_options = {} if args.trace == 'off' else dict(
+        trace_output=args.trace_output, trace_compression=args.trace_compression)
     with ExitStack() as stack:
-        connection = stack.enter_context((state_factory if readonly else controller_factory)(group=args.group))
+        connection = stack.enter_context((state_factory if readonly else controller_factory)(
+            group=args.group, **trace_options))
         reply = _bind_runtime(connection, args.timeout)
-        trace = None
-        if args.trace == 'fbs':
-            from locomotion_aorta.trace.demo import DemoTrace
-            trace = stack.enter_context(DemoTrace(args.trace_output, reply,
-                                                 compression=args.trace_compression))
         from locomotion_aorta._policy_state import format_robot_info
         clients = [stack.enter_context(client_factory(side, connection=connection, read_only=readonly,
             observation_sources=() if readonly else ((SampleStream.EE_STATE, 1 if side == 'left' else 2),))) for side in sides]
@@ -1061,11 +1041,9 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
             print(format_robot_info(reply))
         if readonly:
             if clients:
-                observe(clients, timeout=args.timeout, emit=emit, trace=trace)
+                observe(clients, timeout=args.timeout, emit=emit)
             else:
-                state = (connection.wait_state(args.timeout) if trace is None else
-                         trace.read_body(connection, args.timeout))
-                emit(f'none: BodyState={state}; no EE wait/lease/write')
+                emit(f'none: BodyState={connection.wait_state(args.timeout)}; no EE wait/lease/write')
             return
         targets = {}
         for client in clients:
@@ -1079,7 +1057,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
                 torque=getattr(args, client.side+'_torque_nm'),
                 current=getattr(args, client.side+'_current_a'))
         try:
-            run(connection, clients, targets, options, emit=emit, trace=trace)
+            run(connection, clients, targets, options, emit=emit)
         except KeyboardInterrupt:
             emit('interrupted; CANCEL attempted once, no neutral end-effector target sent')
 

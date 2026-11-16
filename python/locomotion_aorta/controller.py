@@ -160,6 +160,8 @@ class ExternalController:
         client_id: int | None = None,
         _transport: Transport | None = None,
         _subscribe_body_state: bool = True,
+        trace_output=None,
+        trace_compression: str = "zstd",
     ) -> None:
         self.group = _nonempty_text(group, "group")
         self.node_name = _nonempty_text(
@@ -195,7 +197,11 @@ class ExternalController:
         self._closed = False
         self._subscriptions: list[Any] = []
 
+        self._trace = None
         try:
+            if trace_output is not None:
+                from .trace._sdk import SdkTrace
+                self._trace = SdkTrace(trace_output, compression=trace_compression)
             if _subscribe_body_state:
                 self._subscriptions.append(
                     self.transport.subscribe(BODY_STATE_TOPIC, self._on_body_state)
@@ -207,6 +213,8 @@ class ExternalController:
                 self.transport.subscribe(CONTROL_STATUS_TOPIC, self._on_status)
             )
         except BaseException:
+            if self._trace is not None:
+                self._trace.close()
             for subscription in self._subscriptions:
                 try:
                     subscription.close()
@@ -223,7 +231,17 @@ class ExternalController:
         with self._condition:
             return self._latest_status
 
+    @property
+    def trace_health(self):
+        """Local recording health, including after close; None when disabled."""
+        return None if self._trace is None else self._trace.health()
+
     def wait_body_state(self, timeout: float) -> BodyState:
+        if self._trace is not None:
+            return self._trace.call('body_read', self._wait_body_state_observed, timeout)
+        return self._wait_body_state_observed(timeout)
+
+    def _wait_body_state_observed(self, timeout):
         deadline = _deadline(timeout)
         return self._wait_for(
             lambda: self._latest_body_state,
@@ -251,6 +269,8 @@ class ExternalController:
         if self._runtime_binding.poisoned:
             raise self._end_effector_runtime_changed()
         # Preserve partial or failed discovery and each end-effector status for the caller.
+        if self._trace is not None:
+            self._trace.discovery(reply)
         return reply
 
     def enter_external(self, timeout: float) -> ControlStatus:
@@ -268,6 +288,11 @@ class ExternalController:
         timeout bounds entry, not ownership. Release with exit_control().
         HUMANOID_TELEOP accepts EE input; BodyCmd remains EXTERNAL-only.
         """
+        if self._trace is not None:
+            return self._trace.call('control_enter', self._enter_control_observed, action_name, timeout)
+        return self._enter_control_observed(action_name, timeout)
+
+    def _enter_control_observed(self, action_name, timeout):
         if (not isinstance(action_name, str)
                 or action_name not in ("EXTERNAL", "HUMANOID_TELEOP")):
             raise ValueError("action_name must be EXTERNAL or HUMANOID_TELEOP")
@@ -353,6 +378,12 @@ class ExternalController:
             raise
 
     def publish(self, command: BodyCmd, *, target_names=None, required_fields=None) -> BodyCmd:
+        if self._trace is not None:
+            return self._trace.call('body_publish', self._publish_observed, command,
+                                    target_names=target_names, required_fields=required_fields)
+        return self._publish_observed(command, target_names=target_names, required_fields=required_fields)
+
+    def _publish_observed(self, command, *, target_names=None, required_fields=None):
         if not self._capture_publish_timing:
             return self._publish(command, target_names=target_names, required_fields=required_fields)
         trace = {'clock': 'monotonic_ns', 'outcome': 'raised'}
@@ -403,6 +434,8 @@ class ExternalController:
                 for_body=True, expected_runtime_id=command_runtime_id,
                 expected_control=current, expected_body_info=body_info,
                 expected_discovery_runtime=runtime_id)
+        if self._trace is not None:
+            self._trace.reserved(context)
         external_command = replace(
             command,
             protocol_version=BODY_CMD_PROTOCOL_VERSION,
@@ -617,6 +650,11 @@ class ExternalController:
 
     def exit_control(self, timeout: float) -> ControlStatus:
         """CANCEL once and wait for the bound action's completed exit."""
+        if self._trace is not None:
+            return self._trace.call('control_exit', self._exit_control_observed, timeout)
+        return self._exit_control_observed(timeout)
+
+    def _exit_control_observed(self, timeout):
         deadline = _deadline(timeout)
         with self._condition:
             self._ensure_open()
@@ -679,6 +717,9 @@ class ExternalController:
         except BaseException:
             pass
 
+        if self._trace is not None:
+            self._trace.close()
+
     def __enter__(self) -> "ExternalController":
         with self._condition:
             self._ensure_open()
@@ -689,6 +730,7 @@ class ExternalController:
         self.close()
 
     def _on_body_state(self, lowstate: Any) -> None:
+        accepted = False
         if (not isinstance(lowstate, BodyState) or
                 lowstate.protocol_version != BODY_STATE_PROTOCOL_VERSION or
                 not isinstance(lowstate.joints, tuple) or len(lowstate.joints) != BODY_SLOTS):
@@ -698,7 +740,10 @@ class ExternalController:
                     and _valid_generation(lowstate.runtime_id)
                     and lowstate.runtime_id == self._runtime_binding.runtime_id):
                 self._latest_body_state = lowstate
+                accepted = True
                 self._condition.notify_all()
+        if accepted and self._trace is not None:
+            self._trace.received("body", lowstate)
 
     def _on_ack(self, ack: Any) -> None:
         if (

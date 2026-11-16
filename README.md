@@ -60,4 +60,10 @@ python examples/body_state_subscriber/body_state_subscriber.py --group "$AORTA_G
 
 参考手册在独立文档仓维护，本仓只保留真实入口和开发说明。历史说明已标记 ARCHIVE，保存在 `docs/archive/`，不作为当前合同。SDK 结构／有限数值／身份和能力校验仍保留；本体设备范围由服务器 EXTERNAL 执行，普通 q/tau/kp/kd 裁剪、dq 越界拒绝。
 
+Trace 开发候选可在 `PullController`、`ExternalController` 或只读
+`PullStateSource` 构造时指定 `trace_output="trial.ftrace"`。本体与连接上的
+末端继续使用原来的发布／读取 API，SDK 自动采集；不要求包装 demo。
+默认关闭，完整性可读 `controller.trace_health`。格式和当前验证边界见
+[Trace 开发说明](trace/README.md)，此功能尚未发布到既有 RC1 安装包。
+
 本地检查入口为 `make check`；native 安装测试、生成绑定测试和设备验收分别记录。ONNX 构建与审计见 `demo_onnx/README.md`。`AGENTS.md` 为 agent 规则唯一正文，`CLAUDE.md` 保持相对软链接。不要在安装步骤启动运动示例。

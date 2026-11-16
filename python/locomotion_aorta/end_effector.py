@@ -396,6 +396,8 @@ class EndEffectorClient:
                     self._errors[kind] = error
                     self._condition.notify_all()
             return
+        if self.connection._trace is not None:
+            self.connection._trace.received(kind, value)
         self._deliver(kind, value, callback)
 
     def _deliver(self, kind, value, callback):
@@ -513,6 +515,12 @@ class EndEffectorClient:
                 self._condition.wait(remaining)
 
     def publish(self, target, *, input_observations=()):
+        if self.connection._trace is not None:
+            return self.connection._trace.call('endpoint_publish', self._publish_observed,
+                                              target, input_observations=input_observations)
+        return self._publish_observed(target, input_observations=input_observations)
+
+    def _publish_observed(self, target, *, input_observations=()):
         with self._publish_lock:
             with self._condition:
                 self._ensure_open()
@@ -547,6 +555,8 @@ class EndEffectorClient:
             context, publisher = self.connection._reserve_end_effector_command(
                 self, runtime_id, prepare_send
             )
+            if self.connection._trace is not None:
+                self.connection._trace.reserved(context, self._side)
             submission = EndEffectorSubmission(
                 info.runtime_id, info.layout_id, info.side,
                 context.control_id,
@@ -591,6 +601,11 @@ class EndEffectorClient:
         deadline. Core/matching exceptions propagate, while service failures
         raise TouchSetError carrying the unmodified decoded response.
         """
+        if self.connection._trace is not None:
+            return self.connection._trace.call('touch_request', self._set_touch_observed, enable, timeout)
+        return self._set_touch_observed(enable, timeout)
+
+    def _set_touch_observed(self, enable, timeout):
         if type(enable) is not bool:
             raise ValueError('enable must be boolean')
         _positive_timeout(timeout)
