@@ -42,6 +42,23 @@ uint64_t NowUs() {
              Clock::now().time_since_epoch()).count();
 }
 
+uint64_t NativeThreadToken() {
+  // ctypes may recreate PyThreadState on every foreign callback. Native TLS
+  // survives those callbacks but not the OS thread's lifetime. Tokens are
+  // process-unique, so recycled OS/Python thread IDs cannot inherit a ring.
+  static std::atomic<uint64_t> next{1};
+  thread_local const uint64_t token = [] {
+    auto value = next.load(std::memory_order_relaxed);
+    while (value != UINT64_MAX) {
+      if (next.compare_exchange_weak(value, value + 1,
+                                     std::memory_order_relaxed))
+        return value;
+    }
+    return uint64_t{0};
+  }();
+  return token;
+}
+
 struct Counter {
   std::atomic<uint64_t> value{0};
   std::atomic<bool> valid{true};
@@ -525,7 +542,8 @@ py::dict DecodeChunk(py::bytes input) {
 PYBIND11_MODULE(_trace_native, m) {
   m.attr("FORMAT_MAJOR") = 1; m.attr("FORMAT_MINOR") = 3;
   m.attr("SLOT_BYTES") = sizeof(Record);
-  m.attr("CAPTURE_API_VERSION") = 2;
+  m.attr("CAPTURE_API_VERSION") = 3;
+  m.def("thread_token", &NativeThreadToken);
   m.def("monotonic_us", &NowUs);
   m.def("decode_chunk", &DecodeChunk);
   py::class_<Session>(m, "Session")

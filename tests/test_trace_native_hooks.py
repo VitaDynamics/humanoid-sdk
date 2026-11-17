@@ -2,6 +2,9 @@
 from dataclasses import asdict, fields, replace
 from pathlib import Path
 import tempfile
+import os
+import threading
+import uuid
 import unittest
 from unittest.mock import patch
 
@@ -260,6 +263,63 @@ class NativeTraceHooks(unittest.TestCase):
             self.assertTrue(any(r['reference_id'] and r['runtime_id']==101 and r['outcome']==Outcome.REJECTED for r in rows))
         finally:
             case.doCleanups()
+
+    def test_real_aorta_callbacks_reuse_native_thread_channel_across_python_tls_reset(self):
+        from aorta import Node
+        from locomotion_aorta import _end_effector_codec as codec
+        done = threading.Event()
+        observed, errors = [], []
+        group = uuid.uuid4().hex
+        with patch.dict(os.environ, {'AORTA_GROUP': group}):
+            with Trace(self.path, stages=('main',)) as trace:
+                with trace.span('main'):
+                    pass
+                with Node('trace-callback-regression', group=group) as node:
+                    def receive(payload, _context):
+                        try:
+                            sample = trace.decode(codec.decode_state, payload,
+                                                  _stage='endpoint_decode')
+                            trace.received('state', sample)
+                            observed.append((threading.get_native_id(), sample.state_id))
+                        except BaseException as error:
+                            errors.append(error)
+                        finally:
+                            done.set()
+                    subscriber = node.create_subscriber('/sdk/test/trace-callback', receive)
+                    publisher = node.create_publisher('/sdk/test/trace-callback')
+                    for sample_id in range(1, 25):
+                        done.clear()
+                        publisher.publish_bytes(pack(state_object(sample=sample_id)))
+                        self.assertTrue(done.wait(2), 'actual native callback did not arrive')
+                    subscriber.close()
+                    publisher.close()
+                self.assertEqual(errors, [])
+                self.assertEqual([item[1] for item in observed], list(range(1, 25)))
+                native_threads = {item[0] for item in observed}
+                self.assertLess(len(native_threads), len(observed))
+                self.assertEqual(len(trace._threads), 1 + len(native_threads))
+        rows, stages = self.read()
+        decoded = [r for r in rows if r['kind'] == Kind.EFFECTOR_FEEDBACK
+                   and r['stage'] == stages['endpoint_decode']]
+        accepted = [r for r in rows if r['kind'] == Kind.EFFECTOR_FEEDBACK
+                    and r['stage'] == stages['endpoint_feedback']]
+        self.assertEqual([r['state_id'] for r in decoded], list(range(1, 25)))
+        self.assertEqual([r['reference_id'] for r in accepted],
+                         [r['attempt_id'] for r in decoded])
+        self.assertEqual(len({r['producer'] for r in decoded}), len(native_threads))
+
+    def test_native_thread_token_lifetime_does_not_reuse_a_retired_threads_channel(self):
+        from locomotion_aorta.trace import _trace_native
+        original = _trace_native.thread_token()
+        self.assertEqual(_trace_native.thread_token(), original)
+        tokens = []
+        for _ in range(12):
+            thread = threading.Thread(target=lambda: tokens.append(_trace_native.thread_token()))
+            thread.start()
+            thread.join(2)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(len(set(tokens)), 12)
+        self.assertNotIn(original, tokens)
 
 
 if __name__=='__main__':unittest.main()

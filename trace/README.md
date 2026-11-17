@@ -94,7 +94,11 @@ turn on touch or request control. RPC return alone is not a new Touch sample.
 One connection has one native writer and eight preallocated producer channels,
 bound lazily to actual calling/callback threads. The nonblocking binding and
 capture guards drop observation on contention/reentry/exhaustion and mark the
-file incomplete. Channels are never recycled onto another Thread object.
+file incomplete. Channels bind to native thread-lifetime tokens, not Python
+`threading.local()` alone: foreign ctypes callbacks can lose Python TLS on each
+entry even on the same native thread. Such callbacks reuse their existing
+channel without another registration lock acquisition. The bounded registry
+never recycles a channel onto a later thread with a reused OS/Python ID.
 The count/capacity and complete target control-loop overhead still require
 measurement; host capture microbenchmarks are not strict real-time acceptance.
 
@@ -155,9 +159,11 @@ producer IDs and nearest-rank p50/p95/p99 in microseconds. It reads the actual
 FBS integrity ledger; incomplete input returns exit code 2 and keeps all issues.
 Counts are observed spans, not a claim of total inference calls when records
 were lost. Failed calls are separate from successful-call timing. The offline
-summary does not run in the control, Planner or writer thread.
+summary does not run in the control, Planner or writer thread. `stages` may be
+empty for a read-only recording without model spans. `producer_issues` lists the
+actual loss/error counters rather than hiding an incomplete capture.
 
-Native capture requires matching extensions (`CAPTURE_API_VERSION=2` and
+Native capture requires matching extensions (`CAPTURE_API_VERSION=3` and
 `TRACE_CODEC_API_VERSION=1`); mismatches fail at Trace/connection construction.
 The encoder, decoder, control admission and publication gates retain their
 original algorithms and wire layouts. C++ reading Python DTOs keeps the GIL;

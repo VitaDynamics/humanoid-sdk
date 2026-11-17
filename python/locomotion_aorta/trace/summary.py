@@ -48,8 +48,13 @@ def summarize_spans(path):
             invalid_duration_spans=group['invalid_duration'], producers=sorted(group['producers']),
             min_us=values[0] if values else None, p50_us=percentile(50),
             p95_us=percentile(95), p99_us=percentile(99), max_us=values[-1] if values else None))
+    producer_issues = []
+    for index, counts in enumerate((reader.integrity.run_end or {}).get('producers', [])):
+        if (not counts['counters_valid'] or any(counts[name] for name in (
+                'dropped_events', 'unpersisted_events', 'wrong_thread_events', 'invalid_events'))):
+            producer_issues.append(dict(producer=index, **counts))
     return dict(capture_complete=reader.integrity.complete,
-        issues=reader.integrity.issues, stages=result,
+        issues=reader.integrity.issues, producer_issues=producer_issues, stages=result,
         scope='Observed completed spans only; missing spans are not zero-duration calls. '
               'Separate stages/outcomes; no cross-clock subtraction or physical-output claim.',
         percentile_method='nearest rank',

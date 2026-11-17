@@ -328,6 +328,11 @@ class SdkTraceTests(unittest.TestCase):
         h.controller.close()
         self.records(complete=False)
         self.assertGreater(sum(p['invalid_events'] for p in h.controller.trace_health['producers']), 0)
+        from locomotion_aorta.trace.summary import summarize_spans
+        summary = summarize_spans(self.path)
+        self.assertFalse(summary['capture_complete'])
+        self.assertTrue(summary['producer_issues'])
+        self.assertGreater(sum(p['invalid_events'] for p in summary['producer_issues']), 0)
 
     def test_cold_info_keeps_unknown_ranges_without_extra_discovery_or_zero_fabrication(self):
         reply = robot_info_reply()

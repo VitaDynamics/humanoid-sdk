@@ -44,19 +44,22 @@ class Trace:
     """Run-owned writer with a fixed number of preallocated thread channels.
 
     Thread registration never waits; exhaustion is reported as incomplete capture.
-    A retained Thread object prevents recycled Python/OS IDs from reusing a ring.
+    Native lifetime tokens survive foreign callbacks but never recycle a ring
+    onto a later thread, even when Python/OS thread IDs are reused.
     Pass this recorder as ``trace_recorder`` to a connection to capture its SDK
     calls automatically. Close connections and join model workers before exiting
     this context. A borrowing connection never closes the recorder.
     """
     def __init__(self, path, *, compression='zstd', threads=8, stages=()):
-        if getattr(_native(), 'CAPTURE_API_VERSION', None) != 2:
+        backend = _native()
+        if getattr(backend, 'CAPTURE_API_VERSION', None) != 3:
             raise RuntimeError('Trace requires the matching native capture extension')
+        self._thread_token = backend.thread_token
         self.user_stages = tuple(stages)
         self.body_indices = {}
         self._registration = threading.Lock()
         self._local = threading.local()
-        self._threads = []
+        self._threads = {}
         self.session = Session(path, producers=tuple('thread_' + str(i) for i in range(threads)),
             stages=STAGES + self.user_stages + NATIVE_STAGES, compression=compression,
             streams=({'id': 1, 'name': 'body'}, {'id': 2, 'name': 'left'}, {'id': 3, 'name': 'right'}),
@@ -144,6 +147,16 @@ class Trace:
         current = getattr(self._local, 'channel', None)
         if current is not None:
             return current
+        token = self._thread_token()
+        if not token:
+            self._channels[0]._invalid()
+            return None
+        # Foreign callbacks lose Python TLS between invocations. Reuse the
+        # existing native thread's channel without taking the registration lock.
+        current = self._threads.get(token)
+        if current is not None:
+            self._local.channel = current
+            return current
         if not self._registration.acquire(False):
             self._channels[0]._invalid()
             return None
@@ -152,7 +165,7 @@ class Trace:
                 self._channels[0]._invalid()
                 return None
             channel = self._channels[len(self._threads)]
-            self._threads.append(threading.current_thread())
+            self._threads[token] = channel
             self._local.channel = channel
             return channel
         finally:
