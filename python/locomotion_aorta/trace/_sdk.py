@@ -1,5 +1,6 @@
 """Private observation of SDK calls. No user-side publisher or controller wrapper."""
 from dataclasses import asdict
+from array import array
 import json
 import math
 import threading
@@ -195,6 +196,20 @@ class Trace:
         """Allocate a run-unique identity without inventing a model invocation."""
         channel = self._channel()
         return channel.native.allocate_id() if channel is not None else 0
+
+    def incomplete(self, name, *, missing_count, reference_id=0):
+        """Account for proven upstream observation loss without stopping control."""
+        channel = self._channel()
+        if channel is None:
+            return
+        channel._invalid()
+        try:
+            self.mark(name, kind=Kind.ERROR, outcome=Outcome.NOT_AVAILABLE,
+                      reference_id=reference_id, integers=array('Q', [missing_count]))
+        except Exception:
+            # The original missing observation stays accounted even if its
+            # detailed event cannot be represented or persisted.
+            pass
 
     def vector(self, name, values, *, iteration_id=0, inference_id=0, reference_id=0):
         """Copy one existing contiguous numeric buffer through one native call.
