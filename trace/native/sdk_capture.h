@@ -125,6 +125,110 @@ public:
   }
 
   bool Active() const { return busy_.load() || call_depth_ || span_depth_; }
+  uint64_t AllocateId() {
+    Guard guard(*this);
+    return guard ? Identity() : 0;
+  }
+  uint64_t Vector(uint32_t stage, py::buffer source, uint64_t iteration,
+                  uint64_t inference, uint64_t reference) {
+    Guard guard(*this);
+    if (!guard) return 0;
+    try {
+      const auto b = source.request();
+      const bool f32 = b.format == py::format_descriptor<float>::format() && b.itemsize == 4;
+      const bool f64 = b.format == py::format_descriptor<double>::format() && b.itemsize == 8;
+      if (b.ndim != 1 || b.size < 0 || b.size > 8192 || b.strides[0] != b.itemsize || (!f32 && !f64))
+        throw py::value_error("trace vector requires a contiguous float32/64 buffer with at most 8192 values");
+      const auto id = Identity(), stamp = NowUs();
+      if (!id) return 0;
+      for (size_t offset = 0; offset == 0 || offset < size_t(b.size); offset += kValues) {
+        auto r = Event(16, stage, 0, 1);
+        Context(r);
+        r.timestamp_us = stamp;
+        r.ids[4] = id;
+        if (iteration) r.ids[0] = iteration;
+        if (inference) r.ids[1] = inference;
+        r.ids[11] = reference;
+        Integer(r, offset);
+        Integer(r, b.size);
+        const auto n = std::min(kValues, size_t(b.size)-offset);
+        for (size_t i = 0; i < n; ++i) {
+          double value;
+          if (f32) {
+            float input;
+            std::memcpy(&input, static_cast<const char *>(b.ptr)+(offset+i)*4, 4);
+            value = input;
+          } else {
+            std::memcpy(&value, static_cast<const char *>(b.ptr)+(offset+i)*8, 8);
+          }
+          r.values[i] = value;
+          r.validity[i] = std::isfinite(value);
+        }
+        r.n_values = r.n_validity = n;
+        Emit(r);
+      }
+      return id;
+    } catch (const std::exception &) {
+      Invalid();
+      return 0;
+    }
+  }
+  uint64_t Mark(uint16_t kind, uint32_t stage, uint32_t stream, uint8_t outcome,
+                uint64_t iteration, uint64_t inference, uint64_t reference,
+                py::object values, py::object integers, py::object times,
+                py::object validity) {
+    Guard guard(*this);
+    if (!guard)
+      return 0;
+    try {
+      if ((kind != 9 && kind != 11 && kind != 12 && kind != 16 &&
+           kind != 17 && kind != 18 && kind != 20) || outcome > 11)
+        throw py::value_error("invalid user trace event kind/outcome");
+      auto r = Event(kind, stage, stream, outcome);
+      Context(r);
+      r.ids[4] = Identity();
+      if (iteration) r.ids[0] = iteration;
+      if (inference) r.ids[1] = inference;
+      r.ids[11] = reference;
+      r.n_values = Session::CopyValues(values, r.values);
+      r.n_integers = Session::CopyBuffer(integers, r.integers);
+      r.n_times = Session::CopyBuffer(times, r.times_us);
+      r.n_validity = Session::CopyBuffer(validity, r.validity);
+      Emit(r);
+      return r.ids[4];
+    } catch (const std::exception &) {
+      Invalid();
+      return 0;
+    }
+  }
+  // Explicit transferable context, not a TLS span pushed on the submitter.
+  std::array<uint64_t, 7> AsyncBegin(uint32_t stage, uint64_t iteration,
+                                    uint64_t inference, uint64_t parent) {
+    Guard guard(*this);
+    if (!guard) return {};
+    const auto id = Identity();
+    return {id, NowUs(), stage, iteration, inference ? inference : id,
+            parent, NativeThreadToken()};
+  }
+  void AsyncEnd(const std::array<uint64_t, 7> &context, bool failed) {
+    Guard guard(*this);
+    if (!guard) return;
+    auto r = Event(15, context[2], 0, failed ? 3 : 1);
+    if (!context[0] || r.timestamp_us < context[1]) {
+      Invalid();
+      return;
+    }
+    r.duration_us = r.timestamp_us - context[1] + 1;
+    r.duration_valid = true;
+    r.timestamp_us = context[1];
+    r.ids[0] = context[3];
+    r.ids[1] = context[4];
+    r.ids[2] = context[0];
+    r.ids[3] = context[5];
+    // Keep the originating thread lifetime token as explicit provenance.
+    Integer(r, context[6]);
+    Emit(r);
+  }
   void Invalid() {
     if (!state_->closing.load())
       state_->producers[producer_]->invalid.Add();
@@ -384,7 +488,7 @@ public:
       Invalid();
     }
   }
-  void Info(py::bytes raw, uint32_t stage) {
+  void Info(py::bytes raw, uint32_t stage, uint16_t kind) {
     Guard guard(*this);
     if (!guard)
       return;
@@ -393,11 +497,11 @@ public:
       Py_ssize_t size;
       if (PyBytes_AsStringAndSize(raw.ptr(), &bytes, &size))
         throw py::error_already_set();
-      if (size > 256 * 1024)
+      if (size > 256 * 1024 || (kind != 2 && kind != 13 && kind != 14))
         throw py::value_error("Info exceeds cold bound");
       const auto id = Identity();
       for (size_t offset = 0; offset < size_t(size); offset += 216) {
-        auto r = Event(2, stage, 0, 1);
+        auto r = Event(kind, stage, 0, 1);
         r.ids[4] = id;
         Integer(r, offset);
         Integer(r, size);
@@ -750,9 +854,14 @@ void BindSdkCapture(py::module_ &m) {
       .def("end", &SdkCapture::End)
       .def("begin_span", &SdkCapture::BeginSpan)
       .def("end_span", &SdkCapture::EndSpan)
+      .def("allocate_id", &SdkCapture::AllocateId)
+      .def("vector", &SdkCapture::Vector)
+      .def("mark", &SdkCapture::Mark)
+      .def("async_begin", &SdkCapture::AsyncBegin)
+      .def("async_end", &SdkCapture::AsyncEnd)
       .def("reserved", &SdkCapture::Reserved)
       .def("body_feedback", &SdkCapture::BodyFeedback)
       .def("endpoint_feedback", &SdkCapture::EndpointFeedback)
       .def("touch", &SdkCapture::Touch)
-      .def("info", &SdkCapture::Info);
+      .def("info", &SdkCapture::Info, py::arg("raw"), py::arg("stage"), py::arg("kind") = 2);
 }

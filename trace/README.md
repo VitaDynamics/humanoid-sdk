@@ -80,8 +80,19 @@ close/completion wait is not part of a normal model or publish call.
 Unknown stage names, excessive nesting and exhausted producer channels mark
 incomplete capture without stopping computation. A nested SDK call carries the
 active span identity. Publishing after leaving the span does not automatically
-attribute a command to that inference; asynchronous consumption linkage is
-separate work.
+attribute a command to that inference. Pass the exact inference ID when opening
+the later publish span; use explicit result links for background work.
+
+`Trace.start_span(name)` returns a one-use token with `span_id` and
+`inference_id`. The receiving worker calls `token.finish(failed=False)`; this
+does not propagate a TLS context or block the submitter. Calling twice or closing
+with unfinished tokens marks capture incomplete. At most 1024 tokens can be
+outstanding. `Trace.new_id()` allocates a result/input identity without counting
+a model invocation. `Trace.mark(name, kind=Kind.TRACE_LINK, inference_id=...,
+reference_id=...)` records the actual consumer edge. Numeric columns accept
+bounded contiguous typed buffers; reuse them on hot paths. `Trace.define` records
+bounded cold model/marker metadata, including model hash and I/O signatures
+when the application has verified them. Do not invent missing metadata.
 
 The SDK records publish entry before validation/control-lock waiting,
 reservation completion with the actual allocated key, and publication return
@@ -111,9 +122,14 @@ column layouts, original clock meanings and field-mask semantics are in the
 run header. Attempt IDs are local to a producer, not global command identities.
 
 All trace times are integer microseconds. Publication return is not physical
-TX or execution. Network receive/take sub-stages, full model causal association,
-WTT migration, MCAP/HTML and installed current-source/ARM/performance acceptance
-remain pending. Legacy policy JSONL retirement is still validation-gated.
+TX or execution. `body_take` includes polling and waiting; `body_decode` measures
+the selected conversion. `body_admission_gate` measures the original identity
+gate call, while accepted/rejected feedback records retain its verdict.
+`endpoint_callback` starts after Aorta's message parsing and includes SDK
+validation/delivery; it is not network reception. Endpoint decode timing carries
+the actual left/right stream. Cache reads keep original receipt/sample clocks.
+Full model/input causal coverage, target performance and installed ARM acceptance
+are tracked separately. Legacy policy JSONL retirement is still validation-gated.
 
 Each preallocated SPSC ring drops new packets when full. One native writer
 drains continuously, builds FlatBuffers, optionally compresses with Zstd, and
@@ -154,13 +170,21 @@ Offline model timing (after closing the run):
 python -m locomotion_aorta.trace.summary run.ftrace
 ```
 
-This reports observed spans separately by registered stage and outcome, with
+This reports model spans in `stages` and SDK calls in `sdk_stages`, separately by
+recorded stage, stream and outcome, with
 producer IDs and nearest-rank p50/p95/p99 in microseconds. It reads the actual
 FBS integrity ledger; incomplete input returns exit code 2 and keeps all issues.
 Counts are observed spans, not a claim of total inference calls when records
 were lost. Failed calls are separate from successful-call timing. The offline
 summary does not run in the control, Planner or writer thread. `stages` may be
-empty for a read-only recording without model spans. `producer_issues` lists the
+empty without model spans; ordinary Body/EE publish, encode/decode, read,
+control entry/exit and Touch request timings are in `sdk_stages`. Entry events
+and untimed feedback snapshots are not counted as completed calls. A missing
+duration stays unknown; a recorded zero stays zero. Stream0 timings have no
+endpoint attribution and are not assigned to the nearest State. Encoding is
+inside publish, so those durations must not be added. These are SDK wall-time
+measurements, not CAN/device response latency or a hard-real-time guarantee.
+`producer_issues` lists the
 actual loss/error counters rather than hiding an incomplete capture.
 
 Native capture requires matching extensions (`CAPTURE_API_VERSION=3` and
@@ -190,3 +214,48 @@ individual elapsed-us samples and the full loss ledger, and fails if a capture
 is incomplete. It creates no Aorta node or control publisher. Use distinct
 `--output` directories; do not infer target deadlines by subtracting independent
 p99 values or by accepting dropped records.
+
+## Offline HTML and MCAP
+
+After installing the matching wheel with its `trace` extra:
+
+```bash
+python -m locomotion_aorta.trace.summary logs/run.ftrace
+python -m locomotion_aorta.trace.report logs/run.ftrace --output reports/run
+# Optional: existing matching MCAP files; never start a recorder or robot action.
+python -m locomotion_aorta.trace.report logs/run.ftrace --output reports/run-mcap \
+  --mcap recorder/part-0.mcap --mcap recorder/part-1.mcap
+```
+
+Open `reports/run/report/index.html` directly. CSS/JS are local files with no
+CDN, server or JSON fetch requirement. The report includes per-stage/per-side/
+per-outcome timing histograms and CDF, position observations, paginated command
+and span details, exact command keys, source SHA256, CSV and integrity exports.
+Large identities are strings in browser JSON. Chart buckets preserve extrema;
+quantiles use every valid recorded duration, not the chart downsample.
+
+The reader indexes records in SQLite with a 4 MiB page cache and disk sorting.
+Input chunks and metadata are bounded. Detail pages contain at most 128 commands;
+full events remain in the offline `events.jsonl` export. This export is not a
+second runtime writer. Output directories must be new, and source inputs are
+hashed before/after analysis. Incomplete files retain verified records and their
+actual loss/corruption status, never a fabricated zero-duration sample.
+
+MCAP import verifies embedded BFBS against the installed generated metadata and
+root, then uses the existing SDK decoders. Supported roots are BodyCmd/BodyState,
+EE Cmd/State/Info and ControlStatus. Unknown roots, mismatched schema, bad payloads,
+missing footer and oversize chunks remain explicit. Only exact command-key or
+valid EXTERNAL application-key sightings are linked. MCAP log/publish times are
+converted to microseconds; they are not client receive stamps. BodyState lacks
+control_id and EE State lacks an applied command key: neither observation alone
+proves a command-linked new hardware sample. The report deliberately leaves
+hardware E2E, physical completion and unprovided clock alignment unavailable.
+
+For an already-existing same-host subprocess IPC, `Trace.observed_span` accepts
+explicit measured `CLOCK_MONOTONIC` endpoints in microseconds. Register the
+worker/process provenance first; do not supply remote/device clocks through
+this API. `Trace.vector(name, existing_buffer, inference_id=...)` captures a
+contiguous float32/64 observation or action in one native call, with at most
+8192 elements split into owned 256-element chunks. Offset/total and shared
+attempt identity permit exact reconstruction; missing chunks remain missing.
+This avoids `.tolist()` and Python per-element conversion for model logging.

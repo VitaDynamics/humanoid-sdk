@@ -153,13 +153,15 @@ class PullTransport(_AortaTransport):
                     native = self._native_body_rx is not None
                     payload = sample if native else sample.payload
                     if arrays:
-                        decoded = decode_body_state_arrays(payload)
+                        decoded = (self._trace_recorder.decode(decode_body_state_arrays, payload, _stream=1)
+                                   if self._trace_recorder is not None else decode_body_state_arrays(payload))
                         state = copy_reference(decoded, replace(decoded,
                             received_monotonic_ns=mono, received_realtime_ns=wall,
                             pull_context_receive_stamp_ns=(sample.receive_stamp_ns
                                 if native else sample.context.receive_stamp_ns)))
                     else:
-                        state = decode_body_state_native(payload)
+                        state = (self._trace_recorder.decode(decode_body_state_native, payload, _stream=1)
+                                 if self._trace_recorder is not None else decode_body_state_native(payload))
 
                 def commit():
                     nonlocal provisional, retired_raw
@@ -176,7 +178,13 @@ class PullTransport(_AortaTransport):
                     if received[0] is candidate:
                         provisional = False
 
-                if self._accept_candidate(state, commit):
+                cached_sample = received is self._latest_sample
+                accepted = (self._trace_recorder.decode(self._accept_candidate, state, commit,
+                            _stage='body_admission_gate', _stream=1) if self._trace_recorder is not None
+                            else self._accept_candidate(state, commit))
+                if accepted:
+                    if self._trace_recorder is not None and not cached_sample:
+                        self._trace_recorder.received('body', state)
                     return state
                 if self._trace_recorder is not None:
                     self._trace_recorder.rejected("body", state)
@@ -224,6 +232,12 @@ class PullTransport(_AortaTransport):
         return sample
 
     def _receive_state(self, timeout):
+        if self._trace_recorder is not None:
+            return self._trace_recorder.decode(self._receive_state_observed, timeout,
+                                               _stage='body_take', _stream=1)
+        return self._receive_state_observed(timeout)
+
+    def _receive_state_observed(self, timeout):
         nonblocking = type(timeout) in (int, float) and timeout == 0
         if nonblocking:
             deadline = time.monotonic()

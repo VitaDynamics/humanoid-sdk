@@ -443,6 +443,7 @@ class Session {
   }
 
  private:
+  friend class SdkCapture;
   template <class T, size_t N> static uint16_t CopyBuffer(py::object source, std::array<T, N>& dest) {
     if (source.is_none()) return 0;
     const auto b = py::buffer(source).request();
@@ -542,7 +543,7 @@ py::dict DecodeChunk(py::bytes input) {
 PYBIND11_MODULE(_trace_native, m) {
   m.attr("FORMAT_MAJOR") = 1; m.attr("FORMAT_MINOR") = 3;
   m.attr("SLOT_BYTES") = sizeof(Record);
-  m.attr("CAPTURE_API_VERSION") = 3;
+  m.attr("CAPTURE_API_VERSION") = 4;
   m.def("thread_token", &NativeThreadToken);
   m.def("monotonic_us", &NowUs);
   m.def("decode_chunk", &DecodeChunk);

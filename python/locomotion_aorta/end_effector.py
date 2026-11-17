@@ -332,6 +332,13 @@ class EndEffectorClient:
             prepared.close()
 
     def _receive(self, kind, view):
+        trace = self.connection._trace
+        if trace is not None:
+            return trace.decode(self._receive_observed, kind, view,
+                                _stage='endpoint_callback', _stream=1+self._side)
+        return self._receive_observed(kind, view)
+
+    def _receive_observed(self, kind, view):
         with self._condition:
             if self._closed or self._fatal is not None:
                 return
@@ -340,7 +347,8 @@ class EndEffectorClient:
         trace = self.connection._trace
         try:
             decode = getattr(codec, 'decode_' + kind)
-            value = (trace.decode(decode, view, _stage='endpoint_decode' if kind == 'state' else 'touch_decode')
+            value = (trace.decode(decode, view, _stage='endpoint_decode' if kind == 'state' else 'touch_decode',
+                                 _stream=1+self._side)
                      if trace is not None and kind != 'info' else decode(view))
             if kind == 'info':
                 codec.validate_info(value)

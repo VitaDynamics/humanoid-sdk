@@ -7,7 +7,7 @@ import uuid
 from .. import _trace_context
 from contextlib import nullcontext
 
-from .session import Kind, Session, _native
+from .session import Kind, Outcome, Session, _metadata, _native
 
 _NO_SPAN = nullcontext()
 
@@ -15,6 +15,7 @@ STAGES = ('body_read', 'body_publish', 'endpoint_feedback', 'endpoint_publish',
           'control_enter', 'control_exit', 'touch_received', 'key_reserved',
           'discovery', 'touch_request', 'body_callback')
 NATIVE_STAGES = ('body_encode', 'endpoint_encode', 'body_decode', 'endpoint_decode', 'touch_decode', 'native_inference')
+RECEIVE_STAGES = ('body_take', 'body_admission_gate', 'endpoint_callback')
 BODY_COMMAND_COLUMNS = ('q', 'dq', 'tau', 'kp', 'kd')
 BODY_STATE_COLUMNS = ('q', 'dq', 'tau_est', 'error_code')
 EE_COMMAND_COLUMNS = ('pos', 'vel', 'vel_limit', 'tau', 'current')
@@ -52,7 +53,7 @@ class Trace:
     """
     def __init__(self, path, *, compression='zstd', threads=8, stages=()):
         backend = _native()
-        if getattr(backend, 'CAPTURE_API_VERSION', None) != 3:
+        if getattr(backend, 'CAPTURE_API_VERSION', None) != 4:
             raise RuntimeError('Trace requires the matching native capture extension')
         self._thread_token = backend.thread_token
         self.user_stages = tuple(stages)
@@ -60,8 +61,9 @@ class Trace:
         self._registration = threading.Lock()
         self._local = threading.local()
         self._threads = {}
+        self._async_open = 0
         self.session = Session(path, producers=tuple('thread_' + str(i) for i in range(threads)),
-            stages=STAGES + self.user_stages + NATIVE_STAGES, compression=compression,
+            stages=STAGES + self.user_stages + NATIVE_STAGES + RECEIVE_STAGES, compression=compression,
             streams=({'id': 1, 'name': 'body'}, {'id': 2, 'name': 'left'}, {'id': 3, 'name': 'right'}),
             metadata={
                 'capture_scope': 'SDK method entry, reservation, return and accepted feedback',
@@ -128,7 +130,8 @@ class Trace:
                 },
                 'stream_ids': {'body': 1, 'left': 2, 'right': 3},
                 'limitations': ['application return is not physical output',
-                    'receive take/decode timestamps remain pending',
+                    'body_take includes polling/wait; endpoint_callback begins after transport parsing, not network RX',
+                    'admission gate call duration is separate from accepted/rejected feedback verdicts',
                     'repeated cached sample IDs remain repeated',
                     'feedback records are observations, not validity/arrival verdicts',
                     'Touch captures existing accepted callbacks; no extra subscription',
@@ -188,12 +191,112 @@ class Trace:
             return _NO_SPAN
         return _UserSpan(channel, name, iteration_id, inference_id)
 
-    def decode(self, function, *args, _stage='body_decode'):
+    def new_id(self):
+        """Allocate a run-unique identity without inventing a model invocation."""
+        channel = self._channel()
+        return channel.native.allocate_id() if channel is not None else 0
+
+    def vector(self, name, values, *, iteration_id=0, inference_id=0, reference_id=0):
+        """Copy one existing contiguous numeric buffer through one native call.
+
+        At most 8192 elements; owned 256-value chunks share an identity and
+        explicit offset/total. No Python list conversion or second writer.
+        """
+        channel = self._channel()
+        if channel is None:
+            return 0
+        try:
+            if name not in self.user_stages:
+                raise ValueError('unregistered user stage')
+            return channel.native.vector(channel.stages[name], values, iteration_id, inference_id, reference_id)
+        except Exception:
+            channel._invalid()
+            return 0
+
+    def mark(self, name, *, kind=Kind.USER_MARK, outcome=Outcome.OK, stream=0,
+             iteration_id=0, inference_id=0, reference_id=0, values=None,
+             integers=None, times_us=None, validity=None):
+        """One bounded native POD event. Numeric columns must be typed buffers.
+
+        Names are registered before capture. Cross-thread inference/result IDs
+        must be passed explicitly; no implicit thread-local propagation occurs.
+        """
+        channel = self._channel()
+        if channel is None:
+            return 0
+        try:
+            if name not in self.user_stages:
+                raise ValueError('unregistered user stage')
+            return channel.native.mark(kind, channel.stages[name], stream, outcome,
+                iteration_id, inference_id, reference_id, values, integers, times_us, validity)
+        except Exception:
+            channel._invalid()
+            return 0
+
+    def start_span(self, name, *, iteration_id=0, inference_id=0, parent_span_id=0):
+        """Start an explicit asynchronous span; call token.finish() once.
+
+        This does not make the span current on either thread. A worker may use
+        ``span(..., inference_id=token.inference_id)`` to link its actual call.
+        """
+        channel = self._channel()
+        if channel is None:
+            return _AsyncSpan(self, None)
+        try:
+            if name not in self.user_stages or self._async_open >= 1024:
+                raise ValueError('unregistered stage or asynchronous span capacity exceeded')
+            context = channel.native.async_begin(channel.stages[name], iteration_id, inference_id, parent_span_id)
+            if not context[0]:
+                raise ValueError('asynchronous span identity unavailable')
+            self._async_open += 1
+            return _AsyncSpan(self, context)
+        except Exception:
+            channel._invalid()
+            return _AsyncSpan(self, None)
+
+    def define(self, name, metadata, *, model=False):
+        """Cold metadata only; call once at setup, never per control cycle."""
+        channel = self._channel()
+        if channel is None:
+            return
+        try:
+            if name not in self.user_stages:
+                raise ValueError('unregistered user stage')
+            _metadata(metadata)
+            raw = json.dumps(dict(name=name, metadata=metadata), ensure_ascii=True, allow_nan=False).encode()
+            channel.native.info(raw, channel.stages[name], Kind.MODEL_DEFINITION if model else Kind.MARKER_DEFINITION)
+        except Exception:
+            channel._invalid()
+
+    def observed_span(self, name, begin_us, end_us, *, reference_id=0,
+                      iteration_id=0, inference_id=0, outcome=Outcome.OK):
+        """Record measured endpoints from the same host CLOCK_MONOTONIC.
+
+        For an existing bounded subprocess IPC only. Register the worker clock
+        and process provenance with ``define`` first. This API neither maps a
+        remote/device clock nor infers points from duration-only observations.
+        """
+        channel = self._channel()
+        if channel is None:
+            return
+        try:
+            if name not in self.user_stages or type(begin_us) is not int or type(end_us) is not int:
+                raise ValueError('unregistered stage or invalid observed endpoint')
+            if not 0 <= begin_us <= end_us < 2**64-1:
+                raise ValueError('observed endpoints must be ordered uint64 microseconds')
+            identity = channel.native.allocate_id()
+            channel.producer.emit(Kind.USER_SPAN, timestamp_us=begin_us,
+                duration_us=end_us-begin_us+1, stage=channel.stages[name], outcome=outcome,
+                ids=(iteration_id, inference_id, identity, 0, 0, 0, 0, 0, 0, 0, 0, reference_id))
+        except Exception:
+            channel._invalid()
+
+    def decode(self, function, *args, _stage='body_decode', _stream=0):
         channel = self._channel()
         if channel is None:
             return function(*args)
         try:
-            token = channel.native.begin(Kind.STAGE_EVENT, channel.stages[_stage], 0)
+            token = channel.native.begin(Kind.STAGE_EVENT, channel.stages[_stage], _stream)
         except Exception:
             channel._invalid()
             token = 0
@@ -248,6 +351,8 @@ class Trace:
     def close(self):
         try:
             if not self.session._closed:
+                if self._async_open:
+                    self._channels[0]._invalid()
                 for channel in self._channels:
                     if channel.native.active:
                         channel._invalid()
@@ -280,7 +385,7 @@ class _Capture:
     """Thin dispatch only. Native owns clocks, IDs, bounded stacks and snapshots."""
     def __init__(self, owner, producer):
         self.owner, self.producer = owner, producer
-        self.stages = {name: owner.session.stage(name) for name in STAGES + owner.user_stages + NATIVE_STAGES}
+        self.stages = {name: owner.session.stage(name) for name in STAGES + owner.user_stages + NATIVE_STAGES + RECEIVE_STAGES}
         identity = uuid.UUID(owner.session.header['run_id']).int
         self.native = _native().SdkCapture(owner.session._writer, producer.index,
             tuple(self.stages[name] for name in NATIVE_STAGES), (identity >> 64, identity & ((1 << 64)-1)))
@@ -362,3 +467,23 @@ class _UserSpan:
         finally:
             _trace_context.set_sink(self.previous)
         return False
+
+
+class _AsyncSpan:
+    def __init__(self, owner, context):
+        self._owner, self._context = owner, context
+        self.inference_id = context[4] if context is not None else 0
+        self.span_id = context[0] if context is not None else 0
+
+    def finish(self, *, failed=False):
+        context, self._context = self._context, None
+        if context is None:
+            self._owner._channels[0]._invalid()
+            return
+        self._owner._async_open -= 1
+        channel = self._owner._channel()
+        if channel is not None:
+            try:
+                channel.native.async_end(context, failed)
+            except Exception:
+                channel._invalid()
