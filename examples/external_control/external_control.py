@@ -5,7 +5,6 @@ import json
 import math
 import time
 from collections.abc import Callable, Sequence
-from pathlib import Path
 
 from locomotion_aorta import (
     PullController,
@@ -18,6 +17,7 @@ from locomotion_aorta import (
     BODY_SLOTS,
     ServiceStatus,
 )
+from locomotion_aorta.trace.cli import add_trace_arguments, resolve_trace_output
 
 
 COMMAND_SLOTS = BODY_SLOTS
@@ -365,8 +365,7 @@ def main() -> None:
     )
     parser.add_argument("--group", default="default")
     parser.add_argument("--timeout", type=float, default=5.0)
-    parser.add_argument('--trace', choices=('off', 'fbs'), default='off')
-    parser.add_argument('--trace-output', type=Path, help='new .ftrace file; requires --trace=fbs')
+    add_trace_arguments(parser)
     parser.add_argument('--trace-compression', choices=('raw', 'zstd'), default='zstd')
     parser.add_argument(
         "--confirm-motion",
@@ -374,14 +373,13 @@ def main() -> None:
         help="required acknowledgement that this command may move the robot",
     )
     args = parser.parse_args()
-    if args.trace == 'fbs' and (args.trace_output is None or args.trace_output.suffix != '.ftrace'):
-        parser.error('--trace=fbs requires a new --trace-output ending in .ftrace')
-    if args.trace == 'off' and args.trace_output is not None:
-        parser.error('--trace-output requires --trace=fbs')
+    resolve_trace_output(parser, args)
     if not args.confirm_motion:
         parser.error("--confirm-motion is required")
 
-    trace_options = {} if args.trace == 'off' else dict(
+    if args.trace:
+        print(f'Trace output: {args.trace_output}')
+    trace_options = {} if not args.trace else dict(
         trace_output=args.trace_output, trace_compression=args.trace_compression)
     with PullController(group=args.group, **trace_options) as controller:
         run(controller, timeout=args.timeout)

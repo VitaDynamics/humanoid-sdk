@@ -15,6 +15,7 @@ from locomotion_aorta import PullController, PullStateSource, ServiceStatus
 from locomotion_aorta.body_types import _BODY_FIELD_KD, _BODY_FIELD_KP, _BODY_FIELD_Q
 from locomotion_aorta.end_effector import EndEffectorClient
 from locomotion_aorta import _end_effector_codec as codec
+from locomotion_aorta.trace.cli import add_trace_arguments, resolve_trace_output
 from locomotion_aorta.end_effector_types import (
     ControlMode, DeviceModel, EndEffectorSide, EndEffectorTarget, Field, InhibitReason,
     PositionDomain, SampleStatus, SampleStream,
@@ -978,8 +979,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     parser.add_argument('--body-pose', choices=('measured', 'zero'), default='measured')
     parser.add_argument('--return-to-start', action='store_true')
     parser.add_argument('--touch', choices=('keep', 'on', 'off'), default='keep')
-    parser.add_argument('--trace', choices=('off', 'fbs'), default='off')
-    parser.add_argument('--trace-output', type=Path, help='new .ftrace file; requires --trace=fbs')
+    add_trace_arguments(parser)
     parser.add_argument('--trace-compression', choices=('raw', 'zstd'), default='zstd')
     parser.add_argument('--dry-run', action='store_true', help='read-only; no lease, target or touch switch')
     parser.add_argument('--confirm-motion', action='store_true', help='requires separate current on-site authorization')
@@ -993,10 +993,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         parser.add_argument('--'+side+'-hz', type=float, default=50.0)
         parser.add_argument('--'+side+'-native-hz', type=int, help='AGX arm-group native send_frequency from the effective configuration')
     args = parser.parse_args(argv)
-    if args.trace == 'fbs' and (args.trace_output is None or args.trace_output.suffix != '.ftrace'):
-        parser.error('--trace=fbs requires a new --trace-output ending in .ftrace')
-    if args.trace == 'off' and args.trace_output is not None:
-        parser.error('--trace-output requires --trace=fbs')
+    resolve_trace_output(parser, args)
     if not math.isfinite(args.display_hz) or args.display_hz <= 0:
         parser.error('--display-hz must be finite and positive')
     if _expected_device_model is not None and args.side == 'none':
@@ -1045,7 +1042,9 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     client_factory = EndEffectorClient if _client_factory is None else _client_factory
     controller_factory = PullController if _controller_factory is None else _controller_factory
     state_factory = PullStateSource if _state_source_factory is None else _state_source_factory
-    trace_options = {} if args.trace == 'off' else dict(
+    if args.trace:
+        print(f'Trace output: {args.trace_output}')
+    trace_options = {} if not args.trace else dict(
         trace_output=args.trace_output, trace_compression=args.trace_compression)
     with ExitStack() as stack:
         connection = stack.enter_context((state_factory if readonly else controller_factory)(

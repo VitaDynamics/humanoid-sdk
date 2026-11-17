@@ -22,7 +22,7 @@ print(controller.trace_health)
 `ExternalController` and read-only `PullStateSource` accept the same
 `trace_output` and `trace_compression="raw"|"zstd"` options. Omitting the path
 starts no trace resources and does not import the trace backend. Existing
-Body/end-effector CLI entries forward their `--trace=fbs --trace-output=...`
+Body/end-effector CLI entries forward their `--trace=on --trace-output=...`
 options to the connection constructor. Custom user spans use the same file
 without another recorder. Register names once and measure the actual model call:
 
@@ -38,7 +38,11 @@ Observation preparation and publication are outside this particular span.
 Endpoint quantization uses a conservative +1 us margin; this is not a measured
 performance guarantee. An asynchronous GPU/NPU call measures submission unless
 its original completion wait is inside the span. Trace adds no synchronization.
-When disabled, `trace_span` is a no-op and reads no trace clock.
+When disabled, `trace_span` is a no-op and reads no trace clock. The CLI switch
+accepts only `on` or `off`, with a boolean default of `false`; recording uses
+FBS rather than selecting a backend through the switch. With `--trace on`,
+omitting the output generates `/tmp/sdk-trace-<UTC timestamp>-<unique id>.ftrace`
+and prints its path. An explicit output must be a new `.ftrace` file.
 
 For a run with model workers that outlive the SDK connection, create the same
 recorder at the outer run boundary and lend it to the connection:

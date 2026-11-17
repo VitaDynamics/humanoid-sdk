@@ -239,10 +239,32 @@ class SdkTraceTests(unittest.TestCase):
             return original(controller, **kwargs, sleep=clock.sleep, monotonic=clock.monotonic, emit=lambda _: None)
         with patch.object(external_control, 'PullController', factory), \
              patch.object(external_control, 'run', side_effect=execute), \
-             patch('sys.argv', ['external_control.py', '--confirm-motion', '--trace=fbs', '--trace-output', str(self.path)]):
+             patch('sys.argv', ['external_control.py', '--confirm-motion', '--trace=on', '--trace-output', str(self.path)]):
             external_control.main()
         self.assertEqual(options[0]['trace_output'], self.path)
         self.records()
+
+    def test_trace_cli_invalid_options_fail_before_connections(self):
+        from examples.end_effector import end_effector_external as ee_demo
+
+        for flags in (['--trace', 'fbs'],
+                      ['--trace', 'off', '--trace-output', str(self.path)],
+                      ['--trace', 'on', '--trace-output', 'bad.txt']):
+            with self.subTest(flags=flags), redirect_stderr(io.StringIO()):
+                with patch.object(external_control, 'PullController') as controller, \
+                     patch('sys.argv', ['external_control.py', '--confirm-motion', *flags]):
+                    with self.assertRaises(SystemExit) as stopped:
+                        external_control.main()
+                    self.assertEqual(stopped.exception.code, 2)
+                    controller.assert_not_called()
+                with patch.object(ee_demo, 'PullController') as controller, \
+                     patch.object(ee_demo, 'PullStateSource') as source:
+                    with self.assertRaises(SystemExit) as stopped:
+                        ee_demo.main(['--dry-run', *flags])
+                    self.assertEqual(stopped.exception.code, 2)
+                    controller.assert_not_called()
+                    source.assert_not_called()
+                self.assertFalse(self.path.exists())
 
     def test_publish_entry_is_recorded_before_waiting_for_controller_lock(self):
         h, _ = self.harness()

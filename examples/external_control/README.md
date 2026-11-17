@@ -13,10 +13,12 @@ python examples/external_control/external_control.py --help
 本体与统一末端 demo 使用相同参数。在原来已获授权的运动命令后增加：
 
 ```bash
---trace=fbs --trace-output=./body-trial.ftrace
+--trace=on --trace-output=./body-trial.ftrace
 ```
 
-默认 `--trace=off`；`--trace-compression=raw` 可关闭默认的 Zstd 压缩。
+默认值为 `false`（`--trace off`）；`--trace on` 可省略输出参数，自动在 `/tmp`
+生成带 UTC 时间戳及唯一标识的 `.ftrace` 文件并打印路径。`--trace-output` 可覆盖
+默认路径选择，不会覆盖已有文件。`--trace-compression=raw` 可关闭默认的 Zstd 压缩。
 需要含 Trace native 模块的本 PR 候选 wheel，不代表既有 RC1 包已包含新功能。
 
 本体例程只把 Trace 配置传入 PullController，其余仍调用原 SDK 接口。

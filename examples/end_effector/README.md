@@ -55,12 +55,15 @@ OP3 还支持 `--pattern sine`（双侧同相总开口）、`simultaneous` 和 `
 ```bash
 # 只读示例：不申请控制权，不发送目标或触觉开关。
 python examples/end_effector/brainco_revo2.py --dry-run --side left \
-  --trace=fbs --trace-output=./readonly.ftrace
+  --trace=on --trace-output=./readonly.ftrace
 ```
 
 在原来已获授权的运动命令后增加相同两个参数，即可记录原控制流程。
-默认 `--trace=off` 不创建 Trace 会话、队列或文件；文件必须是新的 `.ftrace`，
-不会覆盖已有内容。`--trace-compression=raw` 可关闭压缩，默认使用 Zstd。
+`--trace` 仅接受 `on` 或 `off`，开启时使用 FBS，不再通过参数选择格式。
+默认值为 `false`（`--trace off`），不创建 Trace 会话、队列或文件。
+`--trace on` 不带输出参数时自动使用 `/tmp/sdk-trace-<UTC时间戳>-<唯一标识>.ftrace`，
+启动时打印路径；也可用 `--trace-output` 指定新 `.ftrace` 文件。不会覆盖已有内容。
+`--trace-compression=raw` 可关闭压缩，默认使用 Zstd。
 无需使用者自己为本体、左末端、右末端各写一个 `with`。
 
 `brainco_revo2.py`、`agx_gripper.py`、`linker_l6.py`、`omnipicker3.py`

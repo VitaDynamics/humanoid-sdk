@@ -4,7 +4,9 @@
 
 - Add optional connection-owned native FBS Trace recording, SDK stage summaries
   and offline HTML/CSV reports. Normal publish/read calls need no wrapper;
-  recording is off by default. Capture completeness and SDK call duration do
+  `--trace on|off` enables the single FBS format and defaults to false/off.
+  Enabling without an explicit output chooses a timestamped unique `.ftrace`
+  path in `/tmp` and prints it. Capture completeness and SDK call duration do
   not establish physical execution or hardware latency. Target capture overhead
   and the remaining legacy policy-log retirement are separate follow-ups.
 - Carry OP3 sine, simultaneous and sequential opening trajectories from PR26,
