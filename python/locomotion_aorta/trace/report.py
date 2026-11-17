@@ -182,6 +182,35 @@ def _histogram(index, category, stage, stream, outcome):
 def _feedback(index, destination):
     """Observed position only, using recorded masks. No nearest-command join."""
     db = index.db
+    db.execute('CREATE TEMP TABLE descriptions(runtime TEXT,stream INTEGER,axes TEXT,UNIQUE(runtime,stream,axes))')
+    for definition in index.definitions():
+        document = definition['value']
+        if definition['issue'] or not isinstance(document, dict):
+            continue
+        value = document.get('value')
+        if not isinstance(value, dict):
+            continue
+        if document.get('type') == 'endpoint_info':
+            from ..end_effector_types import _POSITION_DOMAIN_UNITS
+            names, domains, mocks = value.get('axis_names', []), value.get('position_domain', []), value.get('is_mock', [])
+            if len(names) != len(domains) or len(names) != len(mocks):
+                continue
+            axes = [dict(name=name, unit=_POSITION_DOMAIN_UNITS.get(domain), is_mock=mock)
+                    for name, domain, mock in zip(names, domains, mocks)]
+            runtime, stream = value.get('runtime_id', 0), 1+value.get('side', 0)
+        elif document.get('type') == 'robot_info_reply':
+            info = value.get('info') or {}
+            body = info.get('body') or {}
+            names, joints = body.get('joint_names', []), body.get('joints', [])
+            if len(names) != len(joints):
+                continue
+            axes = [dict(name=name, unit='rad', is_mock=joint.get('is_mock'))
+                    for name, joint in zip(names, joints)]
+            runtime, stream = value.get('runtime_id', 0), 1
+        else:
+            continue
+        if runtime:
+            db.execute('INSERT OR IGNORE INTO descriptions VALUES(?,?,?)', (uint_text(runtime), stream, json.dumps(axes)))
     db.execute('CREATE TEMP TABLE positions(stream INTEGER,axis INTEGER,stamp TEXT,value REAL,state TEXT,runtime TEXT)')
     for _, row in index.rows('kind IN (?,?)', (Kind.BODY_FEEDBACK, Kind.EFFECTOR_FEEDBACK)):
         if not row['values'] or not row['integers']:
@@ -211,11 +240,19 @@ def _feedback(index, destination):
                 if value < bounds[0][1]: bounds[0] = point
                 if value > bounds[1][1]: bounds[1] = point
         points = sorted(set(p for bounds in buckets.values() for p in bounds))
+        descriptions = list(db.execute('SELECT axes FROM descriptions WHERE runtime=? AND stream=? LIMIT 2', (runtime, stream)))
+        label, unit, mock = f'axis {axis}', None, None
+        if len(descriptions) == 1:
+            axes = json.loads(descriptions[0][0])
+            if axis < len(axes):
+                label += ' / ' + axes[axis]['name']
+                unit, mock = axes[axis]['unit'], axes[axis]['is_mock']
         vlow, vhigh = min(p[1] for p in points), max(p[1] for p in points)
         poly = ' '.join(f'{40+t/max(1,end-start)*570:.2f},{160-(v-vlow)/max(1e-12,vhigh-vlow)*130:.2f}'
                         for t, v in points)
-        charts.append('<article><h2>stream ' + str(stream) + ' / axis ' + str(axis) + '</h2><p>runtime ' + str(int(runtime)) + '</p><p>' +
-            f'{count} 个有效位置观测。仅展示原始 q / pos；单位须按该流 Info 解读。</p>' +
+        charts.append('<article><h2>stream ' + str(stream) + ' / ' + _cell(label) + '</h2><p>runtime ' + str(int(runtime)) + '</p><p>' +
+            f'{count} 个字段有效的位置观测。解码不代表 SDK 接纳；仅展示原始 q / pos。单位：' + _cell(unit) +
+            ' · is_mock：' + _cell(mock) + (' · 描述有冲突' if len(descriptions) > 1 else '') + '</p>' +
             '<svg viewBox="0 0 650 210"><polyline class="series" points="' + poly + '"/>' +
             f'<text x="40" y="185">0 µs</text><text x="450" y="185">{end-start} µs</text>' +
             f'<text x="40" y="205">值域 [{vlow:.7g}, {vhigh:.7g}]</text></svg></article>')

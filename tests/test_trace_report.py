@@ -23,12 +23,21 @@ class TraceReportTests(unittest.TestCase):
         with Session(self.trace, stages=('endpoint_publish', '<script>bad()</script>'),
                      streams=({'id': 2, 'name': 'left'},)) as session:
             p = session.producer('control')
+            raw = json.dumps(dict(type='endpoint_info', value=dict(runtime_id=huge, side=1,
+                axis_names=['opening'], position_domain=[2], is_mock=[False]))).encode()
+            for offset in range(0, len(raw), 216):
+                chunk = raw[offset:offset+216]
+                chunk += b'\0' * (-len(chunk) % 8)
+                words = [int.from_bytes(chunk[i:i+8], 'little') for i in range(0, len(chunk), 8)]
+                p.emit(Kind.STREAM_INFO, ids=(0,0,0,0,10000,0,0,0,0,0,0,0),
+                       integers=array('Q', [offset, len(raw), *words]))
             for i in range(129):
                 ids = (0, 0, 0, 0, i+1, 0, huge, huge-1, huge-2, i+1, 0, 0)
                 p.emit(Kind.EFFECTOR_COMMAND, timestamp_us=i*20, ids=ids, stage=1, stream=2)
                 p.emit(Kind.EFFECTOR_COMMAND, timestamp_us=i*20+5, duration_us=6,
                        ids=ids, stage=1, stream=2, outcome=Outcome.OK)
             p.emit(Kind.EFFECTOR_FEEDBACK, timestamp_us=1, stream=2, integers=array('Q', [2]),
+                   ids=(0,0,0,0,0,0,huge,0,0,0,0,0),
                    values=array('d', [0., 999.]), validity=array('B', [1, 0]))
             p.emit(Kind.USER_SPAN, timestamp_us=1, duration_us=0, stage=2, outcome=Outcome.OK)
         before = hashlib.sha256(self.trace.read_bytes()).hexdigest()
@@ -45,6 +54,8 @@ class TraceReportTests(unittest.TestCase):
         self.assertTrue(all(r['hardware_latency_us'] == '' for r in rows))
         feedback = (output / 'report/feedback.html').read_text()
         self.assertIn('axis 0', feedback)
+        self.assertIn('opening', feedback)
+        self.assertIn('单位：m', feedback)
         self.assertNotIn('axis 1', feedback)
         detail = (output / 'report/details/commands-0.html').read_text()
         self.assertIn('&quot;runtime_id&quot;: &quot;' + str(huge) + '&quot;', detail)
