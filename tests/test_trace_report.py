@@ -78,6 +78,28 @@ class TraceReportTests(unittest.TestCase):
         self.assertEqual((rows[0]['outcome'], rows[0]['runtime_id']), ('FAILED', '0'))
         self.assertEqual(rows[0]['hardware_association'], 'NOT_AVAILABLE')
 
+    def test_application_status_uses_exact_key_and_clock_without_claiming_hardware_sample(self):
+        for source, clock, expected in ((1, 0, 'APPLICATION_KEY_INTERVAL_ONLY'),
+                                        (3, 0, 'NOT_AVAILABLE'),
+                                        (1, 1, 'CLOCK_MAPPING_MISSING')):
+            with self.subTest(source=source, clock=clock):
+                trace = self.root / f'app-{source}-{clock}.ftrace'
+                with Session(trace, stages=('body_publish', 'body_callback')) as session:
+                    p = session.producer('control')
+                    ids = (0,0,0,0,1,0,11,13,42,7,0,0)
+                    p.emit(Kind.BODY_COMMAND, timestamp_us=100, stream=1, stage=1, ids=ids)
+                    p.emit(Kind.BODY_COMMAND, timestamp_us=110, duration_us=11,
+                           stream=1, stage=1, ids=ids, outcome=Outcome.OK)
+                    p.emit(Kind.BODY_FEEDBACK, timestamp_us=150, clock=clock, stream=1, stage=2,
+                           ids=(0,0,0,0,0,0,11,0,42,7,91,0), outcome=Outcome.OK,
+                           integers=array('Q',[31,1,source]), times_us=array('Q',[0,150,110,120,125,0,0,0]))
+                output = self.root / f'app-report-{source}-{clock}'
+                generate_report(trace, output)
+                row, = csv.DictReader((output/'commands.csv').read_text().splitlines())
+                self.assertEqual(row['application_status_association'], expected)
+                self.assertEqual(row['application_key_interval_us'], '51' if source == 1 and clock == 0 else '')
+                self.assertEqual(row['hardware_latency_us'], '')
+
 
 if __name__ == '__main__':
     unittest.main()

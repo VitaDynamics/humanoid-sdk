@@ -259,3 +259,11 @@ contiguous float32/64 observation or action in one native call, with at most
 8192 elements split into owned 256-element chunks. Offset/total and shared
 attempt identity permit exact reconstruction; missing chunks remain missing.
 This avoids `.tolist()` and Python per-element conversion for model logging.
+
+For Body feedback with a valid EXTERNAL/TRACKING applied key, the report can
+measure the interval from C0 to an accepted same-clock SDK observation when
+R/session/sequence resolves to exactly one recorded attempt. It labels this
+`APPLICATION_KEY_INTERVAL_ONLY`: the State lacks control_id, so this diagnostic
+is not promoted to a full authenticated association, hardware E2E or motion
+completion. Policy/replay/safety-hold source types, ambiguous keys, unknown
+clock mappings and invalid causal order do not receive an invented interval.

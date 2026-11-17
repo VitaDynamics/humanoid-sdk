@@ -122,7 +122,8 @@ def _export_commands(index, destination):
         writer, unknown = csv.writer(out), csv.writer(unmatched)
         writer.writerow(('command_row', 'producer', 'attempt_id', 'stream', *KEY_FIELDS,
                          'entry_us', 'return_us', 'outcome', 'sdk_duration_us', 'call_integrity',
-                         'hardware_latency_us', 'hardware_association'))
+                         'hardware_latency_us', 'hardware_association', 'application_key_interval_us',
+                         'application_status_association'))
         unknown.writerow(('command_row', 'reason', 'hardware_latency_us'))
         for page in range(pages):
             cards = []
@@ -132,8 +133,12 @@ def _export_commands(index, destination):
                 runtime, control, session, sequence, begin, end, outcome, duration, status, raw = rest
                 numeric = [int(v) if v is not None else None for v in (
                     attempt, runtime, control, session, sequence, begin, end)]
+                observation = db.execute('SELECT status,latency,event_id FROM application_status WHERE command_id=?',
+                                         (command_id,)).fetchone()
+                application, latency = (observation[0], observation[1]) if observation else ('NOT_AVAILABLE', None)
                 writer.writerow((command_id, producer, numeric[0], stream, *numeric[1:], outcome,
-                                 int(duration) if duration else None, status, '', 'NOT_AVAILABLE'))
+                                 int(duration) if duration else None, status, '', 'NOT_AVAILABLE',
+                                 int(latency) if latency is not None else '', application))
                 unknown.writerow((command_id, 'No proven command-linked new hardware sample', ''))
                 body = json.loads(raw)
                 key = ' / '.join(str(int(v)) for v in (runtime, control, session, sequence))
@@ -141,7 +146,9 @@ def _export_commands(index, destination):
                     '" id="c' + str(command_id) + '"><h2>#' + str(command_id) +
                     ' · stream ' + str(stream) + ' · ' + _cell(outcome) + '</h2><p>R / control / session / sequence: <code>' +
                     _cell(key) + '</code></p><p>SDK 耗时 ' + _cell(int(duration) if duration else None) +
-                    ' µs · ' + _cell(status) + ' · 设备延迟：缺关联证据</p>' +
+                    ' µs · ' + _cell(status) + ' · 设备延迟：缺关联证据</p><p>应用键观测：' +
+                    _cell(application) + ' · ' + _cell(int(latency) if latency is not None else None) +
+                    ' µs（仅本录制唯一 R/session/sequence；State 缺 control_id，不是完整鉴权关联或新硬件反馈延迟）</p>' +
                     '<details><summary>入口、预留键、编码与返回的原始记录</summary><pre>' +
                     html.escape(json.dumps(_safe(body), ensure_ascii=False, indent=2, allow_nan=False)) +
                     '</pre></details></article>')
@@ -152,6 +159,58 @@ def _export_commands(index, destination):
                   nav + '<label>筛选本页（stream / outcome / attempt）<input id="filter"></label>' +
                   ''.join(cards) + nav, root='..')
     return count, pages
+
+
+def _application_status(index):
+    """SDK-local C0 to accepted application-key observation, never hardware E2E."""
+    db = index.db
+    db.execute('CREATE TEMP TABLE application_status(command_id INTEGER PRIMARY KEY,status TEXT,latency TEXT,event_id INTEGER,stamp TEXT)')
+    for event_id, row in index.rows('kind IN (?,?) AND outcome=? AND stream=1',
+                                    (Kind.BODY_READ, Kind.BODY_FEEDBACK, Outcome.OK)):
+        evidence = row
+        if row['reference_id']:
+            matches = list(db.execute('SELECT row_json FROM events WHERE attempt=? AND kind=? LIMIT 2',
+                                     (uint_text(row['reference_id']), Kind.BODY_FEEDBACK)))
+            if len(matches) != 1:
+                continue
+            evidence = json.loads(matches[0][0])
+            if any(evidence[k] != row[k] for k in ('runtime_id', 'state_id', 'session_id', 'command_sequence')):
+                continue
+        flags = evidence['integers']
+        # Source 1/2 are the existing EXTERNAL/TRACKING owners. Policy,
+        # replay and safety-hold samples are not silently relabelled SDK output.
+        if len(flags) < 3 or flags[:2] != [31, 1] or flags[2] not in (1, 2):
+            continue
+        key = tuple(uint_text(row[k]) for k in ('runtime_id', 'session_id', 'command_sequence'))
+        if not all(int(v) for v in key):
+            continue
+        commands = list(db.execute('SELECT id,producer,attempt,begin_us,status FROM commands '
+                                   'WHERE runtime=? AND session=? AND sequence=? AND stream=1 LIMIT 2', key))
+        if len(commands) != 1:
+            continue
+        command, producer, attempt, begin, call_status = commands[0]
+        if begin is None or call_status != 'COMPLETE_CALL':
+            continue
+        entries = list(db.execute('SELECT row_json FROM events WHERE producer=? AND attempt=? '
+                                  "AND kind=? AND stage='body_publish' AND outcome=0 LIMIT 2",
+                                  (producer, attempt, Kind.BODY_COMMAND)))
+        if len(entries) != 1:
+            continue
+        entry = json.loads(entries[0][0])
+        previous = db.execute('SELECT stamp,status FROM application_status WHERE command_id=?', (command,)).fetchone()
+        stamp = uint_text(row['timestamp_us'])
+        if previous and previous[1] != 'APPLICATION_KEY_INTERVAL_ONLY':
+            continue  # Conflicting/invalid evidence is sticky; no cherry-picking.
+        if (entry['clock'], entry['epoch']) != (row['clock'], row['epoch']):
+            status, latency = 'CLOCK_MAPPING_MISSING', None
+        elif row['timestamp_us'] < int(begin):
+            status, latency = 'INVALID_CAUSAL_ORDER', None
+        else:
+            if previous and previous[0] <= stamp:
+                continue
+            status, latency = 'APPLICATION_KEY_INTERVAL_ONLY', row['timestamp_us']-int(begin)+1
+        db.execute('INSERT OR REPLACE INTO application_status VALUES(?,?,?,?,?)',
+                   (command, status, uint_text(latency), event_id, stamp))
 
 
 def _histogram(index, category, stage, stream, outcome):
@@ -391,6 +450,7 @@ def generate_report(path, output, *, mcap_paths=()):
     with TraceIndex(path, directory=destination) as index:
         summary = summarize_index(index)
         _commands(index)
+        _application_status(index)
         mcap = dict(status='NOT_PROVIDED')
         if mcap_paths:
             from .mcap_input import ingest
