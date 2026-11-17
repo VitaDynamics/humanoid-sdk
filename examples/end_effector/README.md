@@ -22,6 +22,7 @@ python examples/end_effector/omnipicker3.py --dry-run --ee-only --side left --gr
 - --left-vel-limit／--right-vel-limit 是非负速度限制，不是有符号速度目标。tau 与 current 不推算。
 - 通用例程为支持速度限制的非 OP3 角度端点保留 float32 的 20°/s 默认值，仍须落在各轴真实范围；不合法时显式提供合法数组。总开口的该默认值为 0（保留机器人默认），OP3 不自动注入速度限制。不要把这些例程选择误当 SDK DTO 的通用默认值。
 - --left-hz／--right-hz 为提交节奏；--duration 为流送时长，不保证物理采样率或到位。
+- 本体和末端按计划截止时间推进；超时跳过已错过的拍，不补发突发，也不在每次处理后额外累计一个完整周期。
 - AGX 另外要求实际有效配置的 native send_frequency、对应 --left-native-hz／--right-native-hz 及 --native-config；不按客户端 hz 猜它。
 - wait_output_ready 只表示本机 Cmd 资源；机器人 ready、output_allowed 和有效新 State 分别检查。终端表格刷新率不改变发送率。
 
@@ -87,7 +88,8 @@ Touch 只记录原客户端已订阅且已接纳的样本，不因录制创建�
 预分配的独立通道；通道不足或采集竞争会报告不完整，不阻塞控制线程。
 文件记录的是 SDK 调用与原反馈语义，不能冒充 CAN 发送或设备执行证明。
 时间均为微秒，原来源时钟保留区分；不把 Core context stamp 当网络到达。
-取件/解码细分、模型/WTT、MCAP/HTML 和性能验收仍未完成。
+摘要已包含 SDK 取件、编解码和发布阶段，离线报告支持 HTML/CSV 及匹配 Schema 的
+MCAP 观察记录。完整模型/WTT、目标性能与旧策略 JSONL 退役仍需分别验收。
 
 录制故障不新增 CANCEL、不覆盖原运动异常。随 controller 的原退出／关闭流程有界排空采集；
 队列满或丢记录会反映在健康账本中。读取到文件末尾后再检查完整性：
