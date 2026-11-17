@@ -303,9 +303,20 @@ class NativeTraceHooks(unittest.TestCase):
                    and r['stage'] == stages['endpoint_decode']]
         accepted = [r for r in rows if r['kind'] == Kind.EFFECTOR_FEEDBACK
                     and r['stage'] == stages['endpoint_feedback']]
-        self.assertEqual([r['state_id'] for r in decoded], list(range(1, 25)))
-        self.assertEqual([r['reference_id'] for r in accepted],
-                         [r['attempt_id'] for r in decoded])
+        # The writer drains independent producer rings; global file order is
+        # not callback order. Preserve exact completeness and reference checks
+        # without imposing a nonexistent cross-producer serialization promise.
+        self.assertCountEqual([r['state_id'] for r in decoded], range(1, 25))
+        self.assertCountEqual([r['state_id'] for r in accepted], range(1, 25))
+        by_sample = {r['state_id']: r for r in decoded}
+        for row in accepted:
+            original = by_sample[row['state_id']]
+            self.assertEqual(row['reference_id'], original['attempt_id'])
+            self.assertEqual(row['producer'], original['producer'])
+            self.assertEqual(row['runtime_id'], original['runtime_id'])
+        for producer in {r['producer'] for r in decoded}:
+            samples = [r['state_id'] for r in decoded if r['producer'] == producer]
+            self.assertEqual(samples, sorted(samples))
         self.assertEqual(len({r['producer'] for r in decoded}), len(native_threads))
 
     def test_native_thread_token_lifetime_does_not_reuse_a_retired_threads_channel(self):
