@@ -604,7 +604,8 @@ private:
       return;
     }
     for (size_t i = 0; i < r.n_times; ++i)
-      r.validity[r.n_values + i] = r.times_us[i] != 0;
+      if (r.n_values + i >= r.n_validity)
+        r.validity[r.n_values + i] = r.times_us[i] != 0;
     r.n_validity = r.n_values + r.n_times;
     SubmitRecord(*state_, producer_, [&](Record &slot) { slot = r; });
   }
@@ -619,16 +620,6 @@ private:
     if (!std::isfinite(value) || value < 0 || value >= double(UINT64_MAX))
       throw py::value_error("invalid receipt time");
     return static_cast<uint64_t>(value);
-  }
-  static void Integer(Record &r, uint64_t value) {
-    if (r.n_integers == kIntegers)
-      throw py::value_error("trace integer bound");
-    r.integers[r.n_integers++] = value;
-  }
-  static void Time(Record &r, uint64_t value) {
-    if (r.n_times == kTimes)
-      throw py::value_error("trace time bound");
-    r.times_us[r.n_times++] = value;
   }
   static void Number(Record &r, py::handle input, bool valid = true) {
     if (r.n_values == kValues)

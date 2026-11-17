@@ -208,6 +208,73 @@ class SdkTraceTests(unittest.TestCase):
         self.assertEqual(t.published, [])
         self.assertEqual(self.path.read_text(), 'existing')
 
+    def test_readonly_attach_failure_closes_owned_trace_without_gc(self):
+        for cleanup_fails in (False, True):
+            with self.subTest(cleanup_fails=cleanup_fails):
+                self.path = Path(self.temp.name) / f'owned-{cleanup_fails}.ftrace'
+                transport, created = FakeTransport(), []
+                primary = RuntimeError('attach failed')
+                close_trace, close_transport = Trace.close, transport.close
+
+                def create(*args, **kwargs):
+                    trace = Trace(*args, **kwargs)
+                    created.append(trace)
+                    self.addCleanup(trace.session.close)
+                    return trace
+
+                def finish_trace(trace):
+                    close_trace(trace)
+                    if cleanup_fails:
+                        raise OSError('trace cleanup')
+
+                def finish_transport():
+                    close_transport()
+                    if cleanup_fails:
+                        raise OSError('transport cleanup')
+
+                with patch('locomotion_aorta.trace.Trace', side_effect=create), \
+                     patch.object(Trace, 'close', autospec=True, side_effect=finish_trace) as closed, \
+                     patch.object(transport, 'close', side_effect=finish_transport), \
+                     patch.object(transport, '_set_trace', create=True, side_effect=primary):
+                    with self.assertRaises(RuntimeError) as caught:
+                        PullStateSource(_transport=transport, trace_output=self.path)
+                    self.assertIs(caught.exception, primary)
+                    self.assertEqual(len(created), 1)
+                    closed.assert_called_once_with(created[0])
+                self.assertTrue(created[0].session._closed)
+                self.assertEqual(transport.close_count, 1)
+                self.assertEqual(transport.published, [])
+                self.records()
+
+    def test_readonly_attach_failure_preserves_borrowed_trace_and_primary_error(self):
+        for cleanup_fails in (False, True):
+            with self.subTest(cleanup_fails=cleanup_fails):
+                self.path = Path(self.temp.name) / f'borrowed-{cleanup_fails}.ftrace'
+                transport = FakeTransport()
+                primary = RuntimeError('attach failed')
+                close_transport = transport.close
+
+                def finish_transport():
+                    close_transport()
+                    if cleanup_fails:
+                        raise OSError('transport cleanup')
+
+                with Trace(self.path, stages=('still_alive',)) as trace:
+                    with patch.object(trace, 'close', wraps=trace.close) as closed, \
+                         patch.object(transport, 'close', side_effect=finish_transport), \
+                         patch.object(transport, '_set_trace', create=True, side_effect=primary):
+                        with self.assertRaises(RuntimeError) as caught:
+                            PullStateSource(_transport=transport, trace_recorder=trace)
+                        self.assertIs(caught.exception, primary)
+                        closed.assert_not_called()
+                    self.assertFalse(trace.session._closed)
+                    with trace.span('still_alive'):
+                        pass
+                self.assertEqual(transport.close_count, 1)
+                self.assertEqual(transport.published, [])
+                rows, _ = self.records()
+                self.assertEqual(sum(r['kind'] == Kind.USER_SPAN for r in rows), 1)
+
     def test_body_demo_uses_unwrapped_calls_and_one_discovery(self):
         clock = FakeClock()
         c = RecordingController(clock, trace_output=self.path)

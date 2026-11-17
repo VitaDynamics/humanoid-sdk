@@ -31,16 +31,16 @@
 namespace py = pybind11;
 namespace vt = vita::trace;
 namespace {
-constexpr size_t kValues = 256, kTimes = 128, kIntegers = 32, kValidity = 256;
+using locomotion_trace::kValues;
+using locomotion_trace::kTimes;
+using locomotion_trace::kIntegers;
+using locomotion_trace::kValidity;
+using locomotion_trace::Integer;
+using locomotion_trace::Time;
+using locomotion_trace::NowUs;
 constexpr size_t kIds = 12, kMaxBatch = 64;
 constexpr uint32_t kMaxBlock = 4 * 1024 * 1024;
 constexpr char kMagic[] = "FTRACE13";
-using Clock = std::chrono::steady_clock;
-
-uint64_t NowUs() {
-  return std::chrono::duration_cast<std::chrono::microseconds>(
-             Clock::now().time_since_epoch()).count();
-}
 
 uint64_t NativeThreadToken() {
   // ctypes may recreate PyThreadState on every foreign callback. Native TLS

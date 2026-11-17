@@ -73,6 +73,26 @@ class TraceLifecycleTests(unittest.TestCase):
         _, integrity = self.read()
         self.assertFalse(integrity.complete)
 
+    def test_user_mark_preserves_explicit_point_validity_and_defaults_only_missing_bits(self):
+        cases = (
+            ((), (0, 123), (1, 0), [1, 0]),
+            ((1., 2.), (0, 123, 0), (1, 0, 1, 0), [1, 0, 1, 0, 0]),
+            ((), (0, 123), None, [0, 1]),
+        )
+        with Trace(self.path, stages=('mark',)) as trace:
+            for values, times, validity, _ in cases:
+                self.assertNotEqual(trace.mark('mark', values=array('d', values),
+                    times_us=array('Q', times),
+                    validity=None if validity is None else array('B', validity)), 0)
+        rows, integrity = self.read()
+        self.assertTrue(integrity.complete, integrity.issues)
+        marks = [r for r in rows if r['kind'] == Kind.USER_MARK]
+        self.assertEqual(len(marks), len(cases))
+        for row, (values, times, _, expected) in zip(marks, cases):
+            self.assertEqual(row['values'], list(values))
+            self.assertEqual(row['times_us'], list(times))
+            self.assertEqual(row['validity'], expected)
+
     def test_model_buffer_is_owned_chunked_and_keeps_full_numeric_values(self):
         import numpy as np
         values = np.arange(1520, dtype=np.float32)

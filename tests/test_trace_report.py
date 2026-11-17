@@ -4,11 +4,14 @@ import csv
 import hashlib
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from locomotion_aorta.trace import Session, Kind, Outcome
-from locomotion_aorta.trace.report import generate_report
+from locomotion_aorta.trace.index import TraceIndex, uint_text
+from locomotion_aorta.trace.report import PAGE_SIZE, _application_status, _commands, generate_report
 
 
 class TraceReportTests(unittest.TestCase):
@@ -99,6 +102,90 @@ class TraceReportTests(unittest.TestCase):
                 self.assertEqual(row['application_status_association'], expected)
                 self.assertEqual(row['application_key_interval_us'], '51' if source == 1 and clock == 0 else '')
                 self.assertEqual(row['hardware_latency_us'], '')
+
+    def test_timeline_and_commands_traverse_ordered_results_once_across_pages(self):
+        count = PAGE_SIZE * 2 + 7
+        with Session(self.trace, stages=('body_publish', 'model')) as session:
+            producer = session.producer('control')
+            for i in range(count):
+                ids = (0, 0, 0, 0, i + 1, 0, 11, 13, 42, i + 1, 0, 0)
+                producer.emit(Kind.BODY_COMMAND, timestamp_us=i * 20000, stage=1, stream=1, ids=ids)
+                producer.emit(Kind.BODY_COMMAND, timestamp_us=i * 20000 + 1, duration_us=2,
+                              stage=1, stream=1, ids=ids, outcome=Outcome.OK)
+                producer.emit(Kind.USER_SPAN, timestamp_us=i * 20000 + 2, duration_us=1,
+                              stage=2, outcome=Outcome.OK)
+        queries = []
+
+        def index(*args, **kwargs):
+            result = TraceIndex(*args, **kwargs)
+            result.db.set_trace_callback(queries.append)
+            return result
+
+        output = self.root / 'pages'
+        with patch('locomotion_aorta.trace.report.TraceIndex', side_effect=index):
+            generate_report(self.trace, output)
+        summary = json.loads((output / 'summary.json').read_text())
+        self.assertTrue(summary['capture_complete'], summary['issues'])
+        stages = list(csv.DictReader((output / 'stages.csv').read_text().splitlines()))
+        expected = [int(row['event_id']) for row in stages]
+        self.assertEqual(len(expected), count * 2)
+        observed = []
+        for page in range((len(expected) + PAGE_SIZE - 1) // PAGE_SIZE):
+            rows = re.findall(r'<tr><td>(\d+)</td>',
+                              (output / f'report/details/timeline-{page}.html').read_text())
+            self.assertLessEqual(len(rows), PAGE_SIZE)
+            observed.extend(map(int, rows))
+        self.assertEqual(observed, expected)
+        self.assertEqual(len(set(observed)), len(expected))
+        commands = []
+        for page in range((count + PAGE_SIZE - 1) // PAGE_SIZE):
+            rows = re.findall(r'<article data-filter="[^"]*" id="c(\d+)"',
+                              (output / f'report/details/commands-{page}.html').read_text())
+            self.assertLessEqual(len(rows), PAGE_SIZE)
+            commands.extend(map(int, rows))
+        self.assertEqual(commands, list(range(1, count + 1)))
+        self.assertEqual(len(list(csv.DictReader((output / 'commands.csv').read_text().splitlines()))), count)
+        events = [json.loads(line) for line in (output / 'events.jsonl').read_text().splitlines()]
+        self.assertEqual([row['event_id'] for row in events], list(range(1, len(events) + 1)))
+        self.assertEqual(queries.count('SELECT * FROM timings ORDER BY event_id'), 2)  # CSV and HTML
+        self.assertEqual(queries.count('SELECT * FROM commands ORDER BY id'), 1)
+        self.assertFalse(any('OFFSET' in query for query in queries if 'SELECT * FROM' in query))
+
+    def test_reference_and_application_key_queries_use_full_indexes_and_reject_ambiguity(self):
+        for ambiguity in (None, 'reference', 'command'):
+            with self.subTest(ambiguity=ambiguity):
+                path = self.root / f'lookup-{ambiguity}.ftrace'
+                with Session(path, stages=('body_publish', 'body_callback', 'body_read')) as session:
+                    producer = session.producer('control')
+                    commands = 2 if ambiguity == 'command' else 1
+                    for i in range(commands):
+                        ids = (0, 0, 0, 0, i + 1, 0, 11, 13 + i, 42, 7, 0, 0)
+                        producer.emit(Kind.BODY_COMMAND, timestamp_us=100, stage=1, stream=1, ids=ids)
+                        producer.emit(Kind.BODY_COMMAND, timestamp_us=110, duration_us=11,
+                                      stage=1, stream=1, ids=ids, outcome=Outcome.OK)
+                    for _ in range(2 if ambiguity == 'reference' else 1):
+                        producer.emit(Kind.BODY_FEEDBACK, timestamp_us=150, stage=2, stream=1,
+                                      ids=(0, 0, 0, 0, 303, 0, 11, 0, 42, 7, 91, 303),
+                                      integers=array('Q', [31, 1, 1]), outcome=Outcome.OK)
+                    producer.emit(Kind.BODY_READ, timestamp_us=160, stage=3, stream=1,
+                                  ids=(0, 0, 0, 0, 304, 0, 11, 0, 42, 7, 91, 303), outcome=Outcome.OK)
+                with TraceIndex(path) as index:
+                    _commands(index)
+                    reference_plan = str(list(index.db.execute(
+                        'EXPLAIN QUERY PLAN SELECT row_json FROM events WHERE attempt=? AND kind=? LIMIT 2',
+                        (uint_text(303), Kind.BODY_FEEDBACK))))
+                    self.assertIn('SEARCH events', reference_plan)
+                    self.assertIn('attempt=? AND kind=?', reference_plan)
+                    key_plan = str(list(index.db.execute(
+                        'EXPLAIN QUERY PLAN SELECT id,producer,attempt,begin_us,status FROM commands '
+                        'WHERE runtime=? AND session=? AND sequence=? AND stream=1 LIMIT 2',
+                        tuple(map(uint_text, (11, 42, 7))))))
+                    self.assertIn('SEARCH commands', key_plan)
+                    self.assertIn('runtime=? AND session=? AND sequence=? AND stream=?', key_plan)
+                    _application_status(index)
+                    rows = list(index.db.execute('SELECT status,latency FROM application_status'))
+                    self.assertEqual(rows, [('APPLICATION_KEY_INTERVAL_ONLY', uint_text(51))]
+                                     if ambiguity is None else [])
 
 
 if __name__ == '__main__':

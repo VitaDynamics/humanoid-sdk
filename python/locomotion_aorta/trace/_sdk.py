@@ -21,8 +21,6 @@ BODY_COMMAND_COLUMNS = ('q', 'dq', 'tau', 'kp', 'kd')
 BODY_STATE_COLUMNS = ('q', 'dq', 'tau_est', 'error_code')
 EE_COMMAND_COLUMNS = ('pos', 'vel', 'vel_limit', 'tau', 'current')
 EE_STATE_COLUMNS = ('pos', 'vel', 'tau', 'current', 'temperature_c', 'error_code')
-EE_COMMAND_BITS = (1, 2, 4, 8, 16)
-EE_STATE_BITS = (1, 2, 8, 16, 32, 128)
 
 
 def _info_metadata(info):
@@ -337,7 +335,8 @@ class Trace:
         if channel is None:
             return
         if kind == 'state':
-            channel.endpoint_feedback(value, None, None, None)
+            if value is not None:
+                channel.native.endpoint_feedback(value, 0, None, channel.stages['endpoint_feedback'], True)
         elif kind == 'touch':
             channel.touch_received(value)
         elif kind == 'body':
@@ -451,12 +450,6 @@ class _Capture:
             self.native.info(raw, self.stages['discovery'])
         except Exception:
             self._invalid()
-
-    def endpoint_feedback(self, latest, position, fault, received):
-        for role, state in enumerate((latest, position, fault)):
-            if state is not None:
-                self.native.endpoint_feedback(state, role, received if role == 1 else None,
-                                              self.stages['endpoint_feedback'], True)
 
     def touch_received(self, sample):
         if sample is not None:

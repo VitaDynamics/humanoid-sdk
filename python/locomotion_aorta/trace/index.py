@@ -58,6 +58,7 @@ class TraceIndex(AbstractContextManager):
                 raise ValueError('source recording changed while indexing')
             self.db.executescript('''
                 CREATE INDEX event_attempt ON events(producer,attempt,id);
+                CREATE INDEX event_reference ON events(attempt,kind);
                 CREATE INDEX event_span ON events(producer,span,kind);
                 CREATE INDEX event_stage ON events(stage,stream,outcome,duration);
                 CREATE INDEX event_stamp ON events(stamp,id);

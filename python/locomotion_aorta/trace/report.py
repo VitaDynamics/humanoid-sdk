@@ -5,6 +5,7 @@ Never connects to a robot. Source recordings remain byte-for-byte unchanged.
 import argparse
 import csv
 import html
+from itertools import islice
 import json
 import math
 from pathlib import Path
@@ -111,6 +112,7 @@ def _commands(index):
             Outcome(end['outcome']).name if end else 'UNKNOWN',
             uint_text(end['duration_us']) if end else None, status, json.dumps(body)))
     db.execute('CREATE INDEX command_key ON commands(runtime,control,session,sequence,stream)')
+    db.execute('CREATE INDEX command_application_key ON commands(runtime,session,sequence,stream)')
 
 
 def _export_commands(index, destination):
@@ -125,10 +127,10 @@ def _export_commands(index, destination):
                          'hardware_latency_us', 'hardware_association', 'application_key_interval_us',
                          'application_status_association'))
         unknown.writerow(('command_row', 'reason', 'hardware_latency_us'))
+        commands = db.execute('SELECT * FROM commands ORDER BY id')
         for page in range(pages):
             cards = []
-            for row in db.execute('SELECT * FROM commands ORDER BY id LIMIT ? OFFSET ?',
-                                  (PAGE_SIZE, page*PAGE_SIZE)):
+            for row in islice(commands, PAGE_SIZE):
                 command_id, producer, attempt, stream, *rest = row
                 runtime, control, session, sequence, begin, end, outcome, duration, status, raw = rest
                 numeric = [int(v) if v is not None else None for v in (
@@ -349,10 +351,10 @@ def _event_exports(index, destination):
     # deliberately does not flatten worker spans into a serial control timeline.
     count = db.execute('SELECT count(*) FROM timings').fetchone()[0]
     pages = (count+PAGE_SIZE-1)//PAGE_SIZE
+    timings = db.execute('SELECT * FROM timings ORDER BY event_id')
     for page in range(pages):
         rows, intervals = [], []
-        for category, stage, stream, outcome, producer, duration, event in db.execute(
-                'SELECT * FROM timings ORDER BY event_id LIMIT ? OFFSET ?', (PAGE_SIZE, page*PAGE_SIZE)):
+        for category, stage, stream, outcome, producer, duration, event in islice(timings, PAGE_SIZE):
             raw, = db.execute('SELECT row_json FROM events WHERE id=?', (event,)).fetchone()
             row = json.loads(raw)
             if duration is not None:

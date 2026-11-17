@@ -191,7 +191,7 @@ measurements, not CAN/device response latency or a hard-real-time guarantee.
 `producer_issues` lists the
 actual loss/error counters rather than hiding an incomplete capture.
 
-Native capture requires matching extensions (`CAPTURE_API_VERSION=3` and
+Native capture requires matching extensions (`CAPTURE_API_VERSION=4` and
 `TRACE_CODEC_API_VERSION=1`); mismatches fail at Trace/connection construction.
 The encoder, decoder, control admission and publication gates retain their
 original algorithms and wire layouts. C++ reading Python DTOs keeps the GIL;

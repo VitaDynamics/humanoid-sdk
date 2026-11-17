@@ -340,7 +340,12 @@ class PullStateSource:
             if self._trace is not None and hasattr(self.transport, "_set_trace"):
                 self.transport._set_trace(self._trace)
         except BaseException:
-            self.transport.close()
+            for resource in (self.transport, self._trace if self._owns_trace else None):
+                if resource is not None:
+                    try:
+                        resource.close()
+                    except BaseException:
+                        pass
             raise
         self._runtime_binding = _RuntimeBinding()
         self._end_effector_runtime_lock = threading.Lock()
