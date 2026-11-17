@@ -29,6 +29,14 @@ python examples/end_effector/omnipicker3.py --dry-run --ee-only --side left --gr
 
 OP3 回复无事务号，有界同 key 读重试不能严格分辨迟到回复。软件命令键和 publish 成功不证明某轮设备执行或持物。该例程不是自动总线扫描或原始 CAN 工具。
 
+OP3 还支持 `--pattern sine`（双侧同相总开口）、`simultaneous` 和 `sequential`。
+轨迹必须显式提供左右正速度限制，实际 Info 必须公布对应限值；正弦峰值斜率
+`π × (sine_max_m - sine_min_m) / period_s` 不能超过任一侧的限制。
+`--body-pose zero --body-gains hold` 会先执行原本体归零与观察停留，然后在
+同一个 EXTERNAL 会话中保持零位并运行末端轨迹。不能同时指定 `--ee-only`。
+正弦前先从实测开口过渡到中点，结束后回到开始前保存的夹爪位置；全部阶段均
+继续检查本体反馈、身份和末端新鲜度。最终 CANCEL→PASSIVE 不继续保持本体。
+
 ## 公共前提
 
 使用匹配 bundle 的 CPython 3.10 venv；依赖以根 `compatibility.json` 为准。PC 在创建 Node 前设置私有 `ZENOH_SESSION_CONFIG_URI`，并让 `AORTA_GROUP` 与 `--group` 一致。S100 本机方式先 source `/app/script/env.sh` 再激活 venv。

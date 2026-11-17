@@ -624,7 +624,7 @@ def _validate_motion_parameters(*, pattern, loop, period, sine_min, sine_max,
     if pattern not in ('target', 'sine', 'simultaneous', 'sequential'):
         raise ValueError('unknown motion pattern')
     if loop and pattern not in ('simultaneous', 'sequential'):
-        raise ValueError('loop applies only to angular fraction patterns')
+        raise ValueError('loop applies only to fraction patterns')
     if (not math.isfinite(period) or period <= 0 or not math.isfinite(sine_min)
             or not math.isfinite(sine_max) or sine_min >= sine_max
             or not math.isfinite(low_frac) or not math.isfinite(high_frac)
@@ -655,7 +655,7 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
         raise ValueError('one finite positive command rate per endpoint required')
     _validate_rates(rates.values())
     if pattern == 'sine' and tuple(c.side for c in clients) != ('left', 'right'):
-        raise ValueError('sine requires left and right AGX endpoints')
+        raise ValueError('sine requires left and right opening endpoints')
     if pattern != 'target' and not clients:
         raise ValueError('pattern requires end effectors')
     if not clients and not body_enabled:
@@ -693,13 +693,20 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
                                        prepared[client.side].vel_limit)):
             raise ValueError('OP3 selected velocity limit must stay positive after float32 encoding')
         returns[client.side] = codec.prepare_target(info, replace(targets[client.side], pos=state.pos))
-        if pattern == 'sine' and (info.device_model != DeviceModel.AGX or len(info.axis_names) != 1
-                                 or info.position_domain != (PositionDomain.TOTAL_OPENING,)):
-            raise ValueError('sine requires actual one-axis AGX total-opening capability')
+        if pattern == 'sine' and (info.device_model not in (DeviceModel.AGX, DeviceModel.AGILINK_OP3)
+                                 or len(info.axis_names) != 1
+                                 or info.position_domain != (PositionDomain.TOTAL_OPENING,)
+                                 or not all(mask & Field.VEL_LIMIT for mask in info.valid_limits)):
+            raise ValueError('sine requires a one-axis opening endpoint with a proven speed limit')
         if pattern in ('simultaneous', 'sequential') and (
-                info.device_model not in (DeviceModel.BRAINCO_REVO2, DeviceModel.LINKER_L6)
-                or len(info.axis_names) != 6 or any(d != PositionDomain.JOINT_ANGLE for d in info.position_domain)):
-            raise ValueError('fraction patterns require actual six-axis angular hand capability')
+                not ((info.device_model in (DeviceModel.BRAINCO_REVO2, DeviceModel.LINKER_L6)
+                      and len(info.axis_names) == 6
+                      and all(d == PositionDomain.JOINT_ANGLE for d in info.position_domain))
+                     or (info.device_model == DeviceModel.AGILINK_OP3
+                         and len(info.axis_names) == 1
+                         and info.position_domain == (PositionDomain.TOTAL_OPENING,)
+                         and all(mask & Field.VEL_LIMIT for mask in info.valid_limits)))):
+            raise ValueError('fraction patterns require a six-axis hand or one-axis OP3 with a proven speed limit')
         lows = (sine_min,) if pattern == 'sine' else tuple(a+low_frac*(b-a) for a,b in zip(info.pos_min,info.pos_max))
         highs = (sine_max,) if pattern == 'sine' else tuple(a+high_frac*(b-a) for a,b in zip(info.pos_min,info.pos_max))
         if pattern != 'target':
@@ -716,6 +723,10 @@ def _prepare_motion(controller, clients, targets, options, *, sleep, monotonic, 
                           for value, maximum in zip(
                               prepared[client.side].vel_limit or (0.0,)*len(info.axis_names),
                               info.vel_limit_max))
+        elif info.device_model == DeviceModel.AGILINK_OP3 and pattern != 'target':
+            if not all(mask & Field.VEL_LIMIT for mask in prepared[client.side].command_fields):
+                raise ValueError('OP3 trajectories require an explicit positive velocity limit')
+            speed = tuple(_float32(value) for value in prepared[client.side].vel_limit)
         if (pattern != 'target' or info.device_model == DeviceModel.AGX) and (len(speed) != len(info.axis_names) or any(v <= 0 for v in speed)):
             raise ValueError('a proven positive speed limit is required for a trajectory')
         limits[client.side] = (lows, highs, speed)
@@ -928,7 +939,9 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
         patterns = ('target', 'simultaneous', 'sequential')
     elif _expected_device_model == DeviceModel.AGX:
         patterns = ('target', 'sine')
-    elif _expected_device_model in (DeviceModel.LINKER_L6, DeviceModel.AGILINK_OP3):
+    elif _expected_device_model == DeviceModel.AGILINK_OP3:
+        patterns = ('target', 'sine', 'simultaneous', 'sequential')
+    elif _expected_device_model == DeviceModel.LINKER_L6:
         patterns = ('target',)
     elif _expected_device_model is not None:
         raise ValueError('vendor example requires BrainCo Revo2, AGX, Linker L6 or OP3')
@@ -983,7 +996,7 @@ def main(argv=None, *, _client_factory=None, _controller_factory=None, _state_so
     if args.pattern == 'sine' and args.side != 'both':
         parser.error('sine requires --side both')
     if args.loop and args.pattern not in ('simultaneous', 'sequential'):
-        parser.error('--loop requires an angular fraction pattern')
+        parser.error('--loop requires a fraction pattern')
     if args.dry_run and args.confirm_motion:
         parser.error('--dry-run and --confirm-motion are mutually exclusive')
     if args.ee_only and not sides:
