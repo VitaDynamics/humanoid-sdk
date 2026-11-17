@@ -105,15 +105,17 @@ class TraceReportTests(unittest.TestCase):
 
     def test_timeline_and_commands_traverse_ordered_results_once_across_pages(self):
         count = PAGE_SIZE * 2 + 7
-        with Session(self.trace, stages=('body_publish', 'model')) as session:
+        # The offline fixture fits even when the writer is not scheduled yet.
+        with Session(self.trace, stages=('body_publish', 'model'), capacity=1024) as session:
             producer = session.producer('control')
             for i in range(count):
                 ids = (0, 0, 0, 0, i + 1, 0, 11, 13, 42, i + 1, 0, 0)
-                producer.emit(Kind.BODY_COMMAND, timestamp_us=i * 20000, stage=1, stream=1, ids=ids)
-                producer.emit(Kind.BODY_COMMAND, timestamp_us=i * 20000 + 1, duration_us=2,
-                              stage=1, stream=1, ids=ids, outcome=Outcome.OK)
-                producer.emit(Kind.USER_SPAN, timestamp_us=i * 20000 + 2, duration_us=1,
-                              stage=2, outcome=Outcome.OK)
+                self.assertTrue(producer.emit(Kind.BODY_COMMAND, timestamp_us=i * 20000,
+                                              stage=1, stream=1, ids=ids))
+                self.assertTrue(producer.emit(Kind.BODY_COMMAND, timestamp_us=i * 20000 + 1,
+                    duration_us=2, stage=1, stream=1, ids=ids, outcome=Outcome.OK))
+                self.assertTrue(producer.emit(Kind.USER_SPAN, timestamp_us=i * 20000 + 2,
+                                              duration_us=1, stage=2, outcome=Outcome.OK))
         queries = []
 
         def index(*args, **kwargs):
