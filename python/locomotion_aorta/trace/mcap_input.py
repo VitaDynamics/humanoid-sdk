@@ -9,12 +9,15 @@ import io
 import json
 import zlib
 
+from ..body_types import (
+    BODY_CMD_PROTOCOL_VERSION, BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION, BodyCmdAction,
+)
 from .index import file_identity, uint_text
 
 MAX_RECORD = 16 * 1024 * 1024
 MAX_PAYLOAD = 1024 * 1024
 CONTRACTS = {
-    'lowlevel.BodyCmd': ('body_cmd', 3),
+    'lowlevel.BodyCmd': ('body_cmd', BODY_CMD_PROTOCOL_VERSION),
     'lowlevel.BodyState': ('body_state', 3),
     'lowlevel.ee.EndEffectorCmd': ('end_effector_cmd', 2),
     'lowlevel.ee.EndEffectorState': ('end_effector_state', 2),
@@ -71,8 +74,13 @@ def _decoder(schema):
         if not 8 <= len(raw) <= MAX_PAYLOAD:
             raise ValueError('MCAP message outside payload bound')
         view = root.GetRootAs(raw)
-        if view.ProtocolVersion() != version:
+        wire_version = view.ProtocolVersion()
+        if (wire_version != version and not
+                (stem == 'body_cmd' and wire_version == BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION)):
             raise ValueError('MCAP protocol version mismatch: ' + schema.name)
+        if (stem == 'body_cmd' and wire_version == BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION
+                and view.Action() != BodyCmdAction.EXTERNAL):
+            raise ValueError('MCAP BodyCmd version 4 requires EXTERNAL')
         # Finite vector bounds precede DTO construction. Actual SDK validators
         # and native state decoding still run; no second protocol implementation.
         for name, limit in (('Joints', 31), ('Axes', 32), ('InputObservations', 256), ('ImuStates', 8), ('AxisNames', 32)):
@@ -93,7 +101,8 @@ def _decoder(schema):
             joints = _body_codec.unpack_body_cmd(view)
             if len(joints) != 31:
                 raise ValueError('BodyCmd requires 31 joints')
-            return dict(runtime_id=view.RuntimeId(), control_id=view.ControlId(),
+            return dict(protocol_version=wire_version, action=view.Action(),
+                        runtime_id=view.RuntimeId(), control_id=view.ControlId(),
                         session_id=view.SessionId(), command_sequence=view.Sequence(),
                         ts_client_created_us=view.TsClientCreatedUs(), ts_client_send_us=view.TsClientSendUs(),
                         joints=[asdict(joint) for joint in joints])
