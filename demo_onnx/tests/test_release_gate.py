@@ -14,22 +14,23 @@ TOOL = Path(__file__).resolve().parents[1] / "tools/wheels.py"
 spec = importlib.util.spec_from_file_location("native_wheel_tool", TOOL)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+SDK_VERSION = "1.0.1rc1"  # Independent release contract, not read back from the auditor.
 
 
 class ReleaseGateTest(unittest.TestCase):
     def test_generic_linux_wheel_is_not_a_release_asset(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "locomotion_aorta-1.0.1rc1-cp310-cp310-linux_x86_64.whl"
+            path = Path(directory) / f"locomotion_aorta-{SDK_VERSION}-cp310-cp310-linux_x86_64.whl"
             with zipfile.ZipFile(path, "w") as wheel:
-                wheel.writestr("locomotion_aorta-1.0.1rc1.dist-info/WHEEL",
+                wheel.writestr(f"locomotion_aorta-{SDK_VERSION}.dist-info/WHEEL",
                                "Wheel-Version: 1.0\nTag: cp310-cp310-linux_x86_64\n")
             with self.assertRaisesRegex(ValueError, "audited cp310"):
                 module.inspect(path)
 
     def test_release_requires_exact_current_public_message_version(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "locomotion_aorta-1.0.1rc1-cp310-cp310-manylinux_2_35_x86_64.whl"
-            info = "locomotion_aorta-1.0.1rc1.dist-info"
+            path = Path(directory) / f"locomotion_aorta-{SDK_VERSION}-cp310-cp310-manylinux_2_35_x86_64.whl"
+            info = f"locomotion_aorta-{SDK_VERSION}.dist-info"
             elf = bytearray(20)
             elf[:6] = b"\x7fELF\x02\x01"
             struct.pack_into("<H", elf, 18, 62)
@@ -41,7 +42,7 @@ class ReleaseGateTest(unittest.TestCase):
                         wheel.writestr(info + "/WHEEL",
                                        "Wheel-Version: 1.0\nTag: cp310-cp310-manylinux_2_35_x86_64\n")
                         wheel.writestr(info + "/METADATA", (
-                            "Name: locomotion-aorta\nVersion: 1.0.1rc1\nRequires-Python: ==3.10.*\n"
+                            f"Name: locomotion-aorta\nVersion: {SDK_VERSION}\nRequires-Python: ==3.10.*\n"
                             f"Requires-Dist: aorta-sdk=={compatibility['aorta_version']}\n"
                             f"Requires-Dist: aorta-msgs=={compatibility['aorta_version']}\n"
                             f"Requires-Dist: vbot-humanoid-msgs=={version}\n"

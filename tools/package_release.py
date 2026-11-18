@@ -63,14 +63,11 @@ def package(wheelhouses: list[Path], output: Path) -> None:
     (output / "wheelhouse").mkdir()
     for wheel in wheels:
         shutil.copyfile(wheel, output / "wheelhouse" / wheel.name)
-    for name in ("README.md", "AGENTS.md", "compatibility.json"):
+    # Copy only public docs and template, never local profiles or authentication.
+    for name in ("README.md", "AGENTS.md", "compatibility.json", "trace/README.md", profile_path):
+        (output / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / name, output / name)
-    (output / "trace").mkdir()
-    shutil.copyfile(ROOT / "trace/README.md", output / "trace/README.md")
     (output / "CLAUDE.md").symlink_to("AGENTS.md")
-    (output / "config").mkdir()
-    # Copy only the public template, never local profiles or authentication files.
-    shutil.copyfile(ROOT / profile_path, output / profile_path)
     shutil.copytree(ROOT / "examples", output / "examples",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copytree(ROOT / "python/locomotion_aorta", output / "source/locomotion_aorta",

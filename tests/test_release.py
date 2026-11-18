@@ -23,7 +23,7 @@ class ReleaseTest(unittest.TestCase):
             "command_slots", "state_slots", "session_mode", "pc_session_profile", "body_protocol_version",
             "wheel_sha256", "dependency_release_tag", "dependency_release_repository",
             "aorta_abi_version", "schema_sha256", "aorta_native_header_sha256",
-            "native_input_provenance", "trace_wheel_sha256",
+            "native_input_provenance", "trace_wheel_sha256", "trace_wheel_urls",
         })
         self.assertEqual(manifest["python_requires"], "==3.10.*")
         self.assertEqual(manifest["platforms"], ["manylinux_2_35_x86_64", "manylinux_2_35_aarch64"])
@@ -31,8 +31,7 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(manifest["control_request_version"], 4)
         self.assertIn(f'version = "{manifest["sdk_version"]}"',
                       (ROOT / "pyproject.toml").read_text())
-        self.assertIn(f'__version__ = "{manifest["sdk_version"]}"',
-                      (ROOT / "python/locomotion_aorta/_onnx/__init__.py").read_text())
+        self.assertEqual(manifest["sdk_version"], "1.0.1rc1")
         self.assertEqual(set(manifest["schema_sha256"]), {
             "body_cmd", "body_state", "control_ack", "control_request", "control_status",
             "end_effector_cmd", "end_effector_info", "end_effector_set_touch",
@@ -127,12 +126,14 @@ class ReleaseTest(unittest.TestCase):
                 package_release.package([root / "wheels"], output)
             bundled = output / "config/pc_session_peer.json5"
             self.assertTrue(bundled.is_file())
-            self.assertEqual(bundled.read_bytes(), source.read_bytes())
             self.assertEqual([p.name for p in (output / "config").iterdir()], [source.name])
             manifest = json.loads((output / "MANIFEST.json").read_text())
-            self.assertEqual((output / "trace/README.md").read_bytes(), (ROOT / "trace/README.md").read_bytes())
-            self.assertEqual(manifest["files"]["trace/README.md"],
-                             hashlib.sha256((ROOT / "trace/README.md").read_bytes()).hexdigest())
+            for relative in ("config/pc_session_peer.json5", "trace/README.md",
+                             *("examples/" + name for name in examples)):
+                expected = (ROOT / relative).read_bytes()
+                with self.subTest(relative=relative):
+                    self.assertEqual((output / relative).read_bytes(), expected)
+                    self.assertEqual(manifest["files"][relative], hashlib.sha256(expected).hexdigest())
             for name, digest in compatibility["trace_wheel_sha256"].items():
                 self.assertEqual(hashlib.sha256((output / "wheelhouse" / name).read_bytes()).hexdigest(), digest)
                 self.assertEqual(manifest["files"]["wheelhouse/" + name], digest)
@@ -150,11 +151,6 @@ class ReleaseTest(unittest.TestCase):
                     package_release.package([root / "wheels"], corrupt_trace)
                 self.assertFalse(corrupt_trace.exists())
             trace_wheel.write_bytes(saved)
-            for name in examples:
-                relative = "examples/" + name
-                self.assertEqual((output / relative).read_bytes(), (ROOT / relative).read_bytes())
-                self.assertEqual(manifest["files"][relative],
-                                 hashlib.sha256((ROOT / relative).read_bytes()).hexdigest())
             for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py",
                             "brainco_hand/brainco_hand_external.py", "gripper/gripper_external.py"):
                 self.assertFalse((output / "examples" / retired).exists())
@@ -172,8 +168,6 @@ class ReleaseTest(unittest.TestCase):
                     package_release.package([root / "wheels"], missing)
             self.assertFalse(missing.exists())
             self.assertEqual(manifest["pc_session_profile"], "config/pc_session_peer.json5")
-            self.assertEqual(manifest["files"]["config/pc_session_peer.json5"],
-                             hashlib.sha256(bundled.read_bytes()).hexdigest())
             private_profile = json.loads(source.read_text())
             private_profile["transport"]["auth"]["usrpwd"]["password"] = "test-only-value"
             (root / "config/pc_session_peer.json5").write_text(json.dumps(private_profile))

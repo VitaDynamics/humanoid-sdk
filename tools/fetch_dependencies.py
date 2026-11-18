@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import shutil
+import urllib.request
 
 MANIFEST = Path(__file__).resolve().parents[1] / "compatibility.json"
 
@@ -36,9 +37,17 @@ def fetch(output: Path, arch: str, *, source: Path | None = None,
     ]:
         raise ValueError("incomplete pinned wheelhouse")
     expected = {name: manifest["wheel_sha256"][name] for name in names}
+    trace_names = [name for name in manifest["trace_wheel_sha256"]
+                   if name.endswith((f"_{arch}.whl", "-any.whl"))]
+    if sorted(name.split("-")[0] for name in trace_names) != ["lz4", "mcap", "zstandard"]:
+        raise ValueError("incomplete pinned Trace wheelhouse")
+    trace_urls = manifest["trace_wheel_urls"]
+    if set(trace_urls) != set(manifest["trace_wheel_sha256"]):
+        raise ValueError("incomplete pinned Trace sources")
+    expected.update((name, manifest["trace_wheel_sha256"][name]) for name in trace_names)
     expected["aorta.h"] = required_text(manifest, "aorta_native_header_sha256")
     if source is not None:
-        inputs = {name: source / name for name in names}
+        inputs = {name: source / name for name in expected}
         inputs["aorta.h"] = native_header if native_header is not None else source / "aorta.h"
         # Verify the whole local set before creating or copying an output.
         for name, path in inputs.items():
@@ -49,6 +58,14 @@ def fetch(output: Path, arch: str, *, source: Path | None = None,
         if source is not None:
             with inputs[name].open("rb") as incoming, (output / name).open("xb") as destination:
                 shutil.copyfileobj(incoming, destination)
+        elif name in trace_names:
+            destination = output / name
+            if destination.exists() or destination.is_symlink():
+                raise FileExistsError(f"output already exists: {destination}")
+            # Exact official PyPI wheel URL and original digest; no index resolution.
+            with urllib.request.urlopen(trace_urls[name], timeout=120) as incoming, \
+                    destination.open("xb") as target:
+                shutil.copyfileobj(incoming, target)
         else:
             try:
                 subprocess.run([

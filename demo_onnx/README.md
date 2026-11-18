@@ -5,6 +5,14 @@
 构建时，`tools/fetch_ort.py` 从 `ort-archives.json` 明确指定的 GitHub Release 镜像
 下载原官方归档，仍核对原 SHA-256；需已登录的 `gh` 或只读 `GH_TOKEN`。
 原版本、官方来源 URL、目录和哈希保留，不在下载失败后切换版本或跳过校验。
+下载先写同目录的独立暂存目录，校验成功后才原子创建最终文件，拒绝覆盖。
+中断或坏哈希的暂存原件保留供诊断，不占用最终文件名，也不自动重试。
+
+`python tools/fetch_dependencies.py --arch x86_64 --output <新目录>` 收取该架构的
+4 个核心 wheel、3 个 Trace wheel 和匹配 `aorta.h`，逐个核固定 SHA。
+Trace 使用 `compatibility.json` 中固定的官方 PyPI 文件 URL，无动态版本解析。
+打包双架构时分别收取两个新目录，再给 `tools/package_release.py` 传两次
+`--wheelhouse`；显式本地 `--source-dir` 同样须提供完整匹配的输入。
 
 ## 构建和审计
 
