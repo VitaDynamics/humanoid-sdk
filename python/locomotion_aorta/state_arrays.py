@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
+from ._trace_context import current_sink, copy_reference
 
 from .body_types import BodyState, BodyJointState, BodyImuState, BodyImuSample
 
@@ -68,14 +69,14 @@ class BodyStateArrays:
         return tuple(result)
 
     def body_state(self):
-        return BodyState(self.state_id, self.joints, self.protocol_version,
+        return copy_reference(self, BodyState(self.state_id, self.joints, self.protocol_version,
                          self.roster_version, self.ts_state_real_us,
                          self.ts_state_pub_us, self.ts_consumed_us,
                          self.attitude_valid, self.imu_states,
                          self.applied_session_id, self.applied_sequence,
                          self.ts_first_output_us, self.runtime_id,
                          self.ts_control_us, self.applied_key_valid,
-                         self.association_source_type)
+                         self.association_source_type))
 
 
 def decode_body_state_arrays(payload):
@@ -83,4 +84,11 @@ def decode_body_state_arrays(payload):
     from ._native_body_codec import _state_decoder
     from . import _body_cmd_native
     _state_decoder()  # Shared BFBS identity guard; no silent Python fallback.
-    return BodyStateArrays(**_body_cmd_native.decode_state_arrays(payload))
+    sink = current_sink()
+    decoded = (_body_cmd_native.decode_state_arrays(payload, 0, sink) if sink is not None
+               else _body_cmd_native.decode_state_arrays(payload))
+    reference = decoded.pop('_trace_ref', None)
+    result = BodyStateArrays(**decoded)
+    if reference is not None:
+        object.__setattr__(result, '_trace_ref', reference)
+    return result

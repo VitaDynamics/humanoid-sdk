@@ -9,11 +9,12 @@ from dataclasses import replace
 from .controller import (ExternalController, ExternalControlTimeoutError,
                          ControllerClosedError, _close_handles, _deadline, _RuntimeBinding, _nonempty_text,
                          _uint64_nonzero, _valid_generation)
-from .controller import _retire_ee_handles, _close_ee_handles, _detach_ee_handles
+from .controller import _retire_ee_handles, _close_ee_handles, _detach_ee_handles, _NO_TRACE_SPAN
 from .body_types import BODY_STATE_PROTOCOL_VERSION
 from .types import ControlStatus, PROTOCOL_VERSION
 from .transport import _AortaTransport, BODY_STATE_TOPIC, CONTROL_STATUS_TOPIC
 from .state_arrays import decode_body_state_arrays
+from ._trace_context import copy_reference
 from ._native_body_codec import decode_body_state_native, prepare_native_body_pull
 
 
@@ -152,12 +153,15 @@ class PullTransport(_AortaTransport):
                     native = self._native_body_rx is not None
                     payload = sample if native else sample.payload
                     if arrays:
-                        state = replace(decode_body_state_arrays(payload),
+                        decoded = (self._trace_recorder.decode(decode_body_state_arrays, payload, _stream=1)
+                                   if self._trace_recorder is not None else decode_body_state_arrays(payload))
+                        state = copy_reference(decoded, replace(decoded,
                             received_monotonic_ns=mono, received_realtime_ns=wall,
                             pull_context_receive_stamp_ns=(sample.receive_stamp_ns
-                                if native else sample.context.receive_stamp_ns))
+                                if native else sample.context.receive_stamp_ns)))
                     else:
-                        state = decode_body_state_native(payload)
+                        state = (self._trace_recorder.decode(decode_body_state_native, payload, _stream=1)
+                                 if self._trace_recorder is not None else decode_body_state_native(payload))
 
                 def commit():
                     nonlocal provisional, retired_raw
@@ -174,8 +178,16 @@ class PullTransport(_AortaTransport):
                     if received[0] is candidate:
                         provisional = False
 
-                if self._accept_candidate(state, commit):
+                cached_sample = received is self._latest_sample
+                accepted = (self._trace_recorder.decode(self._accept_candidate, state, commit,
+                            _stage='body_admission_gate', _stream=1) if self._trace_recorder is not None
+                            else self._accept_candidate(state, commit))
+                if accepted:
+                    if self._trace_recorder is not None and not cached_sample:
+                        self._trace_recorder.received('body', state)
                     return state
+                if self._trace_recorder is not None:
+                    self._trace_recorder.rejected("body", state)
                 # Keep the true accepted raw and both original representations.
                 if self._latest_sample is None or received is self._latest_sample:
                     raise ValueError('BodyState does not belong to the discovered runtime')
@@ -220,6 +232,12 @@ class PullTransport(_AortaTransport):
         return sample
 
     def _receive_state(self, timeout):
+        if self._trace_recorder is not None:
+            return self._trace_recorder.decode(self._receive_state_observed, timeout,
+                                               _stage='body_take', _stream=1)
+        return self._receive_state_observed(timeout)
+
+    def _receive_state_observed(self, timeout):
         nonblocking = type(timeout) in (int, float) and timeout == 0
         if nonblocking:
             deadline = time.monotonic()
@@ -299,7 +317,10 @@ class PullStateSource:
     """Read-only native-array feedback and ControlStatus snapshots; no publishers."""
 
     def __init__(self, *, group='default', node_name=None, _transport=None,
-                 native_body_rx=None):
+                 native_body_rx=None, trace_output=None, trace_compression="zstd", trace_stages=(), trace_recorder=None):
+        if trace_recorder is not None:
+            from .trace._sdk import _validate_options
+            _validate_options(trace_output, trace_recorder, trace_stages)
         self._group = _nonempty_text(group, 'group')
         if node_name is not None:
             _nonempty_text(node_name, 'node_name')
@@ -308,13 +329,29 @@ class PullStateSource:
         self.transport = _transport if _transport is not None else PullTransport(
             node_name=node_name or 'body-pull-'+uuid.uuid4().hex,
             group=group, publishers=False, native_body_rx=native_body_rx)
+        if isinstance(self.transport, PullTransport) and self.transport._candidate_gate is not None:
+            raise ValueError('Pull transport already has a connection')
+        self._trace = trace_recorder
+        self._owns_trace = trace_recorder is None
+        try:
+            if trace_output is not None:
+                from .trace import Trace
+                self._trace = Trace(trace_output, compression=trace_compression, stages=trace_stages)
+            if self._trace is not None and hasattr(self.transport, "_set_trace"):
+                self.transport._set_trace(self._trace)
+        except BaseException:
+            for resource in (self.transport, self._trace if self._owns_trace else None):
+                if resource is not None:
+                    try:
+                        resource.close()
+                    except BaseException:
+                        pass
+            raise
         self._runtime_binding = _RuntimeBinding()
         self._end_effector_runtime_lock = threading.Lock()
         self._closed = False
         self._end_effector_clients = set()
         if isinstance(self.transport, PullTransport):
-            if self.transport._candidate_gate is not None:
-                raise ValueError('Pull transport already has a connection')
             self.transport._candidate_gate = self._commit_pull_candidate
 
     def _commit_pull_candidate(self, candidate, commit):
@@ -329,7 +366,21 @@ class PullStateSource:
     def group(self):
         return self._group
 
+    @property
+    def trace_health(self):
+        return None if self._trace is None else self._trace.health()
+
+    def trace_span(self, name, *, iteration_id=0, inference_id=0):
+        if self._trace is None:
+            return _NO_TRACE_SPAN
+        return self._trace.span(name, iteration_id=iteration_id, inference_id=inference_id)
+
     def wait_state(self, timeout=5.0):
+        if self._trace is not None:
+            return self._trace.call('body_read', self._wait_state_observed, timeout)
+        return self._wait_state_observed(timeout)
+
+    def _wait_state_observed(self, timeout):
         state = self.transport.wait_state(timeout)
         with self._end_effector_runtime_lock:
             self._ensure_runtime_locked()
@@ -353,6 +404,8 @@ class PullStateSource:
         _close_handles(handles)
         if self._runtime_binding.poisoned:
             raise ValueError('robot runtime changed; create a new connection')
+        if self._trace is not None:
+            self._trace.discovery(reply)
         return reply
 
     def _ensure_runtime_locked(self):
@@ -398,7 +451,11 @@ class PullStateSource:
                 self._closed = True
                 handles = _close_ee_handles(self._end_effector_clients)
         _close_handles(handles)
-        self.transport.close()
+        try:
+            self.transport.close()
+        finally:
+            if self._trace is not None and self._owns_trace:
+                self._trace.close()
 
     def __enter__(self):
         with self._end_effector_runtime_lock:
@@ -412,7 +469,11 @@ class PullStateSource:
 class PullController(ExternalController):
     """Original session protocol with pull status pumping on the caller thread."""
 
-    def __init__(self, *, group='default', node_name=None, client_id=None, _transport=None):
+    def __init__(self, *, group='default', node_name=None, client_id=None, _transport=None,
+                 trace_output=None, trace_compression="zstd", trace_stages=(), trace_recorder=None):
+        if trace_recorder is not None:
+            from .trace._sdk import _validate_options
+            _validate_options(trace_output, trace_recorder, trace_stages)
         _nonempty_text(group, 'group')
         node_name = node_name or 'locomotion-pull-'+uuid.uuid4().hex
         _nonempty_text(node_name, 'node_name')
@@ -423,7 +484,9 @@ class PullController(ExternalController):
         if isinstance(transport, PullTransport) and transport._candidate_gate is not None:
             raise ValueError('Pull transport already has a connection')
         super().__init__(group=group, node_name=node_name, client_id=client_id,
-                         _transport=transport, _subscribe_body_state=False)
+                         _transport=transport, _subscribe_body_state=False,
+                         trace_output=trace_output, trace_compression=trace_compression,
+                         trace_stages=trace_stages, trace_recorder=trace_recorder)
         if isinstance(transport, PullTransport):
             transport._candidate_gate = self._commit_pull_candidate
 
@@ -437,6 +500,11 @@ class PullController(ExternalController):
             return True
 
     def wait_state(self, timeout=5.0):
+        if self._trace is not None:
+            return self._trace.call('body_read', self._wait_state_observed, timeout)
+        return self._wait_state_observed(timeout)
+
+    def _wait_state_observed(self, timeout):
         with self._condition:
             self._ensure_open()
         return self._read_pull_state('wait_state', timeout)
@@ -451,6 +519,11 @@ class PullController(ExternalController):
             return state
 
     def wait_body_state(self, timeout=5.0):
+        if self._trace is not None:
+            return self._trace.call('body_read', self._wait_body_state_observed, timeout)
+        return self._wait_body_state_observed(timeout)
+
+    def _wait_body_state_observed(self, timeout):
         with self._condition:
             self._ensure_open()
         try:

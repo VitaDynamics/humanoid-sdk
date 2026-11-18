@@ -42,7 +42,7 @@ from locomotion_aorta._policy_state import ASAMPLE_BODY_JOINT_NAMES
 _BODY_TEST_TARGETS = tuple('fake_joint_' + str(i) for i in range(31))
 
 class ControllerHarness:
-    def __init__(self, runtime_id: int = 11, *, info_reply=None) -> None:
+    def __init__(self, runtime_id: int = 11, *, info_reply=None, trace_output=None, trace_recorder=None) -> None:
         self.transport = FakeTransport()
         if info_reply is None:
             # Synthetic all-targets-proven fixture for generic BodyCmd positive tests.
@@ -63,7 +63,7 @@ class ControllerHarness:
         self.runtime_id = reply.runtime_id
         self.transport.get_robot_info = lambda timeout: reply
         self.controller = ExternalController(
-            client_id=7, _transport=self.transport
+            client_id=7, _transport=self.transport, trace_output=trace_output, trace_recorder=trace_recorder
         )
         self.controller.get_robot_info(.1)
         self.control_id = 13

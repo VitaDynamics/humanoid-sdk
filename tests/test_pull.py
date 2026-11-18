@@ -182,6 +182,7 @@ class PullTest(unittest.TestCase):
 
     def transport(self, *, node=None, get_robot_info=None):
         t=PullTransport.__new__(PullTransport);t._closed=False;t._state_lock=threading.Lock();t._status_lock=threading.RLock();t._status=None;t._latest_state=None;t._latest_sample=None;t._latest_body_state=None
+        t._trace_recorder = None
         t._native_body_rx=None;t._body_rx_closing=threading.Event();t._body_rx_poll_s=None
         t._pulls={BODY_STATE_TOPIC:Ring(),CONTROL_STATUS_TOPIC:Ring()};t._callbacks={BODY_STATE_TOPIC:[],CONTROL_STATUS_TOPIC:[]}
         t._bindings=S(control_status_decoder=lambda v:v);t._subscriber_spec=lambda topic:(None,lambda v:v,None)

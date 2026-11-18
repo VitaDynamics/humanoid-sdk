@@ -332,11 +332,24 @@ class EndEffectorClient:
             prepared.close()
 
     def _receive(self, kind, view):
+        trace = self.connection._trace
+        if trace is not None:
+            return trace.decode(self._receive_observed, kind, view,
+                                _stage='endpoint_callback', _stream=1+self._side)
+        return self._receive_observed(kind, view)
+
+    def _receive_observed(self, kind, view):
         with self._condition:
             if self._closed or self._fatal is not None:
                 return
+        value = None
+        admitted = False
+        trace = self.connection._trace
         try:
-            value = getattr(codec, 'decode_' + kind)(view)
+            decode = getattr(codec, 'decode_' + kind)
+            value = (trace.decode(decode, view, _stage='endpoint_decode' if kind == 'state' else 'touch_decode',
+                                 _stream=1+self._side)
+                     if trace is not None and kind != 'info' else decode(view))
             if kind == 'info':
                 codec.validate_info(value)
                 if value.side != self._side:
@@ -390,12 +403,18 @@ class EndEffectorClient:
             if retired is not None:
                 _close_handles(retired)
                 return
+            admitted = True
         except (ValueError, TypeError, AttributeError, IndexError, OverflowError, struct.error) as error:
             with self._condition:
                 if not self._closed:
                     self._errors[kind] = error
                     self._condition.notify_all()
             return
+        finally:
+            if value is not None and not admitted and trace is not None and kind != "info":
+                trace.rejected(kind, value)
+        if self.connection._trace is not None:
+            self.connection._trace.received(kind, value)
         self._deliver(kind, value, callback)
 
     def _deliver(self, kind, value, callback):
@@ -513,6 +532,12 @@ class EndEffectorClient:
                 self._condition.wait(remaining)
 
     def publish(self, target, *, input_observations=()):
+        if self.connection._trace is not None:
+            return self.connection._trace.call('endpoint_publish', self._publish_observed,
+                                              target, input_observations=input_observations)
+        return self._publish_observed(target, input_observations=input_observations)
+
+    def _publish_observed(self, target, *, input_observations=()):
         with self._publish_lock:
             with self._condition:
                 self._ensure_open()
@@ -547,6 +572,8 @@ class EndEffectorClient:
             context, publisher = self.connection._reserve_end_effector_command(
                 self, runtime_id, prepare_send
             )
+            if self.connection._trace is not None:
+                self.connection._trace.reserved(context, self._side)
             submission = EndEffectorSubmission(
                 info.runtime_id, info.layout_id, info.side,
                 context.control_id,
@@ -591,6 +618,11 @@ class EndEffectorClient:
         deadline. Core/matching exceptions propagate, while service failures
         raise TouchSetError carrying the unmodified decoded response.
         """
+        if self.connection._trace is not None:
+            return self.connection._trace.call('touch_request', self._set_touch_observed, enable, timeout)
+        return self._set_touch_observed(enable, timeout)
+
+    def _set_touch_observed(self, enable, timeout):
         if type(enable) is not bool:
             raise ValueError('enable must be boolean')
         _positive_timeout(timeout)

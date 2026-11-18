@@ -1,4 +1,6 @@
 #include "body_state_decoder.h"
+#include "../../trace/native/codec_bridge.h"
+namespace lt = locomotion_trace;
 #include "native_body_pull.h"
 
 #include <pybind11/numpy.h>
@@ -116,9 +118,41 @@ py::object RuntimeId(const State &state) {
   return py::int_(state.runtime_id);
 }
 
+lt::Reference Capture(const State &v, lt::Sink *sink) {
+  if (!sink || !v.runtime_id)
+    return {};
+  lt::Record r{};
+  r.kind = 5;
+  r.stream = 1;
+  r.ids[6] = v.runtime_id;
+  r.ids[8] = v.session;
+  r.ids[9] = v.sequence;
+  r.ids[10] = v.id;
+  lt::Integer(r, 31);
+  lt::Integer(r, v.key_valid);
+  lt::Integer(r, v.source_type);
+  for (const auto &j : v.joints)
+    lt::Value(r, j.q());
+  for (const auto &j : v.joints)
+    lt::Value(r, j.dq());
+  for (const auto &j : v.joints)
+    lt::Value(r, j.tau_est());
+  for (const auto &j : v.joints)
+    lt::Value(r, static_cast<uint32_t>(j.error_code()));
+  for (auto time : {v.real, v.pub, v.consumed, v.control, v.output, uint64_t(0),
+                    uint64_t(0), uint64_t(0)})
+    lt::Time(r, time);
+  for (const auto &j : v.joints)
+    for (auto t :
+         {j.ts_acquired_hw_us(), j.ts_ingested_us(), j.ts_assembled_us()})
+      lt::Time(r, t);
+  return sink->decoded(sink->owner, r, lt::BodyDecode, 0);
+}
+
 py::object Decode(State result, const py::object &state_type,
                   const py::object &joint_type, const py::object &imu_type,
-                  const py::object &sample_type) {
+                  const py::object &sample_type, lt::Sink *sink) {
+  const auto reference = Capture(result, sink);
   py::tuple joints(result.joints.size());
   for (size_t i = 0; i < result.joints.size(); ++i) {
     const auto &j = result.joints[i];
@@ -144,6 +178,7 @@ py::object Decode(State result, const py::object &state_type,
                  result.session, result.sequence, result.output,
                  RuntimeId(result), result.control,
                  result.key_valid, result.source_type);
+  lt::Attach(dto, reference);
   return dto;
 }
 
@@ -173,7 +208,8 @@ py::array View(std::vector<T> &data, py::ssize_t columns,
   return result;
 }
 
-py::dict DecodeArrays(State state) {
+py::dict DecodeArrays(State state, lt::Sink *sink) {
+  const auto reference = Capture(state, sink);
   auto arrays = std::make_unique<Arrays>();
   arrays->state = std::move(state);
   const auto joint_count = arrays->state.joints.size();
@@ -244,6 +280,8 @@ py::dict DecodeArrays(State state) {
   out["ts_control_us"] = v.control;
   out["applied_key_valid"] = v.key_valid;
   out["association_source_type"] = v.source_type;
+  if (reference.event)
+    out["_trace_ref"] = lt::ReferenceObject(reference);
   return out;
 }
 }  // namespace
@@ -262,35 +300,40 @@ void BindBodyState(py::module_ &module) {
       .def("close", &body_pull::Reader::Close);
   module.def(
       "decode_state_arrays",
-      [](py::buffer input, size_t offset) {
-        return DecodeArrays(ReadOwnedState(input, offset));
+      [](py::buffer input, size_t offset, py::object sink) {
+        return DecodeArrays(ReadOwnedState(input, offset), lt::GetSink(sink));
       },
-      py::arg("payload"), py::arg("table_offset") = 0);
+      py::arg("payload"), py::arg("table_offset") = 0,
+      py::arg("trace_sink") = py::none());
   module.def(
       "decode_state_arrays",
-      [](const body_pull::Sample& input, size_t offset) {
+      [](const body_pull::Sample &input, size_t offset, py::object sink) {
         const auto [data, size] = input.Bytes();
-        return DecodeArrays(ReadState(data, size, offset));
+        return DecodeArrays(ReadState(data, size, offset), lt::GetSink(sink));
       },
-      py::arg("payload"), py::arg("table_offset") = 0);
+      py::arg("payload"), py::arg("table_offset") = 0,
+      py::arg("trace_sink") = py::none());
   module.attr("BODY_STATE_SCHEMA_SHA256") = BODY_STATE_SCHEMA_SHA256;
   module.attr("BODY_STATE_PROTOCOL_VERSION") = 3;
   module.def(
       "decode_state",
       [state = types.attr("BodyState"), joint = types.attr("BodyJointState"),
-       imu = types.attr("BodyImuState"),
-       sample = types.attr("BodyImuSample")](py::buffer input, size_t offset) {
-        return Decode(ReadOwnedState(input, offset), state, joint, imu, sample);
+       imu = types.attr("BodyImuState"), sample = types.attr("BodyImuSample")](
+          py::buffer input, size_t offset, py::object sink) {
+        return Decode(ReadOwnedState(input, offset), state, joint, imu, sample,
+                      lt::GetSink(sink));
       },
-      py::arg("payload"), py::arg("table_offset") = 0);
+      py::arg("payload"), py::arg("table_offset") = 0,
+      py::arg("trace_sink") = py::none());
   module.def(
       "decode_state",
       [state = types.attr("BodyState"), joint = types.attr("BodyJointState"),
-       imu = types.attr("BodyImuState"),
-       sample = types.attr("BodyImuSample")](const body_pull::Sample& input,
-                                           size_t offset) {
+       imu = types.attr("BodyImuState"), sample = types.attr("BodyImuSample")](
+          const body_pull::Sample &input, size_t offset, py::object sink) {
         const auto [data, size] = input.Bytes();
-        return Decode(ReadState(data, size, offset), state, joint, imu, sample);
+        return Decode(ReadState(data, size, offset), state, joint, imu, sample,
+                      lt::GetSink(sink));
       },
-      py::arg("payload"), py::arg("table_offset") = 0);
+      py::arg("payload"), py::arg("table_offset") = 0,
+      py::arg("trace_sink") = py::none());
 }

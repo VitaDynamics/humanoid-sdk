@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — FBS Trace and OP3 trajectories
+
+- Add optional connection-owned native FBS Trace recording, SDK stage summaries
+  and offline HTML/CSV reports. Normal publish/read calls need no wrapper;
+  `--trace on|off` enables the single FBS format and defaults to false/off.
+  Enabling without an explicit output chooses a timestamped unique `.ftrace`
+  path in `/tmp` and prints it. Capture completeness and SDK call duration do
+  not establish physical execution or hardware latency. Target capture overhead
+  and the remaining legacy policy-log retirement are separate follow-ups.
+- Carry OP3 sine, simultaneous and sequential opening trajectories from PR26,
+  including capability/range checks, explicit positive float32 velocity limits,
+  and sine peak-slope validation before control entry. Body hold and endpoints
+  keep one control owner and cancellation flow. Source timers advance from
+  planned deadlines; overrun ticks are skipped without a catch-up burst.
+- Keep BodyCmd3/BodyState3, Control4 and existing end-effector wire versions.
+  This change does not add BodyCmd4 or negotiate AB/PR coordinates.
+
 ## 1.0.0rc1 — unified Body and end-effector release candidate
 
 The Owner selected 1.0.0 RC for this delivery, replacing the unpublished 0.3.0

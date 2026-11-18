@@ -1,6 +1,7 @@
 """Public body DTOs. Angles rad; robot/client clocks are explicitly microseconds."""
 from __future__ import annotations
 
+from ._trace_context import _TraceMetadata
 from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
@@ -77,7 +78,7 @@ class BodyImuSample:
     ts_assembled_us: int = 0
 
 @dataclass(frozen=True, slots=True)
-class BodyState:
+class BodyState(_TraceMetadata):
     """All-source association; valid zero keys and unobserved stamps are retained."""
     state_id: int
     joints: tuple[BodyJointState, ...]

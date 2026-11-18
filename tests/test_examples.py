@@ -117,6 +117,7 @@ class RecordingController:
         drift_command_range: tuple[int, int] | None = None,
         drift_position_rad: float = 0.2,
         follow_commands: bool = True,
+        trace_output=None,
     ) -> None:
         self.clock = clock
         self.advance_lowstate = advance_lowstate
@@ -131,7 +132,7 @@ class RecordingController:
         self.transport.get_robot_info = lambda timeout: replace(
             example_robot_info_reply(), runtime_id=100)
         self.controller = ExternalController(
-            client_id=7, _transport=self.transport
+            client_id=7, _transport=self.transport, trace_output=trace_output
         )
         self.calls: list[str] = []
         self.status_sequence = 0

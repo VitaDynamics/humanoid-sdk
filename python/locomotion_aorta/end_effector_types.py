@@ -3,6 +3,7 @@
 Requires the matching generated public bindings from the dependency manifest.
 AortaHeader remains owned by the typed transport.
 """
+from ._trace_context import _TraceMetadata
 from dataclasses import dataclass
 
 from .transport import AortaBindingsUnavailableError
@@ -130,7 +131,7 @@ class EndEffectorInfo:
 
 
 @dataclass(frozen=True, slots=True)
-class EndEffectorState:
+class EndEffectorState(_TraceMetadata):
     runtime_id: int
     layout_id: int
     side: int
@@ -183,7 +184,7 @@ class RegionStamp:
 
 
 @dataclass(frozen=True, slots=True)
-class EndEffectorTouch:
+class EndEffectorTouch(_TraceMetadata):
     runtime_id: int
     layout_id: int
     side: int

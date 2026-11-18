@@ -18,6 +18,7 @@ from locomotion_aorta import (
     BODY_SLOTS,
     ServiceStatus,
 )
+from locomotion_aorta.trace.cli import add_trace_arguments, resolve_trace_output
 
 
 COMMAND_SLOTS = BODY_SLOTS
@@ -365,16 +366,23 @@ def main() -> None:
     )
     parser.add_argument("--group", default="default")
     parser.add_argument("--timeout", type=float, default=5.0)
+    add_trace_arguments(parser)
+    parser.add_argument('--trace-compression', choices=('raw', 'zstd'), default='zstd')
     parser.add_argument(
         "--confirm-motion",
         action="store_true",
         help="required acknowledgement that this command may move the robot",
     )
     args = parser.parse_args()
+    resolve_trace_output(parser, args)
     if not args.confirm_motion:
         parser.error("--confirm-motion is required")
 
-    with PullController(group=args.group) as controller:
+    if args.trace:
+        print(f'Trace output: {args.trace_output}')
+    trace_options = {} if not args.trace else dict(
+        trace_output=args.trace_output, trace_compression=args.trace_compression)
+    with PullController(group=args.group, **trace_options) as controller:
         run(controller, timeout=args.timeout)
 
 

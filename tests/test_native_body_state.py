@@ -263,7 +263,7 @@ class NativeBodyPullTest(_NativeStateAssertions, unittest.TestCase):
     slot/POD, Core callback or decoder is replaced by a fake backend.
     """
 
-    def source(self, frames):
+    def source(self, frames, *, trace_output=None):
         from dataclasses import replace
         from body_fixtures import robot_info_reply
         from locomotion_aorta import PullStateSource
@@ -273,7 +273,7 @@ class NativeBodyPullTest(_NativeStateAssertions, unittest.TestCase):
         group_env = mock.patch.dict(os.environ, {'AORTA_GROUP': group})
         group_env.start()
         self.addCleanup(group_env.stop)
-        source = PullStateSource(group=group,
+        source = PullStateSource(group=group, trace_output=trace_output,
             native_body_rx={'slot_count': 2,
                 'max_payload_bytes': max(map(len, frames)),
                 'max_slices': 3, 'poll_interval_s': .001})
@@ -284,6 +284,43 @@ class NativeBodyPullTest(_NativeStateAssertions, unittest.TestCase):
             self.assertIs(source.get_robot_info(.1), reply)
         pub = source.transport.node.create_publisher(BODY_STATE_TOPIC)
         return source, pub, source.transport._native_body_rx
+
+    def test_trace_links_real_native_borrows_without_admitting_foreign_runtime(self):
+        from pathlib import Path
+        import tempfile
+        from locomotion_aorta.trace import Kind, Outcome
+        from locomotion_aorta.trace.reader import Reader
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'pull.ftrace'
+            first, _ = make_state(runtime_id=11)
+            foreign, _ = make_state(runtime_id=12)
+            source, pub, reader = self.source([first, foreign], trace_output=path)
+            pub.publish_bytes(first)
+            state = source.wait_state(2)
+            self.assertTrue(hasattr(state, '_trace_ref'))
+            self.assertIs(source.wait_state(0), state)
+            pub.publish_bytes(foreign)
+            candidate = self.receive(reader)
+            retained = source._trace.call('body_read', source.transport._accept_state,
+                (candidate, time.time_ns(), time.monotonic_ns()), arrays=True)
+            self.assertIs(retained, state)
+            candidate = None
+            source.close()
+            recording = Reader(path)
+            records = list(recording)
+            self.assertTrue(recording.integrity.complete, recording.integrity.issues)
+            decoded = [r for r in records if r['kind'] == Kind.BODY_FEEDBACK
+                       and r['outcome'] == Outcome.UNKNOWN]
+            self.assertEqual([r['runtime_id'] for r in decoded], [11, 12])
+            reads = [r for r in records if r['kind'] == Kind.BODY_READ
+                     and r['outcome'] == Outcome.OK]
+            self.assertEqual(len(reads), 3)
+            self.assertTrue(all(r['reference_id'] == decoded[0]['attempt_id']
+                                and not r['values'] for r in reads))
+            rejected = [r for r in records if r['kind'] == Kind.BODY_FEEDBACK
+                        and r['outcome'] == Outcome.REJECTED]
+            self.assertEqual(len(rejected), 1)
+            self.assertEqual(rejected[0]['reference_id'], decoded[1]['attempt_id'])
 
     def receive(self, reader):
         # Bounded real local IPC arrival wait, not a timing assertion.
