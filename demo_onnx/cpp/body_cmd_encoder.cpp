@@ -182,8 +182,14 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
     values[joint_index++] = lowlevel::BodyJointCmd(row[0], row[1], row[2],
                                                   row[3], row[4]);
   }
-  const auto protocol = command.attr("protocol_version").cast<uint32_t>();
-  if (protocol != 3) throw py::value_error("BodyCmd requires protocol version 3");
+  py::object protocol_value = command.attr("protocol_version");
+  if (!PyLong_CheckExact(protocol_value.ptr()))
+    throw py::value_error("BodyCmd requires protocol version 3 or 4");
+  int protocol_overflow = 0;
+  const auto protocol =
+      PyLong_AsLongAndOverflow(protocol_value.ptr(), &protocol_overflow);
+  if (protocol_overflow || (protocol != 3 && protocol != 4))
+    throw py::value_error("BodyCmd requires protocol version 3 or 4");
   std::array<uint64_t, 6> fields;
   const char *names[] = {"session_id",           "sequence",
                          "input_state_id",       "input_state_ts_real_us",
@@ -191,6 +197,8 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
   for (size_t i = 0; i < fields.size(); ++i)
     fields[i] = command.attr(names[i]).cast<uint64_t>();
   const auto action = command.attr("action").cast<uint8_t>();
+  if (protocol == 4 && action != lowlevel::BodyCmdAction_EXTERNAL)
+    throw py::value_error("BodyCmd protocol version 4 requires EXTERNAL action");
   py::object runtime_value = command.attr("runtime_id");
   py::object control_value = command.attr("control_id");
   if (!PyLong_CheckExact(runtime_value.ptr()) || !PyLong_CheckExact(control_value.ptr()))
@@ -495,6 +503,7 @@ PYBIND11_MODULE(_body_cmd_native, module) {
   BindEndEffectorFeedback(module);
   module.attr("BODY_SCHEMA_SHA256") = BODY_CMD_SCHEMA_SHA256;
   module.attr("BODY_CMD_PROTOCOL_VERSION") = 3;
+  module.attr("BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION") = 4;
   module.attr("EE_CMD_SCHEMA_SHA256") = EE_CMD_SCHEMA_SHA256;
   module.attr("EE_CMD_PROTOCOL_VERSION") = 2;
   py::class_<EECommandContext>(module, "EECommandContext")

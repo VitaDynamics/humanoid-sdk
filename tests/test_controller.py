@@ -125,6 +125,34 @@ def make_command(sequence_hint: int, *, q: float = 0.0) -> BodyCmd:
 
 
 class ExternalControllerTest(unittest.TestCase):
+    def test_motor_theta_version_is_explicit_and_keeps_control_and_input_identity(self):
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+        h.accept_enter()
+        h.controller.enter_external(.1)
+        command = replace(make_command(99), protocol_version=4,
+                          input_state_id=100, input_state_ts_real_us=123456)
+        sent = h.controller.publish(command, target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
+        self.assertEqual((sent.protocol_version, sent.runtime_id, sent.control_id,
+                          sent.session_id, sent.sequence), (4, 11, 13, 42, 1))
+        self.assertEqual((sent.input_state_id, sent.input_state_ts_real_us), (100, 123456))
+        self.assertEqual(sent.joints, command.joints)
+        self.assertEqual(h.transport.published[-1], (BODY_CMD_TOPIC, sent))
+
+    def test_invalid_command_version_does_not_publish_or_consume_sequence(self):
+        h = ControllerHarness()
+        self.addCleanup(h.controller.close)
+        h.accept_enter()
+        h.controller.enter_external(.1)
+        before = len(h.transport.published)
+        for version in (0, 2, 5, True, 3.0, '4', None):
+            with self.subTest(version=version), self.assertRaises(InvalidCommandError):
+                h.controller.publish(replace(make_command(99), protocol_version=version),
+                                     target_names=_BODY_TEST_TARGETS, required_fields=0x1f)
+        self.assertEqual(len(h.transport.published), before)
+        self.assertEqual(h.controller.publish(make_command(0), target_names=_BODY_TEST_TARGETS,
+                                             required_fields=0x1f).sequence, 1)
+
     def test_generation_accepts_integer_subclasses_but_wire_identity_is_exact_int(self):
         class IntegerSubclass(int):
             pass

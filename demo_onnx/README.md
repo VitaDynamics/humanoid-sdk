@@ -14,6 +14,10 @@ Trace 使用 `compatibility.json` 中固定的官方 PyPI 文件 URL，无动态
 打包双架构时分别收取两个新目录，再给 `tools/package_release.py` 传两次
 `--wheelhouse`；显式本地 `--source-dir` 同样须提供完整匹配的输入。
 
+构建归档通过 `ort-archives.json` 固定的 GitHub Release 镜像获取，仍验证原官方 SHA。
+需已有只读 `GH_TOKEN` 或 `gh` 登录；没有失败后 fallback。下载中断的自有暂存原件保留，
+仅校验成功后原子创建最终文件，不覆盖已有输出，也不自动重试。
+
 ## 构建和审计
 
 使用 CMake 3.20+、C++17、目标 CPython 3.10 头文件与正确 SOABI。tools/fetch_ort.py 根据 ort-archives.json 获取官方对应架构归档并核 SHA；不借机器人 /app 动态库。
