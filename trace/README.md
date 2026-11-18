@@ -1,4 +1,4 @@
-# SDK-local FBS trace (development)
+# SDK-local FBS trace
 
 The connection owns recording. Enable it when constructing the existing SDK
 controller; then use the normal SDK methods. End-effector clients inherit their

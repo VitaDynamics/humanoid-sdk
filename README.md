@@ -10,7 +10,7 @@
 
 ## 当前版本
 
-本次候选版本为 **1.0.0 RC1**：Python 包版本 `1.0.0rc1`，发行标签 `v1.0.0-rc.1`，不等同于 1.0.0 正式版。实际发布状态和下载文件以上方 Releases 页面为准。安装必须有匹配机器人版本的同版本 SDK wheel 和完整 bundle，不能把依赖预发布或源码版本当作已交付安装包。
+本次候选版本为 **1.0.1 RC1**：Python 包版本 `1.0.1rc1`，发行标签 `v1.0.1-rc.1`，不等同于 1.0.1 正式版。实际发布状态和下载文件以上方 Releases 页面为准。安装必须有匹配机器人版本的同版本 SDK wheel 和完整 bundle，不能把依赖预发布或源码版本当作已交付安装包。
 
 | 项目 | 支持范围 |
 | --- | --- |
@@ -23,12 +23,12 @@
 
 ## 安装与只读检查
 
-以下仅从已交付、确含 `1.0.0rc1` SDK wheel 的完整 bundle 根目录运行。SDK 默认在用户 PC；只有明确在 S100 本机运行时，先 source `/app/script/env.sh`，再激活 venv。使用新环境，保留旧安装。
+以下仅从已交付、确含 `1.0.1rc1` SDK wheel 的完整 bundle 根目录运行。SDK 默认在用户 PC；只有明确在 S100 本机运行时，先 source `/app/script/env.sh`，再激活 venv。使用新环境，保留旧安装。
 
 ```bash
 python3.10 -m venv venv
 source venv/bin/activate
-python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta==1.0.0rc1'
+python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[trace]==1.0.1rc1'
 python -m pip check
 python examples/body_state_subscriber/body_state_subscriber.py --help
 ```
@@ -60,10 +60,11 @@ python examples/body_state_subscriber/body_state_subscriber.py --group "$AORTA_G
 
 参考手册在独立文档仓维护，本仓只保留真实入口和开发说明。历史说明已标记 ARCHIVE，保存在 `docs/archive/`，不作为当前合同。SDK 结构／有限数值／身份和能力校验仍保留；本体设备范围由服务器 EXTERNAL 执行，普通 q/tau/kp/kd 裁剪、dq 越界拒绝。
 
-Trace 开发候选可在 `PullController`、`ExternalController` 或只读
+本 RC 的 Trace 可在 `PullController`、`ExternalController` 或只读
 `PullStateSource` 构造时指定 `trace_output="trial.ftrace"`。本体与连接上的
 末端继续使用原来的发布／读取 API，SDK 自动采集；不要求包装 demo。
 默认关闭，完整性可读 `controller.trace_health`。格式和当前验证边界见
-[Trace 开发说明](trace/README.md)，此功能尚未发布到既有 RC1 安装包。
+[Trace 说明](trace/README.md)。上面的 `[trace]` 安装包含离线摘要／网页所需的依赖；
+只需核心 SDK 时可省略该 extra。既有 `1.0.0rc1` 安装包不含此功能。
 
 本地检查入口为 `make check`；native 安装测试、生成绑定测试和设备验收分别记录。ONNX 构建与审计见 `demo_onnx/README.md`。`AGENTS.md` 为 agent 规则唯一正文，`CLAUDE.md` 保持相对软链接。不要在安装步骤启动运动示例。
