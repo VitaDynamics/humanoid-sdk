@@ -14,7 +14,7 @@ TOOL = Path(__file__).resolve().parents[1] / "tools/wheels.py"
 spec = importlib.util.spec_from_file_location("native_wheel_tool", TOOL)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-SDK_VERSION = "1.0.1rc1"  # Independent release contract, not read back from the auditor.
+SDK_VERSION = "1.0.1rc2"  # Independent release contract, not read back from the auditor.
 
 
 class ReleaseGateTest(unittest.TestCase):
