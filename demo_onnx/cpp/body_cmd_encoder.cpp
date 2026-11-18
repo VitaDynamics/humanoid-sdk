@@ -182,8 +182,13 @@ py::tuple Encode(py::object command, uint64_t stamp, py::object node,
     values[joint_index++] = lowlevel::BodyJointCmd(row[0], row[1], row[2],
                                                   row[3], row[4]);
   }
-  const auto protocol = command.attr("protocol_version").cast<uint32_t>();
-  if (protocol != 3 && protocol != 4)
+  py::object protocol_value = command.attr("protocol_version");
+  if (!PyLong_CheckExact(protocol_value.ptr()))
+    throw py::value_error("BodyCmd requires protocol version 3 or 4");
+  int protocol_overflow = 0;
+  const auto protocol =
+      PyLong_AsLongAndOverflow(protocol_value.ptr(), &protocol_overflow);
+  if (protocol_overflow || (protocol != 3 && protocol != 4))
     throw py::value_error("BodyCmd requires protocol version 3 or 4");
   std::array<uint64_t, 6> fields;
   const char *names[] = {"session_id",           "sequence",

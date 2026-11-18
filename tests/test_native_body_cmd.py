@@ -131,6 +131,20 @@ class NativeBodyCmdTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     oracle(command)
 
+    def test_protocol_validation_matches_python_types_and_error_class(self):
+        class IntSubclass(int):
+            pass
+
+        for version in (True, False, IntSubclass(3), IntSubclass(4), 3.0, 4.0,
+                        '3', None, -1, 0, 2, 5, 2**32, 2**32 + 3,
+                        2**63, 2**128, -(2**128)):
+            command = dataclasses.replace(make_command(), protocol_version=version)
+            for encode in (lambda cmd: native.encode(cmd, 0, None, 0), oracle):
+                with self.subTest(version=version, type=type(version), encoder=encode):
+                    with self.assertRaises(ValueError) as raised:
+                        encode(command)
+                    self.assertIs(type(raised.exception), ValueError)
+
     def assertBytes(self, command, stamp=123, node='codec', sequence=0):
         expected = oracle(command, stamp, node, sequence)
         actual, trace = native.encode(command, stamp, node, sequence, True)

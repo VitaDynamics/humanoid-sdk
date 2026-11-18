@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ._body_codec import create_body_cmd, decode_body_state, decode_robot_info_response
-from .body_types import BodyCmd, BodyCmdAction, GetRobotInfoResponse
+from .body_types import (
+    BODY_CMD_PROTOCOL_VERSION,
+    BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION,
+    BodyCmd,
+    BodyCmdAction,
+    GetRobotInfoResponse,
+)
 from .types import (
     ControlAck,
     ControlOperation,
@@ -376,8 +382,11 @@ def _fill_body_cmd(
     bindings: _AortaBindings, command: BodyCmd, builder: Any, header: int,
 ) -> int:
     module = bindings.body_cmd_module
-    if (type(command.protocol_version) is not int or command.protocol_version not in (3, 4)
-            or (command.protocol_version == 4 and command.action != BodyCmdAction.EXTERNAL)
+    if (type(command.protocol_version) is not int
+            or command.protocol_version not in (
+                BODY_CMD_PROTOCOL_VERSION, BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION)
+            or (command.protocol_version == BODY_CMD_MOTOR_THETA_PROTOCOL_VERSION
+                and command.action != BodyCmdAction.EXTERNAL)
             or type(command.runtime_id) is not int
             or not 0 < command.runtime_id < 2**64
             or type(command.control_id) is not int or not 0 < command.control_id < 2**64):
