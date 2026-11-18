@@ -2,6 +2,10 @@
 
 1.0.1rc1 的唯一 distribution 是 locomotion-aorta，内含 Body/EE native 编解码及按需加载的 Microsoft ORT 1.20.1 CPU 推理后端。导入 SDK 不加载模型；没有独立 backend 包或 Python ORT 降级。
 
+构建时，`tools/fetch_ort.py` 从 `ort-archives.json` 明确指定的 GitHub Release 镜像
+下载原官方归档，仍核对原 SHA-256；需已登录的 `gh` 或只读 `GH_TOKEN`。
+原版本、官方来源 URL、目录和哈希保留，不在下载失败后切换版本或跳过校验。
+
 ## 构建和审计
 
 使用 CMake 3.20+、C++17、目标 CPython 3.10 头文件与正确 SOABI。tools/fetch_ort.py 根据 ort-archives.json 获取官方对应架构归档并核 SHA；不借机器人 /app 动态库。
