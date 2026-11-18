@@ -20,6 +20,13 @@
     "flatbuffers-25.12.19-py2.py3-none-any.whl": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
     "vbot_humanoid_msgs-0.0.0+g35ce9eb82d5b-py3-none-any.whl": "fb59a316e260bb15d173dc980a82c8337af11e2e4beed868f681a68f4fa0bc21"
   },
+  "trace_wheel_sha256": {
+    "mcap-1.3.1-py3-none-any.whl": "9098685d67288a8087166504cf4adf617cfa8639bb60e936af113f62c11c293f",
+    "lz4-4.4.5-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl": "2a2b7504d2dffed3fd19d4085fe1cc30cf221263fd01030819bdd8d2bb101cf1",
+    "lz4-4.4.5-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl": "daffa4807ef54b927451208f5f85750c545a4abbff03d740835fc444cd97f758",
+    "zstandard-0.25.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl": "4b6d83057e713ff235a12e73916b6d356e3084fd3d14ced499d84240f3eecee0",
+    "zstandard-0.25.0-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.whl": "e05ab82ea7753354bb054b92e2f288afb750e6b439ff6ca78af52939ebbc476d"
+  },
   "dependency_release_tag": "deps-aorta-g7649a87ebb03-schema-g35ce9eb82d5b",
   "aorta_abi_version": 13,
   "schema_sha256": {

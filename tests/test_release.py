@@ -23,7 +23,7 @@ class ReleaseTest(unittest.TestCase):
             "command_slots", "state_slots", "session_mode", "pc_session_profile", "body_protocol_version",
             "wheel_sha256", "dependency_release_tag", "dependency_release_repository",
             "aorta_abi_version", "schema_sha256", "aorta_native_header_sha256",
-            "native_input_provenance",
+            "native_input_provenance", "trace_wheel_sha256",
         })
         self.assertEqual(manifest["python_requires"], "==3.10.*")
         self.assertEqual(manifest["platforms"], ["manylinux_2_35_x86_64", "manylinux_2_35_aarch64"])
@@ -44,6 +44,9 @@ class ReleaseTest(unittest.TestCase):
         self.assertIn(f"vbot_humanoid_msgs-{version}-py3-none-any.whl", manifest["wheel_sha256"])
         self.assertEqual(sorted(n.split("-")[0] for n in manifest["wheel_sha256"]),
                          ["aorta_msgs", "aorta_sdk", "aorta_sdk", "flatbuffers", "vbot_humanoid_msgs"])
+        self.assertEqual(sorted(n.split("-")[0] for n in manifest["trace_wheel_sha256"]),
+                         ["lz4", "lz4", "mcap", "zstandard", "zstandard"])
+        self.assertFalse(set(manifest["trace_wheel_sha256"]) & set(manifest["wheel_sha256"]))
 
     def test_pc_profile_is_peer_and_contains_only_deployment_placeholders(self):
         profile = json.loads((ROOT / "config/pc_session_peer.json5").read_text())
@@ -107,10 +110,11 @@ class ReleaseTest(unittest.TestCase):
                 shutil.copyfile(source, root / "config/pc_session_peer.json5")
             (root / "config/private-auth.txt").write_text("private fixture, must not ship")
             compatibility = json.loads((root / "compatibility.json").read_text())
-            for name in compatibility["wheel_sha256"]:
-                payload = name.encode()
-                (root / "wheels" / name).write_bytes(payload)
-                compatibility["wheel_sha256"][name] = hashlib.sha256(payload).hexdigest()
+            for field in ("wheel_sha256", "trace_wheel_sha256"):
+                for name in compatibility[field]:
+                    payload = name.encode()
+                    (root / "wheels" / name).write_bytes(payload)
+                    compatibility[field][name] = hashlib.sha256(payload).hexdigest()
             (root / "compatibility.json").write_text(json.dumps(compatibility))
             for platform in compatibility["platforms"]:
                 sdk_wheel = root / "dist" / f"locomotion_aorta-{compatibility['sdk_version']}-cp310-cp310-{platform}.whl"
@@ -125,6 +129,23 @@ class ReleaseTest(unittest.TestCase):
             self.assertEqual(bundled.read_bytes(), source.read_bytes())
             self.assertEqual([p.name for p in (output / "config").iterdir()], [source.name])
             manifest = json.loads((output / "MANIFEST.json").read_text())
+            for name, digest in compatibility["trace_wheel_sha256"].items():
+                self.assertEqual(hashlib.sha256((output / "wheelhouse" / name).read_bytes()).hexdigest(), digest)
+                self.assertEqual(manifest["files"]["wheelhouse/" + name], digest)
+            trace_wheel = root / "wheels" / next(iter(compatibility["trace_wheel_sha256"]))
+            saved = trace_wheel.read_bytes()
+            trace_wheel.unlink()
+            with mock.patch.object(package_release, "ROOT", root):
+                missing_trace = Path(temporary) / "missing-trace"
+                with self.assertRaisesRegex(ValueError, "missing wheel"):
+                    package_release.package([root / "wheels"], missing_trace)
+                self.assertFalse(missing_trace.exists())
+                trace_wheel.write_bytes(b"corrupt trace wheel")
+                corrupt_trace = Path(temporary) / "corrupt-trace"
+                with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                    package_release.package([root / "wheels"], corrupt_trace)
+                self.assertFalse(corrupt_trace.exists())
+            trace_wheel.write_bytes(saved)
             for name in examples:
                 relative = "examples/" + name
                 self.assertEqual((output / relative).read_bytes(), (ROOT / relative).read_bytes())

@@ -1,4 +1,4 @@
-"""Bundle pinned SDK/runtime/base/humanoid wheels."""
+"""Bundle pinned SDK/runtime/base/humanoid and Trace wheels."""
 
 import argparse
 import hashlib
@@ -30,7 +30,7 @@ def package(wheelhouses: list[Path], output: Path) -> None:
     if compatibility.get("pc_session_profile") != profile_path.as_posix():
         raise ValueError("compatibility PC profile path does not match bundled template")
     wheels = []
-    for name, expected in compatibility["wheel_sha256"].items():
+    for name, expected in (compatibility["wheel_sha256"] | compatibility["trace_wheel_sha256"]).items():
         matches = [directory / name for directory in wheelhouses
                    if (directory / name).is_file()]
         if not matches:
