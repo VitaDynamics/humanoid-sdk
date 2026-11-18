@@ -65,6 +65,8 @@ def package(wheelhouses: list[Path], output: Path) -> None:
         shutil.copyfile(wheel, output / "wheelhouse" / wheel.name)
     for name in ("README.md", "AGENTS.md", "compatibility.json"):
         shutil.copyfile(ROOT / name, output / name)
+    (output / "trace").mkdir()
+    shutil.copyfile(ROOT / "trace/README.md", output / "trace/README.md")
     (output / "CLAUDE.md").symlink_to("AGENTS.md")
     (output / "config").mkdir()
     # Copy only the public template, never local profiles or authentication files.

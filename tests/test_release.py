@@ -72,8 +72,9 @@ class ReleaseTest(unittest.TestCase):
             for name in ("README.md", "AGENTS.md", "compatibility.json"):
                 shutil.copyfile(ROOT / name, root / name)
             (root / "CLAUDE.md").symlink_to("AGENTS.md")
-            for name in ("examples", "python/locomotion_aorta", "config", "dist", "wheels"):
+            for name in ("examples", "python/locomotion_aorta", "config", "dist", "wheels", "trace"):
                 (root / name).mkdir(parents=True)
+            shutil.copyfile(ROOT / "trace/README.md", root / "trace/README.md")
             examples = (
                 'body_state_subscriber/README.md',
                 'body_state_subscriber/body_state_subscriber.py',
@@ -129,6 +130,9 @@ class ReleaseTest(unittest.TestCase):
             self.assertEqual(bundled.read_bytes(), source.read_bytes())
             self.assertEqual([p.name for p in (output / "config").iterdir()], [source.name])
             manifest = json.loads((output / "MANIFEST.json").read_text())
+            self.assertEqual((output / "trace/README.md").read_bytes(), (ROOT / "trace/README.md").read_bytes())
+            self.assertEqual(manifest["files"]["trace/README.md"],
+                             hashlib.sha256((ROOT / "trace/README.md").read_bytes()).hexdigest())
             for name, digest in compatibility["trace_wheel_sha256"].items():
                 self.assertEqual(hashlib.sha256((output / "wheelhouse" / name).read_bytes()).hexdigest(), digest)
                 self.assertEqual(manifest["files"]["wheelhouse/" + name], digest)
