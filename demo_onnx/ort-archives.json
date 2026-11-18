@@ -1,5 +1,9 @@
 {
   "version": "1.20.1",
+  "mirror_release": {
+    "repository": "VitaDynamics/humanoid-sdk",
+    "tag": "deps-ort-1.20.1"
+  },
   "x86_64": {
     "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-linux-x64-1.20.1.tgz",
     "sha256": "67db4dc1561f1e3fd42e619575c82c601ef89849afc7ea85a003abbac1a1a105",

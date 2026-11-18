@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "sdk_version": "1.0.0rc1",
+  "sdk_version": "1.0.1rc1",
   "aorta_version": "0.0.0+g7649a87ebb03",
   "flatbuffers_version": "25.12.19",
   "python_requires": "==3.10.*",
@@ -19,6 +19,13 @@
     "aorta_sdk-0.0.0+g7649a87ebb03-py3-none-linux_x86_64.whl": "bd1c7d8acb8311f35ae65a51e6cf7a0828cdd8bc9b104ece0082f49bef87c2fb",
     "flatbuffers-25.12.19-py2.py3-none-any.whl": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
     "vbot_humanoid_msgs-0.0.0+g35ce9eb82d5b-py3-none-any.whl": "fb59a316e260bb15d173dc980a82c8337af11e2e4beed868f681a68f4fa0bc21"
+  },
+  "trace_wheel_sha256": {
+    "mcap-1.3.1-py3-none-any.whl": "9098685d67288a8087166504cf4adf617cfa8639bb60e936af113f62c11c293f",
+    "lz4-4.4.5-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl": "2a2b7504d2dffed3fd19d4085fe1cc30cf221263fd01030819bdd8d2bb101cf1",
+    "lz4-4.4.5-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl": "daffa4807ef54b927451208f5f85750c545a4abbff03d740835fc444cd97f758",
+    "zstandard-0.25.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl": "4b6d83057e713ff235a12e73916b6d356e3084fd3d14ced499d84240f3eecee0",
+    "zstandard-0.25.0-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.whl": "e05ab82ea7753354bb054b92e2f288afb750e6b439ff6ca78af52939ebbc476d"
   },
   "dependency_release_tag": "deps-aorta-g7649a87ebb03-schema-g35ce9eb82d5b",
   "aorta_abi_version": 13,
@@ -88,5 +95,12 @@
       "low_cmd": "b048ce7f06a560a671565deca3480dd68fc6f16ee60d6c65e99b7dbce8857485",
       "robot_info": "5a564e37e3d44acc3b15b929eac79dc1213cea4fd9cc247ef0857f6b05de8277"
     }
+  },
+  "trace_wheel_urls": {
+    "mcap-1.3.1-py3-none-any.whl": "https://files.pythonhosted.org/packages/63/22/dad47e86047344f110a9d589d90de49d9c54db7a7ea4f0ef91fb3e8e9f3f/mcap-1.3.1-py3-none-any.whl",
+    "lz4-4.4.5-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl": "https://files.pythonhosted.org/packages/6d/34/7be9b09015e18510a09b8d76c304d505a7cbc66b775ec0b8f61442316818/lz4-4.4.5-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+    "lz4-4.4.5-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl": "https://files.pythonhosted.org/packages/15/45/8ce01cc2715a19c9e72b0e423262072c17d581a8da56e0bd4550f3d76a79/lz4-4.4.5-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+    "zstandard-0.25.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl": "https://files.pythonhosted.org/packages/fd/e5/6d36f92a197c3c17729a2125e29c169f460538a7d939a27eaaa6dcfcba8e/zstandard-0.25.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+    "zstandard-0.25.0-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.whl": "https://files.pythonhosted.org/packages/73/28/a44bdece01bca027b079f0e00be3b6bd89a4df180071da59a3dd7381665b/zstandard-0.25.0-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.whl"
   }
 }

@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -22,15 +23,21 @@ class FetchDependenciesTest(unittest.TestCase):
         path.write_text(json.dumps(manifest))
         with mock.patch.object(fetch_dependencies, "MANIFEST", path), mock.patch.object(
             fetch_dependencies.subprocess, "run", side_effect=download
-        ) as run:
+        ) as run, mock.patch.object(fetch_dependencies.urllib.request, "urlopen",
+                side_effect=lambda url, **kw: io.BytesIO(url.rsplit("/", 1)[-1].encode())) as urls:
             result = fetch_dependencies.fetch(root / "wheels", arch, **inputs)
+            expected_urls = [] if inputs.get("source") is not None else [
+                mock.call(url, timeout=120) for name, url in manifest["trace_wheel_urls"].items()
+                if name.endswith((f"_{arch}.whl", "-any.whl"))]
+            self.assertEqual(urls.call_args_list, expected_urls)
             return result, run.call_args_list
 
     def fixture(self):
         manifest = copy.deepcopy(self.manifest)
         manifest["dependency_release_tag"] = "fixture-release"
-        for name in manifest["wheel_sha256"]:
-            manifest["wheel_sha256"][name] = hashlib.sha256(name.encode()).hexdigest()
+        for field in ("wheel_sha256", "trace_wheel_sha256"):
+            for name in manifest[field]:
+                manifest[field][name] = hashlib.sha256(name.encode()).hexdigest()
         manifest["aorta_native_header_sha256"] = hashlib.sha256(b"aorta.h").hexdigest()
         return manifest
 
@@ -61,7 +68,7 @@ class FetchDependenciesTest(unittest.TestCase):
         for arch in ("x86_64", "aarch64"):
             with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
                 output, calls = self.fetch(Path(directory), self.fixture(), arch, self.download)
-                self.assertEqual(len(list(output.iterdir())), 5)
+                self.assertEqual(len(list(output.iterdir())), 8)
                 self.assertEqual(len(calls), 5)
                 self.assertEqual(sum(c.args[0][-1].endswith(".whl") for c in calls), 4)
                 self.assertEqual((output / "aorta.h").read_bytes(), b"aorta.h")
@@ -84,14 +91,14 @@ class FetchDependenciesTest(unittest.TestCase):
                 source.mkdir()
                 manifest = self.fixture()
                 manifest["dependency_release_tag"] = None
-                for name in manifest["wheel_sha256"]:
+                for name in manifest["wheel_sha256"] | manifest["trace_wheel_sha256"]:
                     (source / name).write_bytes(name.encode())
                 header = root / "actual-aorta.h"
                 header.write_bytes(b"aorta.h")
                 output, calls = self.fetch(root, manifest, arch, source=source,
                                            native_header=header)
                 self.assertEqual(calls, [])
-                self.assertEqual(len(list(output.iterdir())), 5)
+                self.assertEqual(len(list(output.iterdir())), 8)
                 self.assertEqual((output / "aorta.h").read_bytes(), header.read_bytes())
                 sdk = next(p for p in output.iterdir() if p.name.startswith("aorta_sdk-"))
                 self.assertTrue(sdk.name.endswith(f"-linux_{arch}.whl"))
@@ -100,7 +107,7 @@ class FetchDependenciesTest(unittest.TestCase):
                                      else (source / p.name).read_bytes())
 
     def test_local_missing_or_corrupt_input_fails_before_output_without_network_fallback(self):
-        for broken in ("aorta.h", "wheel"):
+        for broken in ("aorta.h", "wheel", "trace"):
             for value in (None, b"wrong bytes"):
                 with self.subTest(broken=broken, value=value), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
@@ -108,11 +115,12 @@ class FetchDependenciesTest(unittest.TestCase):
                     source.mkdir()
                     manifest = self.fixture()
                     manifest["dependency_release_tag"] = None
-                    for name in manifest["wheel_sha256"]:
+                    for name in manifest["wheel_sha256"] | manifest["trace_wheel_sha256"]:
                         (source / name).write_bytes(name.encode())
                     (source / "aorta.h").write_bytes(b"aorta.h")
-                    name = "aorta.h" if broken == "aorta.h" else next(
-                        n for n in manifest["wheel_sha256"] if n.startswith("aorta_msgs-"))
+                    name = ("aorta.h" if broken == "aorta.h" else
+                            next(iter(manifest["trace_wheel_sha256"])) if broken == "trace" else
+                            next(n for n in manifest["wheel_sha256"] if n.startswith("aorta_msgs-")))
                     (source / name).unlink()
                     if value is not None:
                         (source / name).write_bytes(value)
@@ -129,7 +137,7 @@ class FetchDependenciesTest(unittest.TestCase):
             source.mkdir()
             manifest = self.fixture()
             manifest["dependency_release_tag"] = None
-            for name in manifest["wheel_sha256"]:
+            for name in manifest["wheel_sha256"] | manifest["trace_wheel_sha256"]:
                 (source / name).write_bytes(name.encode())
             (source / "aorta.h").write_bytes(b"aorta.h")
             with mock.patch.object(fetch_dependencies.shutil, "copyfileobj",
@@ -161,6 +169,32 @@ class FetchDependenciesTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "incomplete pinned wheelhouse"):
                 self.fetch(Path(directory), manifest)
             self.assertFalse((Path(directory) / "wheels").exists())
+
+    def test_incomplete_trace_closure_or_sources_fail_before_output(self):
+        for field in ("trace_wheel_sha256", "trace_wheel_urls"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                manifest = self.fixture()
+                del manifest[field]["mcap-1.3.1-py3-none-any.whl"]
+                with self.assertRaisesRegex(ValueError, "incomplete pinned Trace"):
+                    self.fetch(Path(directory), manifest, download=self.download)
+                self.assertFalse((Path(directory) / "wheels").exists())
+
+    def test_bad_trace_bytes_are_retained_and_not_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self.fixture()
+            path = root / "compatibility.json"
+            path.write_text(json.dumps(manifest))
+            with mock.patch.object(fetch_dependencies, "MANIFEST", path), \
+                 mock.patch.object(fetch_dependencies.subprocess, "run", side_effect=self.download), \
+                 mock.patch.object(fetch_dependencies.urllib.request, "urlopen",
+                                   return_value=io.BytesIO(b"bad Trace")) as get:
+                with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                    fetch_dependencies.fetch(root / "wheels", "x86_64")
+                get.assert_called_once()
+            name = next(n for n in manifest["trace_wheel_sha256"]
+                        if n.endswith(("_x86_64.whl", "-any.whl")))
+            self.assertEqual((root / "wheels" / name).read_bytes(), b"bad Trace")
 
     def test_missing_release_repository_fails_before_any_download(self):
         with tempfile.TemporaryDirectory() as directory:

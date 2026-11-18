@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased — FBS Trace and OP3 trajectories
+## 1.0.1rc1 — FBS Trace and OP3 trajectories
+
+Python package `1.0.1rc1`, release tag `v1.0.1-rc.1`. This prerelease carries
+the reviewed Trace and OP3 increment; dependency bytes and wire versions stay
+unchanged from 1.0.0 RC1.
 
 - Add optional connection-owned native FBS Trace recording, SDK stage summaries
   and offline HTML/CSV reports. Normal publish/read calls need no wrapper;
@@ -139,7 +143,7 @@ or device acceptance. The final SDK release remains pending.
 
 The following records an earlier unpublished candidate, including Body/control
 protocol 2 and the old 0.1.4 dependency. It is historical context, not the
-current compatibility or installation contract; use the 1.0.0rc1 entry and
+current compatibility or installation contract; use the current release entries and
 compatibility.json above.
 
 - Use the public 31-slot BodyCmd/BodyState interfaces and EXTERNAL control;

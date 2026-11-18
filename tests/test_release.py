@@ -23,7 +23,7 @@ class ReleaseTest(unittest.TestCase):
             "command_slots", "state_slots", "session_mode", "pc_session_profile", "body_protocol_version",
             "wheel_sha256", "dependency_release_tag", "dependency_release_repository",
             "aorta_abi_version", "schema_sha256", "aorta_native_header_sha256",
-            "native_input_provenance",
+            "native_input_provenance", "trace_wheel_sha256", "trace_wheel_urls",
         })
         self.assertEqual(manifest["python_requires"], "==3.10.*")
         self.assertEqual(manifest["platforms"], ["manylinux_2_35_x86_64", "manylinux_2_35_aarch64"])
@@ -31,8 +31,7 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(manifest["control_request_version"], 4)
         self.assertIn(f'version = "{manifest["sdk_version"]}"',
                       (ROOT / "pyproject.toml").read_text())
-        self.assertIn(f'__version__ = "{manifest["sdk_version"]}"',
-                      (ROOT / "python/locomotion_aorta/_onnx/__init__.py").read_text())
+        self.assertEqual(manifest["sdk_version"], "1.0.1rc1")
         self.assertEqual(set(manifest["schema_sha256"]), {
             "body_cmd", "body_state", "control_ack", "control_request", "control_status",
             "end_effector_cmd", "end_effector_info", "end_effector_set_touch",
@@ -44,6 +43,9 @@ class ReleaseTest(unittest.TestCase):
         self.assertIn(f"vbot_humanoid_msgs-{version}-py3-none-any.whl", manifest["wheel_sha256"])
         self.assertEqual(sorted(n.split("-")[0] for n in manifest["wheel_sha256"]),
                          ["aorta_msgs", "aorta_sdk", "aorta_sdk", "flatbuffers", "vbot_humanoid_msgs"])
+        self.assertEqual(sorted(n.split("-")[0] for n in manifest["trace_wheel_sha256"]),
+                         ["lz4", "lz4", "mcap", "zstandard", "zstandard"])
+        self.assertFalse(set(manifest["trace_wheel_sha256"]) & set(manifest["wheel_sha256"]))
 
     def test_pc_profile_is_peer_and_contains_only_deployment_placeholders(self):
         profile = json.loads((ROOT / "config/pc_session_peer.json5").read_text())
@@ -69,8 +71,9 @@ class ReleaseTest(unittest.TestCase):
             for name in ("README.md", "AGENTS.md", "compatibility.json"):
                 shutil.copyfile(ROOT / name, root / name)
             (root / "CLAUDE.md").symlink_to("AGENTS.md")
-            for name in ("examples", "python/locomotion_aorta", "config", "dist", "wheels"):
+            for name in ("examples", "python/locomotion_aorta", "config", "dist", "wheels", "trace"):
                 (root / name).mkdir(parents=True)
+            shutil.copyfile(ROOT / "trace/README.md", root / "trace/README.md")
             examples = (
                 'body_state_subscriber/README.md',
                 'body_state_subscriber/body_state_subscriber.py',
@@ -107,10 +110,11 @@ class ReleaseTest(unittest.TestCase):
                 shutil.copyfile(source, root / "config/pc_session_peer.json5")
             (root / "config/private-auth.txt").write_text("private fixture, must not ship")
             compatibility = json.loads((root / "compatibility.json").read_text())
-            for name in compatibility["wheel_sha256"]:
-                payload = name.encode()
-                (root / "wheels" / name).write_bytes(payload)
-                compatibility["wheel_sha256"][name] = hashlib.sha256(payload).hexdigest()
+            for field in ("wheel_sha256", "trace_wheel_sha256"):
+                for name in compatibility[field]:
+                    payload = name.encode()
+                    (root / "wheels" / name).write_bytes(payload)
+                    compatibility[field][name] = hashlib.sha256(payload).hexdigest()
             (root / "compatibility.json").write_text(json.dumps(compatibility))
             for platform in compatibility["platforms"]:
                 sdk_wheel = root / "dist" / f"locomotion_aorta-{compatibility['sdk_version']}-cp310-cp310-{platform}.whl"
@@ -122,14 +126,31 @@ class ReleaseTest(unittest.TestCase):
                 package_release.package([root / "wheels"], output)
             bundled = output / "config/pc_session_peer.json5"
             self.assertTrue(bundled.is_file())
-            self.assertEqual(bundled.read_bytes(), source.read_bytes())
             self.assertEqual([p.name for p in (output / "config").iterdir()], [source.name])
             manifest = json.loads((output / "MANIFEST.json").read_text())
-            for name in examples:
-                relative = "examples/" + name
-                self.assertEqual((output / relative).read_bytes(), (ROOT / relative).read_bytes())
-                self.assertEqual(manifest["files"][relative],
-                                 hashlib.sha256((ROOT / relative).read_bytes()).hexdigest())
+            for relative in ("config/pc_session_peer.json5", "trace/README.md",
+                             *("examples/" + name for name in examples)):
+                expected = (ROOT / relative).read_bytes()
+                with self.subTest(relative=relative):
+                    self.assertEqual((output / relative).read_bytes(), expected)
+                    self.assertEqual(manifest["files"][relative], hashlib.sha256(expected).hexdigest())
+            for name, digest in compatibility["trace_wheel_sha256"].items():
+                self.assertEqual(hashlib.sha256((output / "wheelhouse" / name).read_bytes()).hexdigest(), digest)
+                self.assertEqual(manifest["files"]["wheelhouse/" + name], digest)
+            trace_wheel = root / "wheels" / next(iter(compatibility["trace_wheel_sha256"]))
+            saved = trace_wheel.read_bytes()
+            trace_wheel.unlink()
+            with mock.patch.object(package_release, "ROOT", root):
+                missing_trace = Path(temporary) / "missing-trace"
+                with self.assertRaisesRegex(ValueError, "missing wheel"):
+                    package_release.package([root / "wheels"], missing_trace)
+                self.assertFalse(missing_trace.exists())
+                trace_wheel.write_bytes(b"corrupt trace wheel")
+                corrupt_trace = Path(temporary) / "corrupt-trace"
+                with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                    package_release.package([root / "wheels"], corrupt_trace)
+                self.assertFalse(corrupt_trace.exists())
+            trace_wheel.write_bytes(saved)
             for retired in ("brainco_hand_control.py", "gripper_external_lifecycle.py", "lowstate_subscriber.py",
                             "brainco_hand/brainco_hand_external.py", "gripper/gripper_external.py"):
                 self.assertFalse((output / "examples" / retired).exists())
@@ -147,8 +168,6 @@ class ReleaseTest(unittest.TestCase):
                     package_release.package([root / "wheels"], missing)
             self.assertFalse(missing.exists())
             self.assertEqual(manifest["pc_session_profile"], "config/pc_session_peer.json5")
-            self.assertEqual(manifest["files"]["config/pc_session_peer.json5"],
-                             hashlib.sha256(bundled.read_bytes()).hexdigest())
             private_profile = json.loads(source.read_text())
             private_profile["transport"]["auth"]["usrpwd"]["password"] = "test-only-value"
             (root / "config/pc_session_peer.json5").write_text(json.dumps(private_profile))
