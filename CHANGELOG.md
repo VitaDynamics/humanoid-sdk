@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.1rc2 — release tooling and offline dependency closure
+
+Python package `1.0.1rc2`, release tag `v1.0.1-rc.2`. This candidate includes
+the release-tool fixes merged in PR29. The published `v1.0.1-rc.1` tag and
+assets remain unchanged; RC2 wheels and the complete bundle are built separately.
+
+- Collect the complete pinned core and Trace dependencies per architecture;
+  CI installs the repaired SDK wheel and its Trace extra from that wheelhouse.
+- Fetch ORT from the explicit fixed mirror, verify its original hash, then
+  atomically create the destination without overwriting existing files.
+  Interrupted downloads retain their own staging evidence.
+- Keep independent release-version checks and consolidate public bundle copying.
+  Aorta, message, FlatBuffers and ORT dependency bytes and wire versions are unchanged.
+
 ## 1.0.1rc1 — FBS Trace and OP3 trajectories
 
 Python package `1.0.1rc1`, release tag `v1.0.1-rc.1`. This prerelease carries
