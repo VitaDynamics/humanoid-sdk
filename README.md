@@ -10,10 +10,11 @@
 
 ## 当前版本
 
-本次候选版本为 **1.0.1 RC2**：Python 包版本 `1.0.1rc2`，发行标签 `v1.0.1-rc.2`，不等同于 1.0.1 正式版。实际发布状态和下载文件以上方 Releases 页面为准。安装必须有匹配机器人版本的同版本 SDK wheel 和完整 bundle，不能把依赖预发布或源码版本当作已交付安装包。
+本次候选版本为 **1.0.1 RC3**：Python 包版本 `1.0.1rc3`，发行标签 `v1.0.1-rc.3`，不等同于 1.0.1 正式版。实际发布状态和下载文件以上方 Releases 页面为准。安装必须有匹配机器人版本的同版本 SDK wheel 和完整 bundle，不能把依赖预发布或源码版本当作已交付安装包。
 
-本 PR 新增的显式 BodyCmd4 尚未包含在已发布的 RC2 安装包中。
-下文 v4 用法需要包含本增量的新构建和匹配固件；现有 RC2 安装包仍使用默认 v3。
+RC3 包含 SDK #27 的显式 BodyCmd4 电机 A/B 命令及对应 MCAP 解析。
+默认 BodyCmd3 继续表示踝 PR；使用 v4 时须匹配固件的 `motor_theta` 配置。
+已发布 RC2 的安装包保持原有默认 v3 行为。
 
 | 项目 | 支持范围 |
 | --- | --- |
@@ -26,12 +27,12 @@
 
 ## 安装与只读检查
 
-以下仅从已交付、确含 `1.0.1rc2` SDK wheel 的完整 bundle 根目录运行。SDK 默认在用户 PC；只有明确在 S100 本机运行时，先 source `/app/script/env.sh`，再激活 venv。使用新环境，保留旧安装。
+以下仅从已交付、确含 `1.0.1rc3` SDK wheel 的完整 bundle 根目录运行。SDK 默认在用户 PC；只有明确在 S100 本机运行时，先 source `/app/script/env.sh`，再激活 venv。使用新环境，保留旧安装。
 
 ```bash
 python3.10 -m venv venv
 source venv/bin/activate
-python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[trace]==1.0.1rc2'
+python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[trace]==1.0.1rc3'
 python -m pip check
 python examples/body_state_subscriber/body_state_subscriber.py --help
 ```

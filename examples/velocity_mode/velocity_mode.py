@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Velocity mode over SDK 1.0.1rc2 with per-cycle latency records."""
+"""Velocity mode over SDK 1.0.1rc3 with per-cycle latency records."""
 
 import argparse
 from dataclasses import dataclass
