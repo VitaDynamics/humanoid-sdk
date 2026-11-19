@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.1rc3 — explicit native ankle command contract
+
+Python package `1.0.1rc3`, release tag `v1.0.1-rc.3`. This candidate includes
+SDK #27 on top of the RC2 release tooling and dependency closure.
+
+- Support explicit BodyCmd v4 EXTERNAL commands carrying ankle motor A/B
+  targets and gains. BodyCmd defaults to v3 for virtual pitch/roll commands;
+  BodyState and RobotInfo continue to expose virtual pitch/roll feedback.
+- Apply matching protocol/action validation in Python and the native encoder.
+- Decode BodyCmd v4 in MCAP analysis with its coordinate identity recorded.
+- Retain optional FBS Trace recording and the existing pinned dependency bytes.
+
+
 ## 1.0.1rc2 — release tooling and offline dependency closure
 
 Python package `1.0.1rc2`, release tag `v1.0.1-rc.2`. This candidate includes
