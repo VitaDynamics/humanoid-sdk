@@ -41,10 +41,11 @@ def _string_vector(schema, field, builder, values):
 class Screen:
     """An external display client; closing it does not release the switch."""
 
-    def __init__(self, *, config=None, group="default", timeout_ms=5000):
+    def __init__(self, *, config=None, group=None, timeout_ms=5000):
         # Set connection options before the SDK creates its first session.
         if config:
             os.environ["ZENOH_SESSION_CONFIG_URI"] = str(Path(config).resolve())
+        group = group if group is not None else os.environ.get("AORTA_GROUP", "default")
         os.environ["AORTA_GROUP"] = group
         self.aorta = importlib.import_module("aorta")
         self.timeout_ms = timeout_ms
@@ -344,7 +345,7 @@ class Screen:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", help="authorized Zenoh session config JSON5")
-    parser.add_argument("--group", default="default")
+    parser.add_argument("--group", help="Aorta group (default: AORTA_GROUP or default)")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("takeover", help="enable external display control")
     image = commands.add_parser("image", help="show an image without registration")

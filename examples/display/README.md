@@ -14,6 +14,8 @@ python examples/display/display_custom.py --help
 
 在客户 PC 上，使用部署方提供的私有 peer 会话配置和显示通道权限；在创建 Node 前
 设置实际 ZENOH_SESSION_CONFIG_URI 和 AORTA_GROUP，或使用脚本的 --config、--group。
+group 优先级为显式 --group / Screen(group=...) 参数、AORTA_GROUP 环境变量、default；
+省略参数时会保留部署方配置的组。
 不要把本机 loopback 地址、内部凭证或机器人上的配置路径当作 PC 接入配置。
 
 下例在依赖、会话配置与显示服务已就绪后运行：
@@ -34,6 +36,9 @@ python examples/display/display_custom.py rcp
 素材：`sample-image.png` 为 854×480 横屏输入；`basketball-dance.gif` 为 8 帧循环；
 `basketball-dance.mp4` 用于文档预览，不作为 animation 子命令输入。
 
-验证为适配设备上的受信本机会话，包括五项操作、中文图片文字，以及注册资源占用
-不增加。外部 PC 网络/权限和正式离线依赖包未随本例程交付，不把这项结果当作外部接入
+此前已在配套设备的受信本机会话验证五项操作、中文图片文字及注册资源占用不增加；
+最新服务端组合单独验证了接管、图片持续显示、拒绝 RCP 请求和释放恢复。
+信息页当前从横屏逻辑坐标左、上各 16 像素处起排，面板偏移下的排版适配待后续实现，
+不将早期本地排版适配结果作为当前服务端能力。
+外部 PC 网络/权限和正式离线依赖包未随本例程交付，不把这项结果当作外部接入
 或已发布 SDK 兼容性验收。正式手册入口见根 README 的已发布飞书链接。
