@@ -57,6 +57,7 @@ python examples/body_state_subscriber/body_state_subscriber.py --group "$AORTA_G
 | 手指／夹爪／OP3 | `examples/end_effector/`，各设备入口及 `--help` |
 | 本地模型 | `examples/teleop_policy/`、`examples/velocity_mode/`、`examples/wbc_tracking_mode/` |
 | 只读 MCAP | `examples/brainco_hand/` |
+| 屏幕显示（独立预发布例程，需配套显示依赖） | `examples/display/display_custom.py`，说明见同目录 README |
 
 `--help`、安装或只读通过不授予运动许可。动作须单独授权并确认可靠支撑、活动／夹持区域无人、有人看护和急停可用。进入 ACK 不等于实际 RUNNING；正常退出走 CANCEL→PASSIVE，可能使负载肢体下落。客户端异常退出不保证释放所有权，不自动重试动作。
 
