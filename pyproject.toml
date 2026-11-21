@@ -10,7 +10,7 @@ requires-python = "==3.10.*"
 dependencies = [
     "aorta-sdk==0.0.0+g7649a87ebb03",
     "aorta-msgs==0.0.0+g7649a87ebb03",
-    "vbot-humanoid-msgs==0.0.0+g35ce9eb82d5b",
+    "vbot-humanoid-msgs==0.0.0+g6e54fcf024bf",
     "flatbuffers==25.12.19",
 ]
 
