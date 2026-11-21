@@ -14,6 +14,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PublicEeBindingTest(unittest.TestCase):
+    def test_display_bindings_and_bfbs_are_in_released_message_wheel(self):
+        manifest = json.loads((ROOT / 'compatibility.json').read_text())
+        hashes = manifest['native_input_provenance']['bfbs_sha256']
+        for stem in ('custom_images_ctrl', 'display_imgs', 'play_emotion',
+                     'set_bool', 'query_state', 'display_info'):
+            with self.subTest(schema=stem):
+                meta = importlib.import_module(stem + '_schema_meta')
+                self.assertEqual(hashlib.sha256(meta.SCHEMA_BFBS).hexdigest(), hashes[stem])
+        for name in ('AddImagesRequest', 'DelImagesRequest', 'GetImagesStatusRequest',
+                     'DisplayImgsRequest', 'PlayEmotionRequest', 'SetBoolRequest',
+                     'QueryStateRequest'):
+            module = importlib.import_module('aorta.services.peripheral.' + name)
+            self.assertTrue(callable(getattr(module, name).GetRootAs))
+        from aorta.topic.peripheral.DisplayInfo import DisplayInfo
+        self.assertTrue(callable(DisplayInfo.GetRootAs))
+
     def test_t021_struct_layouts_and_message_level_clocks(self):
         from lowlevel.ee.AxisCommand import AxisCommand
         from lowlevel.ee.AxisState import AxisState

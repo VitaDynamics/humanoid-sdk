@@ -8,6 +8,10 @@
 显示产品消息绑定、FlatBuffers 与 Pillow。只有 locomotion-aorta 和其原有依赖不足以
 证明显示绑定已齐备；不要替换 SDK 原有依赖 pin 或跨代混装。
 
+显示绑定已包含在 `vbot-humanoid-msgs==0.1.6`，该包固定要求
+`aorta-sdk/aorta-msgs==2026.11.15`。开发分支的依赖接入仍受 SDK 原生组件
+ABI 14 适配阻塞；消息包发布不代表完整 SDK 或本例程的新组合已经验收。
+
 ```bash
 python examples/display/display_custom.py --help
 ```

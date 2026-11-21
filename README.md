@@ -16,6 +16,11 @@ RC3 包含 SDK #27 的显式 BodyCmd4 电机 A/B 命令及对应 MCAP 解析。
 默认 BodyCmd3 继续表示踝 PR；使用 v4 时须匹配固件的 `motor_theta` 配置。
 已发布 RC2 的安装包保持原有默认 v3 行为。
 
+开发分支正在接入已发布的 `vbot-humanoid-msgs==0.1.6` 及其配套
+`aorta-sdk/aorta-msgs==2026.11.15`（Core ABI 14）。当前 SDK 原生组件仍依赖
+ABI 13 的 header-context / pull-slot 接口，新依赖组合尚不能构建完整 SDK，
+不作为安装或升级入口。已发布 RC3 的依赖组合以其交付包内的清单为准。
+
 | 项目 | 支持范围 |
 | --- | --- |
 | Python / 主机 | CPython 3.10.x；Linux x86_64 或 aarch64；发布基线 manylinux_2_35 |
