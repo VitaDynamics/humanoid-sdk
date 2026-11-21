@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PublicEeBindingTest(unittest.TestCase):
-    def test_display_bindings_and_bfbs_are_in_released_message_wheel(self):
+    def test_display_bindings_and_bfbs_match_pinned_message_wheel(self):
         manifest = json.loads((ROOT / 'compatibility.json').read_text())
-        hashes = manifest['native_input_provenance']['bfbs_sha256']
+        hashes = manifest['native_input_provenance']['display_bfbs_sha256']
         for stem in ('custom_images_ctrl', 'display_imgs', 'play_emotion',
                      'set_bool', 'query_state', 'display_info'):
             with self.subTest(schema=stem):

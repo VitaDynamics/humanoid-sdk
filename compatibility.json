@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "sdk_version": "1.0.1rc3",
-  "aorta_version": "2026.11.15",
+  "aorta_version": "0.0.0+g7649a87ebb03",
   "flatbuffers_version": "25.12.19",
   "python_requires": "==3.10.*",
   "platforms": [
@@ -14,11 +14,11 @@
   "session_mode": "peer",
   "pc_session_profile": "config/pc_session_peer.json5",
   "wheel_sha256": {
-    "aorta_msgs-2026.11.15-py3-none-any.whl": "1004add643681f74611bb9cd84a9431f35f1cdabd86473082a499efe7fbcf6fc",
-    "aorta_sdk-2026.11.15-py3-none-linux_aarch64.whl": "39fd8c8146aec4c4bcc9c844388b96fbfd98175f346ff68a5dcaca8c188e2380",
-    "aorta_sdk-2026.11.15-py3-none-linux_x86_64.whl": "808389741428bf393756d539e3d3835c44ea1b0baa438d5d63444078fdc04fc0",
+    "aorta_msgs-0.0.0+g7649a87ebb03-py3-none-any.whl": "636d445d58a4d733bfe0e1684ecd5e0db6aa83c3f15164a9f57e5b525df77e63",
+    "aorta_sdk-0.0.0+g7649a87ebb03-py3-none-linux_aarch64.whl": "afb246f5f4e3384efd6ab0eb41c11a9dae16354cc6dc5eca6a9641d9691660a7",
+    "aorta_sdk-0.0.0+g7649a87ebb03-py3-none-linux_x86_64.whl": "bd1c7d8acb8311f35ae65a51e6cf7a0828cdd8bc9b104ece0082f49bef87c2fb",
     "flatbuffers-25.12.19-py2.py3-none-any.whl": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
-    "vbot_humanoid_msgs-0.1.6-py3-none-any.whl": "078e6ebb016a22e6d6c904b70386684fa574416dbab4775c4f750e1dc059f88a"
+    "vbot_humanoid_msgs-0.0.0+g6e54fcf024bf-py3-none-any.whl": "c37e45056cfd6b3c0cdbd6e43e39246863885b7b1cabf830eb4baa6cf5027066"
   },
   "trace_wheel_sha256": {
     "mcap-1.3.1-py3-none-any.whl": "9098685d67288a8087166504cf4adf617cfa8639bb60e936af113f62c11c293f",
@@ -27,8 +27,8 @@
     "zstandard-0.25.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl": "4b6d83057e713ff235a12e73916b6d356e3084fd3d14ced499d84240f3eecee0",
     "zstandard-0.25.0-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.whl": "e05ab82ea7753354bb054b92e2f288afb750e6b439ff6ca78af52939ebbc476d"
   },
-  "dependency_release_tag": "deps-aorta-2026.11.15-schema-0.1.6",
-  "aorta_abi_version": 14,
+  "dependency_release_tag": "deps-aorta-g7649a87ebb03-schema-g6e54fcf024bf",
+  "aorta_abi_version": 13,
   "schema_sha256": {
     "body_cmd": "de52ffa81239439af1edee5d426d206fd8ca6870999eca5ea220bdf18df8abcb",
     "body_state": "a075e96c07eb2167be7f1d03600764fd49afbbae8326041c128108b90f710626",
@@ -46,40 +46,36 @@
     "low_cmd": "b048ce7f06a560a671565deca3480dd68fc6f16ee60d6c65e99b7dbce8857485",
     "robot_info": "5a564e37e3d44acc3b15b929eac79dc1213cea4fd9cc247ef0857f6b05de8277"
   },
-  "humanoid_msgs_version": "0.1.6",
+  "humanoid_msgs_version": "0.0.0+g6e54fcf024bf",
   "control_request_version": 4,
   "body_protocol_version": 3,
   "dependency_release_repository": "VitaDynamics/humanoid-sdk",
-  "aorta_native_header_sha256": "b1f06c3719e51b986e003c8d89cda03ff2a066ba203c2f853dc890519006ed4a",
+  "aorta_native_header_sha256": "0b1072153f4fe0ac65cad7d2834d5aec84f8d7f353db2ed31ae0bc9f534a067e",
   "native_input_provenance": {
-    "state": "RELEASED_INPUTS_BLOCKED_SDK_ABI14_MIGRATION",
-    "aorta_source_commit": "223b8017ad5da39a7297cae1ec86be0b468937d6",
-    "aorta_release_tag": "v2026.11.15",
-    "aorta_cpp_archive": "aorta-cpp-sdk-2026.11.15-abi14-ubuntu22.04-x86_64.tar.zst",
-    "aorta_cpp_archive_sha256": "fe4dca6e57dc91dc0e040566ef291adfa800f37ab5270f3893bbd3d49e464004",
+    "state": "PINNED_BRANCH_INPUTS_HOST_CHECKS_PASSED_DEVICE_NOT_MEASURED",
+    "aorta_source_commit": "e388833139e69fdc4b6d4537e37ed26f512ab557",
+    "aorta_ci_commit": "7649a87ebb0315ffe225c73a56758ab5ffecaf18",
+    "aorta_tree": "2e5ee0ad3205aeea86b558bf9b0833838e5014a6",
+    "header_artifact_id": 13548816293,
     "core_sha256": {
-      "x86_64": "c6c97aaf21602e16250a5af3b2a05061d09e03e87a56ad10d2b88458893a4c64",
-      "aarch64": "d3aaeb80b1b5f876a9f4c9df5ba1ca3c7ac481c050f41628b5c5a431bfeb75d4"
+      "aarch64": "14db4d1cddd0c85926a16442b0eeb8f57fe4722f480ce760744b3b675adb3bfd",
+      "x86_64": "8783d314c4e362aae84ceb14e02890315eac4214844885ad97b38d2005e13f60"
     },
-    "schema_commit": "18df75052429c146d1443ce57d9cc2008002a11c",
-    "schema_tree": "6e821eafbcc6ba12a71ca75763fa2cd1c7b37800",
-    "schema_release_tag": "humanoid-msgs-0.1.6",
-    "schema_run_id": 44881155564,
+    "schema_commit": "6e54fcf024bfe019b0a23adbda540058c8076033",
+    "schema_tree": "374bb91c7dcc225f6ab7a3b68cc9f0dbea877ac2",
+    "schema_run_id": 44885993732,
     "schema_run_attempt": 1,
-    "schema_native_artifact_id": 14697847622,
-    "schema_cpp_tar_sha256": "e99751d9788da4c191d0c019647fc717932676ca862014cda0a8fce71e852f9b",
-    "schema_native_provenance_sha256": "c366a91838227e27ec0b429f8011027205c98090b4653090ade7e28c179ef65c",
-    "schema_public_provenance_sha256": "b4949bd087abc539ff3702811d540d2298b829a7787df09c74febfc630e097a6",
-    "requirements_sha256": "a02bb68fbb0db5d926ece5a1a78b80d43a15fef3510a569926e1ed5e359d6140",
-    "bfbs_sha256": {
+    "schema_selected_artifact_id": 14700411414,
+    "schema_selected_artifact_sha256": "0c2f5bbfec57ec84e95d793824a05d79f2bdf57a5e2abd17e5439cf1f23b0535",
+    "schema_cpp_tar_sha256": "2122e4d2297719a85034cef09cae9d1d41390fe131cde4bf6fb25e7744c6a6b3",
+    "schema_native_provenance_sha256": "290339e7bcb126201243a66a4f27c183e8ef416ea41ccfac4f4e0e6d5f84e140",
+    "requirements_sha256": "a5634b9cbacac6da5ddcf78e586716f0d18d3f665caf2553b5fca2ace1a5d495",
+    "all_23_bfbs_sha256": {
       "body_cmd": "de52ffa81239439af1edee5d426d206fd8ca6870999eca5ea220bdf18df8abcb",
       "body_state": "a075e96c07eb2167be7f1d03600764fd49afbbae8326041c128108b90f710626",
       "control_ack": "62c55098ecc90644da9781c0d1877b84c41d69b354d0c56570484b0908caab8b",
       "control_request": "27cc08ee7991c0886aeeaee8c33d51d5c0340ec6507343a4aa5e64c10935c777",
       "control_status": "1c92e68e0a9e27c566c71917eead5e11331103415f3c3d469a7729282831835f",
-      "custom_images_ctrl": "9ef302532c70ebd6a95066e5c7b6bdf9d3acab76f1f45c0c8a3062f13b6d26d8",
-      "display_imgs": "eed6fc5dfd0fc2059f161b08e3b281892f4fa8a830cbb873cd6af89a3f668d3e",
-      "display_info": "5fbfa8d96cb3aa178265e3fcad0d817cd24fe3616ebbb4e73235b7859fc8375f",
       "end_effector_cmd": "61f24b8d402e4e736696f950a083ca429666112b95e2d9adc82dfdd23cae684a",
       "end_effector_info": "77dff3e0681e9cfd3c7ff26d9d882eea5cc580da31dbd7c62beb9d863b1f6401",
       "end_effector_set_touch": "601b24664a53504f415ceaa86eb67759f3695af03d194cfdd59816cf03004c0f",
@@ -97,12 +93,16 @@
       "humanoid_low_state": "327a9db17f299ebcdcc2cf249d358dd3f69fe32b7af6a80c10ba4ac0da631f24",
       "joy": "7a94e11f6a4cfd10e881ee126b99813421161513a67ba195bac03f54d2652e66",
       "low_cmd": "b048ce7f06a560a671565deca3480dd68fc6f16ee60d6c65e99b7dbce8857485",
-      "play_emotion": "4a3ec397e3179658c24c6b5d5cea3ef074fbb5b5efc82cbe9c15c011f99b711f",
-      "query_state": "27ca6335fca432d30373d0b9d67aef9733e0250e5d344237f43849a684b0708f",
-      "robot_info": "5a564e37e3d44acc3b15b929eac79dc1213cea4fd9cc247ef0857f6b05de8277",
-      "set_bool": "7455b4c1f728d75543cddcb2c7a2cf6b7c3d0d65e6a23cca0dc650ca3b9ae3c2"
+      "robot_info": "5a564e37e3d44acc3b15b929eac79dc1213cea4fd9cc247ef0857f6b05de8277"
     },
-    "sdk_native_compile": "FAILED: ABI 14 removes header-context and pull-slot APIs required by the current SDK"
+    "display_bfbs_sha256": {
+      "custom_images_ctrl": "9ef302532c70ebd6a95066e5c7b6bdf9d3acab76f1f45c0c8a3062f13b6d26d8",
+      "display_imgs": "eed6fc5dfd0fc2059f161b08e3b281892f4fa8a830cbb873cd6af89a3f668d3e",
+      "play_emotion": "4a3ec397e3179658c24c6b5d5cea3ef074fbb5b5efc82cbe9c15c011f99b711f",
+      "set_bool": "7455b4c1f728d75543cddcb2c7a2cf6b7c3d0d65e6a23cca0dc650ca3b9ae3c2",
+      "query_state": "27ca6335fca432d30373d0b9d67aef9733e0250e5d344237f43849a684b0708f",
+      "display_info": "5fbfa8d96cb3aa178265e3fcad0d817cd24fe3616ebbb4e73235b7859fc8375f"
+    }
   },
   "trace_wheel_urls": {
     "mcap-1.3.1-py3-none-any.whl": "https://files.pythonhosted.org/packages/63/22/dad47e86047344f110a9d589d90de49d9c54db7a7ea4f0ef91fb3e8e9f3f/mcap-1.3.1-py3-none-any.whl",
