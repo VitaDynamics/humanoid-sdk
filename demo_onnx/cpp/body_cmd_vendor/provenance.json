@@ -20,29 +20,21 @@
     "flatbuffers/vector_downward.h": "7f687fdb661f4c1be09223d6e416e042b139ff1748b5a215cb9864c56f9f3be2",
     "flatbuffers/verifier.h": "d7fbf583019088983af684e7d00cbfda23b759093c6501f850c1c33400559b5a"
   },
-  "generated_source_schema_commit": "6e54fcf024bfe019b0a23adbda540058c8076033",
-  "generated_source": "All 44 retained generated headers byte-compared with selected-runtime artifact 14700411414 from schema run 44885993732. All bytes are identical. Same Aorta g7649a87 runtime; no native header edits or ABI migration.",
+  "generated_source_schema_commit": "2731d25df2dc37409e9a64564010b50a5953ce72",
+  "generated_source": "All 44 retained generated headers byte-compared with native artifact 14814705906 from schema run 45163021593, built against official Aorta 2026.11.23. Bytes are identical; no generated header edits.",
   "flatc_argv": null,
   "license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
   "body_cmd_bfbs_sha256": "de52ffa81239439af1edee5d426d206fd8ca6870999eca5ea220bdf18df8abcb",
   "body_cmd_generated_h_sha256": "4242bec61c97a471c7ef4b5c4fb66d1148de81ddc746baff74c9be49c497468b",
   "body_state_bfbs_sha256": "a075e96c07eb2167be7f1d03600764fd49afbbae8326041c128108b90f710626",
   "body_state_generated_h_sha256": "f01cd1ed5e99f54699de1218fa51eef0c1f5abe29fe4475578e8cbabcaf14897",
-  "generated_source_wheel_sha256": "c37e45056cfd6b3c0cdbd6e43e39246863885b7b1cabf830eb4baa6cf5027066",
-  "generated_source_wheel_version": "0.0.0+g6e54fcf024bf",
+  "generated_source_wheel_sha256": "c42f209deb5f0aca55265a68d56a60204b6beace5c2a3ecbf2c9f217a7f354ec",
+  "generated_source_wheel_version": "0.1.7",
   "flatc_version_output": null,
-  "generated_source_schema_tree": "374bb91c7dcc225f6ab7a3b68cc9f0dbea877ac2",
+  "generated_source_schema_tree": "bba8d5c2355b2073272e0328a0fb7dc5be62e952",
   "flatc_rule": {
-    "status": "RULE_SOURCE_ONLY_ACTUAL_ARGV_AND_BINARY_SHA_NOT_CAPTURED",
-    "provider_commit": "309b8691cb7b31949a8977c4ed9db36bddaf6fd6",
-    "rule_path": "message/tools/schema_codegen.bzl",
-    "rule_sha256": "7e903d83f188794fe6dd23ccc7444c64074cd7af024b26f2be43fb1d5700aa0c",
-    "mode": "--cpp",
-    "tool_alias": "@aorta//message/tools:flatc -> @flatbuffers//:flatc",
-    "includes": "dependency-derived -I roots; actual expanded argv not captured",
-    "flatbuffers_archive_sha256": "f81c3162b1046fe8b84b9a0dbdd383e24fdbcf88583b9cb6028f90d04d90696a",
-    "root_override_patch": "patches/flatbuffers_cpp_struct_dependency_order.patch",
-    "root_override_patch_sha256": "fdb43193c2048388cd7de45e9d93acb04aa6e2ca2977f33a3edee9582d8efb58",
+    "status": "ACTUAL_ARGV_AND_BINARY_SHA_NOT_CAPTURED_IN_RELEASE_ARTIFACT",
+    "provider_commit": "33398ba77ca1514da4bb1dc785a2380c4e9a4542",
     "generated_header_static_version": "25.12.19"
   },
   "generated_include_sha256": {
@@ -50,27 +42,36 @@
     "message/schemas/topic/lowlevel/ee_common_generated.h": "0b39ca414f47780816da3c2dc73506346b27ac27b12cfe5ab238ac8713c76415",
     "message/schemas/system/aorta_base_generated.h": "fde3ee3fad85501632552fe45abdb4793dc0b2995c1ce06db62d7ab2487a3be6"
   },
-  "aorta_provider_commit": "309b8691cb7b31949a8977c4ed9db36bddaf6fd6",
-  "flatbuffers_provider_authority_sha256": "015d1579187b12c0dbc79a57c34ce42df1e8ac6fc25d1051be35d14f42857e8b",
+  "aorta_provider_commit": "33398ba77ca1514da4bb1dc785a2380c4e9a4542",
   "native_archive": {
-    "state": "PINNED_BRANCH_INPUTS_HOST_CHECKS_PASSED_DEVICE_NOT_MEASURED",
-    "aorta_source_commit": "e388833139e69fdc4b6d4537e37ed26f512ab557",
-    "aorta_ci_commit": "7649a87ebb0315ffe225c73a56758ab5ffecaf18",
-    "aorta_tree": "2e5ee0ad3205aeea86b558bf9b0833838e5014a6",
-    "header_artifact_id": 13548816293,
-    "core_sha256": {
-      "aarch64": "14db4d1cddd0c85926a16442b0eeb8f57fe4722f480ce760744b3b675adb3bfd",
-      "x86_64": "8783d314c4e362aae84ceb14e02890315eac4214844885ad97b38d2005e13f60"
+    "state": "OFFICIAL_INPUTS_HOST_CHECKS_PASSED_DEVICE_NOT_MEASURED",
+    "aorta_source_commit": "33398ba77ca1514da4bb1dc785a2380c4e9a4542",
+    "aorta_release_tag": "v2026.11.23",
+    "aorta_cpp_archives": {
+      "x86_64": {
+        "name": "aorta-cpp-sdk-2026.11.23-abi15-ubuntu22.04-x86_64.tar.zst",
+        "sha256": "14e4a40db473c15f34e44350aedd163036e3782ca76aca5ee3295d8b1598c4c0"
+      },
+      "aarch64": {
+        "name": "aorta-cpp-sdk-2026.11.23-abi15-ubuntu22.04-aarch64.tar.zst",
+        "sha256": "871b1de68862a00e2d82136da527992bc073e457fdf10be0549203c685f55393"
+      }
     },
-    "schema_commit": "6e54fcf024bfe019b0a23adbda540058c8076033",
-    "schema_tree": "374bb91c7dcc225f6ab7a3b68cc9f0dbea877ac2",
-    "schema_run_id": 44885993732,
+    "core_sha256": {
+      "x86_64": "f654970365b11c499e20949f1cf5289d22d1deb4408d494505da6ebbdf0b7d8d",
+      "aarch64": "54c67639c74f8c0557d361133a276567d6afa2fd39bc382c5a777025b7b38c34"
+    },
+    "schema_commit": "2731d25df2dc37409e9a64564010b50a5953ce72",
+    "schema_tree": "bba8d5c2355b2073272e0328a0fb7dc5be62e952",
+    "schema_release_tag": "humanoid-msgs-0.1.7",
+    "schema_run_id": 45163021593,
     "schema_run_attempt": 1,
-    "schema_selected_artifact_id": 14700411414,
-    "schema_selected_artifact_sha256": "0c2f5bbfec57ec84e95d793824a05d79f2bdf57a5e2abd17e5439cf1f23b0535",
-    "schema_cpp_tar_sha256": "2122e4d2297719a85034cef09cae9d1d41390fe131cde4bf6fb25e7744c6a6b3",
-    "schema_native_provenance_sha256": "290339e7bcb126201243a66a4f27c183e8ef416ea41ccfac4f4e0e6d5f84e140",
-    "requirements_sha256": "a5634b9cbacac6da5ddcf78e586716f0d18d3f665caf2553b5fca2ace1a5d495",
+    "schema_native_artifact_id": 14814705906,
+    "schema_native_artifact_sha256": "aef379e0c8e9159593b89187c77223ce4c662e0471b5a5e032b883fde82b941d",
+    "schema_cpp_tar_sha256": "a83c6b70a965d90552e9e293383a9c4f73e8d1d50af2d5fa26427f327468d019",
+    "schema_native_provenance_sha256": "8a29e2e027f56b848745b22a500c36941879805d6eef1f45f75abecffb89ecfc",
+    "schema_public_provenance_sha256": "2c2d335f872f12f72ce39589b7015ed4ab18136aed0b118a2f880a9e0bbea597",
+    "requirements_sha256": "734de89f80f5962d811242c74ad5129ac680e8b7de103ea3201aa3c43373aff6",
     "all_23_bfbs_sha256": {
       "body_cmd": "de52ffa81239439af1edee5d426d206fd8ca6870999eca5ea220bdf18df8abcb",
       "body_state": "a075e96c07eb2167be7f1d03600764fd49afbbae8326041c128108b90f710626",

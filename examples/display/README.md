@@ -6,8 +6,8 @@
 此例程不属于既有 1.0.0 RC1 或 1.0.1 RC3 bundle 的已交付能力。
 服务端需包含显示接管开关，运行依赖需由部署方提供匹配的 Aorta Python SDK、
 显示产品消息绑定、FlatBuffers 与 Pillow。当前开发分支引用的
-`vbot-humanoid-msgs==0.0.0+g6e54fcf024bf` 已包含本例所需绑定，配套 Aorta
-保持 `0.0.0+g7649a87ebb03`。既有 RC3 bundle 的原消息包不包含这些绑定；
+`vbot-humanoid-msgs==0.1.7` 已包含本例所需绑定，配套 Aorta
+为正式 `2026.11.23`（ABI 15）。既有 RC3 bundle 的原消息包不包含这些绑定；
 不要跨代混装，Pillow 仍需单独提供。
 
 ```bash

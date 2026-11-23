@@ -1,7 +1,7 @@
 {
-  "schema_commit": "6e54fcf024bfe019b0a23adbda540058c8076033",
-  "schema_tree": "374bb91c7dcc225f6ab7a3b68cc9f0dbea877ac2",
-  "source": "Selected-runtime artifact 14700411414, run 44885993732; canonical native headers retained once in body_cmd_vendor and verified byte-identical.",
+  "schema_commit": "2731d25df2dc37409e9a64564010b50a5953ce72",
+  "schema_tree": "bba8d5c2355b2073272e0328a0fb7dc5be62e952",
+  "source": "Schema run 45163021593 native artifact 14814705906; canonical native headers retained once in body_cmd_vendor and verified byte-identical.",
   "headers_sha256": {
     "message/schemas/topic/lowlevel/end_effector_cmd_generated.h": "16e6fd73fc042d401d6f2d7262fe0c68d51473ec216609931adb680a165b720a",
     "message/schemas/topic/lowlevel/end_effector_state_generated.h": "2da833cd17d1e74c318ff8ca91b8ea826679e5428aaddfe60c1d69198b133a7a",
@@ -17,8 +17,8 @@
     "message/schemas/system/aorta_base_generated.h": "fde3ee3fad85501632552fe45abdb4793dc0b2995c1ce06db62d7ab2487a3be6"
   },
   "flatbuffers_version": "25.12.19",
-  "wheel_version": "0.0.0+g6e54fcf024bf",
-  "wheel_sha256": "c37e45056cfd6b3c0cdbd6e43e39246863885b7b1cabf830eb4baa6cf5027066",
-  "binding_note": "All 23 existing BFBS and all 44 retained generated C++ headers are unchanged. Runtime and ABI stay at the original SDK pins; selected SDK checks are recorded separately.",
-  "native_provenance_sha256": "290339e7bcb126201243a66a4f27c183e8ef416ea41ccfac4f4e0e6d5f84e140"
+  "wheel_version": "0.1.7",
+  "wheel_sha256": "c42f209deb5f0aca55265a68d56a60204b6beace5c2a3ecbf2c9f217a7f354ec",
+  "binding_note": "All 29 public BFBS hashes and all 44 retained generated C++ headers are unchanged. Official Aorta 2026.11.23 supplies the native header and RX APIs; SDK/IPC/device evidence is recorded separately.",
+  "native_provenance_sha256": "8a29e2e027f56b848745b22a500c36941879805d6eef1f45f75abecffb89ecfc"
 }
