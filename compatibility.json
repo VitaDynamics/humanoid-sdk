@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "sdk_version": "1.0.1rc3",
-  "aorta_version": "0.0.0+g7649a87ebb03",
+  "aorta_version": "2026.11.23",
   "flatbuffers_version": "25.12.19",
   "python_requires": "==3.10.*",
   "platforms": [
@@ -14,11 +14,11 @@
   "session_mode": "peer",
   "pc_session_profile": "config/pc_session_peer.json5",
   "wheel_sha256": {
-    "aorta_msgs-0.0.0+g7649a87ebb03-py3-none-any.whl": "636d445d58a4d733bfe0e1684ecd5e0db6aa83c3f15164a9f57e5b525df77e63",
-    "aorta_sdk-0.0.0+g7649a87ebb03-py3-none-linux_aarch64.whl": "afb246f5f4e3384efd6ab0eb41c11a9dae16354cc6dc5eca6a9641d9691660a7",
-    "aorta_sdk-0.0.0+g7649a87ebb03-py3-none-linux_x86_64.whl": "bd1c7d8acb8311f35ae65a51e6cf7a0828cdd8bc9b104ece0082f49bef87c2fb",
+    "aorta_msgs-2026.11.23-py3-none-any.whl": "20db786b5fa9408ef6960ee7fe6642d3fdd4f0980e194beab0af28f53c175700",
+    "aorta_sdk-2026.11.23-py3-none-linux_aarch64.whl": "88400f6fcfb00fe4d0935c8e332f6e7b49d8bb8ce378317b00d7ad812c67a42c",
+    "aorta_sdk-2026.11.23-py3-none-linux_x86_64.whl": "2235cd647936822f90d761180f76dab6e6a245bb940c3c59493a3a732cf9f66e",
     "flatbuffers-25.12.19-py2.py3-none-any.whl": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
-    "vbot_humanoid_msgs-0.0.0+g35ce9eb82d5b-py3-none-any.whl": "fb59a316e260bb15d173dc980a82c8337af11e2e4beed868f681a68f4fa0bc21"
+    "vbot_humanoid_msgs-0.1.7-py3-none-any.whl": "c42f209deb5f0aca55265a68d56a60204b6beace5c2a3ecbf2c9f217a7f354ec"
   },
   "trace_wheel_sha256": {
     "mcap-1.3.1-py3-none-any.whl": "9098685d67288a8087166504cf4adf617cfa8639bb60e936af113f62c11c293f",
@@ -27,8 +27,8 @@
     "zstandard-0.25.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl": "4b6d83057e713ff235a12e73916b6d356e3084fd3d14ced499d84240f3eecee0",
     "zstandard-0.25.0-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.whl": "e05ab82ea7753354bb054b92e2f288afb750e6b439ff6ca78af52939ebbc476d"
   },
-  "dependency_release_tag": "deps-aorta-g7649a87ebb03-schema-g35ce9eb82d5b",
-  "aorta_abi_version": 13,
+  "dependency_release_tag": "deps-aorta-2026.11.23-schema-0.1.7",
+  "aorta_abi_version": 15,
   "schema_sha256": {
     "body_cmd": "de52ffa81239439af1edee5d426d206fd8ca6870999eca5ea220bdf18df8abcb",
     "body_state": "a075e96c07eb2167be7f1d03600764fd49afbbae8326041c128108b90f710626",
@@ -46,30 +46,40 @@
     "low_cmd": "b048ce7f06a560a671565deca3480dd68fc6f16ee60d6c65e99b7dbce8857485",
     "robot_info": "5a564e37e3d44acc3b15b929eac79dc1213cea4fd9cc247ef0857f6b05de8277"
   },
-  "humanoid_msgs_version": "0.0.0+g35ce9eb82d5b",
+  "humanoid_msgs_version": "0.1.7",
   "control_request_version": 4,
   "body_protocol_version": 3,
   "dependency_release_repository": "VitaDynamics/humanoid-sdk",
-  "aorta_native_header_sha256": "0b1072153f4fe0ac65cad7d2834d5aec84f8d7f353db2ed31ae0bc9f534a067e",
+  "aorta_native_header_sha256": "d0ec18d8e4a55b2ed0097897462b00a318b7165a3ca0e238ab5e1b228fe7654c",
   "native_input_provenance": {
-    "state": "SOURCE_CANDIDATE_NOT_RELEASED_NOT_ABI_VALIDATED",
-    "aorta_source_commit": "e388833139e69fdc4b6d4537e37ed26f512ab557",
-    "aorta_ci_commit": "7649a87ebb0315ffe225c73a56758ab5ffecaf18",
-    "aorta_tree": "2e5ee0ad3205aeea86b558bf9b0833838e5014a6",
-    "header_artifact_id": 13548816293,
-    "core_sha256": {
-      "aarch64": "14db4d1cddd0c85926a16442b0eeb8f57fe4722f480ce760744b3b675adb3bfd",
-      "x86_64": "8783d314c4e362aae84ceb14e02890315eac4214844885ad97b38d2005e13f60"
+    "state": "OFFICIAL_INPUTS_HOST_CHECKS_PASSED_DEVICE_NOT_MEASURED",
+    "aorta_source_commit": "33398ba77ca1514da4bb1dc785a2380c4e9a4542",
+    "aorta_release_tag": "v2026.11.23",
+    "aorta_cpp_archives": {
+      "x86_64": {
+        "name": "aorta-cpp-sdk-2026.11.23-abi15-ubuntu22.04-x86_64.tar.zst",
+        "sha256": "14e4a40db473c15f34e44350aedd163036e3782ca76aca5ee3295d8b1598c4c0"
+      },
+      "aarch64": {
+        "name": "aorta-cpp-sdk-2026.11.23-abi15-ubuntu22.04-aarch64.tar.zst",
+        "sha256": "871b1de68862a00e2d82136da527992bc073e457fdf10be0549203c685f55393"
+      }
     },
-    "schema_commit": "35ce9eb82d5b707cebcf5943504b6beb52e52d21",
-    "schema_tree": "b2370d2ccfae8fe754e04ab73f286bcd9c03a42b",
-    "schema_run_id": 42745416538,
+    "core_sha256": {
+      "x86_64": "f654970365b11c499e20949f1cf5289d22d1deb4408d494505da6ebbdf0b7d8d",
+      "aarch64": "54c67639c74f8c0557d361133a276567d6afa2fd39bc382c5a777025b7b38c34"
+    },
+    "schema_commit": "2731d25df2dc37409e9a64564010b50a5953ce72",
+    "schema_tree": "bba8d5c2355b2073272e0328a0fb7dc5be62e952",
+    "schema_release_tag": "humanoid-msgs-0.1.7",
+    "schema_run_id": 45163021593,
     "schema_run_attempt": 1,
-    "schema_selected_artifact_id": 13730309055,
-    "schema_selected_artifact_sha256": "91ae891fb48a88dd5bb87927425abe328e470df4296e8de5ce6c515f9e5f7de0",
-    "schema_cpp_tar_sha256": "186afd2a6733c395a95d25f38e660f549f91f4bd502344a5ab4c608da1b0966f",
-    "schema_native_provenance_sha256": "fbfa161ca738027708ffa9509fd6524c185584c60423a82740e29a1aa21b5f5c",
-    "requirements_sha256": "a5634b9cbacac6da5ddcf78e586716f0d18d3f665caf2553b5fca2ace1a5d495",
+    "schema_native_artifact_id": 14814705906,
+    "schema_native_artifact_sha256": "aef379e0c8e9159593b89187c77223ce4c662e0471b5a5e032b883fde82b941d",
+    "schema_cpp_tar_sha256": "a83c6b70a965d90552e9e293383a9c4f73e8d1d50af2d5fa26427f327468d019",
+    "schema_native_provenance_sha256": "8a29e2e027f56b848745b22a500c36941879805d6eef1f45f75abecffb89ecfc",
+    "schema_public_provenance_sha256": "2c2d335f872f12f72ce39589b7015ed4ab18136aed0b118a2f880a9e0bbea597",
+    "requirements_sha256": "734de89f80f5962d811242c74ad5129ac680e8b7de103ea3201aa3c43373aff6",
     "all_23_bfbs_sha256": {
       "body_cmd": "de52ffa81239439af1edee5d426d206fd8ca6870999eca5ea220bdf18df8abcb",
       "body_state": "a075e96c07eb2167be7f1d03600764fd49afbbae8326041c128108b90f710626",
@@ -94,6 +104,14 @@
       "joy": "7a94e11f6a4cfd10e881ee126b99813421161513a67ba195bac03f54d2652e66",
       "low_cmd": "b048ce7f06a560a671565deca3480dd68fc6f16ee60d6c65e99b7dbce8857485",
       "robot_info": "5a564e37e3d44acc3b15b929eac79dc1213cea4fd9cc247ef0857f6b05de8277"
+    },
+    "display_bfbs_sha256": {
+      "custom_images_ctrl": "9ef302532c70ebd6a95066e5c7b6bdf9d3acab76f1f45c0c8a3062f13b6d26d8",
+      "display_imgs": "eed6fc5dfd0fc2059f161b08e3b281892f4fa8a830cbb873cd6af89a3f668d3e",
+      "play_emotion": "4a3ec397e3179658c24c6b5d5cea3ef074fbb5b5efc82cbe9c15c011f99b711f",
+      "set_bool": "7455b4c1f728d75543cddcb2c7a2cf6b7c3d0d65e6a23cca0dc650ca3b9ae3c2",
+      "query_state": "27ca6335fca432d30373d0b9d67aef9733e0250e5d344237f43849a684b0708f",
+      "display_info": "5fbfa8d96cb3aa178265e3fcad0d817cd24fe3616ebbb4e73235b7859fc8375f"
     }
   },
   "trace_wheel_urls": {

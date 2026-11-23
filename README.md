@@ -16,6 +16,10 @@ RC3 包含 SDK #27 的显式 BodyCmd4 电机 A/B 命令及对应 MCAP 解析。
 默认 BodyCmd3 继续表示踝 PR；使用 v4 时须匹配固件的 `motor_theta` 配置。
 已发布 RC2 的安装包保持原有默认 v3 行为。
 
+当前开发分支配套人形消息包 `0.1.7` 与正式 Aorta `2026.11.23`（ABI 15），
+包含显示消息绑定及 SDK 所需的原生收发接口。该依赖更新尚未随新的完整 SDK
+bundle 发布，既有 RC3 安装仍以其交付清单为准。
+
 | 项目 | 支持范围 |
 | --- | --- |
 | Python / 主机 | CPython 3.10.x；Linux x86_64 或 aarch64；发布基线 manylinux_2_35 |
