@@ -4,7 +4,7 @@
 不发布音频、不控制机器人。依赖 SDK 配套的 Aorta 运行时、`aorta-msgs` 和 FlatBuffers；
 使用已导出的 `foxglove.RawAudio`，无需额外显示消息包、NumPy 或音频处理库。
 先按根 README 安装匹配的交付包并准备部署方提供的连接配置。
-这是新增例程，尚未包含在既有已发布 SDK bundle 中；需从对应 SDK 修订取得脚本。
+此例程从 SDK 1.0.1 RC4 bundle 起提供；既有 RC3 bundle 不包含本例程。
 
 ```bash
 export ZENOH_SESSION_CONFIG_URI="$HOME/.config/vita/pc_session_peer.json5"

@@ -10,15 +10,16 @@
 
 ## 当前版本
 
-本次候选版本为 **1.0.1 RC3**：Python 包版本 `1.0.1rc3`，发行标签 `v1.0.1-rc.3`，不等同于 1.0.1 正式版。实际发布状态和下载文件以上方 Releases 页面为准。安装必须有匹配机器人版本的同版本 SDK wheel 和完整 bundle，不能把依赖预发布或源码版本当作已交付安装包。
+本次候选版本为 **1.0.1 RC4**：Python 包版本 `1.0.1rc4`，发行标签 `v1.0.1-rc.4`，不等同于 1.0.1 正式版。实际发布状态和下载文件以上方 Releases 页面为准。安装必须有匹配机器人版本的同版本 SDK wheel 和完整 bundle，不能把依赖预发布或源码版本当作已交付安装包。
 
 RC3 包含 SDK #27 的显式 BodyCmd4 电机 A/B 命令及对应 MCAP 解析。
 默认 BodyCmd3 继续表示踝 PR；使用 v4 时须匹配固件的 `motor_theta` 配置。
 已发布 RC2 的安装包保持原有默认 v3 行为。
 
-当前开发分支配套人形消息包 `0.1.7` 与正式 Aorta `2026.11.23`（ABI 15），
-包含显示消息绑定及 SDK 所需的原生收发接口。该依赖更新尚未随新的完整 SDK
-bundle 发布，既有 RC3 安装仍以其交付清单为准。
+RC4 配套人形消息包 `0.1.7` 与正式 Aorta `2026.11.23`（ABI 15），
+包含显示消息绑定、屏幕控制和原始音频录制例程。既有 RC3 安装仍以原交付清单为准。
+屏幕例程还需要 Pillow；RC4 完整 bundle 附带双架构 Pillow wheel，
+可用 `python -m pip install --no-index --find-links ./wheelhouse Pillow==12.0.0` 安装。
 
 | 项目 | 支持范围 |
 | --- | --- |
@@ -31,12 +32,12 @@ bundle 发布，既有 RC3 安装仍以其交付清单为准。
 
 ## 安装与只读检查
 
-以下仅从已交付、确含 `1.0.1rc3` SDK wheel 的完整 bundle 根目录运行。SDK 默认在用户 PC；只有明确在 S100 本机运行时，先 source `/app/script/env.sh`，再激活 venv。使用新环境，保留旧安装。
+以下仅从已交付、确含 `1.0.1rc4` SDK wheel 的完整 bundle 根目录运行。SDK 默认在用户 PC；只有明确在 S100 本机运行时，先 source `/app/script/env.sh`，再激活 venv。使用新环境，保留旧安装。
 
 ```bash
 python3.10 -m venv venv
 source venv/bin/activate
-python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[trace]==1.0.1rc3'
+python -m pip install --no-index --find-links ./wheelhouse 'locomotion-aorta[trace]==1.0.1rc4'
 python -m pip check
 python examples/body_state_subscriber/body_state_subscriber.py --help
 ```
