@@ -54,6 +54,18 @@ class RawAudioExampleTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     example.decode_pcm(self.payload(pcm, **kwargs), channel)
 
+    def test_bulk_copy_preserves_bytes_without_scalar_accessors(self):
+        from foxglove.RawAudio import RawAudio
+
+        pcm = struct.pack("<6h", -32768, -1, 0, 1, 2, 32767) * 256
+        payload = bytearray(self.payload(pcm))
+        with patch.object(RawAudio, "Data", side_effect=AssertionError("scalar PCM read")):
+            decoded = example.decode_pcm(payload)
+            mono = example.decode_pcm(payload, 5)
+        payload[:] = b"\0" * len(payload)
+        self.assertEqual(decoded, (16000, 6, 256, pcm))
+        self.assertEqual(mono, (16000, 6, 256, struct.pack("<h", 32767) * 256))
+
     def test_record_finalizes_wav_and_inherits_group(self):
         pcm = struct.pack("<6h", 1, 2, 3, 4, 5, 6) * 512
         sub = Mock()

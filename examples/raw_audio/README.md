@@ -26,7 +26,8 @@ python examples/raw_audio/raw_audio_subscriber.py --channel 0 --output channel0.
 `data` 按采样帧交错排列多个通道，采样率和通道数取自 `sample_rate`、
 `number_of_channels`。每块时长为 `len(data) / (2 * channels * sample_rate)`；
 例如 16 kHz、6 通道、6144 字节对应每通道 512 个采样、32 ms。
-脚本不假定固定块大小，也不将多通道误当成单声道。
+脚本不假定固定块大小，也不将多通道误当成单声道。PCM 按整块字节复制，
+避免逐字节调用生成访问器导致接收处理跟不上实时音频；不增加 NumPy 依赖。
 
 使用与发布端一致的 SensorData QoS（尽力交付），本地接收队列深度为 256。
 丢包或队列溢出可能使 WAV 比录制墙钟时间短；脚本仅拼接收到的块，不补静音，
@@ -40,4 +41,7 @@ python examples/raw_audio/raw_audio_subscriber.py --channel 0 --output channel0.
 不要因此改动全局系统配置。WAV 始终保存在运行脚本的主机上。
 
 本地检查覆盖真实生成消息解码、通道提取和 WAV 收尾；另以本机 Aorta 进程间通信发送
-合成 PCM，校验六通道及单通道 WAV 的头和全部采样字节。未进行本例程的实机录音验收。
+合成 PCM，校验六通道及单通道 WAV 的头和全部采样字节。
+另在 S100 实机验证了六通道和单通道各 10 秒录制：16 kHz、每块 256 帧（16 ms），
+分别保存 10.048 秒和 10.032 秒音频，观察到的消息序号连续。此结果仅代表该设备与版本，
+不代表其他采集配置固定为 16 ms，也不保证尽力交付链路永不丢包；未进行人工试听验收。

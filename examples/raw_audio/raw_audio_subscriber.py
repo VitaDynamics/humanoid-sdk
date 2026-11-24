@@ -29,7 +29,14 @@ def decode_pcm(payload, channel=None):
         raise ValueError("invalid sample rate, channels or PCM block length")
     if channel is not None and not 0 <= channel < channels:
         raise ValueError(f"channel {channel} outside 0..{channels - 1}")
-    pcm = bytes(message.Data(i) for i in range(size))
+    # RawAudio.data is field 1 (vtable offset 6). Copy its byte vector in one
+    # operation; calling the generated scalar accessor per byte is too slow
+    # for live multichannel audio on S100. This needs no NumPy dependency.
+    table = message._tab
+    start = table.Vector(table.Offset(6))
+    pcm = bytes(memoryview(table.Bytes)[start:start + size])
+    if len(pcm) != size:
+        raise ValueError("truncated PCM block")
     frames = size // (2 * channels)
     if channel is not None:
         # Each frame contains one little-endian int16 per input channel.
