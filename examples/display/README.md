@@ -3,12 +3,12 @@
 独立的 Aorta Python 示例，支持外部接管、图片、GIF/动态 WebP、key/value 或全屏文字，
 以及结束外部画面并切回 RCP。只调用显示接口，不申请本体运动 EXTERNAL 会话。
 
-此例程从 SDK 1.0.1 RC4 bundle 起提供，不属于既有 1.0.0 RC1 或 1.0.1 RC3 bundle 的已交付能力。
+此例程从 SDK 1.0.2 RC1 bundle 起提供，不属于既有 1.0.0 RC1 或 1.0.1 RC3 bundle 的已交付能力。
 服务端需包含显示接管开关，运行依赖需由部署方提供匹配的 Aorta Python SDK、
-显示产品消息绑定、FlatBuffers 与 Pillow。RC4 引用的
+显示产品消息绑定、FlatBuffers 与 Pillow。1.0.2 RC1 引用的
 `vbot-humanoid-msgs==0.1.7` 已包含本例所需绑定，配套 Aorta
 为正式 `2026.11.23`（ABI 15）。既有 RC3 bundle 的原消息包不包含这些绑定；
-不要跨代混装。RC4 完整 bundle 附带 Pillow 12.0.0 wheel，可离线安装：
+不要跨代混装。1.0.2 RC1 完整 bundle 附带 Pillow 12.0.0 wheel，可离线安装：
 
 ```bash
 python -m pip install --no-index --find-links ./wheelhouse Pillow==12.0.0

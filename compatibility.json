@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "sdk_version": "1.0.1rc4",
+  "sdk_version": "1.0.2rc1",
   "aorta_version": "2026.11.23",
   "flatbuffers_version": "25.12.19",
   "python_requires": "==3.10.*",

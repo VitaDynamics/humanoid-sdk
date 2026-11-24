@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.0.1rc4 — official Aorta runtime, display and audio examples
+## 1.0.2rc1 — official Aorta runtime, display and audio examples
 
-Python package `1.0.1rc4`, release tag `v1.0.1-rc.4`.
+Python package `1.0.2rc1`, release tag `v1.0.2-rc.1`.
 
 - Use official Aorta 2026.11.23 (ABI 15) and humanoid messages 0.1.7.
 - Include display takeover, image/animation/text rendering and return-to-RCP examples.
