@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.2rc1 — official Aorta runtime, display and audio examples
+
+Python package `1.0.2rc1`, release tag `v1.0.2-rc.1`.
+
+- Use official Aorta 2026.11.23 (ABI 15) and humanoid messages 0.1.7.
+- Include display takeover, image/animation/text rendering and return-to-RCP examples.
+- Include receive-only RawAudio WAV recording, channel extraction, bulk PCM copying,
+  early output-path validation, group fallback and bounded receive waits.
+- Deliver rebuilt CPython 3.10 Linux x86_64/aarch64 SDK wheels and an offline
+  bundle, including optional Pillow 12.0.0 wheels for display examples.
+- Retain RC3 BodyCmd v3/v4 behavior; no new control protocol or motion validation.
+
+
 ## 1.0.1rc3 — explicit native ankle command contract
 
 Python package `1.0.1rc3`, release tag `v1.0.1-rc.3`. This candidate includes

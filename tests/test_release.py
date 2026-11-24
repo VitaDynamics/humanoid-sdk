@@ -31,7 +31,7 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(manifest["control_request_version"], 4)
         self.assertIn(f'version = "{manifest["sdk_version"]}"',
                       (ROOT / "pyproject.toml").read_text())
-        self.assertEqual(manifest["sdk_version"], "1.0.1rc3")
+        self.assertEqual(manifest["sdk_version"], "1.0.2rc1")
         self.assertEqual(set(manifest["schema_sha256"]), {
             "body_cmd", "body_state", "control_ack", "control_request", "control_status",
             "end_effector_cmd", "end_effector_info", "end_effector_set_touch",
