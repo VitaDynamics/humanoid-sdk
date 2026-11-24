@@ -18,9 +18,11 @@ python examples/raw_audio/raw_audio_subscriber.py --output raw_audio.wav --durat
 python examples/raw_audio/raw_audio_subscriber.py --channel 0 --output channel0.wav
 ```
 
-`--config` 和 `--group` 可显式覆盖对应环境变量。`--timeout` 默认 5 秒，
+`--config` 和 `--group` 可显式覆盖对应环境变量。`AORTA_GROUP` 未设置或为空时
+回退到 `default`；显式 `--group ""` 会报参数错误。`--timeout` 默认 5 秒，
 首次收不到数据或接收中断均报错退出；Ctrl+C 会结束录制并收尾 WAV 文件。
-已有输出文件不会被覆盖，出错前已收到的数据仍保留。
+建连前先检查输出文件是否已存在、父目录是否可用；实际打开时仍禁止覆盖，防止检查后的竞态。
+出错前已收到的数据仍保留。短超时和录制末尾的单次接收等待不超过剩余时间。
 
 消息不是整句语音或语音识别文本。`format=pcm-s16` 表示小端有符号 16 位 PCM，
 `data` 按采样帧交错排列多个通道，采样率和通道数取自 `sample_rate`、
@@ -31,7 +33,8 @@ python examples/raw_audio/raw_audio_subscriber.py --channel 0 --output channel0.
 
 使用与发布端一致的 SensorData QoS（尽力交付），本地接收队列深度为 256。
 丢包或队列溢出可能使 WAV 比录制墙钟时间短；脚本仅拼接收到的块，不补静音，
-不保证无损录音。`--duration` 从收到首块开始计墙钟时间。
+不保证无损录音。误订阅不兼容消息或 WAV 格式错误会以 `error: ...` 报错退出。
+`--duration` 从收到首块开始计墙钟时间。
 无数据时，应确认语音服务和该 topic 的导出已启用，以及网络、认证和 group 匹配；
 脚本不会自动启动服务或修改机器人配置。
 

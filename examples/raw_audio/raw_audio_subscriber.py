@@ -8,6 +8,7 @@ from contextlib import ExitStack
 import math
 import os
 from pathlib import Path
+import struct
 import time
 import wave
 
@@ -32,6 +33,7 @@ def decode_pcm(payload, channel=None):
     # RawAudio.data is field 1 (vtable offset 6). Copy its byte vector in one
     # operation; calling the generated scalar accessor per byte is too slow
     # for live multichannel audio on S100. This needs no NumPy dependency.
+    # test_bulk_copy_preserves_bytes_without_scalar_accessors guards the offset.
     table = message._tab
     start = table.Vector(table.Offset(6))
     pcm = bytes(memoryview(table.Bytes)[start:start + size])
@@ -45,8 +47,14 @@ def decode_pcm(payload, channel=None):
 
 
 def record(args):
+    if args.output.exists() or args.output.is_symlink():
+        raise FileExistsError(f"output already exists: {args.output}")
+    if not args.output.parent.is_dir():
+        raise NotADirectoryError(f"output parent is not a directory: {args.output.parent}")
     # The current runtime reads the effective group from the environment too.
-    group = args.group if args.group is not None else os.environ.get("AORTA_GROUP", "default")
+    group = args.group if args.group is not None else (os.environ.get("AORTA_GROUP") or "default")
+    if not group:
+        raise ValueError("--group must not be empty")
     os.environ["AORTA_GROUP"] = group
     if args.config:
         os.environ["ZENOH_SESSION_CONFIG_URI"] = str(args.config.resolve())
@@ -74,7 +82,10 @@ def record(args):
                     break
                 if now - last_received >= args.timeout:
                     raise TimeoutError(f"no audio received for {args.timeout:g}s on {args.topic}")
-                sample = subscriber.recv(timeout=0.1)
+                remaining = args.timeout - (now - last_received)
+                if started is not None:
+                    remaining = min(remaining, args.duration - (now - started))
+                sample = subscriber.recv(timeout=min(0.1, remaining))
                 if sample is None:
                     continue
                 rate, channels, frames, pcm = decode_pcm(sample.payload, args.channel)
@@ -128,9 +139,11 @@ def main():
     args = parser.parse_args()
     if args.channel is not None and args.channel < 0:
         parser.error("--channel must be nonnegative")
+    if args.group == "":
+        parser.error("--group must not be empty")
     try:
         record(args)
-    except (ImportError, OSError, ValueError, RuntimeError, TimeoutError) as error:
+    except (ImportError, OSError, ValueError, RuntimeError, struct.error, wave.Error) as error:
         parser.exit(1, f"error: {error}\n")
 
 
