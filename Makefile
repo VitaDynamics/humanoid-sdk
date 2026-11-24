@@ -21,6 +21,7 @@ check: test
 	$(PYTHON) examples/velocity_mode/velocity_mode.py --help
 	$(PYTHON) examples/wbc_tracking_mode/wbc_tracking_mode.py --help
 	$(PYTHON) examples/display/display_custom.py --help
+	$(PYTHON) examples/raw_audio/raw_audio_subscriber.py --help
 	test -L CLAUDE.md
 	test "$$(readlink CLAUDE.md)" = AGENTS.md
 	cmp AGENTS.md CLAUDE.md
