@@ -56,6 +56,7 @@ python examples/body_state_subscriber/body_state_subscriber.py --group "$AORTA_G
 | 需求 | 入口 |
 | --- | --- |
 | 本体只读 | `examples/body_state_subscriber/body_state_subscriber.py` |
+| 原始语音订阅并保存 WAV | `examples/raw_audio/raw_audio_subscriber.py`，说明见同目录 README |
 | 末端只读 | `examples/end_effector_state_subscriber/end_effector_state_subscriber.py` |
 | 本体控制 | `examples/external_control/external_control.py` |
 | 手指／夹爪／OP3 | `examples/end_effector/`，各设备入口及 `--help` |
